@@ -176,15 +176,15 @@ class Orchestrator:
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
                 "refusing to resume")
+        # The ceiling counts the run's cumulative spend, whatever stopped it.
+        self._spent = self.store.status(run_id)["spend_usd"]
         if run["stop_reason"] == "cost_ceiling" and self.run_config:
-            spent = self.store.status(run_id)["spend_usd"]
             ceiling = self.run_config.plan.cost_ceiling_usd
-            if ceiling <= spent:
+            if ceiling <= self._spent:
                 raise ConfigError(self.run_config.plan_path, "cost_ceiling_usd",
-                                  f"run {run_id} stopped on cost ceiling: spend US$ {spent:.2f}, "
+                                  f"run {run_id} stopped on cost ceiling: spend US$ {self._spent:.2f}, "
                                   f"ceiling US$ {ceiling:.2f}; raise cost_ceiling_usd in the plan to continue")
-            self._spent = spent  # the ceiling counts cumulative spend, not spend since resume
-            self.store.set_stop_reason(run_id, None)
+        self.store.set_stop_reason(run_id, None)  # the run is going again
         self._execute(run_id, skip=self.store.completed_identities(run_id))
         return run_id
 

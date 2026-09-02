@@ -128,7 +128,7 @@ def test_cost_ceiling_stops_run_and_resume_needs_raised_ceiling(site, tmp_path, 
     assert spend > 0.0001
 
     # same ceiling: refused, message names both numbers
-    with pytest.raises((ConfigError, RunKilled)) as exc:
+    with pytest.raises(ConfigError) as exc:
         Orchestrator.from_config(store, _resolve(site), tmp_path / "out").resume("run-ceiling")
     msg = str(exc.value)
     assert f"spend US$ {spend:.2f}" in msg and "ceiling US$ 0.00" in msg
@@ -141,6 +141,28 @@ def test_cost_ceiling_stops_run_and_resume_needs_raised_ceiling(site, tmp_path, 
     assert len(rows) == rc.attempts_total
     run = store.run("run-ceiling")
     assert run["stop_reason"] is None and run["finished"] is not None
+
+
+def test_resume_counts_spend_before_the_interruption(site, tmp_path, mock_server):
+    _mock_site(site)
+    _set_ceiling(site, 100)
+    store = Store(tmp_path / "wb.sqlite3")
+    orch = Orchestrator.from_config(store, _resolve(site), tmp_path / "out")
+    orch._stop_after = 1
+    with pytest.raises(RunKilled):
+        orch.run("run-partial")
+    spent = store.status("run-partial")["spend_usd"]
+    assert 0 < spent and store.run("run-partial")["stop_reason"] is None
+
+    # ceiling between S and 2S: the next attempt after resume must trip it
+    _set_ceiling(site, spent * 1.5)
+    with pytest.raises(RunKilled) as exc:
+        Orchestrator.from_config(store, _resolve(site), tmp_path / "out").resume("run-partial")
+    msg = str(exc.value)
+    assert "exceeds ceiling" in msg
+    assert float(msg.split("spend US$ ")[1].split(" ")[0]) >= round(spent, 2)
+    assert store.status("run-partial")["spend_usd"] >= spent * 1.5
+    assert store.run("run-partial")["stop_reason"] == "cost_ceiling"
 
 
 def test_worker_error_sets_stop_reason(site, tmp_path, mock_server, monkeypatch):
