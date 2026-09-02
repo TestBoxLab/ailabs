@@ -151,12 +151,19 @@ each stage hands its artifact to the next:
 | `.specify/memory/constitution.md` | Governing rules for all features. |
 | `.specify/templates/` | Spec Kit spec/plan/tasks/checklist templates. |
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
+| `specs/001-declarative-benchmark-config/` | Feature 001: benchmark inputs as files; `contracts/` holds the CLI and config-file contracts. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
 | `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Resume-here note: state, rules, next steps. |
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
 | `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus). |
+| `workflowbench/config/` | Benchmark inputs as YAML; a run is one product × one plan (`wb run --product X --plan Y`). See `config/README.md`. |
+| `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`). |
+| `workflowbench/config/models/` | One language model per file: provider, prices, API key name. |
+| `workflowbench/config/harnesses/` | How a competitor is driven: API loop, CLI agent, scripted check, Monarch. |
+| `workflowbench/config/plans/` | Task set, test mode, repetitions, competitors, baseline, audience, cost ceiling, `approved_by`. |
+| `workflowbench/config/side-effects.yaml` | Reviewed per-service side-effect list used by `wb corpus declare`. |
 | `workflowbench/wb_orchestrator/orchestrator.py` | Attempt state machine, config hash, resume. |
 | `workflowbench/wb_orchestrator/declare.py` | Approval-rule derivation and the side-effect list. |
 | `workflowbench/wb_arms/providers.py`, `api_loop.py` | Model catalog with prices; generic tool loop (OpenAI chat, OpenAI Responses, Gemini, Anthropic). |

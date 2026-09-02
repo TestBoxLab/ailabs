@@ -54,14 +54,29 @@ place to look.
 
 ## Run a round
 
+Every input is a file under `config/`. A run is one product times one plan.
+
 ```
-uv run wb run --suite tasks/ --arms oracle,claude-opus-4-8,gpt-5.6-terra,kimi-k3-fireworks --k 2
+uv run wb run                                                   # interactive: pick a product and a plan
+uv run wb run --product simulated-apps --plan smoke-frontier    # the same, non-interactive (CI)
 uv run wb status <run_id>
-uv run wb report <run_id> --audience internal --baseline bare/api/claude-opus-4-8
+uv run wb report <run_id> --audience internal --baseline claude-opus-4-8/api
 ```
 
-Registered providers: `claude-opus-4-8` (Monarch's authoring brain, the control arm),
-`gpt-5.6-sol`, `gpt-5.6-terra`, `kimi-k3`, `kimi-k3-fireworks`, `glm-5.3`, `gemini-3.7-flash`.
+- `config/products/` — what is under test: the app set, its data, which test modes it supports.
+- `config/models/` — one language model per file, with provider, price table and API key name.
+- `config/harnesses/` — how a competitor is driven: the generic API loop, a CLI agent, a scripted check (`oracle`, `sloppy`, `null`), or Monarch itself.
+- `config/plans/` — task set, test mode, repetitions, the competitors (`model` + `harness`), baseline, audience and cost ceiling.
+
+Field tables and examples: `config/README.md` and
+`specs/001-declarative-benchmark-config/contracts/config-files.md` (repo root).
+
+Two guards live in the plan file. A plan with more than 20 attempts per competitor
+is refused until `approved_by` names who approved it. `cost_ceiling_usd` stops the
+run once spend passes it; raise it and `wb resume <run_id>` to continue.
+
+Deriving approval rules for a corpus also takes the product:
+`uv run wb corpus declare corpus/ --product simulated-apps`.
 
 ## Open items (carried from the T0 spec)
 
