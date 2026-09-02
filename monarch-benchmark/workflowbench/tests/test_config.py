@@ -358,6 +358,19 @@ def test_resolve_rule3_missing_env(site):
     assert "OPENAI_API_KEY" in str(exc.value)
 
 
+def test_resolve_rule3_empty_env_is_unset(site):
+    with pytest.raises(ConfigError) as exc:
+        resolve(site, env={**ENV, "OPENAI_API_KEY": ""})
+    assert exc.value.field == "key_env" and "OPENAI_API_KEY" in str(exc.value)
+
+
+def test_resolve_relative_tasks_dir(site, monkeypatch):
+    write(site / "config/plans", edit(plan_text(site), "tasks", "tasks"))
+    monkeypatch.chdir(site / "config")  # any cwd: relative to the folder above config/
+    rc = resolve(site)
+    assert rc.attempts_per_competitor == 4 and rc.plan.tasks == "tasks" and rc.config_json["tasks_dir"] == "tasks"
+
+
 def runnable_monarch(site, modes="[full-flow, create-run, run-only]"):
     text = edit(HARNESS_MONARCH, "runnable", "true").replace(
         "modes: [full-flow, create-run, run-only]", f"modes: {modes}")
@@ -479,6 +492,10 @@ def test_hash_changes_with_experimental_inputs(site):
 
 def test_hash_ignores_guard_fields(site):
     h0 = resolve(site).hash
+    write(site / "config/models", MODEL_OPENAI.replace("cached: 0.40", "cached: 0.4"))
+    assert resolve(site).hash == h0  # int/float spelling of a price
+    write(site / "config/plans", edit(plan_text(site), "timeout_s", "600.0"))
+    assert resolve(site).hash == h0
     write(site / "config/plans", edit(plan_text(site), "cost_ceiling_usd", "500"))
     assert resolve(site).hash == h0
     write(site / "config/plans", edit(plan_text(site), "approved_by", "carlos"))

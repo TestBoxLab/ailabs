@@ -215,10 +215,10 @@ def load_model(path) -> Model:
     p = c.sub("usd_per_million")
     p.keys(("input", "cached", "output"), ("cache_write",))
     num = (int, float)
-    prices = Prices(input=p.get("input", num), cached=p.get("cached", num),
-                    output=p.get("output", num), cache_write=p.get("cache_write", num))
-    if prices.cache_write is None:
-        prices.cache_write = prices.input
+    # float() so `5` and `5.00` are the same price (and the same hash)
+    prices = Prices(input=float(p.get("input", num)), cached=float(p.get("cached", num)),
+                    output=float(p.get("output", num)),
+                    cache_write=float(p.get("cache_write", num, default=p.get("input", num))))
     verified = c.get("prices_verified", (datetime.date, str))
     if isinstance(verified, str):
         try:
@@ -300,7 +300,7 @@ def load_plan(path) -> Plan:
         tasks=c.get("tasks", str),
         mode=c.get("mode", str, enum=MODES),
         repetitions=c.get("repetitions", int, minimum=1),
-        timeout_s=c.get("timeout_s", num, minimum=0, strict=True),
+        timeout_s=float(c.get("timeout_s", num, minimum=0, strict=True)),
         concurrency=c.get("concurrency", int, minimum=1),
         competitors=competitors,
         baseline=c.get("baseline", str),
@@ -362,7 +362,8 @@ class RunConfig:
                 "attempts_total": self.attempts_total}
 
 
-def _known(folder) -> str:
+def known(folder) -> str:
+    """Names of the config files in `folder`, comma-joined (messages and the picker)."""
     return ", ".join(sorted(p.stem for p in Path(folder).glob("*.yaml")))
 
 
@@ -371,7 +372,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
 
     Models and harnesses are read from `config_dir` (default: the folder above
     the product file). `env` is only asked whether a name is set. Rule 9, the
-    smoke-scale guard, is applied by the caller.
+    smoke-scale guard, is applied by the caller. A relative `plan.tasks` is
+    taken from the folder above `config_dir`; the hash keeps the string as written.
     """
     product_path, plan_path = Path(product_path), Path(plan_path)
     config_dir = Path(config_dir) if config_dir else product_path.parent.parent
@@ -389,10 +391,13 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
 
     models, harnesses, competitors = {}, {}, []
     for i, spec in enumerate(plan.competitors):
+        name = f"{spec.model}/{spec.harness}" if spec.model else spec.harness
+        if any(x.name == name for x in competitors):
+            c.fail(f"competitors[{i}]", f"duplicate competitor {name!r}")
         hpath = config_dir / "harnesses" / f"{spec.harness}.yaml"
         if not hpath.exists():
             c.fail(f"competitors[{i}].harness",
-                   f"unknown harness {spec.harness!r}; known: {_known(hpath.parent)}")
+                   f"unknown harness {spec.harness!r}; known: {known(hpath.parent)}")
         h = harnesses.get(spec.harness) or load_harness(hpath)
         model = None
         if spec.model is None:
@@ -401,25 +406,22 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         else:
             mpath = config_dir / "models" / f"{spec.model}.yaml"
             if not mpath.exists():
-                c.fail(f"competitors[{i}].model", f"unknown model {spec.model!r}; known: {_known(mpath.parent)}")
+                c.fail(f"competitors[{i}].model", f"unknown model {spec.model!r}; known: {known(mpath.parent)}")
             model = models.get(spec.model) or load_model(mpath)
             if h.accepts == "none":
                 c.fail(f"competitors[{i}].model", f"harness {h.name!r} takes no model")
             if model.provider not in h.accepts:
                 c.fail(f"competitors[{i}].model", f"harness {h.name!r} accepts {', '.join(h.accepts)}; "
                        f"model {model.name!r} is from {model.provider!r}")
+            if not env.get(model.key_env):
+                raise ConfigError(mpath, "key_env", f"environment variable {model.key_env} is not set")
         if not h.runnable:
             c.fail(f"competitors[{i}].harness", f"harness {h.name!r} is not runnable yet")
         if h.kind == "monarch" and plan.mode not in h.modes:
             c.fail(f"competitors[{i}].harness",
                    f"mode {plan.mode!r} is not in the modes of {hpath}: {', '.join(h.modes)}")
-        if model and not env.get(model.key_env):
-            raise ConfigError(mpath, "key_env", f"environment variable {model.key_env} is not set")
         if h.credential_env and not env.get(h.credential_env):
             raise ConfigError(hpath, "credential_env", f"environment variable {h.credential_env} is not set")
-        name = f"{spec.model}/{spec.harness}" if spec.model else spec.harness
-        if any(x.name == name for x in competitors):
-            c.fail(f"competitors[{i}]", f"duplicate competitor {name!r}")
         competitors.append(Competitor(name, model, h))
         harnesses[h.name] = h
         if model:
@@ -430,8 +432,11 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         c.fail("baseline", f"{plan.baseline!r} is not a competitor; have: {', '.join(names)}")
 
     from wb_orchestrator.orchestrator import load_suite
+    tasks_dir = Path(plan.tasks)
+    if not tasks_dir.is_absolute():
+        tasks_dir = config_dir.parent / tasks_dir  # the workflowbench dir, whatever the cwd
     try:
-        tasks = load_suite(plan.tasks)
+        tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:
         c.fail("tasks", str(e))
     for t in tasks:
