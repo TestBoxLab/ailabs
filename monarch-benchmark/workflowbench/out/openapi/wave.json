@@ -1,0 +1,811 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "wave (WorkflowBench simulated)",
+  "version": "graphql",
+  "description": "Wave Accounting GraphQL API. Authentication uses OAuth 2.0 Bearer tokens. All operations are sent as POST requests to /graphql/public with a JSON body containing a query or mutation string and optional variables. Results use Relay-style cursor pagination with edges/pageInfo. Wave uses PUT-style create semantics via GraphQL mutations. Scopes follow resource:operation pattern (e.g., invoice:write, customer:read). Most entity queries are nested under a business node."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/wave"
+  }
+ ],
+ "paths": {
+  "/graphql/public": {
+   "post": {
+    "operationId": "wave.user",
+    "summary": "41 variants: get, list, get, list, get, create, update, delete, list, list, create, update, archive, list, create, update, archive, list, get, listByCustomer, create, clone, delete, send, approve, markSent, list, convertToInvoice, list, create, update, archive, create, list, create, list, get, list, get, list, list",
+    "description": "[wave.user.get] Retrieve profile details for the currently authenticated user.\n\n[wave.businesses.list] List all businesses belonging to the authenticated user. Supports cursor-based pagination.\n\n[wave.business.get] Fetch a single business by its identifier, including its address, currency, and organisation type.\n\n[wave.customers.list] Retrieve a paginated list of customers for a given business.\n\n[wave.customers.get] Fetch a single customer by their identifier, including contact details, address, and shipping information.\n\n[wave.customers.create] Add a new customer to a business. Requires the business ID and a customer name at minimum.\n\n[wave.customers.update] Modify an existing customer's details.\n\n[wave.customers.delete] Permanently remove a customer record from a business.\n\n[wave.vendors.list] Retrieve a paginated list of vendors (suppliers) for a business.\n\n[wave.accounts.list] List all ledger accounts for a business, with optional filtering by type or subtype.\n\n[wave.accounts.create] Add a new ledger account. Requires the business ID, a name, and an account subtype.\n\n[wave.accounts.update] Modify an existing account's name, description, or other editable fields.\n\n[wave.accounts.archive] Soft-delete an account by marking it as archived. Archived accounts no longer appear in transaction forms.\n\n[wave.products.list] List all products and services available in a business.\n\n[wave.products.create] Add a new product or service to a business.\n\n[wave.products.update] Modify an existing product or service.\n\n[wave.products.archive] Soft-delete a product by archiving it.\n\n[wave.invoices.list] Retrieve a paginated list of invoices for a business, sorted by most recently modified.\n\n[wave.invoices.get] Fetch a single invoice with full details including line items, tax totals, and delivery history.\n\n[wave.invoices.listByCustomer] Retrieve invoices for a specific customer, optionally filtered by status.\n\n[wave.invoices.create] Generate a new invoice for a customer. Requires the business ID, customer ID, and at least one line item with a product reference.\n\n[wave.invoices.clone] Duplicate an existing invoice, copying its line items and settings into a new draft.\n\n[wave.invoices.delete] Permanently remove an invoice.\n\n[wave.invoices.send] Email an invoice to one or more recipients. The invoice must be in an approvable state.\n\n[wave.invoices.approve] Approve a draft invoice, moving it to an active state ready for sending or payment.\n\n[wave.invoices.markSent] Flag an invoice as sent without actually dispatching an email. Useful when the invoice was delivered through other means.\n\n[wave.estimates.list] Retrieve a paginated list of estimates for a business.\n\n[wave.estimates.convertToInvoice] Turn an accepted estimate into a new invoice, copying over line items and customer details.\n\n[wave.salestaxes.list] List all tax configurations for a business.\n\n[wave.salestaxes.create] Define a new sales tax for a business.\n\n[wave.salestaxes.update] Modify a sales tax name, abbreviation, or settings.\n\n[wave.salestaxes.archive] Archive a sales tax so it is no longer selectable on new transactions.\n\n[wave.salestaxrates.create] Add a new rate tier to an existing sales tax.\n\n[wave.transactions.list] Retrieve financial transactions for a business.\n\n[wave.transactions.create] Record a new categorised financial transaction with an anchor account and one or more line items. The anchor represents the primary bank or cash account, and line items split the amount across ledger accounts.\n\n[wave.currencies.list] List all currencies supported by Wave.\n\n[wave.currencies.get] Look up a single currency by its ISO code.\n\n[wave.countries.list] List all countries recognised by Wave, including their provinces and default currencies.\n\n[wave.countries.get] Retrieve details for a single country by its ISO code.\n\n[wave.accountTypes.list] List the top-level account type classifications (Asset, Liability, Equity, Income, Expense).\n\n[wave.accountSubtypes.list] List all available account subtypes for use when creating new accounts.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{user: User}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "query { user { id firstName lastName defaultEmail createdAt modifiedAt } }",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Address": {
+    "type": "object",
+    "description": "A structured mailing or physical location.",
+    "properties": {
+     "addressLine1": {
+      "type": "string"
+     },
+     "addressLine2": {
+      "type": "string"
+     },
+     "city": {
+      "type": "string"
+     },
+     "postalCode": {
+      "type": "string"
+     },
+     "provinceCode": {
+      "type": "string",
+      "description": "State or province abbreviation."
+     },
+     "countryCode": {
+      "type": "string",
+      "description": "Two-letter ISO country code."
+     }
+    }
+   },
+   "Currency": {
+    "type": "object",
+    "description": "Represents a monetary denomination with its display properties.",
+    "properties": {
+     "code": {
+      "type": "string",
+      "description": "ISO 4217 currency code (e.g., USD, CAD, EUR)."
+     },
+     "symbol": {
+      "type": "string",
+      "description": "Display symbol (e.g., $, EUR)."
+     },
+     "name": {
+      "type": "string",
+      "description": "Full currency name."
+     },
+     "plural": {
+      "type": "string",
+      "description": "Plural form of the currency name."
+     },
+     "exponent": {
+      "type": "integer",
+      "description": "Number of decimal places for this currency."
+     }
+    }
+   },
+   "Money": {
+    "type": "object",
+    "description": "A monetary value paired with its currency.",
+    "properties": {
+     "value": {
+      "type": "number",
+      "description": "Numeric amount."
+     },
+     "currency": {
+      "type": "object",
+      "description": "Currency of the amount."
+     }
+    }
+   },
+   "ShippingDetails": {
+    "type": "object",
+    "description": "Delivery information associated with a customer order.",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Recipient name for delivery."
+     },
+     "phone": {
+      "type": "string"
+     },
+     "instructions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Special delivery notes."
+     },
+     "address": {
+      "type": "object"
+     }
+    }
+   },
+   "PageInfo": {
+    "type": "object",
+    "description": "Relay-style pagination metadata returned with every paginated collection.",
+    "properties": {
+     "hasNextPage": {
+      "type": "boolean"
+     },
+     "hasPreviousPage": {
+      "type": "boolean"
+     },
+     "startCursor": {
+      "type": "string"
+     },
+     "endCursor": {
+      "type": "string"
+     }
+    }
+   },
+   "User": {
+    "type": "object",
+    "description": "The authenticated Wave user account.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "firstName": {
+      "type": "string"
+     },
+     "lastName": {
+      "type": "string"
+     },
+     "defaultEmail": {
+      "type": "string",
+      "description": "Primary email for the user account."
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "modifiedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Business": {
+    "type": "object",
+    "description": "A company or sole proprietorship managed in Wave. All financial data (customers, invoices, accounts, etc.) belongs to a business.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Globally unique business identifier."
+     },
+     "name": {
+      "type": "string"
+     },
+     "isPersonal": {
+      "type": "boolean",
+      "description": "Whether this is a personal (non-business) entity."
+     },
+     "organizationType": {
+      "type": "string"
+     },
+     "type": {
+      "type": "string",
+      "description": "Business classification."
+     },
+     "phone": {
+      "type": "string"
+     },
+     "address": {
+      "type": "object"
+     },
+     "currency": {
+      "type": "object",
+      "description": "Default operating currency."
+     }
+    }
+   },
+   "Customer": {
+    "type": "object",
+    "description": "A person or organisation that you sell products or services to and bill through invoices.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Globally unique customer identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Full display name of the customer."
+     },
+     "firstName": {
+      "type": "string"
+     },
+     "lastName": {
+      "type": "string"
+     },
+     "displayId": {
+      "type": "string",
+      "description": "Short identifier visible in the UI."
+     },
+     "email": {
+      "type": "string"
+     },
+     "mobile": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "fax": {
+      "type": "string"
+     },
+     "tollFree": {
+      "type": "string"
+     },
+     "website": {
+      "type": "string"
+     },
+     "internalNotes": {
+      "type": "string",
+      "description": "Private notes not shared with the customer."
+     },
+     "currency": {
+      "type": "object"
+     },
+     "address": {
+      "type": "object"
+     },
+     "shippingDetails": {
+      "type": "object"
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "modifiedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Vendor": {
+    "type": "object",
+    "description": "A supplier or contractor from whom your business purchases goods or services.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string",
+      "description": "Full name of the vendor."
+     },
+     "firstName": {
+      "type": "string"
+     },
+     "lastName": {
+      "type": "string"
+     },
+     "email": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "mobile": {
+      "type": "string"
+     },
+     "fax": {
+      "type": "string"
+     },
+     "tollFree": {
+      "type": "string"
+     },
+     "website": {
+      "type": "string"
+     },
+     "address": {
+      "type": "object"
+     },
+     "currency": {
+      "type": "object"
+     },
+     "internalNotes": {
+      "type": "string"
+     }
+    }
+   },
+   "Account": {
+    "type": "object",
+    "description": "A ledger category that groups financial transactions by nature -- revenue, expense, asset, liability, or equity.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string",
+      "description": "Account label displayed in reports and transaction forms."
+     },
+     "description": {
+      "type": "string"
+     },
+     "displayId": {
+      "type": "string",
+      "description": "Short code shown alongside the account name."
+     },
+     "type": {
+      "type": "object",
+      "description": "High-level classification (ASSET, LIABILITY, EQUITY, INCOME, EXPENSE).",
+      "properties": {
+       "name": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string",
+        "enum": [
+         "ASSET",
+         "LIABILITY",
+         "EQUITY",
+         "INCOME",
+         "EXPENSE"
+        ]
+       }
+      }
+     },
+     "subtype": {
+      "type": "object",
+      "description": "More specific grouping within the account type.",
+      "properties": {
+       "name": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string"
+       }
+      }
+     },
+     "currency": {
+      "type": "object"
+     },
+     "normalBalanceType": {
+      "type": "string",
+      "description": "Whether the account normally carries a debit or credit balance."
+     },
+     "isArchived": {
+      "type": "boolean",
+      "description": "Whether the account has been soft-deleted."
+     }
+    }
+   },
+   "Product": {
+    "type": "object",
+    "description": "A sellable or purchasable item that can be referenced on invoice line items. Tracks pricing and linked accounts.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string",
+      "description": "Product or service name."
+     },
+     "description": {
+      "type": "string"
+     },
+     "unitPrice": {
+      "type": "number",
+      "description": "Default per-unit selling price."
+     },
+     "isSold": {
+      "type": "boolean",
+      "description": "Whether this item is available for sale."
+     },
+     "isBought": {
+      "type": "boolean",
+      "description": "Whether this item is used for purchases."
+     },
+     "incomeAccount": {
+      "type": "object",
+      "description": "Revenue account credited when this product is sold."
+     },
+     "expenseAccount": {
+      "type": "object",
+      "description": "Expense account debited when this product is purchased."
+     },
+     "defaultSalesTaxes": {
+      "type": "array",
+      "description": "Tax rates applied by default when this product appears on an invoice.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "isArchived": {
+      "type": "boolean"
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "modifiedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Invoice": {
+    "type": "object",
+    "description": "A bill sent to a customer requesting payment for products or services. Tracks status, amounts, and delivery history.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SENT",
+       "VIEWED",
+       "PAID",
+       "PARTIAL",
+       "OVERDUE",
+       "APPROVED"
+      ],
+      "description": "Current lifecycle state."
+     },
+     "title": {
+      "type": "string",
+      "description": "Custom heading displayed on the invoice."
+     },
+     "subhead": {
+      "type": "string",
+      "description": "Secondary heading below the title."
+     },
+     "invoiceNumber": {
+      "type": "string",
+      "description": "Sequential identifier for this invoice."
+     },
+     "invoiceDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the invoice was issued."
+     },
+     "poNumber": {
+      "type": "string",
+      "description": "Purchase order reference provided by the customer."
+     },
+     "customer": {
+      "type": "object"
+     },
+     "currency": {
+      "type": "object"
+     },
+     "dueDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "amountDue": {
+      "type": "object",
+      "description": "Outstanding balance remaining. Read-only."
+     },
+     "amountPaid": {
+      "type": "object",
+      "description": "Total payments received so far. Read-only."
+     },
+     "taxTotal": {
+      "type": "object",
+      "description": "Total tax across all line items. Read-only."
+     },
+     "total": {
+      "type": "object",
+      "description": "Grand total including tax. Read-only."
+     },
+     "exchangeRate": {
+      "type": "number",
+      "description": "Conversion rate when the invoice currency differs from the business currency."
+     },
+     "footer": {
+      "type": "string",
+      "description": "Text displayed at the bottom of the invoice."
+     },
+     "memo": {
+      "type": "string",
+      "description": "Internal note not shown to the customer."
+     },
+     "disableCreditCardPayments": {
+      "type": "boolean",
+      "description": "Prevent the customer from paying by credit card online."
+     },
+     "disableBankPayments": {
+      "type": "boolean",
+      "description": "Prevent the customer from paying via bank transfer online."
+     },
+     "itemTitle": {
+      "type": "string",
+      "description": "Column header override for the item/product column."
+     },
+     "unitTitle": {
+      "type": "string",
+      "description": "Column header override for the quantity column."
+     },
+     "priceTitle": {
+      "type": "string",
+      "description": "Column header override for the unit price column."
+     },
+     "amountTitle": {
+      "type": "string",
+      "description": "Column header override for the line total column."
+     },
+     "hideName": {
+      "type": "boolean"
+     },
+     "hideDescription": {
+      "type": "boolean"
+     },
+     "hideUnit": {
+      "type": "boolean"
+     },
+     "hidePrice": {
+      "type": "boolean"
+     },
+     "hideAmount": {
+      "type": "boolean"
+     },
+     "items": {
+      "type": "array",
+      "description": "Individual billed entries making up this invoice.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "lastSentAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "lastSentVia": {
+      "type": "string"
+     },
+     "lastViewedAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "pdfUrl": {
+      "type": "string",
+      "description": "URL to download a PDF version of the invoice."
+     },
+     "viewUrl": {
+      "type": "string",
+      "description": "Public link the customer uses to view and pay the invoice."
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "modifiedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "InvoiceItem": {
+    "type": "object",
+    "description": "A single line on an invoice representing a product or service, with quantity, pricing, and tax details.",
+    "properties": {
+     "product": {
+      "type": "object",
+      "description": "The product or service being billed."
+     },
+     "description": {
+      "type": "string",
+      "description": "Line-level description overriding the product default."
+     },
+     "quantity": {
+      "type": "number",
+      "description": "Number of units billed."
+     },
+     "price": {
+      "type": "number",
+      "description": "Per-unit price for this line."
+     },
+     "subtotal": {
+      "type": "object",
+      "description": "Line total before tax. Read-only."
+     },
+     "total": {
+      "type": "object",
+      "description": "Line total including tax. Read-only."
+     },
+     "account": {
+      "type": "object",
+      "description": "Revenue account this line posts to."
+     },
+     "taxes": {
+      "type": "array",
+      "description": "Tax rates applied to this line.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "salesTax": {
+         "type": "object"
+        },
+        "amount": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "Estimate": {
+    "type": "object",
+    "description": "A preliminary cost breakdown shared with a customer before finalising a sale. Not a payment request; can later be turned into an invoice.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "estimateNumber": {
+      "type": "string"
+     },
+     "customer": {
+      "type": "object"
+     },
+     "status": {
+      "type": "string"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "total": {
+      "type": "object"
+     },
+     "currency": {
+      "type": "object"
+     },
+     "estimateDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "expiryDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "footer": {
+      "type": "string"
+     },
+     "memo": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "subhead": {
+      "type": "string"
+     }
+    }
+   },
+   "SalesTax": {
+    "type": "object",
+    "description": "A named tax configuration containing one or more rate tiers, used when billing customers.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the tax (e.g., HST, GST, Sales Tax)."
+     },
+     "abbreviation": {
+      "type": "string",
+      "description": "Short code shown on invoices."
+     },
+     "rates": {
+      "type": "array",
+      "description": "Rate components that make up this tax.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "rate": {
+         "type": "number"
+        },
+        "effectiveDate": {
+         "type": "string",
+         "format": "date"
+        }
+       }
+      }
+     },
+     "isArchived": {
+      "type": "boolean"
+     },
+     "isCompound": {
+      "type": "boolean",
+      "description": "When true, the rate stacks on top of the subtotal plus any other applicable taxes."
+     },
+     "isRecoverable": {
+      "type": "boolean",
+      "description": "Whether the business can claim this tax back as an input credit."
+     }
+    }
+   },
+   "Transaction": {
+    "type": "object",
+    "description": "A categorised financial event recorded against accounts in the ledger, such as income received or an expense paid.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "date": {
+      "type": "string",
+      "format": "date"
+     },
+     "description": {
+      "type": "string"
+     },
+     "amount": {
+      "type": "object"
+     },
+     "currency": {
+      "type": "object"
+     },
+     "lineItems": {
+      "type": "array",
+      "description": "Account-level splits that make up this transaction.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "accountId": {
+         "type": "string"
+        },
+        "amount": {
+         "type": "number"
+        },
+        "balance": {
+         "type": "string",
+         "enum": [
+          "INCREASE",
+          "DECREASE"
+         ],
+         "description": "Whether this line increases or decreases the target account balance."
+        }
+       }
+      }
+     },
+     "anchor": {
+      "type": "object",
+      "description": "The primary account and direction for this transaction.",
+      "properties": {
+       "accountId": {
+        "type": "string"
+       },
+       "amount": {
+        "type": "number"
+       },
+       "direction": {
+        "type": "string",
+        "enum": [
+         "DEPOSIT",
+         "WITHDRAWAL"
+        ],
+        "description": "Whether money flows into or out of the anchor account."
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

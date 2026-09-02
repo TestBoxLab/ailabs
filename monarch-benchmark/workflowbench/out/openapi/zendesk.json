@@ -1,0 +1,969 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "zendesk (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Simulated zendesk API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/zendesk"
+  }
+ ],
+ "paths": {
+  "/api/v2/tickets": {
+   "get": {
+    "operationId": "zendesk.tickets.list",
+    "summary": "Retrieve all tickets in the helpdesk. Fetches every support case, issue, or request regardless of status.",
+    "description": "Retrieve all tickets in the helpdesk. Fetches every support case, issue, or request regardless of status.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "ListTicketsResponse: {tickets: [Ticket], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "zendesk.tickets.create",
+    "summary": "Open a new support ticket. Submits a fresh helpdesk request with a subject, description, priority, status, and assignee.",
+    "description": "Open a new support ticket. Submits a fresh helpdesk request with a subject, description, priority, status, and assignee.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{ticket: Ticket}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{ticket: {subject, description?, status?, priority?, type?, requester_id?, requester_email?, requester_name?, assignee_id?, group_id?, tags?, external_id?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{id}": {
+   "get": {
+    "operationId": "zendesk.tickets.get",
+    "summary": "Fetch a single ticket by its numeric ID. Looks up one specific support case or issue.",
+    "description": "Fetch a single ticket by its numeric ID. Looks up one specific support case or issue.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the ticket to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ticket: Ticket}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "operationId": "zendesk.tickets.update",
+    "summary": "Modify an existing ticket. Change a support case's status, priority, assignee, group, tags, or subject. Optionally inclu",
+    "description": "Modify an existing ticket. Change a support case's status, priority, assignee, group, tags, or subject. Optionally include a comment with the update.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the ticket to modify.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ticket: Ticket}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{ticket: {subject?, status?, priority?, type?, assignee_id?, group_id?, organization_id?, tags?, comment?: {body (string), public? (boolean), author_id? (string)}}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/search": {
+   "get": {
+    "operationId": "zendesk.tickets.search",
+    "summary": "Query tickets by keyword or attribute. Locate support cases matching a subject, description, or Zendesk search expressio",
+    "description": "Query tickets by keyword or attribute. Locate support cases matching a subject, description, or Zendesk search expression.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": true,
+      "description": "Search expression (searches subject and description). Supports Zendesk query syntax e.g. 'status:open type:ticket'.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "SearchTicketsResponse: {tickets: [Ticket], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{ticket_id}/comments": {
+   "get": {
+    "operationId": "zendesk.tickets.comments.list",
+    "summary": "Get all comments on a ticket. Returns the full conversation thread, including public replies and internal notes.",
+    "description": "Get all comments on a ticket. Returns the full conversation thread, including public replies and internal notes.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the ticket whose comments are being fetched.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ListCommentsResponse: {comments: [Comment], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{ticket_id}/tags": {
+   "put": {
+    "operationId": "zendesk.tickets.tags.add",
+    "summary": "Attach tags to a ticket. Applies one or more labels to categorize a support case.",
+    "description": "Attach tags to a ticket. Applies one or more labels to categorize a support case.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the ticket to tag.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ticket_id, tags: [string]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{tags: [string]} (array of tag strings to add)",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "zendesk.tickets.tags.remove",
+    "summary": "Strip tags from a ticket. Removes specified labels from a support case.",
+    "description": "Strip tags from a ticket. Removes specified labels from a support case.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the ticket to untag.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ticket_id, tags: [string]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{tags: [string]} (array of tag strings to remove)",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/users": {
+   "get": {
+    "operationId": "zendesk.users.list",
+    "summary": "Return all users in Zendesk. Retrieves every agent, end-user, and admin account in the system.",
+    "description": "Return all users in Zendesk. Retrieves every agent, end-user, and admin account in the system.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "ListUsersResponse: {users: [User], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "zendesk.users.create",
+    "summary": "Register a new user. Adds a fresh agent, end-user, or admin account to the Zendesk instance.",
+    "description": "Register a new user. Adds a fresh agent, end-user, or admin account to the Zendesk instance.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{user: User}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{user: {name, email?, phone?, role?, organization_id?, tags?, details?, notes?, external_id?, verified?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/users/{id}": {
+   "get": {
+    "operationId": "zendesk.users.get",
+    "summary": "Fetch a single user by their numeric ID. Retrieves one agent, customer, or admin account.",
+    "description": "Fetch a single user by their numeric ID. Retrieves one agent, customer, or admin account.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the user to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{user: User}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "zendesk.users.update",
+    "summary": "Change an existing user's attributes. Update a user's name, email, phone, role, organization, tags, notes, or details.",
+    "description": "Change an existing user's attributes. Update a user's name, email, phone, role, organization, tags, notes, or details.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the user to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{user: User}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{user: {name?, email?, phone?, role?, organization_id?, tags?, details?, notes?, verified?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "zendesk.users.delete",
+    "summary": "Remove a user. Deletes or deactivates an agent, customer, or admin account from Zendesk.",
+    "description": "Remove a user. Deletes or deactivates an agent, customer, or admin account from Zendesk.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the user to remove.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{} (empty JSON object)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/users/search": {
+   "get": {
+    "operationId": "zendesk.users.search",
+    "summary": "Find users by name or email. Queries agents, customers, and contacts matching the search term.",
+    "description": "Find users by name or email. Queries agents, customers, and contacts matching the search term.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "Search term matching against name and email fields.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "email",
+      "in": "query",
+      "required": false,
+      "description": "Locate a user by their exact email address.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "SearchUsersResponse: {users: [User], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/users/create_or_update": {
+   "post": {
+    "operationId": "zendesk.users.create_or_update",
+    "summary": "Look up a user by email and return them, or create a new user if no match is found. Upserts a user record by email.",
+    "description": "Look up a user by email and return them, or create a new user if no match is found. Upserts a user record by email.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{user: User}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{user: {email, name?, phone?, role?, organization_id?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/organizations": {
+   "get": {
+    "operationId": "zendesk.organizations.list",
+    "summary": "Return all organizations in Zendesk. Lists every company, account, or organizational group in the system.",
+    "description": "Return all organizations in Zendesk. Lists every company, account, or organizational group in the system.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "ListOrganizationsResponse: {organizations: [Organization], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "zendesk.organizations.create",
+    "summary": "Register a new organization. Adds a fresh company, account, or organizational group to Zendesk.",
+    "description": "Register a new organization. Adds a fresh company, account, or organizational group to Zendesk.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{organization: Organization}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{organization: {name, domain_names?, details?, notes?, tags?, group_id?, shared_tickets?, shared_comments?, external_id?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/organizations/{id}": {
+   "get": {
+    "operationId": "zendesk.organizations.get",
+    "summary": "Fetch a single organization by its numeric ID. Retrieves one company or account record.",
+    "description": "Fetch a single organization by its numeric ID. Retrieves one company or account record.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the organization to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{organization: Organization}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "zendesk.organizations.update",
+    "summary": "Change an existing organization's attributes. Update a company's name, domains, details, notes, tags, or sharing configu",
+    "description": "Change an existing organization's attributes. Update a company's name, domains, details, notes, tags, or sharing configuration.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the organization to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{organization: Organization}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{organization: {name?, domain_names?, details?, notes?, tags?, shared_tickets?, shared_comments?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/organizations/search": {
+   "get": {
+    "operationId": "zendesk.organizations.search",
+    "summary": "Query organizations by name. Finds matching companies or accounts in Zendesk.",
+    "description": "Query organizations by name. Finds matching companies or accounts in Zendesk.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "Search term matched against organization names.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "SearchOrganizationsResponse: {organizations: [Organization], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/organizations/create_or_update": {
+   "post": {
+    "operationId": "zendesk.organizations.create_or_update",
+    "summary": "Look up an organization by name and return it, or create a new one if no match is found. Upserts an organization record.",
+    "description": "Look up an organization by name and return it, or create a new one if no match is found. Upserts an organization record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{organization: Organization}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{organization: {name, domain_names?, details?, notes?}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/groups": {
+   "get": {
+    "operationId": "zendesk.groups.list",
+    "summary": "Return all groups in Zendesk. Lists every agent team or department configured in the system.",
+    "description": "Return all groups in Zendesk. Lists every agent team or department configured in the system.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "ListGroupsResponse: {groups: [Group], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/groups/{id}": {
+   "get": {
+    "operationId": "zendesk.groups.get",
+    "summary": "Fetch a single agent group by its numeric ID. Retrieves one team or department record.",
+    "description": "Fetch a single agent group by its numeric ID. Retrieves one team or department record.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the group to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{group: Group}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Ticket": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Numeric identifier for the ticket."
+     },
+     "subject": {
+      "type": "string",
+      "description": "Title or headline of the ticket."
+     },
+     "description": {
+      "type": "string",
+      "description": "Initial message describing the reported issue (read-only after the ticket is created)."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "new",
+       "open",
+       "pending",
+       "hold",
+       "solved",
+       "closed"
+      ],
+      "description": "Current state of the ticket."
+     },
+     "priority": {
+      "type": "string",
+      "enum": [
+       "urgent",
+       "high",
+       "normal",
+       "low"
+      ],
+      "description": "Urgency level of the ticket."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "problem",
+       "incident",
+       "question",
+       "task"
+      ],
+      "description": "Classification of the ticket."
+     },
+     "requester_id": {
+      "type": "integer",
+      "description": "Identifier of the user who submitted the ticket."
+     },
+     "assignee_id": {
+      "type": "integer",
+      "description": "Identifier of the agent handling the ticket."
+     },
+     "group_id": {
+      "type": "integer",
+      "description": "Identifier of the team assigned to the ticket."
+     },
+     "organization_id": {
+      "type": "integer",
+      "description": "Identifier of the requester's organization."
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Labels attached to the ticket."
+     },
+     "external_id": {
+      "type": "string",
+      "description": "Reference ID for connecting to external platforms."
+     },
+     "created_at": {
+      "type": "string",
+      "description": "When the ticket was originally created."
+     },
+     "updated_at": {
+      "type": "string",
+      "description": "When the ticket was most recently modified."
+     }
+    }
+   },
+   "Comment": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Numeric identifier for the comment."
+     },
+     "body": {
+      "type": "string",
+      "description": "Content of the comment."
+     },
+     "public": {
+      "type": "boolean",
+      "description": "Whether the comment is visible to the requester."
+     },
+     "author_id": {
+      "type": "integer",
+      "description": "Identifier of the user who wrote the comment."
+     },
+     "created_at": {
+      "type": "string",
+      "description": "When the comment was posted."
+     }
+    }
+   },
+   "User": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Numeric identifier for the user."
+     },
+     "name": {
+      "type": "string",
+      "description": "Full name of the user."
+     },
+     "email": {
+      "type": "string",
+      "description": "Email address associated with the user account."
+     },
+     "phone": {
+      "type": "string",
+      "description": "Phone number for the user."
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "end-user",
+       "agent",
+       "admin"
+      ],
+      "description": "Access level assigned to the user."
+     },
+     "organization_id": {
+      "type": "integer",
+      "description": "Identifier of the organization this user belongs to."
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Labels applied to this user."
+     },
+     "details": {
+      "type": "string",
+      "description": "Additional descriptive information about the user."
+     },
+     "notes": {
+      "type": "string",
+      "description": "Internal notes recorded about the user."
+     },
+     "external_id": {
+      "type": "string",
+      "description": "Reference identifier from an external system."
+     },
+     "verified": {
+      "type": "boolean",
+      "description": "Whether the user's identity has been confirmed."
+     },
+     "created_at": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     }
+    }
+   },
+   "Organization": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Numeric identifier for the organization."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name of the organization."
+     },
+     "domain_names": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Email domains associated with this organization."
+     },
+     "details": {
+      "type": "string",
+      "description": "Descriptive information about the organization."
+     },
+     "notes": {
+      "type": "string",
+      "description": "Internal notes about the organization."
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Labels attached to the organization."
+     },
+     "group_id": {
+      "type": "integer",
+      "description": "Default team assigned to new tickets from this organization."
+     },
+     "shared_tickets": {
+      "type": "boolean",
+      "description": "Determines whether tickets are visible across all organization members."
+     },
+     "shared_comments": {
+      "type": "boolean",
+      "description": "Determines whether members of the organization can view and comment on each other's tickets."
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     }
+    }
+   },
+   "Group": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Numeric identifier for the group."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the group."
+     },
+     "created_at": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

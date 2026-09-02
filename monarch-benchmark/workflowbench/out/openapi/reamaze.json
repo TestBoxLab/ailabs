@@ -1,0 +1,286 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "reamaze (WorkflowBench simulated)",
+  "version": "v1",
+  "description": "Simulated reamaze API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/reamaze"
+  }
+ ],
+ "paths": {
+  "/conversations": {
+   "get": {
+    "operationId": "reamaze.conversations.list",
+    "summary": "Retrieve all Re:amaze conversations, tickets, and threads. Fetch the full list of support conversations.",
+    "description": "Retrieve all Re:amaze conversations, tickets, and threads. Fetch the full list of support conversations.",
+    "parameters": [
+     {
+      "name": "filter",
+      "in": "query",
+      "required": false,
+      "description": "Narrow conversations by their current state.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "archived",
+        "open",
+        "unassigned",
+        "all"
+       ]
+      }
+     },
+     {
+      "name": "for",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results to a specific user's email address.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sort",
+      "in": "query",
+      "required": false,
+      "description": "Ordering applied to the returned results.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tag",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results to conversations with a given tag.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "category",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results to a specific category slug.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "Which page of results to return.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "start_date",
+      "in": "query",
+      "required": false,
+      "description": "Return only conversations created on or after this date.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "end_date",
+      "in": "query",
+      "required": false,
+      "description": "Return only conversations created on or before this date.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "origin",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results to a particular conversation channel or origin.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{conversations: [ConversationObject], page_size: int, page_count: int, total_count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "reamaze.conversations.create",
+    "summary": "Open a new Re:amaze conversation or support ticket.",
+    "description": "Open a new Re:amaze conversation or support ticket.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{conversation: ConversationObject, id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {conversation: {subject (optional, string), category (required, string \u00e2\u20ac\u201d channel slug), message: {body (required, string), recipients (optional, array of email strings), suppress_notifications (optional, boolean)}, user: {email (required, string), name (optional, string)}, tag_list (optional, array of strings), status (optional, integer \u00e2\u20ac\u201d 0=Open, 1=Responded, 2=Done, 3=Spam, 4=Archived, 5=On Hold, 6=Auto-Done, 7=AI Agent Assigned, 8=AI Agent Done, 9=Spam AI), assignee (optional, string \u00e2\u20ac\u201d assignee email), data (optional, object \u00e2\u20ac\u201d custom field key-value pairs)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversation_id}": {
+   "put": {
+    "operationId": "reamaze.conversations.update",
+    "summary": "Modify an existing Re:amaze conversation. Adjust its status, category, tags, or assigned agent.",
+    "description": "Modify an existing Re:amaze conversation. Adjust its status, category, tags, or assigned agent.",
+    "parameters": [
+     {
+      "name": "conversation_id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the conversation to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{conversation: ConversationObject, id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {conversation: {status (optional, integer \u00e2\u20ac\u201d 0=Open, 1=Responded, 2=Done, 3=Spam, 4=Archived, 5=On Hold, 6=Auto-Done, 7=AI Agent Assigned, 8=AI Agent Done, 9=Spam AI), hold_until (optional, ISO 8601 datetime \u00e2\u20ac\u201d when status=5), assignee: {email (optional, string)}, tag_list (optional, array of strings), category (optional, string \u00e2\u20ac\u201d email channel name), data (optional, object \u00e2\u20ac\u201d custom field key-value pairs), brand (optional, string \u00e2\u20ac\u201d brand URL for moving conversations)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversation_id}/messages": {
+   "post": {
+    "operationId": "reamaze.conversations.addMessage",
+    "summary": "Append a message or reply to an existing Re:amaze conversation.",
+    "description": "Append a message or reply to an existing Re:amaze conversation.",
+    "parameters": [
+     {
+      "name": "conversation_id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the conversation to add a message to.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{message: MessageObject, conversation_id: string, message_id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {message: {body (required, string \u00e2\u20ac\u201d supports markdown), visibility (optional, integer \u00e2\u20ac\u201d 0=Regular, 1=Internal Note), user (optional, object \u00e2\u20ac\u201d {email, name} to specify sender), suppress_notifications (optional, boolean), suppress_autoresolve (optional, boolean), attachment (optional, string \u00e2\u20ac\u201d file URL)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts": {
+   "get": {
+    "operationId": "reamaze.contacts.list",
+    "summary": "Retrieve all Re:amaze contacts and customers.",
+    "description": "Retrieve all Re:amaze contacts and customers.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{contacts: [ContactObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "reamaze.contacts.create",
+    "summary": "Add a new Re:amaze contact or customer record.",
+    "description": "Add a new Re:amaze contact or customer record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{contact: ContactObject, id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {contact: {email (required, string), name (optional, string), phone (optional, string), notes (optional, string), external_id (optional, string \u00e2\u20ac\u201d unique identifier in your app)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {}
+ }
+}

@@ -1,0 +1,1087 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "hubspot (WorkflowBench simulated)",
+  "version": "v3",
+  "description": "Simulated hubspot API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/hubspot"
+  }
+ ],
+ "paths": {
+  "/crm/v3/objects/contacts": {
+   "get": {
+    "operationId": "hubspot.crm.contacts.list",
+    "summary": "Retrieve a paginated list of contacts from the HubSpot CRM.",
+    "description": "Retrieve a paginated list of contacts from the HubSpot CRM.",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results to return per page (default 10, max 100).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "description": "Cursor for fetching the next page of results.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "properties",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of contact properties to include.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [Contact], paging: {next: {after: string}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "hubspot.crm.contacts.create",
+    "summary": "Add a new contact record to HubSpot CRM.",
+    "description": "Add a new contact record to HubSpot CRM.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Contact with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {email, firstname, lastname, phone, company, jobtitle, lifecyclestage}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/contacts/{contactId}": {
+   "get": {
+    "operationId": "hubspot.crm.contacts.get",
+    "summary": "Fetch complete details for one contact record by its HubSpot ID.",
+    "description": "Fetch complete details for one contact record by its HubSpot ID.",
+    "parameters": [
+     {
+      "name": "contactId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the contact to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "properties",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of properties to include.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Contact object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "operationId": "hubspot.crm.contacts.update",
+    "summary": "Modify properties on an existing HubSpot contact.",
+    "description": "Modify properties on an existing HubSpot contact.",
+    "parameters": [
+     {
+      "name": "contactId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the contact to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Updated Contact",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {email, firstname, lastname, phone, company, jobtitle, lifecyclestage, linkedin_url}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/contacts/search": {
+   "post": {
+    "operationId": "hubspot.crm.contacts.search",
+    "summary": "Filter and query contacts using property-based criteria. Find or look up contacts by any property value.",
+    "description": "Filter and query contacts using property-based criteria. Find or look up contacts by any property value.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{total: int, results: [Contact], paging: {next: {after: string}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{filterGroups: [{filters: [{propertyName: string, operator: string (EQ|NEQ|LT|LTE|GT|GTE|BETWEEN|IN|NOT_IN|CONTAINS_TOKEN|NOT_CONTAINS_TOKEN|HAS_PROPERTY|NOT_HAS_PROPERTY), value: string, highValue?: string, values?: [string]}]}], sorts: [{propertyName: string, direction: string}], limit: int, after: string}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/companies": {
+   "get": {
+    "operationId": "hubspot.crm.companies.list",
+    "summary": "Retrieve a paginated list of companies from the HubSpot CRM.",
+    "description": "Retrieve a paginated list of companies from the HubSpot CRM.",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results per page.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "description": "Cursor for fetching the next page.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "properties",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of company properties to include.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [Company], paging: {next: {after: string}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "hubspot.crm.companies.create",
+    "summary": "Add a new company record to HubSpot CRM.",
+    "description": "Add a new company record to HubSpot CRM.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Company with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {name (required), domain, industry, phone, city, state, country, lifecyclestage}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/deals": {
+   "get": {
+    "operationId": "hubspot.crm.deals.list",
+    "summary": "Retrieve a paginated list of deals from the HubSpot CRM.",
+    "description": "Retrieve a paginated list of deals from the HubSpot CRM.",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results per page.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "description": "Cursor for fetching the next page.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "properties",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of deal properties to include.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [Deal], paging: {next: {after: string}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "hubspot.crm.deals.create",
+    "summary": "Add a new deal record to HubSpot CRM.",
+    "description": "Add a new deal record to HubSpot CRM.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Deal with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {dealname (required), dealstage (required), pipeline, amount, closedate, dealtype, hubspot_owner_id}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/deals/{dealId}": {
+   "patch": {
+    "operationId": "hubspot.crm.deals.update",
+    "summary": "Modify properties on an existing HubSpot deal.",
+    "description": "Modify properties on an existing HubSpot deal.",
+    "parameters": [
+     {
+      "name": "dealId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the deal to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Updated Deal",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {dealname, dealstage, pipeline, amount, closedate, dealtype, hubspot_owner_id}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/deals/{dealId}/associations/contact/{contactId}/{associationType}": {
+   "put": {
+    "operationId": "hubspot.crm.deals.contacts.add",
+    "summary": "Link a contact to a deal. The associationType is a numeric ID (e.g., 3 for deal_to_contact).",
+    "description": "Link a contact to a deal. The associationType is a numeric ID (e.g., 3 for deal_to_contact).",
+    "parameters": [
+     {
+      "name": "dealId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the deal.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "contactId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the contact to link.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "associationType",
+      "in": "path",
+      "required": true,
+      "description": "Numeric identifier for the association type (e.g., 3 for deal_to_contact, 5 for deal_to_company).",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{deal_id, contact_id, associated: true}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/tickets": {
+   "get": {
+    "operationId": "hubspot.crm.tickets.list",
+    "summary": "Retrieve a paginated list of support tickets from HubSpot CRM.",
+    "description": "Retrieve a paginated list of support tickets from HubSpot CRM.",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results per page.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "description": "Cursor for fetching the next page.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "properties",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of ticket properties to include.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [Ticket], paging: {next: {after: string}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "hubspot.crm.tickets.create",
+    "summary": "Open a new support ticket in HubSpot CRM.",
+    "description": "Open a new support ticket in HubSpot CRM.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Ticket with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {subject (required), content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority, hubspot_owner_id}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/tickets/{ticketId}": {
+   "patch": {
+    "operationId": "hubspot.crm.tickets.update",
+    "summary": "Modify properties on an existing HubSpot support ticket.",
+    "description": "Modify properties on an existing HubSpot support ticket.",
+    "parameters": [
+     {
+      "name": "ticketId",
+      "in": "path",
+      "required": true,
+      "description": "HubSpot ID of the ticket to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Updated Ticket",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {subject, content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority, hubspot_owner_id}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/notes": {
+   "post": {
+    "operationId": "hubspot.crm.notes.create",
+    "summary": "Record a note activity in HubSpot. Log free-form text attached to contacts, companies, or deals.",
+    "description": "Record a note activity in HubSpot. Log free-form text attached to contacts, companies, or deals.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Note with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {hs_note_body (required), hs_timestamp}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/emails": {
+   "post": {
+    "operationId": "hubspot.crm.emails.create",
+    "summary": "Record an email activity in HubSpot. Log an email message linked to contacts, companies, or deals.",
+    "description": "Record an email activity in HubSpot. Log an email message linked to contacts, companies, or deals.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created EmailActivity with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {hs_email_text or hs_email_html (required), hs_email_subject, hs_email_direction, hs_timestamp}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/calls": {
+   "post": {
+    "operationId": "hubspot.crm.calls.create",
+    "summary": "Record a call activity in HubSpot. Log a phone conversation linked to contacts, companies, or deals.",
+    "description": "Record a call activity in HubSpot. Log a phone conversation linked to contacts, companies, or deals.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Call with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {hs_call_body (required), hs_call_title, hs_call_duration, hs_call_direction, hs_timestamp}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/meetings": {
+   "post": {
+    "operationId": "hubspot.crm.meetings.create",
+    "summary": "Record a meeting activity in HubSpot. Log a scheduled meeting linked to contacts, companies, or deals.",
+    "description": "Record a meeting activity in HubSpot. Log a scheduled meeting linked to contacts, companies, or deals.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Meeting with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {hs_meeting_body (required), hs_meeting_title, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/tasks": {
+   "post": {
+    "operationId": "hubspot.crm.tasks.create",
+    "summary": "Record a task activity in HubSpot. Create a to-do item linked to contacts, companies, or deals.",
+    "description": "Record a task activity in HubSpot. Create a to-do item linked to contacts, companies, or deals.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created TaskActivity with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {hs_task_body (required), hs_task_subject, hs_task_status, hs_task_priority, hs_timestamp}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/crm/v3/objects/engagements": {
+   "post": {
+    "operationId": "hubspot.crm.engagements.create",
+    "summary": "Create an engagement (activity) in HubSpot. This is a legacy unified endpoint for logging notes, emails, calls, meetings",
+    "description": "Create an engagement (activity) in HubSpot. This is a legacy unified endpoint for logging notes, emails, calls, meetings, or tasks. Prefer the dedicated per-type endpoints (/notes, /emails, /calls, /meetings, /tasks).",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created Engagement with id and type",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{properties: {engagement_type (required: NOTE|EMAIL|CALL|MEETING|TASK), body}, associations: [{to: {id: string}, types: [{associationCategory: \"HUBSPOT_DEFINED\", associationTypeId: int}]}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Contact": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "HubSpot-assigned unique identifier for this contact."
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "email": {
+        "type": "string"
+       },
+       "firstname": {
+        "type": "string"
+       },
+       "lastname": {
+        "type": "string"
+       },
+       "phone": {
+        "type": "string"
+       },
+       "company": {
+        "type": "string"
+       },
+       "jobtitle": {
+        "type": "string"
+       },
+       "lifecyclestage": {
+        "type": "string"
+       }
+      }
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Company": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string"
+       },
+       "domain": {
+        "type": "string"
+       },
+       "industry": {
+        "type": "string"
+       },
+       "phone": {
+        "type": "string"
+       },
+       "city": {
+        "type": "string"
+       },
+       "state": {
+        "type": "string"
+       },
+       "country": {
+        "type": "string"
+       },
+       "lifecyclestage": {
+        "type": "string"
+       }
+      }
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Deal": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "dealname": {
+        "type": "string"
+       },
+       "dealstage": {
+        "type": "string"
+       },
+       "pipeline": {
+        "type": "string"
+       },
+       "amount": {
+        "type": "string"
+       },
+       "closedate": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "dealtype": {
+        "type": "string"
+       },
+       "hubspot_owner_id": {
+        "type": "string"
+       }
+      }
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Ticket": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "subject": {
+        "type": "string"
+       },
+       "content": {
+        "type": "string"
+       },
+       "hs_pipeline": {
+        "type": "string"
+       },
+       "hs_pipeline_stage": {
+        "type": "string"
+       },
+       "hs_ticket_priority": {
+        "type": "string",
+        "enum": [
+         "LOW",
+         "MEDIUM",
+         "HIGH",
+         "URGENT"
+        ]
+       },
+       "hubspot_owner_id": {
+        "type": "string"
+       }
+      }
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Note": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "hs_note_body": {
+        "type": "string",
+        "description": "Body of the note in HTML or plain text."
+       },
+       "hs_timestamp": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     }
+    }
+   },
+   "EmailActivity": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "hs_email_text": {
+        "type": "string"
+       },
+       "hs_email_html": {
+        "type": "string"
+       },
+       "hs_email_subject": {
+        "type": "string"
+       },
+       "hs_email_direction": {
+        "type": "string",
+        "enum": [
+         "EMAIL",
+         "INCOMING_EMAIL",
+         "FORWARDED_EMAIL"
+        ]
+       },
+       "hs_timestamp": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     }
+    }
+   },
+   "Call": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "hs_call_body": {
+        "type": "string",
+        "description": "Notes recorded during or after the call."
+       },
+       "hs_call_title": {
+        "type": "string"
+       },
+       "hs_call_duration": {
+        "type": "string"
+       },
+       "hs_call_direction": {
+        "type": "string",
+        "enum": [
+         "INBOUND",
+         "OUTBOUND"
+        ]
+       },
+       "hs_timestamp": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     }
+    }
+   },
+   "Meeting": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "hs_meeting_body": {
+        "type": "string"
+       },
+       "hs_meeting_title": {
+        "type": "string"
+       },
+       "hs_meeting_start_time": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "hs_meeting_end_time": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "hs_timestamp": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     }
+    }
+   },
+   "TaskActivity": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "properties": {
+      "type": "object",
+      "properties": {
+       "hs_task_body": {
+        "type": "string"
+       },
+       "hs_task_subject": {
+        "type": "string"
+       },
+       "hs_task_status": {
+        "type": "string",
+        "enum": [
+         "NOT_STARTED",
+         "COMPLETED",
+         "WAITING"
+        ]
+       },
+       "hs_task_priority": {
+        "type": "string",
+        "enum": [
+         "LOW",
+         "MEDIUM",
+         "HIGH"
+        ]
+       },
+       "hs_timestamp": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

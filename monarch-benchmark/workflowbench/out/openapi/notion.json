@@ -1,0 +1,164 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "notion (WorkflowBench simulated)",
+  "version": "2025-09-03",
+  "description": "Notion REST API. Authorization: Bearer {integration_token}. Notion-Version: 2025-09-03 header required. parent_id can be a page ID or database ID. Page IDs are UUIDs (with or without dashes)."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/notion"
+  }
+ ],
+ "paths": {
+  "/pages": {
+   "post": {
+    "operationId": "notion.pages.create",
+    "summary": "Create a new Notion page under a given parent (page or database) with specified properties. Use the children array to su",
+    "description": "Create a new Notion page under a given parent (page or database) with specified properties. Use the children array to supply block content. For public integrations only, omit the parent to create a private workspace-level page.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, object: 'page', url, public_url, created_time, last_edited_time, archived, in_trash, is_locked, parent, properties: {title: {title: [{text: {content}}]}}, icon, cover, created_by, last_edited_by}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {parent (required for internal integrations, object \u00e2\u20ac\u201d {type: 'page_id', page_id: '...'} or {type: 'database_id', database_id: '...'} or {workspace: true} for public integrations), properties (required, object \u00e2\u20ac\u201d {title: {title: [{text: {content: 'Page Title'}}]}} for page parents, or database property values for database parents), children (optional, array \u00e2\u20ac\u201d block objects for page content, max 100; mutually exclusive with markdown), content (optional, array \u00e2\u20ac\u201d block objects, max 100; mutually exclusive with markdown), markdown (optional, string \u00e2\u20ac\u201d page content as Notion-flavored Markdown; mutually exclusive with content/children), icon (optional, object \u00e2\u20ac\u201d {type: 'emoji', emoji: '...'} or {type: 'external', external: {url: '...'}}), cover (optional, object \u00e2\u20ac\u201d {type: 'external', external: {url: '...'}}), template (optional, object \u00e2\u20ac\u201d {type: 'none'|'default'|'template_id', template_id (string \u00e2\u20ac\u201d required when type is template_id), timezone (string \u00e2\u20ac\u201d IANA timezone for template variables)}), position (optional, object)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/pages/{page_id}": {
+   "patch": {
+    "operationId": "notion.pages.update",
+    "summary": "Modify an existing Notion page's properties, icon, cover, archived or trash status, or locked state. A template can also",
+    "description": "Modify an existing Notion page's properties, icon, cover, archived or trash status, or locked state. A template can also be applied. Note: to add new content blocks, use the Append block children API rather than this endpoint.",
+    "parameters": [
+     {
+      "name": "page_id",
+      "in": "path",
+      "required": true,
+      "description": "The UUID of the page to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, object: 'page', url, public_url, archived, in_trash, is_locked, last_edited_time, properties, icon, cover, created_by, last_edited_by}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {properties (optional, object \u00e2\u20ac\u201d property values to update, e.g. {title: {title: [{text: {content: 'New Title'}}]}}), archived (optional, boolean \u00e2\u20ac\u201d true to archive the page), in_trash (optional, boolean \u00e2\u20ac\u201d true to move page to trash), icon (optional, object \u00e2\u20ac\u201d {type: 'emoji', emoji: '...'} or {type: 'external', external: {url: '...'}}), cover (optional, object \u00e2\u20ac\u201d {type: 'external', external: {url: '...'}}), is_locked (optional, boolean \u00e2\u20ac\u201d lock or unlock the page from editing in the Notion app UI), template (optional, object \u00e2\u20ac\u201d {type: 'default'|'template_id', template_id (string), timezone (string \u00e2\u20ac\u201d IANA timezone)}), erase_content (optional, boolean \u00e2\u20ac\u201d delete all existing block children before applying template)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Page": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The page's UUID."
+     },
+     "object": {
+      "type": "string",
+      "enum": [
+       "page"
+      ]
+     },
+     "created_time": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "last_edited_time": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "archived": {
+      "type": "boolean"
+     },
+     "in_trash": {
+      "type": "boolean",
+      "description": "Indicates whether the page has been moved to trash."
+     },
+     "is_locked": {
+      "type": "boolean",
+      "description": "When true, the page cannot be edited through the Notion app UI."
+     },
+     "url": {
+      "type": "string",
+      "description": "The public web address for this Notion page."
+     },
+     "public_url": {
+      "type": "string",
+      "description": "A publicly shareable URL when the page is published; null if not published."
+     },
+     "properties": {
+      "type": "object",
+      "description": "Collection of page properties. The 'title' key is always present; other keys correspond to property names."
+     },
+     "parent": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string",
+        "enum": [
+         "page_id",
+         "database_id",
+         "workspace"
+        ]
+       },
+       "page_id": {
+        "type": "string"
+       },
+       "database_id": {
+        "type": "string"
+       }
+      }
+     },
+     "created_by": {
+      "type": "object",
+      "description": "User object identifying who originally created this page."
+     },
+     "last_edited_by": {
+      "type": "object",
+      "description": "User object identifying who last made changes to this page."
+     }
+    }
+   }
+  }
+ }
+}

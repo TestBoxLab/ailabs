@@ -1,0 +1,149 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "gorgias (WorkflowBench simulated)",
+  "version": "v1",
+  "description": "Simulated gorgias API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/gorgias"
+  }
+ ],
+ "paths": {
+  "/api/tickets": {
+   "get": {
+    "operationId": "gorgias.tickets.list",
+    "summary": "Retrieve a collection of support tickets from Gorgias. Fetch and browse helpdesk ticket records.",
+    "description": "Retrieve a collection of support tickets from Gorgias. Fetch and browse helpdesk ticket records.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{data: [TicketObject], meta: {total_count: int}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "gorgias.tickets.create",
+    "summary": "Open a new helpdesk ticket in Gorgias. Submit a ticket with a subject line, the customer's email address, and message co",
+    "description": "Open a new helpdesk ticket in Gorgias. Submit a ticket with a subject line, the customer's email address, and message content.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id: int, subject: string, channel: string, status: string, customer: object, messages: array, message_count: int, tags: array, assignee_user_id: string, created_at: string, updated_at: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {subject (optional, string), channel (optional, string \u00e2\u20ac\u201d 'aircall'|'api'|'chat'|'contact_form'|'email'|'facebook'|'facebook-mention'|'facebook-messenger'|'facebook-recommendations'|'help-center'|'instagram-ad-comment'|'instagram-comment'|'instagram-direct-message'|'instagram-mention'|'internal-note'|'phone'|'sms'|'twitter'|'twitter-direct-message'|'whatsapp'|'yotpo-review', default 'email'), via (required, string \u00e2\u20ac\u201d 'api'|'email'|'helpdesk'|'chat'|'sms'), customer (optional, object \u00e2\u20ac\u201d {email, name}), messages (required, array of {body_text, body_html, channel, from_agent (bool), via} \u00e2\u20ac\u201d minimum 1 item), tags (optional, array of {name} objects), from_agent (optional, boolean)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/tickets/{ticket_id}": {
+   "put": {
+    "operationId": "gorgias.tickets.update",
+    "summary": "Modify an existing ticket in Gorgias. Update the ticket's status (open/closed) or reassign its tags.",
+    "description": "Modify an existing ticket in Gorgias. Update the ticket's status (open/closed) or reassign its tags.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the ticket to modify.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id: int, subject: string, channel: string, status: string, customer: object, messages: array, message_count: int, tags: array, assignee_user_id: string, created_at: string, updated_at: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{status (optional, string \u00e2\u20ac\u201d 'open'|'closed'), tags (optional, array of {name: string} objects \u00e2\u20ac\u201d e.g. [{name: 'urgent'}, {name: 'vip'}]), subject (optional, string), priority (optional, string \u00e2\u20ac\u201d 'critical'|'high'|'normal'|'low')}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/tickets/{ticket_id}/messages": {
+   "post": {
+    "operationId": "gorgias.tickets.create_message",
+    "summary": "Append a message or reply to an existing Gorgias ticket. Post a response to a customer's support request.",
+    "description": "Append a message or reply to an existing Gorgias ticket. Post a response to a customer's support request.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the ticket to append the message to.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id: int, body_text: string, body_html: string, channel: string, from_agent: bool, created_datetime: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {body_text (optional, string), body_html (optional, string), channel (required, string \u00e2\u20ac\u201d 'aircall'|'api'|'chat'|'contact_form'|'email'|'facebook'|'facebook-mention'|'facebook-messenger'|'facebook-recommendations'|'help-center'|'instagram-ad-comment'|'instagram-comment'|'instagram-direct-message'|'instagram-mention'|'internal-note'|'phone'|'sms'|'twitter'|'twitter-direct-message'|'whatsapp'|'yotpo-review'), from_agent (required, boolean \u00e2\u20ac\u201d true for agent message, false for customer), via (required, string \u00e2\u20ac\u201d 'api'|'email'|'helpdesk'|'chat'|'sms'), subject (optional, string), public (optional, boolean, default true)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {}
+ }
+}

@@ -1,0 +1,254 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "asana (WorkflowBench simulated)",
+  "version": "1.0",
+  "description": "Asana REST API. Authorization: Bearer {personal_access_token}. All responses wrap data in a 'data' envelope. GIDs are globally unique identifiers (strings of digits)."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/asana"
+  }
+ ],
+ "paths": {
+  "/tasks": {
+   "post": {
+    "operationId": "asana.tasks.create",
+    "summary": "Create a new task in Asana. Associate it with a workspace, and optionally attach it to projects, specify an assignee, se",
+    "description": "Create a new task in Asana. Associate it with a workspace, and optionally attach it to projects, specify an assignee, set a due date, and apply tags.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{data: {gid, name, notes, due_on, completed, assignee, workspace, created_at}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (optional, string), notes (optional, string \u00e2\u20ac\u201d description), due_on (optional, YYYY-MM-DD), assignee (optional, string \u00e2\u20ac\u201d user GID or email), completed (optional, bool, default false), tags (optional, array of tag GIDs), projects (optional, array of project GIDs), parent (optional, string \u00e2\u20ac\u201d parent task GID), workspace (conditional, string \u00e2\u20ac\u201d workspace GID, required if projects and parent are not specified)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/projects/{project_gid}/sections": {
+   "get": {
+    "operationId": "asana.sections.getForProject",
+    "summary": "Retrieve all sections belonging to a project. Returns each section's GID and display name.",
+    "description": "Retrieve all sections belonging to a project. Returns each section's GID and display name.",
+    "parameters": [
+     {
+      "name": "project_gid",
+      "in": "path",
+      "required": true,
+      "description": "The globally unique identifier of the project.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results to return per page (max 100).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "description": "Token used to paginate through additional results.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: [{gid, name, project: {gid, name}}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/sections/{section_gid}/addTask": {
+   "post": {
+    "operationId": "asana.sections.addTask",
+    "summary": "Place an existing task into a section within a project. Obtain the section GID first via GET /projects/{project_gid}/sec",
+    "description": "Place an existing task into a section within a project. Obtain the section GID first via GET /projects/{project_gid}/sections.",
+    "parameters": [
+     {
+      "name": "section_gid",
+      "in": "path",
+      "required": true,
+      "description": "The globally unique identifier of the section.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {task (required, string \u00e2\u20ac\u201d task GID to add), insert_before (optional, string \u00e2\u20ac\u201d task GID to insert before), insert_after (optional, string \u00e2\u20ac\u201d task GID to insert after)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/tasks/{task_gid}/addTag": {
+   "post": {
+    "operationId": "asana.tasks.addTag",
+    "summary": "Apply a tag to an existing task in Asana.",
+    "description": "Apply a tag to an existing task in Asana.",
+    "parameters": [
+     {
+      "name": "task_gid",
+      "in": "path",
+      "required": true,
+      "description": "The globally unique identifier of the task.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {tag (required, string \u00e2\u20ac\u201d tag GID)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Task": {
+    "type": "object",
+    "properties": {
+     "gid": {
+      "type": "string",
+      "description": "Globally unique identifier for the task."
+     },
+     "name": {
+      "type": "string",
+      "description": "Title of the task."
+     },
+     "notes": {
+      "type": "string",
+      "description": "Plain text body describing the task."
+     },
+     "due_on": {
+      "type": "string",
+      "description": "Target completion date in YYYY-MM-DD format."
+     },
+     "completed": {
+      "type": "boolean"
+     },
+     "assignee": {
+      "type": "object",
+      "properties": {
+       "gid": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      }
+     },
+     "workspace": {
+      "type": "object",
+      "properties": {
+       "gid": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      }
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Section": {
+    "type": "object",
+    "properties": {
+     "gid": {
+      "type": "string",
+      "description": "Globally unique identifier for the section."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the section."
+     },
+     "project": {
+      "type": "object",
+      "properties": {
+       "gid": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

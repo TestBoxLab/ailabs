@@ -1,0 +1,360 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "twitter (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "X (Twitter) API v2. All requests require Authorization: Bearer {token}. OAuth 2.0 Bearer Token for app-only auth; OAuth 1.0a or OAuth 2.0 PKCE for user-context endpoints (likes, follows, post tweet)."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/twitter"
+  }
+ ],
+ "paths": {
+  "/tweets": {
+   "post": {
+    "operationId": "twitter.tweets.create",
+    "summary": "Publish a new tweet. To reply to an existing tweet, supply the target tweet ID via reply.in_reply_to_tweet_id.",
+    "description": "Publish a new tweet. To reply to an existing tweet, supply the target tweet ID via reply.in_reply_to_tweet_id.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{data: {id, text}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {text (required, 1\u00e2\u20ac\u201c280 chars), reply (optional): {in_reply_to_tweet_id (string)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/tweets/search/recent": {
+   "get": {
+    "operationId": "twitter.tweets.search",
+    "summary": "Find tweets published within the past 7 days. Accepts full-text search operators such as from:user, #hashtag, and others",
+    "description": "Find tweets published within the past 7 days. Accepts full-text search operators such as from:user, #hashtag, and others.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": true,
+      "description": "Search expression up to 512 characters. Supports operators: from:, to:, #hashtag, @mention, is:retweet, lang:.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "max_results",
+      "in": "query",
+      "required": false,
+      "description": "Number of results to return per page (range 10\u00e2\u20ac\u201c100, default 10).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "tweet.fields",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of tweet fields to include: id,text,author_id,created_at,public_metrics,conversation_id.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "expansions",
+      "in": "query",
+      "required": false,
+      "description": "Related objects to expand alongside the results, e.g. 'author_id'.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "next_token",
+      "in": "query",
+      "required": false,
+      "description": "Cursor token from the previous page of results, used for pagination.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: [{id, text, author_id, created_at, public_metrics}], meta: {newest_id, oldest_id, result_count, next_token}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/users/by/username/{username}": {
+   "get": {
+    "operationId": "twitter.users.getByUsername",
+    "summary": "Retrieve a user's profile by their @username (omit the @). Returns id, name, username, and any additionally requested fi",
+    "description": "Retrieve a user's profile by their @username (omit the @). Returns id, name, username, and any additionally requested fields.",
+    "parameters": [
+     {
+      "name": "username",
+      "in": "path",
+      "required": true,
+      "description": "The target user's handle, without the @ prefix.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "user.fields",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated user fields to include: id,name,username,description,public_metrics,verified,created_at.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {id, name, username, description, public_metrics, verified, created_at}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/users/{id}/following": {
+   "post": {
+    "operationId": "twitter.users.follow",
+    "summary": "Follow another user on behalf of an authenticated account. Requires user-context OAuth credentials.",
+    "description": "Follow another user on behalf of an authenticated account. Requires user-context OAuth credentials.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The user ID of the authenticated account performing the follow.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {following (bool), pending_follow (bool)}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {target_user_id (required, string) \u00e2\u20ac\u201d the ID of the user to follow}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/users/{id}/likes": {
+   "post": {
+    "operationId": "twitter.tweets.like",
+    "summary": "Like a tweet on behalf of an authenticated user. Requires user-context OAuth credentials.",
+    "description": "Like a tweet on behalf of an authenticated user. Requires user-context OAuth credentials.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The user ID of the authenticated account performing the like.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {liked (bool)}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {tweet_id (required, string) \u00e2\u20ac\u201d the ID of the tweet to like}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/users/me": {
+   "get": {
+    "operationId": "twitter.users.me",
+    "summary": "Returns the profile of the currently authenticated user. Useful for retrieving your own account ID, username, and displa",
+    "description": "Returns the profile of the currently authenticated user. Useful for retrieving your own account ID, username, and display name.",
+    "parameters": [
+     {
+      "name": "user.fields",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of user fields to include in the response.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: {id, name, username, description, public_metrics, verified, created_at}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Tweet": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The tweet's unique identifier."
+     },
+     "text": {
+      "type": "string",
+      "description": "The content of the tweet (maximum 280 characters)."
+     },
+     "author_id": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "conversation_id": {
+      "type": "string"
+     },
+     "in_reply_to_user_id": {
+      "type": "string"
+     },
+     "public_metrics": {
+      "type": "object",
+      "properties": {
+       "retweet_count": {
+        "type": "integer"
+       },
+       "like_count": {
+        "type": "integer"
+       },
+       "reply_count": {
+        "type": "integer"
+       },
+       "quote_count": {
+        "type": "integer"
+       },
+       "impression_count": {
+        "type": "integer"
+       },
+       "bookmark_count": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   },
+   "User": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The user's unique identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "The user's display name shown on their profile."
+     },
+     "username": {
+      "type": "string",
+      "description": "The user's handle, without the @ symbol."
+     },
+     "description": {
+      "type": "string"
+     },
+     "public_metrics": {
+      "type": "object",
+      "properties": {
+       "followers_count": {
+        "type": "integer"
+       },
+       "following_count": {
+        "type": "integer"
+       },
+       "tweet_count": {
+        "type": "integer"
+       },
+       "listed_count": {
+        "type": "integer"
+       }
+      }
+     },
+     "verified": {
+      "type": "boolean"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  }
+ }
+}

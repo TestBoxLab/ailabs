@@ -1,0 +1,111 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "confluence (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Confluence Cloud REST API v2. Authorization: Bearer {api_token} or Basic base64(email:token). spaceId is the numeric ID of the Confluence space."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/confluence"
+  }
+ ],
+ "paths": {
+  "/api/v2/pages": {
+   "post": {
+    "operationId": "confluence.pages.create",
+    "summary": "Create a new Confluence page. Supply the spaceId and an optional parentId to nest the page under an existing one. Page b",
+    "description": "Create a new Confluence page. Supply the spaceId and an optional parentId to nest the page under an existing one. Page body content should use storage (HTML-like) format. To create blog posts, use the separate /wiki/api/v2/blogposts endpoint.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, title, status, spaceId, parentId, body: {representation, value}, version: {number}, _links: {webui}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {spaceId (required, string \u00e2\u20ac\u201d numeric space ID), title (required, string), body (required, object \u00e2\u20ac\u201d {representation: 'storage', value: '<p>HTML content</p>'}), parentId (optional, string \u00e2\u20ac\u201d parent page ID for nested pages), status (optional, string \u00e2\u20ac\u201d 'current' or 'draft', default 'current')}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Page": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier of the page."
+     },
+     "title": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "current",
+       "draft"
+      ],
+      "description": "'current' indicates the page is published and visible."
+     },
+     "spaceId": {
+      "type": "string"
+     },
+     "parentId": {
+      "type": "string",
+      "description": "Identifier of the parent page; null for top-level pages."
+     },
+     "body": {
+      "type": "object",
+      "description": "In API v2 responses, the body uses a flat structure: {representation, value}. It is not nested under 'storage'.",
+      "properties": {
+       "representation": {
+        "type": "string",
+        "enum": [
+         "storage",
+         "atlas_doc_format"
+        ]
+       },
+       "value": {
+        "type": "string",
+        "description": "Page content as an HTML or storage-format string."
+       }
+      }
+     },
+     "version": {
+      "type": "object",
+      "properties": {
+       "number": {
+        "type": "integer"
+       }
+      }
+     },
+     "_links": {
+      "type": "object",
+      "properties": {
+       "webui": {
+        "type": "string",
+        "description": "URL to open the page in the Confluence web interface."
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

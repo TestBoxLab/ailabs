@@ -1,0 +1,204 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "facebook_lead_ads (WorkflowBench simulated)",
+  "version": "v25.0",
+  "description": "Facebook Lead Ads API via the Graph API. Lead Ads let you collect contact info from users via an instant form. To get started: create a lead form on a Page, then create an Ad that references the form. Leads submitted through the form are retrievable via the form's leads edge. Requires pages_manage_ads, ads_management, and leads_retrieval permissions."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/facebook_lead_ads"
+  }
+ ],
+ "paths": {
+  "/{pageId}/leadgen_forms": {
+   "post": {
+    "operationId": "facebook_lead_ads.leadgen_forms.create",
+    "summary": "Set up a new Lead Ad (instant form) on a Facebook Page. The form collects contact details from users who engage with the",
+    "description": "Set up a new Lead Ad (instant form) on a Facebook Page. The form collects contact details from users who engage with the ad. Returns the ID of the newly created ad.",
+    "parameters": [
+     {
+      "name": "pageId",
+      "in": "path",
+      "required": true,
+      "description": "The Facebook Page ID on which the lead ad will be created.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, ad: {id, ad_name, status, adset_id, form_id}, ad_id}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {ad_name (required, string \u00e2\u20ac\u201d name of the lead ad), adset_id (required, string \u00e2\u20ac\u201d the ad set ID to attach the ad to), creative_name (required, string \u00e2\u20ac\u201d name for the ad creative), message (required, string \u00e2\u20ac\u201d ad body text), link (required, string \u00e2\u20ac\u201d destination URL), form (required, string \u00e2\u20ac\u201d form/template ID for lead capture), action_type (required, string \u00e2\u20ac\u201d call to action; enum: APPLY_NOW|DOWNLOAD|GET_QUOTE|LEARN_MORE|SIGN_UP|SUBSCRIBE), status (required, string \u00e2\u20ac\u201d ACTIVE or PAUSED), description (optional, string \u00e2\u20ac\u201d ad description), campaign_name (optional, string \u00e2\u20ac\u201d campaign to associate)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/{formId}/leads": {
+   "get": {
+    "operationId": "facebook_lead_ads.leads.list",
+    "summary": "Fetch all leads submitted to a particular Lead Ad form. Returns every submission along with the corresponding form field",
+    "description": "Fetch all leads submitted to a particular Lead Ad form. Returns every submission along with the corresponding form field data.",
+    "parameters": [
+     {
+      "name": "formId",
+      "in": "path",
+      "required": true,
+      "description": "The ID of the Lead Ad form whose submissions you want to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, ad_id, ad_name, leads: [{id, ad_id, created_time, field_data}], count}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/act_{adAccountId}/ads": {
+   "get": {
+    "operationId": "facebook_lead_ads.ads.find",
+    "summary": "Locate a Lead Ad by name within a given ad account. Pass the name query parameter to perform a search by ad name.",
+    "description": "Locate a Lead Ad by name within a given ad account. Pass the name query parameter to perform a search by ad name.",
+    "parameters": [
+     {
+      "name": "adAccountId",
+      "in": "path",
+      "required": true,
+      "description": "The ad account ID (excluding the act_ prefix).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "name",
+      "in": "query",
+      "required": false,
+      "description": "The exact ad name to search for.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, found, ad: {id, ad_name, status, adset_id}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "LeadForm": {
+    "type": "object",
+    "description": "A Facebook Lead Ad instant form used for contact capture.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the form."
+     },
+     "ad_name": {
+      "type": "string",
+      "description": "Display name of the lead ad."
+     },
+     "form_id": {
+      "type": "string",
+      "description": "Identifier of the instant form used to collect lead information."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "PAUSED"
+      ],
+      "description": "Current running state of the ad."
+     }
+    }
+   },
+   "Lead": {
+    "type": "object",
+    "description": "A contact submission captured through a Facebook Lead Ad form.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the lead submission."
+     },
+     "ad_id": {
+      "type": "string",
+      "description": "Identifier of the ad that captured this lead."
+     },
+     "created_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of when the lead was submitted."
+     },
+     "field_data": {
+      "type": "array",
+      "description": "Collection of {name, values} objects representing the form field responses."
+     }
+    }
+   },
+   "Ad": {
+    "type": "object",
+    "description": "A Facebook Ad creative object.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the ad."
+     },
+     "ad_name": {
+      "type": "string",
+      "description": "Display name of the ad."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "PAUSED"
+      ],
+      "description": "Current delivery state of the ad."
+     },
+     "adset_id": {
+      "type": "string",
+      "description": "Identifier of the ad set this ad is grouped under."
+     }
+    }
+   }
+  }
+ }
+}

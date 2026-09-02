@@ -1,0 +1,156 @@
+"""HTTP front door for one episode (BUILD-SPEC §2.2 Option B; verified 2 Sep
+2026: the Monarch executor dispatches plain HTTP, never MCP). Stdlib only.
+
+Two surfaces over the same Episode:
+
+  Tool surface (kept for harnesses that speak the 3-tool contract):
+    POST /fetch   {method, url, params?, body?} -> api_fetch result
+    POST /search  {query, top_k?}               -> api_search result
+    POST /encode  {text}                        -> base64_encode result
+
+  REST surface (what Monarch's engine calls after discovering the OpenAPI docs):
+    GET  /openapi/index.json, /openapi/<service>.json
+    ANY  /<service>/<real path>?query   JSON body -> api_fetch(baseUrl + path)
+         AB error envelopes {"error": {"code": N}} become HTTP status N.
+
+One shim per episode. WB_SHIM_PUBLIC_URL overrides the advertised server URL
+when Monarch runs in Docker (e.g. http://host.docker.internal:PORT).
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+from wb_world.episode import Episode
+from wb_world.openapi import build_spec, load_schemas
+
+
+class EpisodeHTTPShim:
+    def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None):
+        outer = self
+        self.episode = episode
+        self.schemas = load_schemas()
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
+        self.port = self.httpd.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.public_url = (public_url or os.environ.get("WB_SHIM_PUBLIC_URL") or self.url).rstrip("/")
+        self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def _handler(self):
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _body(self) -> bytes:
+                n = int(self.headers.get("Content-Length") or 0)
+                return self.rfile.read(n) if n else b""
+
+            def do_GET(self):
+                sp = urlsplit(self.path)
+                if sp.path == "/openapi/index.json":
+                    self._reply(200, {svc: {"url": f"{outer.public_url}/openapi/{svc}.json"}
+                                      for svc in outer.schemas})
+                elif sp.path.startswith("/openapi/") and sp.path.endswith(".json"):
+                    svc = sp.path[len("/openapi/"):-len(".json")]
+                    if svc not in outer.schemas:
+                        self._reply(404, {"error": f"unknown service {svc}"})
+                        return
+                    self._reply(200, build_spec(svc, outer.schemas[svc], outer.public_url))
+                else:
+                    self._rest("GET")
+
+            def do_POST(self):
+                if self.path in ("/fetch", "/search", "/encode"):
+                    self._tool()
+                else:
+                    self._rest("POST")
+
+            def do_PUT(self): self._rest("PUT")
+            def do_PATCH(self): self._rest("PATCH")
+            def do_DELETE(self): self._rest("DELETE")
+
+            def _tool(self):
+                try:
+                    req = json.loads(self._body() or b"{}")
+                    ep = outer.episode
+                    if self.path == "/fetch":
+                        out = ep.api_fetch(req["method"], req["url"],
+                                           params=_as_json_str(req.get("params")),
+                                           body=_as_json_str(req.get("body")))
+                    elif self.path == "/search":
+                        out = ep.api_search(req["query"], int(req.get("top_k") or 5))
+                    else:
+                        out = ep.base64_encode(req["text"])
+                    self._reply(200, {"result": out})
+                except Exception as e:
+                    self._reply(400, {"error": str(e)})
+
+            def _rest(self, method: str):
+                sp = urlsplit(self.path)
+                parts = sp.path.lstrip("/").split("/", 1)
+                svc = parts[0]
+                if svc not in outer.schemas:
+                    self._reply(404, {"error": f"unknown service {svc!r}"})
+                    return
+                rest = parts[1] if len(parts) > 1 else ""
+                base = outer.schemas[svc].get("baseUrl", "").rstrip("/")
+                url = f"{base}/{rest}"
+                # Single-valued query params, like every AB router expects.
+                params = {k: v[-1] for k, v in parse_qs(sp.query, keep_blank_values=True).items()}
+                raw = self._body()
+                body = raw.decode("utf-8") if raw else None
+                try:
+                    out = outer.episode.api_fetch(method, url, params=json.dumps(params) if params else None,
+                                                  body=body)
+                except Exception as e:
+                    self._reply(500, {"error": str(e)})
+                    return
+                self._raw(out)
+
+            def _raw(self, text: str):
+                status = 200
+                try:
+                    data = json.loads(text)
+                    err = data.get("error") if isinstance(data, dict) else None
+                    if isinstance(err, dict) and isinstance(err.get("code"), int):
+                        status = err["code"]
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+                payload = text.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def _reply(self, code: int, obj: dict):
+                self._raw_status(code, json.dumps(obj))
+
+            def _raw_status(self, code: int, text: str):
+                payload = text.encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        return Handler
+
+    def start(self) -> "EpisodeHTTPShim":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def _as_json_str(v) -> str | None:
+    if v is None or isinstance(v, str):
+        return v
+    return json.dumps(v)

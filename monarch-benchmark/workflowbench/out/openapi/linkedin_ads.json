@@ -1,0 +1,335 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "linkedin_ads (WorkflowBench simulated)",
+  "version": "rest",
+  "description": "LinkedIn Marketing API (REST/v2). Used for managing LinkedIn Ads audiences (Matched Audiences / DMP Segments), sending conversion events, and creating reports. All requests require Authorization: Bearer {access_token} and LinkedIn-Version header. Audiences are called DMP Segments. Contacts are identified by hashed email."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/linkedin_ads"
+  }
+ ],
+ "paths": {
+  "/adAccounts/{accountId}/dmpSegments": {
+   "post": {
+    "operationId": "linkedin_ads.audiences.create",
+    "summary": "Define a new LinkedIn Matched Audience (DMP Segment). Audiences can be USER type (email-based) or COMPANY type (company-",
+    "description": "Define a new LinkedIn Matched Audience (DMP Segment). Audiences can be USER type (email-based) or COMPANY type (company-based) and are applied for targeting within LinkedIn ad campaigns.",
+    "parameters": [
+     {
+      "name": "accountId",
+      "in": "path",
+      "required": true,
+      "description": "The LinkedIn Ads account ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, audience: {id, name, audience_type, account_id}, audience_id}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (required, string \u00e2\u20ac\u201d audience name), type (optional, string \u00e2\u20ac\u201d USER or COMPANY, default USER)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/dmpSegments/{segmentId}/users": {
+   "post": {
+    "operationId": "linkedin_ads.audiences.addContact",
+    "summary": "Enroll a contact (user) in a LinkedIn Matched Audience. The contact is identified by email address. Supply action=ADD as",
+    "description": "Enroll a contact (user) in a LinkedIn Matched Audience. The contact is identified by email address. Supply action=ADD as a query parameter.",
+    "parameters": [
+     {
+      "name": "segmentId",
+      "in": "path",
+      "required": true,
+      "description": "The audience or segment ID to enroll the contact into.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "required": true,
+      "description": "Must be 'ADD'.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, member_id, account, audience_id, entity_type: 'CONTACT', status: 'ACTIVE'}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {account (required, string \u00e2\u20ac\u201d LinkedIn Ads account ID), audience (required, string \u00e2\u20ac\u201d audience/segment ID), email (optional, string \u00e2\u20ac\u201d contact email address), first_name (optional, string), last_name (optional, string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "linkedin_ads.audiences.removeEmail",
+    "summary": "Withdraw an email address from a LinkedIn Matched Audience.",
+    "description": "Withdraw an email address from a LinkedIn Matched Audience.",
+    "parameters": [
+     {
+      "name": "segmentId",
+      "in": "path",
+      "required": true,
+      "description": "The audience or segment ID to remove the email from.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, account, audience_id, email, removed}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {account (required, string \u00e2\u20ac\u201d LinkedIn Ads account ID), audience (required, string \u00e2\u20ac\u201d audience/segment ID), email (required, string \u00e2\u20ac\u201d email to remove)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/dmpSegments/{segmentId}/companies": {
+   "post": {
+    "operationId": "linkedin_ads.audiences.addCompany",
+    "summary": "Enroll a company in a LinkedIn Matched Audience. The company is identified by company ID or name. Supply action=ADD as a",
+    "description": "Enroll a company in a LinkedIn Matched Audience. The company is identified by company ID or name. Supply action=ADD as a query parameter.",
+    "parameters": [
+     {
+      "name": "segmentId",
+      "in": "path",
+      "required": true,
+      "description": "The audience or segment ID to enroll the company into.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "required": true,
+      "description": "Must be 'ADD'.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, member_id, account, audience_id, entity_type: 'COMPANY', status: 'ACTIVE'}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {account (required, string \u00e2\u20ac\u201d LinkedIn Ads account ID), audience (required, string \u00e2\u20ac\u201d audience/segment ID), company_name (optional, string \u00e2\u20ac\u201d company name), company_id (optional, string \u00e2\u20ac\u201d LinkedIn company ID)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversions": {
+   "post": {
+    "operationId": "linkedin_ads.conversions.create",
+    "summary": "Submit a conversion event to LinkedIn Ads. Conversion events capture actions users perform after viewing or engaging wit",
+    "description": "Submit a conversion event to LinkedIn Ads. Conversion events capture actions users perform after viewing or engaging with LinkedIn advertisements.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, conversion: {id, account_id, conversion_name, value, currency_code}, event_id}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {account (required, string \u00e2\u20ac\u201d LinkedIn Ads account ID), conversion (required, string \u00e2\u20ac\u201d conversion action name or ID), email (optional, string \u00e2\u20ac\u201d user email), first_name (optional, string), last_name (optional, string), value (optional, number \u00e2\u20ac\u201d conversion value), currency (optional, string \u00e2\u20ac\u201d ISO currency code, default USD)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/adAnalytics": {
+   "post": {
+    "operationId": "linkedin_ads.analytics.create",
+    "summary": "Generate an analytics report for a LinkedIn Ads account. Returns performance metrics across campaigns.",
+    "description": "Generate an analytics report for a LinkedIn Ads account. Returns performance metrics across campaigns.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, report: {id, account_id, report_type}, report_id}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {account (required, string \u00e2\u20ac\u201d LinkedIn Ads account ID), name (optional, string \u00e2\u20ac\u201d report name), report_type (optional, string \u00e2\u20ac\u201d type of report, default CAMPAIGN_PERFORMANCE)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Audience": {
+    "type": "object",
+    "description": "A LinkedIn Matched Audience represented as a DMP Segment.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the audience or segment."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the audience."
+     },
+     "audience_type": {
+      "type": "string",
+      "enum": [
+       "USER",
+       "COMPANY"
+      ],
+      "description": "Specifies whether the audience targets users or companies."
+     },
+     "account_id": {
+      "type": "string",
+      "description": "The associated LinkedIn Ads account ID."
+     },
+     "member_count": {
+      "type": "integer",
+      "description": "Total number of members currently in the audience."
+     }
+    }
+   },
+   "ConversionEvent": {
+    "type": "object",
+    "description": "A tracked conversion event within LinkedIn Ads.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the event."
+     },
+     "account_id": {
+      "type": "string",
+      "description": "The associated LinkedIn Ads account ID."
+     },
+     "conversion_name": {
+      "type": "string",
+      "description": "Name of the conversion action being tracked."
+     },
+     "value": {
+      "type": "number",
+      "description": "Financial value attributed to the conversion."
+     },
+     "currency_code": {
+      "type": "string",
+      "description": "Currency expressed as an ISO 4217 code."
+     }
+    }
+   },
+   "Report": {
+    "type": "object",
+    "description": "A generated LinkedIn Ads analytics report.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the report."
+     },
+     "account_id": {
+      "type": "string",
+      "description": "The associated LinkedIn Ads account ID."
+     },
+     "report_type": {
+      "type": "string",
+      "description": "Category or type of the report."
+     }
+    }
+   }
+  }
+ }
+}

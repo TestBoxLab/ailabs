@@ -1,0 +1,170 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "monday (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Monday.com API v2. All requests are POST to the same endpoint with a GraphQL query in the body. Authorization: Bearer {api_token}. board_id and item_id are integers (pass as strings). column_id is the column's internal ID (e.g. 'status', 'date4', 'text')."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/monday"
+  }
+ ],
+ "paths": {
+  "/items:find": {
+   "post": {
+    "operationId": "monday.items.find",
+    "summary": "Search for an item by name on a Monday.com board. Returns the item ID required for subsequent column update operations.",
+    "description": "Search for an item by name on a Monday.com board. Returns the item ID required for subsequent column update operations.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{items: [{id, name, board: {id, name}, column_values: [{id, title, text, value}]}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {board_id (required, string \u00e2\u20ac\u201d board ID), name (required, string \u00e2\u20ac\u201d item name to search for)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/items:create": {
+   "post": {
+    "operationId": "monday.items.create",
+    "summary": "Add a new row (item) to a Monday.com board.",
+    "description": "Add a new row (item) to a Monday.com board.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, name, board: {id, name}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {board_id (required, string \u00e2\u20ac\u201d board ID), item_name (required, string \u00e2\u20ac\u201d name for the new item), group_id (optional, string \u00e2\u20ac\u201d group/section ID to place the item in), column_values (optional, JSON string \u00e2\u20ac\u201d initial column values as a JSON object mapping column IDs to values, e.g. '{\"status\":\"Done\",\"date4\":\"2024-01-15\"}')}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/items/{itemId}/columns:update": {
+   "post": {
+    "operationId": "monday.items.updateColumn",
+    "summary": "Set a column value for an item. Use column_type to indicate the kind of column: 'status' for status/dropdown columns, 'd",
+    "description": "Set a column value for an item. Use column_type to indicate the kind of column: 'status' for status/dropdown columns, 'date' for date columns (value: YYYY-MM-DD), 'number' for numeric columns, 'text' for text columns.",
+    "parameters": [
+     {
+      "name": "itemId",
+      "in": "path",
+      "required": true,
+      "description": "The item ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, name, column_values: [{id, title, text, value}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {board_id (required, string \u00e2\u20ac\u201d board ID), column_id (required, string \u00e2\u20ac\u201d column internal ID), value (required, string \u00e2\u20ac\u201d new value; for status use the label text, for date use YYYY-MM-DD, for number use a numeric string), column_type (optional, string: 'status'|'date'|'number'|'text' \u00e2\u20ac\u201d helps route to the correct update function)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Item": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the item."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the item."
+     },
+     "board": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      }
+     },
+     "column_values": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string",
+         "description": "Internal identifier for the column."
+        },
+        "title": {
+         "type": "string",
+         "description": "Human-readable label for the column."
+        },
+        "text": {
+         "type": "string",
+         "description": "The value formatted for display."
+        },
+        "value": {
+         "type": "string",
+         "description": "Underlying raw JSON value for the column."
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

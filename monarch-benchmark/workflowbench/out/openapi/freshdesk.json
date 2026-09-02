@@ -1,0 +1,575 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "freshdesk (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Simulated freshdesk API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/freshdesk"
+  }
+ ],
+ "paths": {
+  "/api/v2/tickets": {
+   "get": {
+    "operationId": "freshdesk.tickets.list",
+    "summary": "Retrieve all tickets from the helpdesk. Fetches open, pending, resolved, and closed support cases and issues.",
+    "description": "Retrieve all tickets from the helpdesk. Fetches open, pending, resolved, and closed support cases and issues.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[Ticket] (JSON array of ticket objects)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "freshdesk.tickets.create",
+    "summary": "Submit a new support ticket to the helpdesk. Specify the subject, description, priority, status, and assigned agent when",
+    "description": "Submit a new support ticket to the helpdesk. Specify the subject, description, priority, status, and assigned agent when opening the ticket.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Ticket object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{subject, description?, status?, priority?, type?, requester_id?, email?, responder_id?, tags?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{id}": {
+   "get": {
+    "operationId": "freshdesk.tickets.get",
+    "summary": "Fetch a single ticket by its ID. Use this to look up a specific support case or issue.",
+    "description": "Fetch a single ticket by its ID. Use this to look up a specific support case or issue.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The unique identifier of the ticket to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Ticket object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "freshdesk.tickets.update",
+    "summary": "Modify an existing support ticket. Update fields such as status, priority, assigned agent, group, tags, subject, or desc",
+    "description": "Modify an existing support ticket. Update fields such as status, priority, assigned agent, group, tags, subject, or description.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The unique identifier of the ticket to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Ticket object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{subject?, description?, status?, priority?, type?, responder_id?, group_id?, tags?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/search/tickets": {
+   "get": {
+    "operationId": "freshdesk.tickets.search",
+    "summary": "Query tickets using a structured filter syntax such as \"(status:2 OR priority:3)\". Useful for locating tickets matching ",
+    "description": "Query tickets using a structured filter syntax such as \"(status:2 OR priority:3)\". Useful for locating tickets matching specific field criteria.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "A filter expression using Freshdesk query syntax, e.g. \"(status:2 OR priority:3)\".",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "SearchTicketsResponse: {tickets: [Ticket], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{ticket_id}/conversations": {
+   "get": {
+    "operationId": "freshdesk.tickets.notes.list",
+    "summary": "Retrieve all notes and replies in the conversation thread of a ticket. Returns the full correspondence history for a sup",
+    "description": "Retrieve all notes and replies in the conversation thread of a ticket. Returns the full correspondence history for a support case.",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "The identifier of the ticket whose conversations to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ListNotesResponse: {notes: [Note], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/tickets/{ticket_id}/notes": {
+   "post": {
+    "operationId": "freshdesk.tickets.notes.create",
+    "summary": "Append a note to a ticket. The note can be internal (private) or visible to the requester (public).",
+    "description": "Append a note to a ticket. The note can be internal (private) or visible to the requester (public).",
+    "parameters": [
+     {
+      "name": "ticket_id",
+      "in": "path",
+      "required": true,
+      "description": "The identifier of the ticket to attach the note to.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ticket_id, note_id}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{body: string, private?: boolean}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/contacts": {
+   "get": {
+    "operationId": "freshdesk.contacts.list",
+    "summary": "Retrieve all contacts (customers and requesters) stored in Freshdesk.",
+    "description": "Retrieve all contacts (customers and requesters) stored in Freshdesk.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "ListContactsResponse: {contacts: [Contact], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "freshdesk.contacts.create",
+    "summary": "Register a new contact in Freshdesk. Use this to add a customer, requester, or any person to the system.",
+    "description": "Register a new contact in Freshdesk. Use this to add a customer, requester, or any person to the system.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Contact object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name, email?, phone?, mobile?, company_id?, job_title?, description?, tags?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/contacts/{id}": {
+   "get": {
+    "operationId": "freshdesk.contacts.get",
+    "summary": "Look up a single contact record by ID. Returns full details for the specified customer or requester.",
+    "description": "Look up a single contact record by ID. Returns full details for the specified customer or requester.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The unique identifier of the contact to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Contact object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/search/contacts": {
+   "get": {
+    "operationId": "freshdesk.contacts.search",
+    "summary": "Search for contacts using a structured query or direct lookup by email or contact ID. Useful for finding a specific cust",
+    "description": "Search for contacts using a structured query or direct lookup by email or contact ID. Useful for finding a specific customer or requester.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "A filter expression using Freshdesk query syntax, e.g. \"(email:'user@example.com')\".",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "email",
+      "in": "query",
+      "required": false,
+      "description": "Locate a contact by their exact email address.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "contact_id",
+      "in": "query",
+      "required": false,
+      "description": "Locate a contact by their unique ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "SearchContactsResponse: {contacts: [Contact], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v2/companies": {
+   "post": {
+    "operationId": "freshdesk.companies.create",
+    "summary": "Add a new company (organization or business account) to Freshdesk.",
+    "description": "Add a new company (organization or business account) to Freshdesk.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Company object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name, description?, domains?, note?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Ticket": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique numeric identifier for the ticket."
+     },
+     "subject": {
+      "type": "string",
+      "description": "Title or subject line of the support ticket."
+     },
+     "description": {
+      "type": "string",
+      "description": "Full body of the ticket, formatted as HTML."
+     },
+     "status": {
+      "type": "integer",
+      "enum": [
+       2,
+       3,
+       4,
+       5,
+       6,
+       7
+      ],
+      "description": "Numeric status code: 2=Open, 3=Pending, 4=Resolved, 5=Closed, 6=Waiting on Customer, 7=Waiting on Third Party."
+     },
+     "priority": {
+      "type": "integer",
+      "enum": [
+       1,
+       2,
+       3,
+       4
+      ],
+      "description": "Numeric priority level: 1=Low, 2=Medium, 3=High, 4=Urgent."
+     },
+     "type": {
+      "type": "string",
+      "description": "Classification of the ticket (e.g., Question, Incident, Problem, Feature Request)."
+     },
+     "requester_id": {
+      "type": "string",
+      "description": "Identifier of the contact who submitted the ticket."
+     },
+     "responder_id": {
+      "type": "string",
+      "description": "Identifier of the agent assigned to handle the ticket."
+     },
+     "group_id": {
+      "type": "string",
+      "description": "Identifier of the team group assigned to the ticket."
+     },
+     "source": {
+      "type": "integer",
+      "description": "Inbound channel for the ticket: 1=Email, 2=Portal, 3=Phone, 4=Forum, 5=Twitter, 6=Facebook, 7=Chat, 8=Mobihelp, 9=Feedback Widget, 10=Outbound Email."
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Labels or tags attached to the ticket."
+     },
+     "created_at": {
+      "type": "string",
+      "description": "Date and time when the ticket was originally created."
+     },
+     "updated_at": {
+      "type": "string",
+      "description": "Date and time of the most recent update to the ticket."
+     }
+    }
+   },
+   "Note": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the note."
+     },
+     "body": {
+      "type": "string",
+      "description": "Text content of the note."
+     },
+     "private": {
+      "type": "boolean",
+      "description": "When true, the note is internal and not visible to the requester."
+     },
+     "created_at": {
+      "type": "string",
+      "description": "Date and time when the note was created."
+     }
+    }
+   },
+   "Contact": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the contact."
+     },
+     "name": {
+      "type": "string",
+      "description": "Full name of the contact."
+     },
+     "email": {
+      "type": "string",
+      "description": "Email address of the contact."
+     },
+     "phone": {
+      "type": "string",
+      "description": "Telephone number for the contact."
+     },
+     "mobile": {
+      "type": "string",
+      "description": "Mobile or cell phone number for the contact."
+     },
+     "company_id": {
+      "type": "string",
+      "description": "Identifier of the company this contact belongs to."
+     },
+     "job_title": {
+      "type": "string",
+      "description": "Professional title or role of the contact."
+     },
+     "description": {
+      "type": "string",
+      "description": "Additional notes or context about the contact."
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Labels or tags associated with the contact."
+     },
+     "created_at": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     }
+    }
+   },
+   "Company": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the company."
+     },
+     "name": {
+      "type": "string",
+      "description": "Legal or display name of the company."
+     },
+     "description": {
+      "type": "string",
+      "description": "Brief overview or notes about the company."
+     },
+     "domains": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Web domains linked to this company."
+     },
+     "note": {
+      "type": "string",
+      "description": "Free-form notes attached to the company record."
+     },
+     "created_at": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

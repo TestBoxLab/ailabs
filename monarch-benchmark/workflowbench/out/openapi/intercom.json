@@ -1,0 +1,537 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "intercom (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Simulated intercom API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/intercom"
+  }
+ ],
+ "paths": {
+  "/contacts": {
+   "get": {
+    "operationId": "intercom.contacts.list",
+    "summary": "Retrieve all Intercom contacts, users, and leads. Fetch the full set of contact records.",
+    "description": "Retrieve all Intercom contacts, users, and leads. Fetch the full set of contact records.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{contacts: [ContactObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts/search": {
+   "post": {
+    "operationId": "intercom.contacts.search",
+    "summary": "Look up an Intercom contact using email address, contact ID, or tag.",
+    "description": "Look up an Intercom contact using email address, contact ID, or tag.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{contacts: [ContactObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{query?, email?, contact_id?, tag?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts/{contact_id}": {
+   "put": {
+    "operationId": "intercom.contacts.update",
+    "summary": "Edit an Intercom contact's name, email address, or phone number.",
+    "description": "Edit an Intercom contact's name, email address, or phone number.",
+    "parameters": [
+     {
+      "name": "contact_id",
+      "in": "path",
+      "required": true,
+      "description": "Intercom contact ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Updated contact object",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name?, email?, phone?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts/{contact_id}/tags": {
+   "post": {
+    "operationId": "intercom.contacts.addTag",
+    "summary": "Attach a tag to an Intercom contact. Apply a label to a user or lead record.",
+    "description": "Attach a tag to an Intercom contact. Apply a label to a user or lead record.",
+    "parameters": [
+     {
+      "name": "contact_id",
+      "in": "path",
+      "required": true,
+      "description": "Intercom contact ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ContactObject (with updated tags)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{id: string (tag ID)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts/{contact_id}/tags/{tag_id}": {
+   "delete": {
+    "operationId": "intercom.contacts.removeTag",
+    "summary": "Detach a tag from an Intercom contact. Remove a label previously applied to a user or lead.",
+    "description": "Detach a tag from an Intercom contact. Remove a label previously applied to a user or lead.",
+    "parameters": [
+     {
+      "name": "contact_id",
+      "in": "path",
+      "required": true,
+      "description": "Intercom contact ID.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tag_id",
+      "in": "path",
+      "required": true,
+      "description": "Tag ID to remove.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ContactObject (with updated tags)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts/{contact_id}/notes": {
+   "post": {
+    "operationId": "intercom.contacts.addNote",
+    "summary": "Append a note to an Intercom contact. Record internal annotations that are visible only to admins.",
+    "description": "Append a note to an Intercom contact. Record internal annotations that are visible only to admins.",
+    "parameters": [
+     {
+      "name": "contact_id",
+      "in": "path",
+      "required": true,
+      "description": "Intercom contact ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, body, contact_id, admin_id, created_at}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{body: string (note text), admin_id: string (optional)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/contacts:findOrCreateLead": {
+   "post": {
+    "operationId": "intercom.contacts.findOrCreateLead",
+    "summary": "Retrieve or register an Intercom lead by email address. Upsert a lead contact record.",
+    "description": "Retrieve or register an Intercom lead by email address. Upsert a lead contact record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Lead contact object with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{email: string, name?, phone?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/companies": {
+   "get": {
+    "operationId": "intercom.companies.list",
+    "summary": "Retrieve all Intercom companies, organizations, and accounts.",
+    "description": "Retrieve all Intercom companies, organizations, and accounts.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{companies: [CompanyObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "intercom.companies.findOrCreate",
+    "summary": "Retrieve or register an Intercom company. Upsert a company or organization record.",
+    "description": "Retrieve or register an Intercom company. Upsert a company or organization record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Company object with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name: string, company_id?, industry?, website?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/companies/search": {
+   "post": {
+    "operationId": "intercom.companies.search",
+    "summary": "Look up an Intercom company by name or company ID.",
+    "description": "Look up an Intercom company by name or company ID.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{companies: [CompanyObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{query?, company_id?, name?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/tags": {
+   "post": {
+    "operationId": "intercom.companies.tag",
+    "summary": "Apply a tag to an Intercom company. Assign a label to an organization. Operates via the shared tags endpoint.",
+    "description": "Apply a tag to an Intercom company. Assign a label to an organization. Operates via the shared tags endpoint.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Tag object with tagged companies",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name: string (tag name), companies: [{id: string (company ID)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations": {
+   "get": {
+    "operationId": "intercom.conversations.list",
+    "summary": "Retrieve all Intercom conversations, threads, and messages. Fetch support interaction records.",
+    "description": "Retrieve all Intercom conversations, threads, and messages. Fetch support interaction records.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{conversations: [ConversationObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/search": {
+   "post": {
+    "operationId": "intercom.conversations.search",
+    "summary": "Locate an Intercom conversation by query text or conversation ID.",
+    "description": "Locate an Intercom conversation by query text or conversation ID.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{conversations: [ConversationObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{query?, conversation_id?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversation_id}/reply": {
+   "post": {
+    "operationId": "intercom.conversations",
+    "summary": "2 variants: reply, note",
+    "description": "[intercom.conversations.reply] Post a response to an Intercom conversation. Send a message back within an existing thread.\n\n[intercom.conversations.note] Insert an internal note into an Intercom conversation. Compose a private agent annotation. Set message_type to 'note' to differentiate from public replies.",
+    "parameters": [
+     {
+      "name": "conversation_id",
+      "in": "path",
+      "required": true,
+      "description": "Conversation ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{conversation_id: string, part_id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{message_type: string (required, e.g. \"comment\"), type: string (required, e.g. \"admin\"), admin_id: string (required), body: string (required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversation_id}/tags": {
+   "post": {
+    "operationId": "intercom.conversations.addTag",
+    "summary": "Attach a tag to an Intercom conversation.",
+    "description": "Attach a tag to an Intercom conversation.",
+    "parameters": [
+     {
+      "name": "conversation_id",
+      "in": "path",
+      "required": true,
+      "description": "Conversation ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ConversationObject (with updated tags)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{id: string (tag ID)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/tickets": {
+   "post": {
+    "operationId": "intercom.tickets.create",
+    "summary": "Open a new Intercom ticket, support request, or issue record.",
+    "description": "Open a new Intercom ticket, support request, or issue record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created ticket object with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{title: string, description?, state?, ticket_type_id?, contact_id?, assignee_id?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {}
+ }
+}

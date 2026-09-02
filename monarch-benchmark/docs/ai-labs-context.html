@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Labs · Monarch Benchmark Context</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --ink: #1c1c1a; --muted: #6b6a66; --line: #e3e0d8;
+    --accent: #2b3fd6; --accent-soft: #eef0fc; --warn: #a83f2b; --warn-soft: #fbeeea;
+    --ok: #2f7a4a; --ok-soft: #e9f4ec; --code: #f2f0ea;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 Georgia, "Times New Roman", serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 { font-size: 1.4rem; margin: 56px 0 12px; padding-top: 24px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 28px 0 8px; font-family: system-ui, sans-serif; }
+  p { margin: 0 0 14px; }
+  .sub { color: var(--muted); font-family: system-ui, sans-serif; font-size: .95rem; margin-bottom: 32px; }
+  .toc { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; font-family: system-ui, sans-serif; font-size: .92rem; }
+  .toc ol { margin: 8px 0 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  .toc li { margin: 2px 0; break-inside: avoid; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; font-family: system-ui, sans-serif; font-size: .9rem; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; background: #f5f3ee; }
+  .tbl { overflow-x: auto; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: .86em; background: var(--code); padding: 1px 5px; border-radius: 3px; }
+  pre { background: var(--code); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font-size: .85rem; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; font-family: system-ui, sans-serif; font-size: .95rem; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .tag { display: inline-block; font-family: system-ui, sans-serif; font-size: .75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: #eee; color: #444; vertical-align: middle; }
+  .tag.done { background: var(--ok-soft); color: var(--ok); }
+  .tag.blocked { background: var(--warn-soft); color: var(--warn); }
+  .tag.partial { background: #fff4d6; color: #7a5a00; }
+  .timeline { list-style: none; padding: 0; margin: 12px 0 20px; font-family: system-ui, sans-serif; font-size: .93rem; }
+  .timeline li { position: relative; padding: 0 0 14px 28px; border-left: 2px solid var(--line); margin-left: 8px; }
+  .timeline li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); }
+  .timeline b { display: block; color: var(--muted); font-weight: 600; font-size: .8rem; letter-spacing: .02em; }
+  figure { margin: 20px 0; }
+  figcaption { font-family: system-ui, sans-serif; font-size: .82rem; color: var(--muted); margin-top: 6px; }
+  svg text { font-family: system-ui, sans-serif; }
+  dl { font-family: system-ui, sans-serif; font-size: .93rem; }
+  dt { font-weight: 600; margin-top: 10px; }
+  dd { margin: 2px 0 0 0; color: #333; }
+  ul { padding-left: 22px; } li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>AI Labs · Monarch Benchmark Context</h1>
+<p class="sub">Onboarding notes for Carlos Mattos · 2 Sep 2026 · Built from Lucas's design documents, the code in <code>workflowbench/</code>, the results in <code>out/</code>, and a read of the Monarch codebase. Written so it can be shared with anyone on the team.</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#tldr">In one minute</a></li>
+    <li><a href="#people">Who is involved</a></li>
+    <li><a href="#history">What happened so far</a></li>
+    <li><a href="#how">How the benchmark works</a></li>
+    <li><a href="#targets">What we test, and against what</a></li>
+    <li><a href="#rules">The rules Lucas set</a></li>
+    <li><a href="#deyton">Questions that were waiting on Deyton</a></li>
+    <li><a href="#monarch">What we learned from the Monarch code</a></li>
+    <li><a href="#code">What is built and what is not</a></li>
+    <li><a href="#results">Results so far</a></li>
+    <li><a href="#zip">About the zip file</a></li>
+    <li><a href="#plan">Lucas's roadmap</a></li>
+    <li><a href="#open">Decisions still open</a></li>
+    <li><a href="#alignment">Carlos's input vs what exists</a></li>
+    <li><a href="#glossary">Words used in this project</a></li>
+  </ol>
+</div>
+
+<h2 id="tldr">1. In one minute</h2>
+<p>Lucas designed and partly built a benchmark for Monarch. The benchmark gives the same task (for example, "read Lisa's email and update her city in Salesforce") to several competitors: Monarch, and off-the-shelf AI models or agents. It then checks who did the task correctly, how much it cost, and how long it took.</p>
+<p>The tasks run against a <strong>simulated set of 47 business apps</strong> (Salesforce, Gmail, Asana, HubSpot and so on) borrowed from Zapier's open-source AutomationBench. Simulated means: no real accounts, fully predictable, and each task costs cents. A version against <strong>real accounts</strong> is designed but not built yet.</p>
+<p>What exists today: the simulated apps, the checker that decides pass or fail, a runner that can be interrupted and resumed, a results database, statistics, a report generator, and 200 tasks. One real model (Kimi K3) has been run. <strong>Monarch itself has never been run through it.</strong> That was blocked on two questions to Deyton. Reading the Monarch code today answers both, and reveals a third problem (section 8).</p>
+
+<h2 id="people">2. Who is involved</h2>
+<div class="tbl"><table>
+<tr><th>Person</th><th>Role</th></tr>
+<tr><td><strong>Lucas Wakigawa</strong> ("Waki" in the docs)</td><td>Wrote all the design documents and all the code. Co-lead of AI Labs.</td></tr>
+<tr><td><strong>Carlos Mattos</strong></td><td>Co-lead of AI Labs, joined 2 Sep 2026. Lucas's plan asks for two more owners to be named by 2 Oct; Carlos is the obvious candidate for one of them.</td></tr>
+<tr><td><strong>Deyton</strong></td><td>Reviewer of every design document. Represents the Monarch product side: the engine, how to call Monarch without the UI, telemetry, and how the benchmark ties into releases.</td></tr>
+<tr><td><strong>Sam</strong></td><td>Founder / go-to-market. Decides what may be published externally. Main reader of the public version of the report.</td></tr>
+<tr><td><strong>Alex</strong></td><td>Proposed approver for moving Lucas's experimental settings into the shipped product.</td></tr>
+<tr><td><strong>Mercedes</strong></td><td>Routes external communication (blog posts, conference talk).</td></tr>
+</table></div>
+
+<h2 id="history">3. What happened so far</h2>
+<p>Reconstructed from the documents. There are no meeting notes in the repository, so what we know about conversations is only what the documents mention.</p>
+<ul class="timeline">
+  <li><b>Before August 2026</b>TestBox was already running a modified copy of Zapier's AutomationBench (version 9.12). It produced <strong>5,427 historical results</strong>, stored under <code>Monarch_Main\bench-host-state\runs</code>.</li>
+  <li><b>August 2026</b>A "reconciliation failure": benchmark numbers reported in different places did not match, and nobody could trace where each number came from. This became the number-one design rule of the new system: <strong>every number must show its source</strong>.</li>
+  <li><b>19 Aug 2026</b>A sync where the idea came up of storing "what this action does / does not do" next to each API endpoint in Monarch's knowledge base.</li>
+  <li><b>August 2026</b>An internal proposal (an "RFC", not in this repo) asked Monarch to emit tracking events during a run. Lucas turned that into the list of events the benchmark wants to receive.</li>
+  <li><b>August 2026</b>Lucas audited the upstream AutomationBench and filed <strong>9 issues</strong> in Zapier's repo. Meant to be the lab's first public output.</li>
+  <li><b>31 Aug 2026</b>Lucas wrote the first design, had it torn apart by an adversarial review (methods, engineering, vendor relations, plus a check of vendor terms of service), and published the revised design the same day. He also wrote the build plan, the program plan, and a UI concept, all with Deyton as reviewer. He shipped the first working code (<code>workflowbench-t0.zip</code>, 9 tests green).</li>
+  <li><b>1 Sep 2026</b>The code moved well past the first version: runner, results database, statistics, report, 200 tasks, CI. First run with a real model (Kimi K3).</li>
+  <li><b>2 Sep 2026</b>Carlos onboarded. This document.</li>
+</ul>
+
+<h2 id="how">4. How the benchmark works</h2>
+<p>Each test is one task given to one competitor. The simulated apps are loaded with the task's starting data (an inbox, a few CRM contacts). A snapshot is taken. The competitor works. A second snapshot is taken. The checker compares the two snapshots. The checker runs separately, after the competitor has finished, so nothing grades its own work.</p>
+
+<figure>
+<svg viewBox="0 0 860 300" width="100%" role="img" aria-label="Flow of one test">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6b6a66"/></marker></defs>
+  <g font-size="13" fill="#1c1c1a">
+    <rect x="10" y="110" width="120" height="60" rx="6" fill="#fff" stroke="#e3e0d8"/><text x="70" y="136" text-anchor="middle">Task</text><text x="70" y="154" text-anchor="middle" font-size="11" fill="#6b6a66">prompt + starting data</text>
+    <rect x="170" y="110" width="130" height="60" rx="6" fill="#fff" stroke="#e3e0d8"/><text x="235" y="136" text-anchor="middle">Simulated apps</text><text x="235" y="154" text-anchor="middle" font-size="11" fill="#6b6a66">47 services, fixed clock</text>
+    <rect x="340" y="20" width="140" height="50" rx="6" fill="#eef0fc" stroke="#2b3fd6"/><text x="410" y="50" text-anchor="middle">raw model (API)</text>
+    <rect x="340" y="85" width="140" height="50" rx="6" fill="#eef0fc" stroke="#2b3fd6"/><text x="410" y="115" text-anchor="middle">Claude Code / Codex</text>
+    <rect x="340" y="150" width="140" height="50" rx="6" fill="#fbeeea" stroke="#a83f2b"/><text x="410" y="180" text-anchor="middle">Monarch</text>
+    <rect x="340" y="215" width="140" height="50" rx="6" fill="#f5f3ee" stroke="#6b6a66"/><text x="410" y="245" text-anchor="middle">scripted controls</text>
+    <text x="410" y="290" text-anchor="middle" font-size="11" fill="#6b6a66">everyone gets the same 3 tools: search API, call API, base64</text>
+    <rect x="530" y="110" width="130" height="60" rx="6" fill="#fff" stroke="#e3e0d8"/><text x="595" y="136" text-anchor="middle">Checker</text><text x="595" y="154" text-anchor="middle" font-size="11" fill="#6b6a66">runs separately</text>
+    <rect x="700" y="110" width="150" height="60" rx="6" fill="#fff" stroke="#e3e0d8"/><text x="775" y="136" text-anchor="middle">Result row</text><text x="775" y="154" text-anchor="middle" font-size="11" fill="#6b6a66">SQLite + jsonl</text>
+  </g>
+  <g stroke="#6b6a66" stroke-width="1.5" fill="none" marker-end="url(#a)">
+    <path d="M130,140 L170,140"/>
+    <path d="M300,140 L340,45"/><path d="M300,140 L340,110"/><path d="M300,140 L340,175"/><path d="M300,140 L340,240"/>
+    <path d="M480,45 L530,140"/><path d="M480,110 L530,140"/><path d="M480,175 L530,140"/><path d="M480,240 L530,140"/>
+    <path d="M660,140 L700,140"/>
+  </g>
+</svg>
+<figcaption>One test. Every competitor sees the same simulated apps through the same three tools.</figcaption>
+</figure>
+
+<h3>The checker</h3>
+<p>A task passes only if both of these hold:</p>
+<ul>
+  <li><strong>The expected result is there.</strong> Example: contact 003004 now has city = Denver.</li>
+  <li><strong>Nothing else changed.</strong> Every change between the two snapshots must be either expected or explicitly allowed. This catches a competitor that does the task but also deletes an email on the way.</li>
+</ul>
+<p>There is also a sanity rule for the tasks themselves: every check must fail on the untouched starting data. Otherwise the task is empty. This runs automatically in CI.</p>
+<div class="callout ok">The first pilot showed why the second rule matters: a scripted "sloppy" competitor that does the task plus one unwanted change passes <strong>100%</strong> of the "expected result" checks and only gets caught by the "nothing else changed" rule, dropping to 40%.</div>
+
+<h3>Competitors</h3>
+<p>The documents call them "arms". Each one has a fixed configuration and a versioned name, so results are comparable over time.</p>
+<div class="tbl"><table>
+<tr><th>Competitor</th><th>What it is</th><th>Why it is there</th></tr>
+<tr><td>Raw model over API</td><td>A model (Claude, GPT, Kimi, Gemini, ...) with a minimal tool loop and no product around it.</td><td>The baseline. If Monarch beats the same model it uses internally, the difference is the product.</td></tr>
+<tr><td>Coding agents</td><td>Claude Code, Codex, Gemini CLI, pointed at the simulated apps.</td><td>What a customer might use today instead of Monarch.</td></tr>
+<tr><td>Computer-use agents</td><td>Vendor "computer use" APIs driving a browser.</td><td>Only makes sense against real apps with a UI. Not built.</td></tr>
+<tr><td>Monarch, as shipped</td><td>The product: its agent writes the workflow, its engine runs it.</td><td>The thing we are measuring. The only Monarch result that may ever be published.</td></tr>
+<tr><td>Monarch, experimental</td><td>Same product with settings Lucas is experimenting with.</td><td>Internal only, never published, so experiments cannot be mistaken for the product.</td></tr>
+<tr><td>Scripted controls</td><td>"Oracle" (always right), "sloppy" (right plus collateral damage), "null" (does nothing).</td><td>Prove the checker works before trusting any result.</td></tr>
+</table></div>
+
+<h2 id="targets">5. What we test, and against what</h2>
+<p>Two separate questions, easy to mix up:</p>
+
+<h3>5.1 Which platform is the target?</h3>
+<p>Monarch's job is to map a platform and then operate it. The benchmark can point at different kinds of platform, and each kind needs its own set of task prompts:</p>
+<div class="tbl"><table>
+<tr><th>Target platform</th><th>Example</th><th>What makes it different</th><th>Status</th></tr>
+<tr><td>Simulated API set</td><td>The AutomationBench mock of 47 apps</td><td>No UI. Endpoints are described in files. Predictable, cheap.</td><td>Today's target</td></tr>
+<tr><td>Real platform with API and UI</td><td>Salesforce, HubSpot, Asana, Linear</td><td>Monarch can map it from the UI and from network traffic. Needs a test account, cleanup between tasks, and a check of the vendor's terms.</td><td>Later</td></tr>
+<tr><td>Real platform, API only</td><td>A public REST API with no web app</td><td>Only the API surface exists to map. Tests a different side of Monarch's mapping.</td><td>Later</td></tr>
+</table></div>
+
+<h3>5.2 How much of Monarch is under test?</h3>
+<p>Monarch works in three stages. A test can cover one, two or all three:</p>
+<div class="tbl"><table>
+<tr><th>Stage</th><th>What it does</th></tr>
+<tr><td><strong>1. Discovery</strong></td><td>Monarch explores the platform and builds its knowledge base: which actions exist, which API calls they need, what they do and do not do.</td></tr>
+<tr><td><strong>2. Workflow creation</strong></td><td>Monarch's agent turns the user's request into a workflow, using that knowledge base.</td></tr>
+<tr><td><strong>3. Workflow execution</strong></td><td>Monarch's engine runs the workflow: makes the API calls, handles errors, retries.</td></tr>
+</table></div>
+<p>So there are three ways to test Monarch, and all three are worth having:</p>
+<ul>
+  <li><strong>Full flow (1 + 2 + 3):</strong> Monarch discovers the platform itself, then creates and runs the workflow. This is the real product story.</li>
+  <li><strong>Create and run (2 + 3):</strong> the knowledge base is given to Monarch; we measure how well it writes and runs workflows.</li>
+  <li><strong>Run only (3):</strong> a correct workflow is given to Monarch; we measure only the engine.</li>
+</ul>
+<div class="callout"><strong>Where Lucas's design stands:</strong> it covers "create and run" only, with the knowledge base loaded by hand from the 47 description files. Discovery is never exercised. <strong>Carlos's direction (2 Sep):</strong> for the first version, the target stays the simulated API set, and all three test modes get built against it, including the full flow where Monarch has to discover the mock API on its own.</div>
+<div class="callout ok"><strong>Good news from the Monarch code:</strong> Feature Discovery can map a platform from an <strong>OpenAPI document alone</strong>, no UI needed (it already does this for Slack and Linear). So the full-flow mode is feasible on the mock: we publish an OpenAPI file for the 47 simulated apps and let Monarch discover it. The same mechanism also solves the knowledge-base problem in section 8.4 without inserting anything by hand.</div>
+
+<h2 id="rules">6. The rules Lucas set</h2>
+<p>These come from the revised design document. They survived the review, or were created by it.</p>
+
+<h3>6.1 Fair comparison</h3>
+<ul>
+  <li>Everyone gets the same task text and the same three tools. Monarch gets no extra knowledge that a raw model cannot reach.</li>
+  <li>Every task is frozen before any competitor runs: a hash of its prompt, starting data and checks is stored. Grading later against a changed task is refused.</li>
+  <li>Each task runs several times per competitor (k=4 in the simulation, k=2 against real apps) so we measure reliability, not luck.</li>
+  <li>Comparisons are paired: the same task, same trial number, competitor A vs competitor B. Wins and losses are counted; a standard statistical test says whether the difference is real.</li>
+  <li>Vendor agents are run with pinned versions and API-key billing. Any non-default setting is recorded next to the result.</li>
+</ul>
+
+<h3>6.2 Honest numbers</h3>
+<ul>
+  <li>Every number in a report carries its source: which task set, which version, how many results, which competitor, which run. No number is typed by hand.</li>
+  <li>Cost includes every token spent, split into cached and non-cached, priced from a versioned price table. Time is measured per stage.</li>
+  <li>Infrastructure failures (rate limits, model down) are counted separately and never as a competitor failure.</li>
+</ul>
+
+<h3>6.3 What may be published</h3>
+<p>Three levels, decided by Sam:</p>
+<ol>
+  <li><strong>Internal only.</strong> Everything, every competitor, real dollars. This is what we build now.</li>
+  <li><strong>Public progress.</strong> Monarch compared with earlier Monarch versions, plus an open description of the method. No vendor is named.</li>
+  <li><strong>Public comparison naming vendors.</strong> Only if a neutral third party governs it. Otherwise a Monarch-branded leaderboard naming Claude Code or Codex is not credible and hurts partnerships.</li>
+</ol>
+<p>The report generator enforces this in code: a public report physically cannot contain a raw-model or experimental-Monarch result.</p>
+
+<h3>6.4 Legal check of vendors (31 Aug)</h3>
+<div class="tbl"><table>
+<tr><th>Vendor</th><th>Status</th><th>Note</th></tr>
+<tr><td>Google Workspace</td><td><span class="tag done">ok</span></td><td>Automating your own account via API is allowed.</td></tr>
+<tr><td>Linear</td><td><span class="tag done">ok</span></td><td></td></tr>
+<tr><td>Slack</td><td><span class="tag partial">legal to confirm</span></td><td>Its policy points to Salesforce's terms.</td></tr>
+<tr><td>Salesforce</td><td><span class="tag blocked">needs consent</span></td><td>Its contract forbids use "for benchmarking or competitive purposes". Lucas's reading: we benchmark agents, not Salesforce. Flagged for Sam and legal.</td></tr>
+<tr><td>Zendesk</td><td><span class="tag partial">legal to confirm</span></td><td>Similar clause.</td></tr>
+<tr><td>Anthropic / OpenAI</td><td><span class="tag done">ok</span></td><td>No benchmark ban. Automating a consumer subscription is a gray zone, so API keys only.</td></tr>
+</table></div>
+
+<h3>6.5 Things deliberately left out for now</h3>
+<ul>
+  <li>Running the whole task set against real apps (estimated at six figures in cost).</li>
+  <li>Publishing exact dollar costs externally (ratios only).</li>
+  <li>A public brand name for the benchmark.</li>
+  <li>Adopting an off-the-shelf benchmark framework. Lucas evaluated one ("Harbor") and kept only its small adapter layer.</li>
+</ul>
+
+<h2 id="deyton">7. Questions that were waiting on Deyton</h2>
+<p>Deyton reviewed every document. The documents do not contain his comments, only the questions Lucas addressed to him.</p>
+<div class="tbl"><table>
+<tr><th>#</th><th>Question</th><th>Why it matters</th><th>Status on 2 Sep</th></tr>
+<tr><td>1</td><td>Does Monarch's engine call the apps through MCP, or through plain HTTP?</td><td>Decides how the simulated apps are exposed to Monarch.</td><td><span class="tag done">answered by the code</span> section 8</td></tr>
+<tr><td>2</td><td>How do we ask Monarch to create a workflow from a text request, without the UI?</td><td>Without this the benchmark cannot drive Monarch automatically.</td><td><span class="tag done">answered by the code</span> section 8</td></tr>
+<tr><td>3</td><td>How does the knowledge base Lucas generates from the 47 files get loaded into Monarch?</td><td>Without this Monarch does not know the simulated apps exist.</td><td><span class="tag blocked">answered, and it is a problem</span> section 8</td></tr>
+<tr><td>4</td><td>Where should results be stored: a new database or Monarch's?</td><td></td><td>Lucas went with a new one (SQLite).</td></tr>
+<tr><td>5</td><td>Start with 10 simple tasks?</td><td></td><td>Done.</td></tr>
+</table></div>
+<p>Deyton is also co-owner of: connecting Monarch to the benchmark, the capacity model for real test accounts, and the study of whether results on simulated apps predict results on real apps. That study decides whether the benchmark ever blocks a release.</p>
+
+<h2 id="monarch">8. What we learned from the Monarch code</h2>
+<p>Read on 2 Sep 2026 in the <code>../monarch</code> repository.</p>
+
+<h3>8.1 Which model Monarch uses</h3>
+<p>Workflow creation runs on the <strong>Claude Agent SDK over AWS Bedrock</strong>, and it is a team of models, not one:</p>
+<div class="tbl"><table>
+<tr><th>Role</th><th>Model</th></tr>
+<tr><td>Main brain that writes the workflow</td><td>Claude Opus 4.8, highest effort setting</td></tr>
+<tr><td>Picks candidate actions, first-pass triage, advisory checks</td><td>Claude Haiku 4.5</td></tr>
+<tr><td>Criticizes the plan</td><td>Claude Sonnet 5</td></tr>
+<tr><td>Final review</td><td>Claude Sonnet 4.6</td></tr>
+<tr><td>Investigates failed runs</td><td>Claude Opus 5</td></tr>
+<tr><td>Decision steps inside a running workflow</td><td>Haiku 4.5 or Sonnet 5</td></tr>
+</table></div>
+<p>The engine that makes the actual API calls uses no model at all. Fable and Mythos are blocked in Monarch by a data-retention decision.</p>
+<div class="callout">What this means for the benchmark: the fair baseline is <strong>raw Claude Opus 4.8</strong>, because that is Monarch's own brain. The benchmark does not have a Claude adapter yet. And Monarch's cost per task must add up the whole team of models, not just the main one.</div>
+
+<h3>8.2 MCP or HTTP? HTTP.</h3>
+<p>The engine calls apps with plain HTTP requests (or through a browser, or SQL, depending on the action). It never uses MCP at run time. So the simulated apps need a small HTTP front door. Lucas already sketched it (<code>wb_arms/http_shim.py</code>).</p>
+
+<h3>8.3 Driving Monarch without the UI</h3>
+<p>Possible, but only through HTTP endpoints that require a logged-in session. There is no command line and no API key for this:</p>
+<pre><code>POST /api/workflows/recipe/runs      { goal: "..." }      create a workflow from text
+GET  /api/workflows/recipe/runs/:id/stream                progress (server-sent events)
+POST /api/workflows/:id/run          { mode: "live" }     run a saved workflow</code></pre>
+<p>To run this, the whole Monarch stack must be up: Postgres, LocalStack (queues, DynamoDB, a Lambda emulator that needs Docker's socket), the backend, the workflow orchestrator, the ingest worker, and the Feature Discovery API.</p>
+
+<h3>8.4 The knowledge base problem</h3>
+<div class="callout warn">Monarch's workflow agent does <strong>not</strong> read a file. It asks the Feature Discovery service over HTTP, which reads from Postgres. The file Lucas generates from the 47 app descriptions has nowhere to go.</div>
+<p>Two supported ways to get the simulated apps into Feature Discovery, both documented in <code>feature-discovery/docs/public-api-seeds-runbook.md</code>:</p>
+<ul>
+  <li><strong>Discovery from an OpenAPI document.</strong> Register an "api_spec" discovery configuration with no credential and a URL to an OpenAPI file. Monarch's discovery reads the spec and writes the knowledge base itself. This is how the full-flow test mode works.</li>
+  <li><strong>Seed fixtures.</strong> A small generator script turns a spec into fixture files that are loaded as a seed. Deterministic and reviewable. This is how the "create and run" mode gets a fixed, known knowledge base.</li>
+</ul>
+<p>Either way, we need one thing we do not have yet: an <strong>OpenAPI document for the 47 simulated apps</strong>, generated from the same 47 description files, and served by the HTTP front door.</p>
+
+<h3>8.5 Tracking already in Monarch</h3>
+<ul>
+  <li>OpenTelemetry, exporting to SigNoz.</li>
+  <li>A second, filtered export of model calls to <strong>Langfuse</strong>, switched on by two environment variables.</li>
+  <li>Token counts per model call, and a per-run ledger of tokens for workflow creation.</li>
+  <li><strong>No dollar cost</strong> anywhere on the product side. Only Feature Discovery has a price table.</li>
+</ul>
+<p>Monarch does not emit the event file Lucas's benchmark expects. Either the benchmark reads Monarch's run records instead, or Monarch gets per-stage tracking added (planned, see <code>PLAN.md</code>).</p>
+
+<h2 id="code">9. What is built and what is not</h2>
+<p>All in <code>workflowbench/</code>, Python 3.13, about 4,400 lines.</p>
+<div class="tbl"><table>
+<tr><th>Piece</th><th>Status</th><th>What it does</th></tr>
+<tr><td>Simulated apps + snapshots</td><td><span class="tag done">done</span></td><td>Loads a task's starting data, exposes the 3 tools (also as an MCP server), takes before/after snapshots.</td></tr>
+<tr><td>Checker</td><td><span class="tag done">done</span></td><td>Expected result + nothing-else-changed + empty-task detection.</td></tr>
+<tr><td>Knowledge-base file generator</td><td><span class="tag partial">done, unusable</span></td><td>47 description files → one JSON file. Monarch cannot read it (8.4).</td></tr>
+<tr><td>Raw-model competitor</td><td><span class="tag done">done</span></td><td>Generic tool loop for OpenAI-compatible APIs and Gemini. Careful about prompt caching.</td></tr>
+<tr><td>Model list with prices</td><td><span class="tag partial">no Claude, no GPT</span></td><td>GLM-5.3, Kimi K3 (two providers), Gemini 3.7 Flash.</td></tr>
+<tr><td>Claude Code competitor</td><td><span class="tag partial">never ran</span></td><td>Runs Claude Code headless against the simulated apps.</td></tr>
+<tr><td>Monarch competitor</td><td><span class="tag blocked">blocked</span></td><td>Placeholder driven by two commands that do not exist yet.</td></tr>
+<tr><td>HTTP front door for Monarch</td><td><span class="tag partial">sketch</span></td><td></td></tr>
+<tr><td>Runner</td><td><span class="tag done">done</span></td><td>Runs tasks × competitors × trials, resumes after a crash, retries only on infrastructure errors, checks providers before spending money.</td></tr>
+<tr><td>Results database</td><td><span class="tag done">done</span></td><td>SQLite. Every query returns its own source line.</td></tr>
+<tr><td>Statistics</td><td><span class="tag done">done</span></td><td>Paired wins/losses, reliability score, error bars.</td></tr>
+<tr><td>Report generator</td><td><span class="tag done">done</span></td><td>Markdown and HTML. Internal and public variants, enforced in code.</td></tr>
+<tr><td>Import of the 5,427 old results</td><td><span class="tag partial">code only</span></td><td>Not verified against the real files.</td></tr>
+<tr><td>Real test accounts</td><td><span class="tag partial">stub</span></td><td></td></tr>
+<tr><td>Task set</td><td><span class="tag done">200 tasks</span></td><td>The "simple" domain of AutomationBench.</td></tr>
+<tr><td>CI</td><td><span class="tag partial">written, not running</span></td><td>Needs a copy of AutomationBench the CI does not have.</td></tr>
+</table></div>
+<div class="callout warn">The local Python environment was created under Lucas's Windows user and does not run on another machine. The copy of AutomationBench it depends on is a patched local copy on Lucas's machine (version 1.0.6+evalrepair.10), not in this repository. First job: make the setup reproducible.</div>
+
+<h2 id="results">10. Results so far</h2>
+<h3>Pilot 1: checker validation (10 tasks × 3 scripted controls × 2 trials)</h3>
+<div class="tbl"><table>
+<tr><th>Control</th><th>Pass</th><th>Expected-result checks only</th><th>Caught by "nothing else changed"</th></tr>
+<tr><td>Oracle (always right)</td><td>100%</td><td>100%</td><td>0</td></tr>
+<tr><td>Sloppy (right + collateral)</td><td>40%</td><td>100%</td><td>12 of 20</td></tr>
+<tr><td>Null (does nothing)</td><td>0%</td><td>0%</td><td>20 of 20</td></tr>
+</table></div>
+
+<h3>Pilot 2: first real model (10 tasks × 2 trials)</h3>
+<div class="tbl"><table>
+<tr><th>Competitor</th><th>Pass</th><th>Cache hit rate</th><th>Cost for 20 tests</th></tr>
+<tr><td>Kimi K3 (via Fireworks)</td><td>90% ± 10%</td><td>69%</td><td>US$ 0.75</td></tr>
+<tr><td>Oracle</td><td>100%</td><td></td><td>0</td></tr>
+</table></div>
+<p>No other model has run. Monarch has not run.</p>
+
+<h2 id="zip">11. About the zip file</h2>
+<p><code>workflowbench-t0.zip</code> is the first version of the code from 31 Aug (36 files). The <code>workflowbench/</code> folder contains all of them plus 235 more. Five files differ and the folder is newer in every case. <strong>The zip is already unpacked and superseded.</strong> Keep it only as a historical marker.</p>
+
+<h2 id="plan">12. Lucas's roadmap</h2>
+<h3>Who the benchmark serves</h3>
+<ul>
+  <li><strong>Monarch engineering:</strong> where Monarch fails, by type of failure, per release.</li>
+  <li><strong>Sam and sales:</strong> numbers that survive investor and customer scrutiny.</li>
+  <li><strong>Lucas's experiments:</strong> a safe place to try settings before they reach the product.</li>
+  <li><strong>The outside world:</strong> a credible, honest description of how we measure.</li>
+</ul>
+
+<h3>Build steps (from the build plan)</h3>
+<div class="tbl"><table>
+<tr><th>Step</th><th>Deliverable</th><th>State</th></tr>
+<tr><td>0</td><td>Simulated apps, checker, first pilot</td><td><span class="tag done">done</span></td></tr>
+<tr><td>1</td><td>First real model, runner, results database</td><td><span class="tag done">done</span></td></tr>
+<tr><td>2</td><td>Monarch as a competitor, paired against a model</td><td><span class="tag blocked">blocked</span> section 8</td></tr>
+<tr><td>3</td><td>Import of the 5,427 old results</td><td><span class="tag partial">code only</span></td></tr>
+<tr><td>4</td><td>Statistics and report generator</td><td><span class="tag done">done</span></td></tr>
+<tr><td>5</td><td>Real test accounts (Google first), computer-use competitors</td><td><span class="tag blocked">not started</span></td></tr>
+<tr><td>6</td><td>A report on every Monarch release; task set with CI</td><td><span class="tag partial">partly</span></td></tr>
+</table></div>
+
+<h3>Timeline</h3>
+<div class="tbl"><table>
+<tr><th>When</th><th>What</th></tr>
+<tr><td>September</td><td>Steps 1 and 2. Two more owners named by 2 Oct.</td></tr>
+<tr><td>October</td><td>Steps 3 and 4. First weekly report in standup.</td></tr>
+<tr><td>Oct–Nov</td><td>Step 5. Sam reads the first full internal report.</td></tr>
+<tr><td>Nov–Jan</td><td>Step 6. Task set grows to 576. Study: do simulated results predict real ones?</td></tr>
+<tr><td>Jan–Feb</td><td>Monthly public progress posts.</td></tr>
+</table></div>
+<p><strong>Goal:</strong> by 28 Feb the benchmark runs, reports and improves without Lucas in the loop.</p>
+
+<h3>Planned rhythm (not automated yet)</h3>
+<ul>
+  <li>Weekly: report generated from the database and posted in #benchmarks.</li>
+  <li>Per Monarch release: a report, informational only.</li>
+  <li>Monthly: one public post.</li>
+</ul>
+
+<h2 id="open">13. Decisions still open</h2>
+<div class="tbl"><table>
+<tr><th>Decision</th><th>Whose</th></tr>
+<tr><td>Confirm the three publishing levels; who can veto external posts while Lucas is on leave</td><td>Sam</td></tr>
+<tr><td>Who approves moving experimental settings into the product (or drop the experimental competitor)</td><td>Sam + Alex</td></tr>
+<tr><td>Name the two additional owners by 2 Oct</td><td>Lucas + Sam</td></tr>
+<tr><td>Salesforce and Zendesk: get consent, anonymize, or leave them out</td><td>Sam + legal</td></tr>
+<tr><td>How Monarch loads the simulated apps into its knowledge base; who builds it</td><td>Lucas + Deyton + Carlos</td></tr>
+</table></div>
+
+<h2 id="alignment">14. Carlos's input vs what exists</h2>
+<div class="tbl"><table>
+<tr><th>Carlos asked for</th><th>Already there</th><th>Missing</th></tr>
+<tr><td>Test Monarch against other models and agents, in several ways</td><td>The competitor types cover it. Raw-model loop works for four models.</td><td>Claude and GPT adapters. Monarch itself.</td></tr>
+<tr><td>Different target platforms and prompts per platform</td><td>Only the simulated API set, with its 200 prompts.</td><td>Real platforms (API + UI, and API-only) with their own prompt sets. Legal check per vendor.</td></tr>
+<tr><td>Three test modes: full flow with discovery, create + run, run only</td><td>Only "create + run", with the knowledge base loaded by hand.</td><td>Full flow (needs Monarch's discovery pointed at the mock API) and run-only (needs a known-good workflow per task).</td></tr>
+<tr><td>Run the benchmark periodically</td><td>Runner is resumable; weekly rhythm designed.</td><td>Any scheduling. Decision: manual for now.</td></tr>
+<tr><td>Infrastructure</td><td>Simulation runs on one machine.</td><td>Reproducible setup. Somewhere to run the Monarch stack (needs Docker; Railway cannot run its Lambda emulator).</td></tr>
+<tr><td>A framework for the tests</td><td>Decided: custom, small. Off-the-shelf frameworks were evaluated and rejected.</td><td>Nothing.</td></tr>
+<tr><td>Storing results, maybe in Langfuse</td><td>SQLite is the source of truth (the publishing rules depend on it). Monarch already sends model calls to Langfuse.</td><td>One Langfuse trace per test, linked to the run. Slack post generated from the report.</td></tr>
+<tr><td>Measure time and token cost</td><td>Every result row has tokens (cached / not), dollars, wall-clock, number of turns and tool calls.</td><td>Monarch's cost must sum its model team; Monarch stores tokens, not dollars.</td></tr>
+<tr><td>Same prompt for everyone</td><td>Rule in place.</td><td>For Monarch the prompt becomes the "goal" text; record that mapping.</td></tr>
+</table></div>
+
+<h2 id="glossary">15. Words used in this project</h2>
+<dl>
+  <dt>Arm / competitor</dt><dd>One thing being measured: a model, an agent, or Monarch, with a fixed configuration.</dd>
+  <dt>Episode / test</dt><dd>One task run once by one competitor.</dd>
+  <dt>Pass (strict)</dt><dd>Expected result present, nothing else changed, and the competitor finished normally.</dd>
+  <dt>pass^k</dt><dd>Chance that k runs of the same task all pass. A reliability score.</dd>
+  <dt>Source line</dt><dd>The provenance attached to every number: task set, version, count, competitor, run.</dd>
+  <dt>Contract hash</dt><dd>Fingerprint of a task (prompt + starting data + checks), frozen before any run.</dd>
+  <dt>Stock</dt><dd>"As shipped": pinned version, all settings recorded.</dd>
+  <dt>Synthetic / simulated mode</dt><dd>Running against the AutomationBench mock apps.</dd>
+  <dt>Real mode</dt><dd>Running against real accounts on real platforms.</dd>
+  <dt>AutomationBench</dt><dd>Zapier's open-source benchmark: 47 simulated apps and 576 tasks. We reuse its apps and tasks.</dd>
+  <dt>Feature Discovery</dt><dd>The part of Monarch that maps a platform and stores what it found (Postgres). The workflow agent reads from it.</dd>
+  <dt>Business Action</dt><dd>One operation on one platform in Monarch's knowledge base, with the HTTP (or browser, or SQL) call behind it.</dd>
+  <dt>Recipe</dt><dd>Monarch's internal name for a workflow written by its agent.</dd>
+</dl>
+
+<p class="sub" style="margin-top:56px">Sources: DESIGN.md v2.1, BUILD-SPEC.md, PROGRAM-SPEC.md, T0-INGESTION-SPEC.md, UX-SPEC.md, CLAUDE-CODE-PROMPT.md, WORKFLOWBENCH-T0-README.md, the <code>workflowbench/</code> code and <code>out/</code> results, and the <code>../monarch</code> repository.</p>
+
+</div>
+</body>
+</html>

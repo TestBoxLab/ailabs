@@ -1,0 +1,4774 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "bamboohr (WorkflowBench simulated)",
+  "version": "v1",
+  "description": "BambooHR Human Resources API v1. Authenticates via HTTP Basic (API key as username, 'x' as password) or OAuth 2.0. All paths begin with /api/v1/. Employee fields are requested by name using a comma-separated list. Tabular data (job history, compensation, etc.) is accessed through the tables sub-resource."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/bamboohr"
+  }
+ ],
+ "paths": {
+  "/bamboohr/v1/employees/{id}": {
+   "get": {
+    "operationId": "bamboohr.employees.get",
+    "summary": "Retrieve data for a single employee. Returns only the fields specified in the query parameter.",
+    "description": "Retrieve data for a single employee. Returns only the fields specified in the query parameter.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Employee ID. Use '0' to reference the employee linked to the current API key.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "fields",
+      "in": "query",
+      "required": false,
+      "description": "A comma-delimited set of field names specifying which data to return (defaults to firstName,lastName).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "onlyCurrent",
+      "in": "query",
+      "required": false,
+      "description": "Controls whether historical table fields return only current data (true, the default) or also include values with effective dates in the future.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Object containing the requested field name/value pairs for the employee.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.employees.update",
+    "summary": "Modify one or more fields on an existing employee record. Only the supplied fields are changed.",
+    "description": "Modify one or more fields on an existing employee record. Only the supplied fields are changed.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK. No response body on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: JSON object of field name/value pairs to update. Any standard employee field may be included (e.g., {firstName, lastName, workEmail, jobTitle, department, location, payRate, ...}).",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/directory": {
+   "get": {
+    "operationId": "bamboohr.employees.directory",
+    "summary": "Retrieve the company employee directory, including contact details and job information for all active employees.",
+    "description": "Retrieve the company employee directory, including contact details and job information for all active employees.",
+    "parameters": [
+     {
+      "name": "onlyCurrent",
+      "in": "query",
+      "required": false,
+      "description": "When true (default), only currently active employees appear. Disable to also return employees whose hire date or status effective date is in the future.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{fieldsets: [{id, title, fields: [fieldId]}], employees: [{id, displayName, firstName, lastName, preferredName, jobTitle, workPhone, workEmail, department, location, division, photoUrl, ...}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees": {
+   "post": {
+    "operationId": "bamboohr.employees.create",
+    "summary": "Add a new employee to the system. Returns the new employee's ID in the response Location header.",
+    "description": "Add a new employee to the system. Returns the new employee's ID in the response Location header.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with Location header containing the new employee URL. No response body.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {firstName (required), lastName (required), and any combination of standard employee fields such as workEmail, jobTitle, department, division, location, hireDate, address1, city, state, zipcode, country, mobilePhone, homePhone, workPhone, dateOfBirth, ssn, gender, maritalStatus, payRate, payType, exempt, employeeNumber, payFrequency}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "bamboohr.employees.list",
+    "summary": "Retrieve a paginated list of employees, with optional filtering and sorting.",
+    "description": "Retrieve a paginated list of employees, with optional filtering and sorting.",
+    "parameters": [
+     {
+      "name": "cursor",
+      "in": "query",
+      "required": false,
+      "description": "Pagination cursor returned from a previous request.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "description": "Maximum results per page.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "firstName",
+      "in": "query",
+      "required": false,
+      "description": "Filter by first name.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "lastName",
+      "in": "query",
+      "required": false,
+      "description": "Filter by last name.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "jobTitleName",
+      "in": "query",
+      "required": false,
+      "description": "Filter by job title.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "Filter by employment status.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "active",
+        "inactive"
+       ]
+      }
+     },
+     {
+      "name": "ids",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of employee IDs to fetch.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sortBy",
+      "in": "query",
+      "required": false,
+      "description": "Field to sort results by.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sortOrder",
+      "in": "query",
+      "required": false,
+      "description": "Sort direction.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "asc",
+        "desc"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{employees: [{employeeId, firstName, lastName, preferredName, photoUrl, jobTitleName, status, workEmail, homeEmail, bestEmail, workPhone, mobilePhone, homePhone, department, division, location}], cursor}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/changed": {
+   "get": {
+    "operationId": "bamboohr.employees.changed",
+    "summary": "Retrieve a list of employee IDs whose records have been modified since a given timestamp.",
+    "description": "Retrieve a list of employee IDs whose records have been modified since a given timestamp.",
+    "parameters": [
+     {
+      "name": "since",
+      "in": "query",
+      "required": true,
+      "description": "ISO 8601 timestamp. Only employees modified after this point are returned.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "type",
+      "in": "query",
+      "required": false,
+      "description": "Narrow results to a specific change type.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "inserted",
+        "updated",
+        "deleted"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{employees: {employeeId: {id, action, lastChanged}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{id}/files/view": {
+   "get": {
+    "operationId": "bamboohr.employees.files.list",
+    "summary": "List all file categories and documents for a specific employee.",
+    "description": "List all file categories and documents for a specific employee.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{categories: [{id, name, files: [{id, name, originalFileName, size, dateCreated, createdBy, shareWithEmployee}]}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{id}/files/{fileId}": {
+   "get": {
+    "operationId": "bamboohr.employees.files.get",
+    "summary": "Download the binary content of an employee's file.",
+    "description": "Download the binary content of an employee's file.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file to download.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Raw binary data of the requested file. The response Content-Type header corresponds to the original file format.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.employees.files.update",
+    "summary": "Update the metadata of an existing employee file (name, category, or sharing).",
+    "description": "Update the metadata of an existing employee file (name, category, or sharing).",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file to modify.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string), categoryId (integer), shareWithEmployee (boolean \u00e2\u20ac\u201d 'yes' or 'no')}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.employees.files.delete",
+    "summary": "Remove a file from an employee's documents.",
+    "description": "Remove a file from an employee's documents.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file to delete.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{id}/files": {
+   "post": {
+    "operationId": "bamboohr.employees.files.upload",
+    "summary": "Upload a new document to an employee's file storage.",
+    "description": "Upload a new document to an employee's file storage.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Employee ID. Use '0' for the API key's associated employee.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "201 Created. Location header contains the new file resource URL.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Multipart form: fileName (string, required \u00e2\u20ac\u201d display name), category (integer, required \u00e2\u20ac\u201d file section ID), share (string, 'yes' or 'no'), file (binary, required \u00e2\u20ac\u201d max 20MB).",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{id}/tables/{table}": {
+   "get": {
+    "operationId": "bamboohr.employees.tables.get",
+    "summary": "Retrieve all rows from a specified table for an employee. Standard tables include: jobInfo, employmentStatus, compensati",
+    "description": "Retrieve all rows from a specified table for an employee. Standard tables include: jobInfo, employmentStatus, compensation, dependents, contacts, education, assets, training, customTables.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "table",
+      "in": "path",
+      "required": true,
+      "description": "Name of the table to query (e.g., jobInfo, compensation, dependents).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, employeeId, ...table-specific fields}]. Common tables and their key fields: jobInfo (date, location, department, division, jobTitle, reportsTo), employmentStatus (date, employmentStatus, comment), compensation (startDate, rate, type, paidPer, paySchedule, overtimeRate, reason, comment), dependents (firstName, middleName, lastName, relationship, gender, ssn, dateOfBirth, addressSameAsEmployee, isUsCitizen, isStudent), contacts (firstName, lastName, relationship, homePhone, mobilePhone, workPhone, email, address1, city, state, zipcode, isPrimary).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.employees.tables.addRow",
+    "summary": "Insert a new row into the specified table for an employee.",
+    "description": "Insert a new row into the specified table for an employee.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "table",
+      "in": "path",
+      "required": true,
+      "description": "Name of the target table.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success. Location header contains the new row URL.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: JSON object with field name/value pairs appropriate to the table. For example, compensation: {startDate, rate, type, paidPer, reason, comment}.",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{id}/tables/{table}/{rowId}": {
+   "post": {
+    "operationId": "bamboohr.employees.tables.updateRow",
+    "summary": "Modify an existing row in an employee table.",
+    "description": "Modify an existing row in an employee table.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "table",
+      "in": "path",
+      "required": true,
+      "description": "Name of the table containing the row.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "rowId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the row to update.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: JSON object of field name/value pairs to change.",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/changed/tables/{table}": {
+   "get": {
+    "operationId": "bamboohr.employees.tables.changed",
+    "summary": "Retrieve table rows that have been modified since a specified point in time, organized by employee ID.",
+    "description": "Retrieve table rows that have been modified since a specified point in time, organized by employee ID.",
+    "parameters": [
+     {
+      "name": "table",
+      "in": "path",
+      "required": true,
+      "description": "Name of the table to check for changes (e.g., jobInfo, compensation).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "since",
+      "in": "query",
+      "required": true,
+      "description": "ISO 8601 timestamp (URL-encoded). Only rows changed after this moment are included.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Changed table rows grouped by employee ID with last-changed timestamps.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_off/requests": {
+   "get": {
+    "operationId": "bamboohr.timeoff.requests.list",
+    "summary": "Retrieve time off requests across the company, with optional filtering by date range, employee, type, or approval status",
+    "description": "Retrieve time off requests across the company, with optional filtering by date range, employee, type, or approval status.",
+    "parameters": [
+     {
+      "name": "start",
+      "in": "query",
+      "required": true,
+      "description": "Beginning of the date range (YYYY-MM-DD, required).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": true,
+      "description": "End of the date range (YYYY-MM-DD, required).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "employeeId",
+      "in": "query",
+      "required": false,
+      "description": "Limit results to a specific employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "type",
+      "in": "query",
+      "required": false,
+      "description": "Filter by time off type ID.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "Filter by current approval state.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "approved",
+        "denied",
+        "superceded",
+        "requested",
+        "canceled"
+       ]
+      }
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "required": false,
+      "description": "Use 'approve' to see only requests awaiting the caller's approval.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "view",
+        "approve"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[TimeOffRequest, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/time_off/request": {
+   "put": {
+    "operationId": "bamboohr.timeoff.requests.create",
+    "summary": "Submit a new time off request for an employee. Users with sufficient permissions can create pre-approved requests.",
+    "description": "Submit a new time off request for an employee. Users with sufficient permissions can create pre-approved requests.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee requesting time off.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "201 Created on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {timeOffTypeId (integer, required), start (date, required), end (date, required), status (string \u00e2\u20ac\u201d 'requested' or 'approved'), amount (number \u00e2\u20ac\u201d hours or days per date), notes (string \u00e2\u20ac\u201d optional employee note), dates: {YYYY-MM-DD: amount, ...}, previousRequest (integer \u00e2\u20ac\u201d ID of the request being modified)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_off/requests/{requestId}/status": {
+   "put": {
+    "operationId": "bamboohr.timeoff.requests.changeStatus",
+    "summary": "Approve, deny, or cancel a pending time off request.",
+    "description": "Approve, deny, or cancel a pending time off request.",
+    "parameters": [
+     {
+      "name": "requestId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the time off request to act on.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {status (string, required \u00e2\u20ac\u201d 'approved', 'denied', or 'canceled'), note (string \u00e2\u20ac\u201d optional comment from the approver)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/time_off/history": {
+   "put": {
+    "operationId": "bamboohr.timeoff.history.add",
+    "summary": "Manually add a balance adjustment entry to an employee's time off history.",
+    "description": "Manually add a balance adjustment entry to an employee's time off history.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {date (date, required), timeOffTypeId (integer, required), note (string), amount (number \u00e2\u20ac\u201d positive to add, negative to subtract)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_off/whos_out": {
+   "get": {
+    "operationId": "bamboohr.timeoff.whosout",
+    "summary": "Get a list of employees who are out of office during a given date range, including company holidays.",
+    "description": "Get a list of employees who are out of office during a given date range, including company holidays.",
+    "parameters": [
+     {
+      "name": "start",
+      "in": "query",
+      "required": false,
+      "description": "Start date for the query (YYYY-MM-DD, defaults to today).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": false,
+      "description": "End date for the query (YYYY-MM-DD, defaults to 14 days from start).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, type ('timeOff' or 'holiday'), employeeId, name, start, end}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/time_off/calculator": {
+   "get": {
+    "operationId": "bamboohr.timeoff.calculator",
+    "summary": "Calculate an employee's projected time off balance for a future date.",
+    "description": "Calculate an employee's projected time off balance for a future date.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": true,
+      "description": "Target date for the balance projection (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{timeOffType, name, units, balance}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/time_off/policies": {
+   "get": {
+    "operationId": "bamboohr.timeoff.policies.list",
+    "summary": "Retrieve all configured time off accrual and allotment policies.",
+    "description": "Retrieve all configured time off accrual and allotment policies.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[TimeOffPolicy, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/time_off/types": {
+   "get": {
+    "operationId": "bamboohr.timeoff.types.list",
+    "summary": "List all time off categories configured for the company.",
+    "description": "List all time off categories configured for the company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{timeOffTypes: [{id, name, units, color, icon}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/time_off/policies": {
+   "put": {
+    "operationId": "bamboohr.timeoff.policies.assign",
+    "summary": "Assign one or more time off policies to an employee.",
+    "description": "Assign one or more time off policies to an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: [{timeOffPolicyId (integer), accrualStartDate (date \u00e2\u20ac\u201d when accrual begins)}]",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "bamboohr.timeoff.policies.employee.list",
+    "summary": "List the time off policies currently assigned to an employee.",
+    "description": "List the time off policies currently assigned to an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{timeOffPolicyId, timeOffTypeId, accrualStartDate}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/reports/{id}": {
+   "get": {
+    "operationId": "bamboohr.reports.company",
+    "summary": "Run a previously saved company report and retrieve its output.",
+    "description": "Run a previously saved company report and retrieve its output.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the report to execute. This can be located in the BambooHR UI by inspecting the report link.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "format",
+      "in": "query",
+      "required": false,
+      "description": "Output format to use (not case-sensitive). Falls back to the Accept header when not specified.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "json",
+        "xml",
+        "csv",
+        "xls",
+        "pdf"
+       ]
+      }
+     },
+     {
+      "name": "fd",
+      "in": "query",
+      "required": false,
+      "description": "Controls whether duplicate rows are filtered out.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "yes",
+        "no"
+       ]
+      }
+     },
+     {
+      "name": "onlyCurrent",
+      "in": "query",
+      "required": false,
+      "description": "When enabled (the default), fields with historical data only show the present value. Disable to include past and future entries.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "JSON: {title, fields: [{id, type, name}], employees: [{id, ...requested fields}]}. Other formats return file content with the appropriate Content-Type.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/reports/custom": {
+   "post": {
+    "operationId": "bamboohr.reports.custom",
+    "summary": "Generate an ad-hoc report by specifying which fields to include and optionally filtering employees.",
+    "description": "Generate an ad-hoc report by specifying which fields to include and optionally filtering employees.",
+    "parameters": [
+     {
+      "name": "format",
+      "in": "query",
+      "required": false,
+      "description": "Desired output format.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "json",
+        "xml",
+        "csv",
+        "xls",
+        "pdf"
+       ]
+      }
+     },
+     {
+      "name": "onlyCurrent",
+      "in": "query",
+      "required": false,
+      "description": "When enabled (the default), fields with historical data only show the present value. Disable to include past and future entries.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "JSON: {title, fields: [{id, type, name}], employees: [{id, ...requested fields}]}. Other formats return file content.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {title (string, required \u00e2\u20ac\u201d serves as the report label and download file name), fields (array of field ID strings, required \u00e2\u20ac\u201d max 400), filters (object \u00e2\u20ac\u201d {lastChanged: {value: ISO 8601, includeNull: boolean}, employeeIds: [integer]}), filterDuplicates (string \u00e2\u20ac\u201d 'yes' or 'no', default 'yes')}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals": {
+   "get": {
+    "operationId": "bamboohr.goals.list",
+    "summary": "Retrieve all goals for a specific employee.",
+    "description": "Retrieve all goals for a specific employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "filter",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results by goal status.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "all",
+        "open",
+        "completed",
+        "closed"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goals: [Goal, ...]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.goals.create",
+    "summary": "Create a new goal for an employee.",
+    "description": "Create a new goal for an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goal: Goal}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {title (string, required), description (string), percentComplete (integer, 0-100), dueDate (date), alignsWithOptionId (integer), sharedWithEmployeeIds (array of integers), milestones (array of {title, startValue, targetValue})}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}": {
+   "put": {
+    "operationId": "bamboohr.goals.update",
+    "summary": "Modify an existing employee goal.",
+    "description": "Modify an existing employee goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the goal to update.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goal: Goal}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {title, description, percentComplete, dueDate, status, sharedWithEmployeeIds, milestones}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.goals.delete",
+    "summary": "Remove an employee goal.",
+    "description": "Remove an employee goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the goal to delete.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/statusCount": {
+   "get": {
+    "operationId": "bamboohr.goals.statusCount",
+    "summary": "Get a count of an employee's goals grouped by status.",
+    "description": "Get a count of an employee's goals grouped by status.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{open, completed, closed}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/aggregate": {
+   "get": {
+    "operationId": "bamboohr.goals.aggregate",
+    "summary": "Retrieve aggregate progress and alignment data for an employee's goals.",
+    "description": "Retrieve aggregate progress and alignment data for an employee's goals.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{averagePercentComplete, alignmentData}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/type": {
+   "get": {
+    "operationId": "bamboohr.training.types.list",
+    "summary": "List all training types configured for the company.",
+    "description": "List all training types configured for the company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[TrainingType, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.training.types.create",
+    "summary": "Define a new training type.",
+    "description": "Define a new training type.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{trainingId, ...TrainingType}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required), renewable (boolean), frequency (integer \u00e2\u20ac\u201d months), dueFromHireDate (integer \u00e2\u20ac\u201d days), required (boolean), category: {id (integer)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/type/{trainingTypeId}": {
+   "put": {
+    "operationId": "bamboohr.training.types.update",
+    "summary": "Update an existing training type's settings.",
+    "description": "Update an existing training type's settings.",
+    "parameters": [
+     {
+      "name": "trainingTypeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the training type.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name, renewable, frequency, dueFromHireDate, required, category}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.training.types.delete",
+    "summary": "Remove a training type definition.",
+    "description": "Remove a training type definition.",
+    "parameters": [
+     {
+      "name": "trainingTypeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the training type.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/category": {
+   "get": {
+    "operationId": "bamboohr.training.categories.list",
+    "summary": "List all training categories.",
+    "description": "List all training categories.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.training.categories.create",
+    "summary": "Create a new training category for organizing training types.",
+    "description": "Create a new training category for organizing training types.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, name}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/category/{categoryId}": {
+   "put": {
+    "operationId": "bamboohr.training.categories.update",
+    "summary": "Rename a training category.",
+    "description": "Rename a training category.",
+    "parameters": [
+     {
+      "name": "categoryId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the category.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.training.categories.delete",
+    "summary": "Remove a training category.",
+    "description": "Remove a training category.",
+    "parameters": [
+     {
+      "name": "categoryId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the category.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/record/{employeeId}": {
+   "get": {
+    "operationId": "bamboohr.training.records.list",
+    "summary": "Retrieve all training records for a given employee.",
+    "description": "Retrieve all training records for a given employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "trainingTypeId",
+      "in": "query",
+      "required": false,
+      "description": "Restrict to a specific training type.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[TrainingRecord, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.training.records.create",
+    "summary": "Log a training completion record for an employee.",
+    "description": "Log a training completion record for an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "201 Created on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {completedDate (date, required), trainingTypeId (integer, required), cost: {currency, cost}, instructor (string), hours (number), credits (number), notes (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/training/record/{employeeId}/{recordId}": {
+   "put": {
+    "operationId": "bamboohr.training.records.update",
+    "summary": "Update an existing training record.",
+    "description": "Update an existing training record.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "recordId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the training record.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {completedDate, cost, instructor, hours, credits, notes}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.training.records.delete",
+    "summary": "Remove a training record.",
+    "description": "Remove a training record.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "recordId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the training record.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/benefitplans": {
+   "get": {
+    "operationId": "bamboohr.benefits.plans.list",
+    "summary": "Retrieve all benefit plans offered by the company.",
+    "description": "Retrieve all benefit plans offered by the company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[BenefitPlan, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/benefitcoverages": {
+   "get": {
+    "operationId": "bamboohr.benefits.coverages.list",
+    "summary": "Retrieve all benefit coverage tiers (e.g., Employee Only, Employee + Spouse, Family).",
+    "description": "Retrieve all benefit coverage tiers (e.g., Employee Only, Employee + Spouse, Family).",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employee_deductions": {
+   "get": {
+    "operationId": "bamboohr.benefits.employee.deductions",
+    "summary": "List benefit deduction records for employees.",
+    "description": "List benefit deduction records for employees.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, employeeId, benefitPlanId, startDate, endDate, amount, deductionFrequency, coverageLevel}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/benefittypes": {
+   "get": {
+    "operationId": "bamboohr.benefits.company.types",
+    "summary": "Retrieve the available benefit type categories.",
+    "description": "Retrieve the available benefit type categories.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, type}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/webhooks": {
+   "get": {
+    "operationId": "bamboohr.webhooks.list",
+    "summary": "Retrieve all webhook subscriptions configured for the company.",
+    "description": "Retrieve all webhook subscriptions configured for the company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[Webhook, ...]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.webhooks.create",
+    "summary": "Register a new webhook to receive notifications when monitored fields change.",
+    "description": "Register a new webhook to receive notifications when monitored fields change.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created: Webhook object with id.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required), monitorFields (array of field names, required), postFields (object), url (string, required), format ('json' or 'xml'), frequency: {hour, minute, day}, limit: {employeeIds: [int]}, includeCompanyDomain (boolean)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/webhooks/{webhookId}": {
+   "get": {
+    "operationId": "bamboohr.webhooks.get",
+    "summary": "Retrieve configuration details for a specific webhook.",
+    "description": "Retrieve configuration details for a specific webhook.",
+    "parameters": [
+     {
+      "name": "webhookId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the webhook.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Webhook object.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "bamboohr.webhooks.update",
+    "summary": "Modify an existing webhook's configuration.",
+    "description": "Modify an existing webhook's configuration.",
+    "parameters": [
+     {
+      "name": "webhookId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the webhook to update.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name, monitorFields, postFields, url, format, frequency, limit, includeCompanyDomain}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.webhooks.delete",
+    "summary": "Remove a webhook subscription.",
+    "description": "Remove a webhook subscription.",
+    "parameters": [
+     {
+      "name": "webhookId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the webhook to delete.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/webhooks/{webhookId}/log": {
+   "get": {
+    "operationId": "bamboohr.webhooks.logs",
+    "summary": "View delivery attempt logs for a webhook.",
+    "description": "View delivery attempt logs for a webhook.",
+    "parameters": [
+     {
+      "name": "webhookId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the webhook.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, webhookId, statusCode, timestamp, url}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/webhooks/monitor_fields": {
+   "get": {
+    "operationId": "bamboohr.webhooks.monitorFields",
+    "summary": "List all fields that can be monitored for changes by webhooks.",
+    "description": "List all fields that can be monitored for changes by webhooks.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, alias}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/webhooks/post_fields": {
+   "get": {
+    "operationId": "bamboohr.webhooks.postFields",
+    "summary": "List all fields that can be included in webhook payloads.",
+    "description": "List all fields that can be included in webhook payloads.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, alias}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/fields": {
+   "get": {
+    "operationId": "bamboohr.meta.fields",
+    "summary": "Retrieve the full list of employee fields available in the system, including custom fields.",
+    "description": "Retrieve the full list of employee fields available in the system, including custom fields.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, type, alias}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/tables": {
+   "get": {
+    "operationId": "bamboohr.meta.tables",
+    "summary": "Retrieve the list of available employee tables and their field definitions.",
+    "description": "Retrieve the list of available employee tables and their field definitions.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{alias, fields: [{id, name, type, alias}]}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/lists": {
+   "get": {
+    "operationId": "bamboohr.meta.lists",
+    "summary": "Retrieve all list field options (picklist values) for the company.",
+    "description": "Retrieve all list field options (picklist values) for the company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{fieldId: [{id, value, archived}], ...}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/photo/small": {
+   "get": {
+    "operationId": "bamboohr.photos.get",
+    "summary": "Retrieve the small version of an employee's profile photo.",
+    "description": "Retrieve the small version of an employee's profile photo.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Binary image data with appropriate Content-Type header.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/photo": {
+   "post": {
+    "operationId": "bamboohr.photos.upload",
+    "summary": "Upload or replace an employee's profile photo.",
+    "description": "Upload or replace an employee's profile photo.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Multipart form: file (binary image).",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/last_changed/employees": {
+   "get": {
+    "operationId": "bamboohr.lastchanged",
+    "summary": "Get the most recent modification timestamp across all employee records.",
+    "description": "Get the most recent modification timestamp across all employee records.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{lastChanged: ISO 8601 timestamp}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/{employeeId}/time_off/balance_adjustment": {
+   "put": {
+    "operationId": "bamboohr.timeoff.balanceAdjustment",
+    "summary": "Apply a one-time adjustment to an employee's time off balance.",
+    "description": "Apply a one-time adjustment to an employee's time off balance.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {date (date, required), timeOffTypeId (integer, required), amount (number, required \u00e2\u20ac\u201d positive to credit, negative to debit), note (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/company_information": {
+   "get": {
+    "operationId": "bamboohr.company.info",
+    "summary": "Retrieve basic company profile details.",
+    "description": "Retrieve basic company profile details.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{legalName, displayName, address: {line1, line2, city, state, zip, country}, phone, website}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/applications": {
+   "get": {
+    "operationId": "bamboohr.ats.applications.list",
+    "summary": "List candidate applications, optionally filtered by job opening or status.",
+    "description": "List candidate applications, optionally filtered by job opening or status.",
+    "parameters": [
+     {
+      "name": "jobId",
+      "in": "query",
+      "required": false,
+      "description": "Filter to applications for a specific job opening.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "statusId",
+      "in": "query",
+      "required": false,
+      "description": "Filter by application status.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "Page number for pagination.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "pageLimit",
+      "in": "query",
+      "required": false,
+      "description": "Number of results per page.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{applications: [{id, applicantId, jobOpeningId, status, appliedDate, ...}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/applications/{applicationId}": {
+   "get": {
+    "operationId": "bamboohr.ats.applications.get",
+    "summary": "Retrieve full details for a single application.",
+    "description": "Retrieve full details for a single application.",
+    "parameters": [
+     {
+      "name": "applicationId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the application.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, applicantId, jobOpeningId, status, appliedDate, rating, comments, resume, coverLetter}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/applications/{applicationId}/status": {
+   "post": {
+    "operationId": "bamboohr.ats.applications.updateStatus",
+    "summary": "Change the status of a candidate application.",
+    "description": "Change the status of a candidate application.",
+    "parameters": [
+     {
+      "name": "applicationId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the application.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {status (integer, required \u00e2\u20ac\u201d status ID)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/applications/{applicationId}/comments": {
+   "post": {
+    "operationId": "bamboohr.ats.applications.addComment",
+    "summary": "Add a comment to a candidate application.",
+    "description": "Add a comment to a candidate application.",
+    "parameters": [
+     {
+      "name": "applicationId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the application.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "201 Created.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {comment (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/application": {
+   "post": {
+    "operationId": "bamboohr.ats.applications.create",
+    "summary": "Submit a new candidate application for a job opening.",
+    "description": "Submit a new candidate application for a job opening.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with application ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {firstName (string, required), lastName (string, required), email (string), jobId (integer), phone (string), address (string), city (string), state (string), zip (string), source (string), resume (binary), coverLetter (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/jobs": {
+   "get": {
+    "operationId": "bamboohr.ats.jobs.list",
+    "summary": "List all job opening summaries.",
+    "description": "List all job opening summaries.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, title, departmentId, locationId, status, hiringLead, datePosted, dateClosed}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/job_opening": {
+   "post": {
+    "operationId": "bamboohr.ats.jobs.create",
+    "summary": "Create a new job opening.",
+    "description": "Create a new job opening.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with job opening ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {title (string, required), departmentId (integer), locationId (integer), hiringLead (integer \u00e2\u20ac\u201d employee ID), description (string), minimumExperience (string), employmentType (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/statuses": {
+   "get": {
+    "operationId": "bamboohr.ats.statuses.list",
+    "summary": "List all configured applicant statuses.",
+    "description": "List all configured applicant statuses.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/hiring_leads": {
+   "get": {
+    "operationId": "bamboohr.ats.hiringLeads.list",
+    "summary": "Retrieve employees designated as hiring leads.",
+    "description": "Retrieve employees designated as hiring leads.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, employeeId, name}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/applicant_tracking/locations": {
+   "get": {
+    "operationId": "bamboohr.ats.locations.list",
+    "summary": "List office locations available for job postings.",
+    "description": "List office locations available for job postings.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/timesheet_entries": {
+   "get": {
+    "operationId": "bamboohr.timetracking.entries.list",
+    "summary": "Retrieve timesheet entries within a date range (max 365 days).",
+    "description": "Retrieve timesheet entries within a date range (max 365 days).",
+    "parameters": [
+     {
+      "name": "start",
+      "in": "query",
+      "required": true,
+      "description": "Start of the date range (YYYY-MM-DD, required).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": true,
+      "description": "End of the date range (YYYY-MM-DD, required).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "employeeIds",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated employee IDs to filter by.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{timesheetEntries: [{id, employeeId, date, start, end, hours, projectId, taskId, note}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/employees/{employeeId}/clock_in": {
+   "post": {
+    "operationId": "bamboohr.timetracking.clockIn",
+    "summary": "Record a clock-in event for an employee.",
+    "description": "Record a clock-in event for an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK with clock entry ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {start (datetime), note (string), projectId (integer), taskId (integer)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/employees/{employeeId}/clock_out": {
+   "post": {
+    "operationId": "bamboohr.timetracking.clockOut",
+    "summary": "Record a clock-out event for an employee.",
+    "description": "Record a clock-out event for an employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {end (datetime), note (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/clock_entries/store": {
+   "post": {
+    "operationId": "bamboohr.timetracking.clockEntries.store",
+    "summary": "Create or update clock-based timesheet entries in bulk.",
+    "description": "Create or update clock-based timesheet entries in bulk.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {entries: [{employeeId (integer), date (date), start (time), end (time), projectId (integer), taskId (integer), note (string)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/hour_entries/store": {
+   "post": {
+    "operationId": "bamboohr.timetracking.hourEntries.store",
+    "summary": "Create or update hour-based timesheet entries in bulk.",
+    "description": "Create or update hour-based timesheet entries in bulk.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {entries: [{employeeId (integer), date (date), hours (number), projectId (integer), taskId (integer), note (string)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/time_tracking/projects": {
+   "post": {
+    "operationId": "bamboohr.timetracking.projects.create",
+    "summary": "Create a new time tracking project.",
+    "description": "Create a new time tracking project.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, name}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1_2/datasets": {
+   "get": {
+    "operationId": "bamboohr.datasets.list",
+    "summary": "List all available data sets for reporting.",
+    "description": "List all available data sets for reporting.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{name, description}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/datasets/{datasetName}": {
+   "post": {
+    "operationId": "bamboohr.datasets.query",
+    "summary": "Run a query against a named dataset, with support for field selection, filtering, sorting, grouping, and aggregations.",
+    "description": "Run a query against a named dataset, with support for field selection, filtering, sorting, grouping, and aggregations.",
+    "parameters": [
+     {
+      "name": "datasetName",
+      "in": "path",
+      "required": true,
+      "description": "Name of the dataset to query.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{data: [{field: value, ...}], pagination: {nextCursor}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {fields (array of field IDs, required), filters: {match ('all' or 'any'), filters: [{field, operator, value}]}, sortBy: [{field, sort ('asc' or 'desc')}], groupBy (array of field IDs), aggregations: {defaultAggregation (string), overridingAggregations: {fieldId: aggregation}}, showHistory (array of field IDs)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1_2/datasets/{datasetName}/fields": {
+   "get": {
+    "operationId": "bamboohr.datasets.fields",
+    "summary": "List the available fields for a specific dataset.",
+    "description": "List the available fields for a specific dataset.",
+    "parameters": [
+     {
+      "name": "datasetName",
+      "in": "path",
+      "required": true,
+      "description": "Name of the dataset.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, name, type}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/custom-reports": {
+   "get": {
+    "operationId": "bamboohr.customReports.list",
+    "summary": "List all saved custom reports.",
+    "description": "List all saved custom reports.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, lastModified}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/custom-reports/{reportId}": {
+   "get": {
+    "operationId": "bamboohr.customReports.get",
+    "summary": "Execute a saved custom report and retrieve its data.",
+    "description": "Execute a saved custom report and retrieve its data.",
+    "parameters": [
+     {
+      "name": "reportId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the saved report.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Report data in the requested format (JSON, CSV, XLS, PDF).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employeedependents": {
+   "get": {
+    "operationId": "bamboohr.dependents.list",
+    "summary": "List employee dependents, optionally filtered to a specific employee.",
+    "description": "List employee dependents, optionally filtered to a specific employee.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results to dependents of this employee.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, employeeId, firstName, middleName, lastName, relationship, gender, ssn, sin, dateOfBirth, addressLine1, addressLine2, city, state, zipCode, homePhone, country, isUsCitizen, isStudent}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.dependents.create",
+    "summary": "Add a new dependent to an employee's record.",
+    "description": "Add a new dependent to an employee's record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with dependent ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {employeeId (integer, required), firstName (string), middleName (string), lastName (string), relationship (string), gender (string), ssn (string), sin (string), dateOfBirth (date), addressLine1 (string), addressLine2 (string), city (string), state (string), zipCode (string), homePhone (string), country (string), isUsCitizen (boolean), isStudent (boolean)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employeedependents/{id}": {
+   "get": {
+    "operationId": "bamboohr.dependents.get",
+    "summary": "Retrieve a specific dependent record.",
+    "description": "Retrieve a specific dependent record.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Dependent ID.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, employeeId, firstName, middleName, lastName, relationship, gender, dateOfBirth, ...}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "bamboohr.dependents.update",
+    "summary": "Replace a dependent record with updated information.",
+    "description": "Replace a dependent record with updated information.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Dependent ID.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: full dependent object with all fields.",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/hris/org/locations": {
+   "get": {
+    "operationId": "bamboohr.locations.list",
+    "summary": "List all company office locations.",
+    "description": "List all company office locations.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "[{id, name, address, city, state, zip, country}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.locations.create",
+    "summary": "Add a new office location.",
+    "description": "Add a new office location.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with location ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required), address (string), city (string), state (string), zip (string), country (string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/hris/org/locations/{id}": {
+   "get": {
+    "operationId": "bamboohr.locations.get",
+    "summary": "Retrieve details for a specific location.",
+    "description": "Retrieve details for a specific location.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Location ID.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, name, address, city, state, zip, country}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "bamboohr.locations.update",
+    "summary": "Update an existing office location.",
+    "description": "Update an existing office location.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Location ID.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name, address, city, state, zip, country}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.locations.delete",
+    "summary": "Remove an office location.",
+    "description": "Remove an office location.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Location ID.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/files/view": {
+   "get": {
+    "operationId": "bamboohr.files.company.list",
+    "summary": "List all company-level file categories and documents.",
+    "description": "List all company-level file categories and documents.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{categories: [{id, name, files: [{id, name, originalFileName, size, dateCreated, createdBy}]}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/files/{fileId}": {
+   "get": {
+    "operationId": "bamboohr.files.company.get",
+    "summary": "Download a company-level file.",
+    "description": "Download a company-level file.",
+    "parameters": [
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Binary file content with appropriate Content-Type.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.files.company.update",
+    "summary": "Update metadata for a company-level file.",
+    "description": "Update metadata for a company-level file.",
+    "parameters": [
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string), categoryId (integer)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "bamboohr.files.company.delete",
+    "summary": "Remove a company-level file.",
+    "description": "Remove a company-level file.",
+    "parameters": [
+     {
+      "name": "fileId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the file.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/files": {
+   "post": {
+    "operationId": "bamboohr.files.company.upload",
+    "summary": "Upload a new company-level document.",
+    "description": "Upload a new company-level document.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with Location header.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Multipart form: fileName (string, required), category (integer, required \u00e2\u20ac\u201d file section ID), file (binary, required \u00e2\u20ac\u201d max 20MB).",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/employees/files/categories": {
+   "post": {
+    "operationId": "bamboohr.files.categories.employee.create",
+    "summary": "Create a new employee file category.",
+    "description": "Create a new employee file category.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with category ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/files/categories": {
+   "post": {
+    "operationId": "bamboohr.files.categories.company.create",
+    "summary": "Create a new company file category.",
+    "description": "Create a new company file category.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "201 Created with category ID.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/users": {
+   "get": {
+    "operationId": "bamboohr.meta.users",
+    "summary": "Retrieve all user accounts, optionally filtered by enabled status.",
+    "description": "Retrieve all user accounts, optionally filtered by enabled status.",
+    "parameters": [
+     {
+      "name": "enabled",
+      "in": "query",
+      "required": false,
+      "description": "Filter to only enabled or only disabled users.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, employeeId, firstName, lastName, email, status}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/meta/lists/{listFieldId}": {
+   "put": {
+    "operationId": "bamboohr.meta.lists.update",
+    "summary": "Create, update, or archive values for a list-type field.",
+    "description": "Create, update, or archive values for a list-type field.",
+    "parameters": [
+     {
+      "name": "listFieldId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the list field.",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {options: [{id (integer \u00e2\u20ac\u201d omit for new), value (string), archived (boolean)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}/comments": {
+   "get": {
+    "operationId": "bamboohr.goals.comments.list",
+    "summary": "Retrieve all comments on a goal.",
+    "description": "Retrieve all comments on a goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, authorId, text, createdAt}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "bamboohr.goals.comments.create",
+    "summary": "Add a comment to a goal.",
+    "description": "Add a comment to a goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, authorId, text, createdAt}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {text (string, required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}/progress": {
+   "put": {
+    "operationId": "bamboohr.goals.progress",
+    "summary": "Update the completion percentage for a goal.",
+    "description": "Update the completion percentage for a goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goal: Goal}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {percentComplete (integer, 0-100)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}/milestones/{milestoneId}/progress": {
+   "put": {
+    "operationId": "bamboohr.goals.milestone.progress",
+    "summary": "Update progress on a specific milestone within a goal.",
+    "description": "Update progress on a specific milestone within a goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "milestoneId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "200 OK on success.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {currentValue (number)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}/close": {
+   "post": {
+    "operationId": "bamboohr.goals.close",
+    "summary": "Mark a goal as closed.",
+    "description": "Mark a goal as closed.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goal: Goal}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/bamboohr/v1/performance/employees/{employeeId}/goals/{goalId}/reopen": {
+   "post": {
+    "operationId": "bamboohr.goals.reopen",
+    "summary": "Reopen a previously closed goal.",
+    "description": "Reopen a previously closed goal.",
+    "parameters": [
+     {
+      "name": "employeeId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "goalId",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{goal: Goal}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Employee": {
+    "type": "object",
+    "description": "Represents an individual within the BambooHR system. The set of returned fields depends on the 'fields' query parameter.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "System-assigned unique identifier for the employee (read-only)."
+     },
+     "firstName": {
+      "type": "string",
+      "description": "Employee's legal given name."
+     },
+     "lastName": {
+      "type": "string",
+      "description": "Employee's legal surname."
+     },
+     "preferredName": {
+      "type": "string",
+      "description": "The name the employee prefers to go by."
+     },
+     "displayName": {
+      "type": "string",
+      "description": "Formatted version of the employee's name for display purposes (read-only)."
+     },
+     "middleName": {
+      "type": "string",
+      "description": "Employee's middle name."
+     },
+     "gender": {
+      "type": "string",
+      "enum": [
+       "Male",
+       "Female",
+       "Non-binary"
+      ],
+      "description": "Gender identity of the employee."
+     },
+     "dateOfBirth": {
+      "type": "string",
+      "format": "date",
+      "description": "Birth date in YYYY-MM-DD format."
+     },
+     "age": {
+      "type": "integer",
+      "description": "Current age computed from dateOfBirth (read-only)."
+     },
+     "maritalStatus": {
+      "type": "string",
+      "enum": [
+       "Single",
+       "Married",
+       "Domestic Partnership"
+      ],
+      "description": "Current marital status."
+     },
+     "ssn": {
+      "type": "string",
+      "description": "Social Security Number (US employees)."
+     },
+     "sin": {
+      "type": "string",
+      "description": "Social Insurance Number (Canadian employees)."
+     },
+     "nin": {
+      "type": "string",
+      "description": "National Insurance Number."
+     },
+     "nationalId": {
+      "type": "string",
+      "description": "National identification number."
+     },
+     "employeeNumber": {
+      "type": "string",
+      "description": "Company-defined employee number (distinct from BambooHR ID)."
+     },
+     "hireDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the employee was hired (YYYY-MM-DD)."
+     },
+     "originalHireDate": {
+      "type": "string",
+      "format": "date",
+      "description": "First hire date for rehired employees (v1.1+)."
+     },
+     "terminationDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of employment termination (read-only in v1.1+)."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "Active",
+       "Inactive"
+      ],
+      "description": "Whether the employee is currently active or inactive."
+     },
+     "employmentHistoryStatus": {
+      "type": "string",
+      "description": "Current employment status label (read-only in v1.1+)."
+     },
+     "jobTitle": {
+      "type": "string",
+      "description": "Employee's current job title. Updating this creates a history entry."
+     },
+     "department": {
+      "type": "string",
+      "description": "Name of the employee's department."
+     },
+     "division": {
+      "type": "string",
+      "description": "Name of the employee's division."
+     },
+     "location": {
+      "type": "string",
+      "description": "Work location name."
+     },
+     "workEmail": {
+      "type": "string",
+      "format": "email",
+      "description": "Corporate email address."
+     },
+     "homeEmail": {
+      "type": "string",
+      "format": "email",
+      "description": "Personal email address."
+     },
+     "bestEmail": {
+      "type": "string",
+      "format": "email",
+      "description": "Derived field that resolves to the corporate email when present, falling back to the personal email (read-only)."
+     },
+     "workPhone": {
+      "type": "string",
+      "description": "Office phone number."
+     },
+     "workPhoneExtension": {
+      "type": "string",
+      "description": "Extension for the office phone."
+     },
+     "mobilePhone": {
+      "type": "string",
+      "description": "Cell phone number."
+     },
+     "homePhone": {
+      "type": "string",
+      "description": "Residential phone number."
+     },
+     "address1": {
+      "type": "string",
+      "description": "Primary street address line."
+     },
+     "address2": {
+      "type": "string",
+      "description": "Secondary address line (apartment, suite, etc.)."
+     },
+     "city": {
+      "type": "string",
+      "description": "City of residence."
+     },
+     "state": {
+      "type": "string",
+      "description": "State or province. The system automatically converts entries to their standard abbreviated form."
+     },
+     "stateCode": {
+      "type": "string",
+      "description": "Two-character state abbreviation (read-only)."
+     },
+     "zipcode": {
+      "type": "string",
+      "description": "ZIP or postal code."
+     },
+     "country": {
+      "type": "string",
+      "description": "Country of residence."
+     },
+     "supervisor": {
+      "type": "string",
+      "description": "Name of the employee's direct supervisor (read-only)."
+     },
+     "supervisorEId": {
+      "type": "integer",
+      "description": "BambooHR employee ID of the supervisor (read-only)."
+     },
+     "supervisorEmail": {
+      "type": "string",
+      "description": "Email of the employee's supervisor (read-only)."
+     },
+     "payRate": {
+      "type": "string",
+      "description": "Current compensation rate."
+     },
+     "payType": {
+      "type": "string",
+      "enum": [
+       "Hourly",
+       "Salary",
+       "Commission Only",
+       "Exception Hourly",
+       "Monthly"
+      ],
+      "description": "How the employee is compensated."
+     },
+     "payFrequency": {
+      "type": "string",
+      "enum": [
+       "Weekly",
+       "Every other week",
+       "Twice a month",
+       "Monthly",
+       "Quarterly",
+       "Twice a year",
+       "Yearly"
+      ],
+      "description": "How often pay is distributed."
+     },
+     "paidPer": {
+      "type": "string",
+      "enum": [
+       "Hour",
+       "Day",
+       "Week",
+       "Month",
+       "Quarter",
+       "Year",
+       "Pay Period"
+      ],
+      "description": "Unit of the pay rate."
+     },
+     "exempt": {
+      "type": "string",
+      "enum": [
+       "Exempt",
+       "Non-exempt"
+      ],
+      "description": "FLSA overtime classification."
+     },
+     "standardHoursPerWeek": {
+      "type": "integer",
+      "description": "Number of standard hours per work week."
+     },
+     "eeo": {
+      "type": "string",
+      "description": "EEO job classification category."
+     },
+     "ethnicity": {
+      "type": "string",
+      "description": "Employee's ethnicity."
+     },
+     "acaStatusCategory": {
+      "type": "string",
+      "description": "Affordable Care Act status (e.g., full-time, contractor, intern-eligible)."
+     },
+     "includeInPayroll": {
+      "type": "boolean",
+      "description": "Whether this employee should be part of payroll runs."
+     },
+     "timeTrackingEnabled": {
+      "type": "boolean",
+      "description": "Whether time tracking is turned on for this employee."
+     },
+     "isPhotoUploaded": {
+      "type": "boolean",
+      "description": "Indicates if the employee has uploaded a profile photo (read-only)."
+     },
+     "lastChanged": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of the most recent change to this record."
+     },
+     "createdByUserId": {
+      "type": "integer",
+      "description": "ID of the user who initially created this employee record (read-only)."
+     },
+     "photoUrl": {
+      "type": "string",
+      "description": "URL to the employee's profile photo."
+     }
+    }
+   },
+   "TimeOffRequest": {
+    "type": "object",
+    "description": "A request by an employee to use time off. Must be approved before it impacts balances, though sufficiently privileged users can create pre-approved requests.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique identifier for this time off request."
+     },
+     "employeeId": {
+      "type": "integer",
+      "description": "ID of the employee who submitted the request."
+     },
+     "type": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "integer",
+        "description": "ID of the time off type."
+       },
+       "name": {
+        "type": "string",
+        "description": "Label for the time off type (e.g., Vacation, Sick Leave)."
+       }
+      }
+     },
+     "status": {
+      "type": "object",
+      "properties": {
+       "status": {
+        "type": "string",
+        "enum": [
+         "approved",
+         "denied",
+         "superceded",
+         "requested",
+         "canceled"
+        ],
+        "description": "Current approval state of the request."
+       },
+       "lastChanged": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When the status was last modified."
+       },
+       "lastChangedByUserId": {
+        "type": "integer",
+        "description": "ID of the user who last changed the status."
+       }
+      }
+     },
+     "start": {
+      "type": "string",
+      "format": "date",
+      "description": "First day of the requested time off period."
+     },
+     "end": {
+      "type": "string",
+      "format": "date",
+      "description": "Final day of the requested time off period."
+     },
+     "amount": {
+      "type": "object",
+      "properties": {
+       "unit": {
+        "type": "string",
+        "enum": [
+         "hours",
+         "days"
+        ],
+        "description": "Whether the amount is measured in hours or days."
+       },
+       "amount": {
+        "type": "string",
+        "description": "Numeric quantity of time requested."
+       }
+      }
+     },
+     "notes": {
+      "type": "object",
+      "properties": {
+       "employee": {
+        "type": "string",
+        "description": "Comment provided by the employee."
+       },
+       "manager": {
+        "type": "string",
+        "description": "Comment provided by the approving manager."
+       }
+      }
+     },
+     "dates": {
+      "type": "object",
+      "description": "Mapping of individual dates (YYYY-MM-DD) to the number of hours/days requested for each."
+     },
+     "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the request was originally submitted."
+     }
+    }
+   },
+   "TimeOffType": {
+    "type": "object",
+    "description": "A category of time off configured for the company (e.g., Vacation, Sick, Personal).",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique identifier for this time off category."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the time off category."
+     },
+     "units": {
+      "type": "string",
+      "enum": [
+       "hours",
+       "days"
+      ],
+      "description": "Whether this type tracks time in hours or days."
+     },
+     "color": {
+      "type": "string",
+      "description": "Hex color code used for calendar display."
+     },
+     "icon": {
+      "type": "string",
+      "description": "Icon identifier for visual representation."
+     }
+    }
+   },
+   "TimeOffPolicy": {
+    "type": "object",
+    "description": "An accrual or allotment policy governing how employees earn time off.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique identifier for this policy."
+     },
+     "timeOffTypeId": {
+      "type": "integer",
+      "description": "The time off type this policy applies to."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the policy."
+     },
+     "effectiveDate": {
+      "type": "string",
+      "format": "date",
+      "description": "When this policy takes effect."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "accruing",
+       "discretionary",
+       "manual"
+      ],
+      "description": "Mechanism by which time off is granted."
+     }
+    }
+   },
+   "WhosOut": {
+    "type": "object",
+    "description": "A record indicating an employee is absent or on leave during a given time range.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "ID of the time off entry or holiday."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "timeOff",
+       "holiday"
+      ],
+      "description": "Whether this is an employee absence or a company holiday."
+     },
+     "employeeId": {
+      "type": "integer",
+      "description": "ID of the absent employee (absent for holidays)."
+     },
+     "name": {
+      "type": "string",
+      "description": "Employee's display name or holiday name."
+     },
+     "start": {
+      "type": "string",
+      "format": "date",
+      "description": "Start date of the absence or holiday."
+     },
+     "end": {
+      "type": "string",
+      "format": "date",
+      "description": "End date of the absence or holiday."
+     }
+    }
+   },
+   "EmployeeFile": {
+    "type": "object",
+    "description": "Metadata for a document stored in an employee's file.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique file identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the file."
+     },
+     "originalFileName": {
+      "type": "string",
+      "description": "Name of the file as originally uploaded."
+     },
+     "size": {
+      "type": "integer",
+      "description": "File size in bytes."
+     },
+     "dateCreated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the file was uploaded."
+     },
+     "createdBy": {
+      "type": "string",
+      "description": "Name of the user who uploaded the file."
+     },
+     "shareWithEmployee": {
+      "type": "boolean",
+      "description": "Whether the file is visible to the employee."
+     }
+    }
+   },
+   "FileCategory": {
+    "type": "object",
+    "description": "A folder-like grouping used to organize employee documents.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Category identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Category label."
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/EmployeeFile"
+      },
+      "description": "Documents within this category."
+     }
+    }
+   },
+   "TableRow": {
+    "type": "object",
+    "description": "A single row in an employee table (e.g., job history, compensation, dependents). Fields vary by table.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Row identifier within the table."
+     },
+     "employeeId": {
+      "type": "integer",
+      "description": "ID of the employee this row belongs to."
+     }
+    },
+    "additionalProperties": true
+   },
+   "Report": {
+    "type": "object",
+    "description": "A generated report containing employee data across selected fields.",
+    "properties": {
+     "title": {
+      "type": "string",
+      "description": "Label for the report."
+     },
+     "fields": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string",
+         "description": "Field identifier."
+        },
+        "type": {
+         "type": "string",
+         "description": "Data type of the field."
+        },
+        "name": {
+         "type": "string",
+         "description": "Human-readable field label."
+        }
+       }
+      },
+      "description": "Column definitions included in the report."
+     },
+     "employees": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "description": "An employee record containing only the requested fields plus their ID."
+      },
+      "description": "Collection of employee records matching the report criteria."
+     }
+    }
+   },
+   "Webhook": {
+    "type": "object",
+    "description": "A subscription that sends real-time HTTP notifications when employee or company data changes.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique webhook identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Descriptive label for this webhook."
+     },
+     "monitorFields": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Field names that trigger a notification when modified."
+     },
+     "postFields": {
+      "type": "object",
+      "description": "Fields to include in the webhook payload."
+     },
+     "url": {
+      "type": "string",
+      "description": "Target URL where notifications are delivered."
+     },
+     "format": {
+      "type": "string",
+      "enum": [
+       "json",
+       "xml"
+      ],
+      "description": "Payload serialization format."
+     },
+     "frequency": {
+      "type": "object",
+      "properties": {
+       "hour": {
+        "type": "integer",
+        "description": "Hour of day for scheduled delivery (0-23)."
+       },
+       "minute": {
+        "type": "integer",
+        "description": "Minute within the hour (0-59)."
+       },
+       "day": {
+        "type": "integer",
+        "description": "Day of the month for monthly delivery."
+       }
+      }
+     },
+     "limit": {
+      "type": "object",
+      "properties": {
+       "employeeIds": {
+        "type": "array",
+        "items": {
+         "type": "integer"
+        },
+        "description": "Restrict this webhook to specific employees."
+       }
+      }
+     },
+     "includeCompanyDomain": {
+      "type": "boolean",
+      "description": "Whether to include the company subdomain in payloads."
+     },
+     "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the webhook was set up."
+     },
+     "lastSent": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of the last successful delivery."
+     }
+    }
+   },
+   "Goal": {
+    "type": "object",
+    "description": "A performance goal assigned to an employee.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique goal identifier."
+     },
+     "employeeId": {
+      "type": "integer",
+      "description": "ID of the employee who owns this goal."
+     },
+     "title": {
+      "type": "string",
+      "description": "Short descriptive name for the goal."
+     },
+     "description": {
+      "type": "string",
+      "description": "Detailed explanation of what the goal entails."
+     },
+     "percentComplete": {
+      "type": "integer",
+      "description": "Progress toward completion as a percentage (0-100)."
+     },
+     "alignsWithOptionId": {
+      "type": "integer",
+      "description": "ID of a company-level goal this aligns with."
+     },
+     "sharedWithEmployeeIds": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      },
+      "description": "IDs of employees this goal is shared with."
+     },
+     "dueDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Target completion date."
+     },
+     "completionDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the goal was actually completed."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "open",
+       "completed",
+       "closed"
+      ],
+      "description": "Current lifecycle state of the goal."
+     },
+     "milestones": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "integer"
+        },
+        "employeeGoalId": {
+         "type": "integer"
+        },
+        "title": {
+         "type": "string"
+        },
+        "currentValue": {
+         "type": "number"
+        },
+        "startValue": {
+         "type": "number"
+        },
+        "targetValue": {
+         "type": "number"
+        },
+        "completedDateTime": {
+         "type": "string",
+         "format": "date-time"
+        },
+        "lastEditedDateTime": {
+         "type": "string",
+         "format": "date-time"
+        }
+       }
+      },
+      "description": "Measurable checkpoints within the goal."
+     },
+     "actions": {
+      "type": "object",
+      "properties": {
+       "canEdit": {
+        "type": "boolean"
+       },
+       "canEditEmployeeGoalComment": {
+        "type": "boolean"
+       },
+       "canDeleteEmployeeGoal": {
+        "type": "boolean"
+       }
+      },
+      "description": "Permissions the current user has on this goal."
+     }
+    }
+   },
+   "TrainingRecord": {
+    "type": "object",
+    "description": "A record of an employee's participation in a training activity.",
+    "properties": {
+     "employeeId": {
+      "type": "integer",
+      "description": "ID of the employee."
+     },
+     "completedDate": {
+      "type": "string",
+      "format": "date",
+      "description": "When the training was finished."
+     },
+     "cost": {
+      "type": "object",
+      "properties": {
+       "currency": {
+        "type": "string"
+       },
+       "cost": {
+        "type": "number"
+       }
+      },
+      "description": "Financial cost of the training."
+     },
+     "instructor": {
+      "type": "string",
+      "description": "Who led the training."
+     },
+     "hours": {
+      "type": "number",
+      "description": "Duration of training in hours."
+     },
+     "credits": {
+      "type": "number",
+      "description": "Continuing education credits earned."
+     },
+     "notes": {
+      "type": "string",
+      "description": "Additional remarks about the training."
+     }
+    }
+   },
+   "TrainingType": {
+    "type": "object",
+    "description": "A category of training offered by the company.",
+    "properties": {
+     "trainingId": {
+      "type": "integer",
+      "description": "Unique training type identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Name of the training program."
+     },
+     "renewable": {
+      "type": "boolean",
+      "description": "Whether this training expires and must be retaken."
+     },
+     "frequency": {
+      "type": "integer",
+      "description": "Renewal interval in months (if renewable)."
+     },
+     "dueFromHireDate": {
+      "type": "integer",
+      "description": "Number of days after hire by which this training should be completed."
+     },
+     "required": {
+      "type": "boolean",
+      "description": "Whether all employees must complete this training."
+     },
+     "category": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "integer"
+       },
+       "name": {
+        "type": "string"
+       }
+      },
+      "description": "Grouping category for this training type."
+     }
+    }
+   },
+   "BenefitPlan": {
+    "type": "object",
+    "description": "A benefits package or plan offered to employees.",
+    "properties": {
+     "id": {
+      "type": "integer",
+      "description": "Unique plan identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the benefits plan."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "health",
+       "dental",
+       "vision",
+       "retirement",
+       "hsa",
+       "flex",
+       "life",
+       "disability",
+       "reimbursement",
+       "supplemental",
+       "other"
+      ],
+      "description": "Category of benefit."
+     },
+     "startDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the plan became active."
+     },
+     "endDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the plan was discontinued."
+     },
+     "description": {
+      "type": "string",
+      "description": "Summary of the plan's coverage."
+     },
+     "planUrl": {
+      "type": "string",
+      "description": "Link to detailed plan documentation."
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,448 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "helpscout (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "Simulated helpscout API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/helpscout"
+  }
+ ],
+ "paths": {
+  "/mailboxes": {
+   "get": {
+    "operationId": "helpscout.mailboxes.list",
+    "summary": "Retrieve all Help Scout mailboxes and inboxes. Enumerate every available email inbox configured in the account.",
+    "description": "Retrieve all Help Scout mailboxes and inboxes. Enumerate every available email inbox configured in the account.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{mailboxes: [MailboxObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/mailboxes/{mailboxId}": {
+   "get": {
+    "operationId": "helpscout.mailboxes.get",
+    "summary": "Fetch a particular Help Scout mailbox or inbox using its ID.",
+    "description": "Fetch a particular Help Scout mailbox or inbox using its ID.",
+    "parameters": [
+     {
+      "name": "mailboxId",
+      "in": "path",
+      "required": true,
+      "description": "Mailbox ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Mailbox object with id, name, email, slug",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers": {
+   "get": {
+    "operationId": "helpscout.customers.list",
+    "summary": "Browse or search Help Scout customers and contacts. Narrow results by name, email, or other query terms.",
+    "description": "Browse or search Help Scout customers and contacts. Narrow results by name, email, or other query terms.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "Search query (name, email, etc.).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "email",
+      "in": "query",
+      "required": false,
+      "description": "Filter by exact email address.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{customers: [CustomerObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "helpscout.customers.create",
+    "summary": "Add a new customer or contact to Help Scout.",
+    "description": "Add a new customer or contact to Help Scout.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created customer with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{email: string, firstName?, lastName?, phone?, organization?, jobTitle?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}": {
+   "get": {
+    "operationId": "helpscout.customers.get",
+    "summary": "Retrieve a single Help Scout customer record by their ID.",
+    "description": "Retrieve a single Help Scout customer record by their ID.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Customer object with contact info",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "operationId": "helpscout.customers.update",
+    "summary": "Modify an existing Help Scout customer's profile details.",
+    "description": "Modify an existing Help Scout customer's profile details.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{firstName?: string, lastName?: string, phone?: string, organization?: string, jobTitle?: string, background?: string, location?: string}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers:findOrCreate": {
+   "post": {
+    "operationId": "helpscout.customers.findOrCreate",
+    "summary": "Look up a Help Scout customer by email address, or register a new one if no match exists. Returns the resulting customer",
+    "description": "Look up a Help Scout customer by email address, or register a new one if no match exists. Returns the resulting customer record.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Customer object with id, email, firstName, lastName, phone, organization",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{email: string (required), firstName?: string, lastName?: string, phone?: string, organization?: string}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations": {
+   "get": {
+    "operationId": "helpscout.conversations.list",
+    "summary": "Retrieve Help Scout conversations, tickets, and threads. Enumerate all support interactions.",
+    "description": "Retrieve Help Scout conversations, tickets, and threads. Enumerate all support interactions.",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "Filter by status: active (default), closed, open, pending, spam, all.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{conversations: [ConversationObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "helpscout.conversations.create",
+    "summary": "Start a new Help Scout conversation, thread, or support ticket.",
+    "description": "Start a new Help Scout conversation, thread, or support ticket.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "Created conversation with id",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{subject: string (required), type: string (required, enum: 'email'|'chat'|'phone'), mailboxId: number (required), status: string (required, enum: 'active'|'closed'|'pending', default 'active'), customer: {id?: number, email?: string} (required), threads: [{type: string ('note'|'chat'|'phone'|'reply'|'customer'), text: string, customer?: {id?: number, email?: string}}] (required), tags?: [string], assignTo?: number}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversationId}": {
+   "patch": {
+    "operationId": "helpscout.conversations.update",
+    "summary": "Modify a Help Scout conversation. Adjust its status, assigned agent, tags, or mailbox.",
+    "description": "Modify a Help Scout conversation. Adjust its status, assigned agent, tags, or mailbox.",
+    "parameters": [
+     {
+      "name": "conversationId",
+      "in": "path",
+      "required": true,
+      "description": "Conversation ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{status?, assignTo?, tags?, mailboxId?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversationId}/threads/reply": {
+   "post": {
+    "operationId": "helpscout.conversations.reply",
+    "summary": "Post a reply to a Help Scout conversation. Write back to a customer within a support thread.",
+    "description": "Post a reply to a Help Scout conversation. Write back to a customer within a support thread.",
+    "parameters": [
+     {
+      "name": "conversationId",
+      "in": "path",
+      "required": true,
+      "description": "Conversation ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{thread_id: string, conversation_id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{text: string (required), customer: {id?: number, email?: string} (required), draft: boolean (optional), status: string (optional), cc: [string] (optional), bcc: [string] (optional)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/conversations/{conversationId}/threads/note": {
+   "post": {
+    "operationId": "helpscout.conversations.note",
+    "summary": "Attach an internal note to a Help Scout conversation. Write a private comment that is only visible to agents.",
+    "description": "Attach an internal note to a Help Scout conversation. Write a private comment that is only visible to agents.",
+    "parameters": [
+     {
+      "name": "conversationId",
+      "in": "path",
+      "required": true,
+      "description": "Conversation ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{thread_id: string, conversation_id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{text: string (required), user: number (optional \u00e2\u20ac\u201d user ID adding the note), status: string (optional \u00e2\u20ac\u201d changes conversation status)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/users": {
+   "get": {
+    "operationId": "helpscout.users.list",
+    "summary": "Enumerate all Help Scout users, agents, and team members.",
+    "description": "Enumerate all Help Scout users, agents, and team members.",
+    "parameters": [
+     {
+      "name": "email",
+      "in": "query",
+      "required": false,
+      "description": "Filter by exact email.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{users: [UserObject], count: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {}
+ }
+}

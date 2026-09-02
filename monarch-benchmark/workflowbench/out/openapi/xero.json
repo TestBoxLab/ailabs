@@ -1,0 +1,6219 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "xero (WorkflowBench simulated)",
+  "version": "2.0",
+  "description": "Xero Accounting API. Authentication uses OAuth 2.0. Every request requires a xero-tenant-id header identifying the target organisation. IMPORTANT: Xero uses non-standard HTTP methods -- PUT creates new records, POST updates existing records. Supports If-Modified-Since header for incremental sync. Common query params: where (filter expression), order (sort), page (pagination, 100 per page). Unit amounts default to 2 decimal places; set unitdp=4 for four."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/xero"
+  }
+ ],
+ "paths": {
+  "/api.xro/2.0/Invoices": {
+   "get": {
+    "operationId": "xero.invoices.list",
+    "summary": "Retrieve a paginated list of invoices and bills with optional filtering by status, contact, date, or keyword.",
+    "description": "Retrieve a paginated list of invoices and bills with optional filtering by status, contact, date, or keyword.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "Filter expression (e.g., Status==\"AUTHORISED\" AND Type==\"ACCREC\").",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "Sort order (e.g., Date DESC, InvoiceNumber ASC).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "IDs",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated list of InvoiceIDs to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "InvoiceNumbers",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated invoice numbers to filter by.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ContactIDs",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated ContactIDs to filter by.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "Statuses",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated statuses to filter by (DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED, DELETED).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "Page number (100 records per page).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "includeArchived",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "summaryOnly",
+      "in": "query",
+      "required": false,
+      "description": "Return lightweight records without line items or payments.",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "searchTerm",
+      "in": "query",
+      "required": false,
+      "description": "Free-text keyword filter for invoice records (ignores case).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "createdByMyApp",
+      "in": "query",
+      "required": false,
+      "description": "Only return invoices created by the current OAuth app.",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "Decimal places for unit amounts (default 2, set to 4 for four).",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Invoices: [Invoice]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.invoices.create",
+    "summary": "Create one or more new invoices or bills. Each requires a Type (ACCREC for sales, ACCPAY for purchases), a Contact, and ",
+    "description": "Create one or more new invoices or bills. Each requires a Type (ACCREC for sales, ACCPAY for purchases), a Contact, and LineItems.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "When false, returns individual validation errors per record.",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Invoices: [Invoice with InvoiceID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Invoices: [{Type (required - ACCREC|ACCPAY), Contact (required - {ContactID or Name}), LineItems (required - [{Description, Quantity, UnitAmount, AccountCode, TaxType, ItemCode, Tracking}]), Date, DueDate, InvoiceNumber, Reference, LineAmountTypes, BrandingThemeID, CurrencyCode, CurrencyRate, Status, Url}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Invoices/{InvoiceID}": {
+   "get": {
+    "operationId": "xero.invoices.get",
+    "summary": "Fetch a single invoice or bill by its unique identifier, including full line items and payment history.",
+    "description": "Fetch a single invoice or bill by its unique identifier, including full line items and payment history.",
+    "parameters": [
+     {
+      "name": "InvoiceID",
+      "in": "path",
+      "required": true,
+      "description": "UUID of the invoice to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Invoices: [Invoice]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.invoices.update",
+    "summary": "Modify an existing invoice or bill. Can update fields, change status (e.g., AUTHORISED, VOIDED, DELETED), or mark as sen",
+    "description": "Modify an existing invoice or bill. Can update fields, change status (e.g., AUTHORISED, VOIDED, DELETED), or mark as sent.",
+    "parameters": [
+     {
+      "name": "InvoiceID",
+      "in": "path",
+      "required": true,
+      "description": "UUID of the invoice to update.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Invoices: [updated Invoice]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Invoice fields to update: {InvoiceNumber, Date, DueDate, Status, LineItems, Reference, Contact, LineAmountTypes, SentToContact, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Invoices/{InvoiceID}/Email": {
+   "post": {
+    "operationId": "xero.invoices.email",
+    "summary": "Send an invoice to the contact's email address. The invoice must be in AUTHORISED or SUBMITTED status.",
+    "description": "Send an invoice to the contact's email address. The invoice must be in AUTHORISED or SUBMITTED status.",
+    "parameters": [
+     {
+      "name": "InvoiceID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Invoices/{InvoiceID}/OnlineInvoice": {
+   "get": {
+    "operationId": "xero.invoices.onlineUrl",
+    "summary": "Retrieve the URL for the online version of an invoice that can be shared with the customer.",
+    "description": "Retrieve the URL for the online version of an invoice that can be shared with the customer.",
+    "parameters": [
+     {
+      "name": "InvoiceID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{OnlineInvoices: [{OnlineInvoiceUrl: string}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Contacts": {
+   "get": {
+    "operationId": "xero.contacts.list",
+    "summary": "Retrieve a paginated list of contacts with optional filtering and search.",
+    "description": "Retrieve a paginated list of contacts with optional filtering and search.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "Filter expression (e.g., ContactStatus==\"ACTIVE\").",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "IDs",
+      "in": "query",
+      "required": false,
+      "description": "Comma-separated ContactIDs.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "includeArchived",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "summaryOnly",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "searchTerm",
+      "in": "query",
+      "required": false,
+      "description": "Searches across contact name, number, and email fields.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Contacts: [Contact]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.contacts.create",
+    "summary": "Create one or more new contacts. At minimum, a Name is required.",
+    "description": "Create one or more new contacts. At minimum, a Name is required.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Contacts: [Contact with ContactID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Contacts: [{Name (required), FirstName, LastName, EmailAddress, CompanyNumber, AccountNumber, ContactNumber, ContactStatus, Addresses ([{AddressType, AddressLine1-4, City, Region, PostalCode, Country}]), Phones ([{PhoneType, PhoneNumber, PhoneAreaCode, PhoneCountryCode}]), ContactPersons, TaxNumber, BankAccountDetails, DefaultCurrency, AccountsReceivableTaxType, AccountsPayableTaxType, SalesDefaultAccountCode, PurchasesDefaultAccountCode, PaymentTerms}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Contacts/{ContactID}": {
+   "get": {
+    "operationId": "xero.contacts.get",
+    "summary": "Fetch a single contact by its unique identifier, including addresses, phone numbers, and balances.",
+    "description": "Fetch a single contact by its unique identifier, including addresses, phone numbers, and balances.",
+    "parameters": [
+     {
+      "name": "ContactID",
+      "in": "path",
+      "required": true,
+      "description": "UUID of the contact.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Contacts: [Contact]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.contacts.update",
+    "summary": "Modify an existing contact record.",
+    "description": "Modify an existing contact record.",
+    "parameters": [
+     {
+      "name": "ContactID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Contacts: [updated Contact]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Contact fields to update: {Name, FirstName, LastName, EmailAddress, ContactStatus, Addresses, Phones, ContactPersons, PaymentTerms, DefaultCurrency, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Accounts": {
+   "get": {
+    "operationId": "xero.accounts.list",
+    "summary": "List all ledger accounts, optionally filtered by type, status, or class.",
+    "description": "List all ledger accounts, optionally filtered by type, status, or class.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "Filter expression (e.g., Type==\"BANK\", Class==\"EXPENSE\").",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Accounts: [Account]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.accounts.create",
+    "summary": "Add a new account to the chart of accounts.",
+    "description": "Add a new account to the chart of accounts.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{Accounts: [Account with AccountID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Account fields: {Name (required), Code (required), Type (required - BANK|CURRENT|CURRLIAB|DEPRECIATN|DIRECTCOSTS|EQUITY|EXPENSE|FIXED|INVENTORY|LIABILITY|NONCURRENT|OTHERINCOME|OVERHEADS|PREPAYMENT|REVENUE|SALES|TERMLIAB), Description, BankAccountNumber (required for BANK type), BankAccountType, CurrencyCode, TaxType, EnablePaymentsToAccount, ShowInExpenseClaims, AddToWatchlist}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Accounts/{AccountID}": {
+   "get": {
+    "operationId": "xero.accounts.get",
+    "summary": "Look up one ledger account by ID.",
+    "description": "Look up one ledger account by ID.",
+    "parameters": [
+     {
+      "name": "AccountID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Accounts: [Account]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.accounts.update",
+    "summary": "Modify an existing account.",
+    "description": "Modify an existing account.",
+    "parameters": [
+     {
+      "name": "AccountID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Accounts: [updated Account]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Account fields to update: {Name, Code, Type, Description, Status, TaxType, EnablePaymentsToAccount, ShowInExpenseClaims, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.accounts.delete",
+    "summary": "Remove an account from the chart of accounts. System accounts and accounts with transactions cannot be deleted.",
+    "description": "Remove an account from the chart of accounts. System accounts and accounts with transactions cannot be deleted.",
+    "parameters": [
+     {
+      "name": "AccountID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Accounts: [deleted Account]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Items": {
+   "get": {
+    "operationId": "xero.items.list",
+    "summary": "Retrieve all products and services configured in the organisation.",
+    "description": "Retrieve all products and services configured in the organisation.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Items: [Item]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.items.create",
+    "summary": "Create one or more new items. Each requires a unique Code.",
+    "description": "Create one or more new items. Each requires a unique Code.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Items: [Item with ItemID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Items: [{Code (required), Name, Description, PurchaseDescription, IsSold, IsPurchased, SalesDetails: {UnitPrice, AccountCode, TaxType}, PurchaseDetails: {UnitPrice, AccountCode, COGSAccountCode, TaxType}, IsTrackedAsInventory, InventoryAssetAccountCode}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Items/{ItemID}": {
+   "get": {
+    "operationId": "xero.items.get",
+    "summary": "Fetch a single item by its identifier.",
+    "description": "Fetch a single item by its identifier.",
+    "parameters": [
+     {
+      "name": "ItemID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Items: [Item]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.items.update",
+    "summary": "Modify an existing item.",
+    "description": "Modify an existing item.",
+    "parameters": [
+     {
+      "name": "ItemID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Items: [updated Item]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Item fields to update: {Code, Name, Description, PurchaseDescription, SalesDetails, PurchaseDetails, IsSold, IsPurchased, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.items.delete",
+    "summary": "Remove an item. Items referenced on existing transactions cannot be deleted.",
+    "description": "Remove an item. Items referenced on existing transactions cannot be deleted.",
+    "parameters": [
+     {
+      "name": "ItemID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Payments": {
+   "get": {
+    "operationId": "xero.payments.list",
+    "summary": "Retrieve a list of payments with optional filtering.",
+    "description": "Retrieve a list of payments with optional filtering.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Payments: [Payment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.payments.create",
+    "summary": "Record one or more payments against invoices or credit notes.",
+    "description": "Record one or more payments against invoices or credit notes.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Payments: [Payment with PaymentID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Payments: [{Invoice: {InvoiceID or InvoiceNumber} (required), Account: {AccountID or Code} (required), Amount (required), Date (required), Reference, IsReconciled, CurrencyRate}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Payments/{PaymentID}": {
+   "get": {
+    "operationId": "xero.payments.get",
+    "summary": "Fetch a single payment by its identifier.",
+    "description": "Fetch a single payment by its identifier.",
+    "parameters": [
+     {
+      "name": "PaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Payments: [Payment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.payments.delete",
+    "summary": "Delete a payment by setting its status to DELETED. Reconciled payments cannot be deleted.",
+    "description": "Delete a payment by setting its status to DELETED. Reconciled payments cannot be deleted.",
+    "parameters": [
+     {
+      "name": "PaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Payments: [Payment with Status DELETED]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Status: 'DELETED'}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BankTransactions": {
+   "get": {
+    "operationId": "xero.banktransactions.list",
+    "summary": "Retrieve bank transactions with optional filtering. Results are paginated at 100 per page.",
+    "description": "Retrieve bank transactions with optional filtering. Results are paginated at 100 per page.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransactions: [BankTransaction]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.banktransactions.create",
+    "summary": "Create one or more bank transactions. Each requires a Type, BankAccount, and LineItems.",
+    "description": "Create one or more bank transactions. Each requires a Type, BankAccount, and LineItems.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransactions: [BankTransaction with BankTransactionID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{BankTransactions: [{Type (required - RECEIVE|SPEND|RECEIVE-OVERPAYMENT|SPEND-OVERPAYMENT|RECEIVE-PREPAYMENT|SPEND-PREPAYMENT), Contact: {ContactID or Name}, BankAccount (required - {AccountID or Code}), LineItems (required), Date, Reference, CurrencyCode, CurrencyRate, Url, LineAmountTypes, Status}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BankTransactions/{BankTransactionID}": {
+   "get": {
+    "operationId": "xero.banktransactions.get",
+    "summary": "Fetch a single bank transaction by its identifier.",
+    "description": "Fetch a single bank transaction by its identifier.",
+    "parameters": [
+     {
+      "name": "BankTransactionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransactions: [BankTransaction]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.banktransactions.update",
+    "summary": "Modify an existing bank transaction.",
+    "description": "Modify an existing bank transaction.",
+    "parameters": [
+     {
+      "name": "BankTransactionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransactions: [updated BankTransaction]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "BankTransaction fields to update: {Contact, LineItems, Date, Reference, Status, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/CreditNotes": {
+   "get": {
+    "operationId": "xero.creditnotes.list",
+    "summary": "Retrieve credit notes with optional filtering by status or contact.",
+    "description": "Retrieve credit notes with optional filtering by status or contact.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{CreditNotes: [CreditNote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.creditnotes.create",
+    "summary": "Issue new credit notes against customer or supplier accounts.",
+    "description": "Issue new credit notes against customer or supplier accounts.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{CreditNotes: [CreditNote with CreditNoteID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{CreditNotes: [{Type (required - ACCPAYCREDIT|ACCRECCREDIT), Contact (required - {ContactID or Name}), LineItems (required), Date, DueDate, CreditNoteNumber, Reference, LineAmountTypes, BrandingThemeID, CurrencyCode, CurrencyRate, Status}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/CreditNotes/{CreditNoteID}": {
+   "get": {
+    "operationId": "xero.creditnotes.get",
+    "summary": "Fetch a single credit note by its identifier.",
+    "description": "Fetch a single credit note by its identifier.",
+    "parameters": [
+     {
+      "name": "CreditNoteID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{CreditNotes: [CreditNote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.creditnotes.update",
+    "summary": "Modify an existing credit note.",
+    "description": "Modify an existing credit note.",
+    "parameters": [
+     {
+      "name": "CreditNoteID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{CreditNotes: [updated CreditNote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "CreditNote fields to update: {Status, LineItems, Date, CreditNoteNumber, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/CreditNotes/{CreditNoteID}/Allocations": {
+   "put": {
+    "operationId": "xero.creditnotes.allocate",
+    "summary": "Apply a credit note against one or more invoices by creating allocation records.",
+    "description": "Apply a credit note against one or more invoices by creating allocation records.",
+    "parameters": [
+     {
+      "name": "CreditNoteID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Allocations: [Allocation with AllocationID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Allocations: [{Invoice: {InvoiceID} (required), Amount (required), Date (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/PurchaseOrders": {
+   "get": {
+    "operationId": "xero.purchaseorders.list",
+    "summary": "Retrieve purchase orders with optional filtering by status or date range.",
+    "description": "Retrieve purchase orders with optional filtering by status or date range.",
+    "parameters": [
+     {
+      "name": "Status",
+      "in": "query",
+      "required": false,
+      "description": "Filter by PO status (DRAFT, SUBMITTED, AUTHORISED, BILLED, DELETED).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "DateFrom",
+      "in": "query",
+      "required": false,
+      "description": "Return orders on or after this date (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "DateTo",
+      "in": "query",
+      "required": false,
+      "description": "Return orders on or before this date.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "searchTerm",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{PurchaseOrders: [PurchaseOrder]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.purchaseorders.create",
+    "summary": "Submit new supplier purchase orders.",
+    "description": "Submit new supplier purchase orders.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{PurchaseOrders: [PurchaseOrder with PurchaseOrderID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{PurchaseOrders: [{Contact (required - {ContactID or Name}), LineItems (required), Date, DeliveryDate, PurchaseOrderNumber, Reference, DeliveryAddress, AttentionTo, Telephone, DeliveryInstructions, ExpectedArrivalDate, CurrencyCode, CurrencyRate, BrandingThemeID, Status, LineAmountTypes}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/PurchaseOrders/{PurchaseOrderID}": {
+   "get": {
+    "operationId": "xero.purchaseorders.get",
+    "summary": "Fetch a single purchase order by its identifier.",
+    "description": "Fetch a single purchase order by its identifier.",
+    "parameters": [
+     {
+      "name": "PurchaseOrderID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{PurchaseOrders: [PurchaseOrder]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.purchaseorders.update",
+    "summary": "Modify an existing purchase order.",
+    "description": "Modify an existing purchase order.",
+    "parameters": [
+     {
+      "name": "PurchaseOrderID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{PurchaseOrders: [updated PurchaseOrder]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "PurchaseOrder fields to update: {LineItems, Status, DeliveryDate, DeliveryAddress, Reference, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.purchaseorders.delete",
+    "summary": "Remove a purchase order. Only DRAFT orders can be deleted.",
+    "description": "Remove a purchase order. Only DRAFT orders can be deleted.",
+    "parameters": [
+     {
+      "name": "PurchaseOrderID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Quotes": {
+   "get": {
+    "operationId": "xero.quotes.list",
+    "summary": "Retrieve quotes with optional filtering by status, date range, or contact.",
+    "description": "Retrieve quotes with optional filtering by status, date range, or contact.",
+    "parameters": [
+     {
+      "name": "Status",
+      "in": "query",
+      "required": false,
+      "description": "Filter by status (DRAFT, SENT, DECLINED, ACCEPTED, INVOICED, DELETED).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "DateFrom",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "DateTo",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ExpiryDateFrom",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ExpiryDateTo",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ContactID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "QuoteNumber",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Quotes: [Quote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.quotes.create",
+    "summary": "Submit new quotes for customers.",
+    "description": "Submit new quotes for customers.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Quotes: [Quote with QuoteID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Quotes: [{Contact (required - {ContactID or Name}), LineItems (required), Date, ExpiryDate, QuoteNumber, Title, Summary, Terms, Reference, CurrencyCode, CurrencyRate, BrandingThemeID, Status, LineAmountTypes}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Quotes/{QuoteID}": {
+   "get": {
+    "operationId": "xero.quotes.get",
+    "summary": "Fetch a single quote by its identifier.",
+    "description": "Fetch a single quote by its identifier.",
+    "parameters": [
+     {
+      "name": "QuoteID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Quotes: [Quote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.quotes.update",
+    "summary": "Modify an existing quote.",
+    "description": "Modify an existing quote.",
+    "parameters": [
+     {
+      "name": "QuoteID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Quotes: [updated Quote]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Quote fields to update: {LineItems, Status, ExpiryDate, Title, Summary, Terms, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ManualJournals": {
+   "get": {
+    "operationId": "xero.manualjournals.list",
+    "summary": "Retrieve manual journal entries with optional filtering.",
+    "description": "Retrieve manual journal entries with optional filtering.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ManualJournals: [ManualJournal]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.manualjournals.create",
+    "summary": "Create one or more manual journal entries. Each requires a Narration and balanced JournalLines.",
+    "description": "Create one or more manual journal entries. Each requires a Narration and balanced JournalLines.",
+    "parameters": [
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ManualJournals: [ManualJournal with ManualJournalID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{ManualJournals: [{Narration (required), JournalLines (required - [{LineAmount (positive=debit, negative=credit), AccountCode or AccountID, Description, TaxType, Tracking}]), Date, Status, LineAmountTypes, Url, ShowOnCashBasisReports}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ManualJournals/{ManualJournalID}": {
+   "get": {
+    "operationId": "xero.manualjournals.get",
+    "summary": "Fetch a single manual journal entry.",
+    "description": "Fetch a single manual journal entry.",
+    "parameters": [
+     {
+      "name": "ManualJournalID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ManualJournals: [ManualJournal]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.manualjournals.update",
+    "summary": "Modify an existing manual journal entry.",
+    "description": "Modify an existing manual journal entry.",
+    "parameters": [
+     {
+      "name": "ManualJournalID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ManualJournals: [updated ManualJournal]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "ManualJournal fields to update: {Narration, JournalLines, Date, Status, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Employees": {
+   "get": {
+    "operationId": "xero.employees.list",
+    "summary": "Retrieve all employees in the organisation.",
+    "description": "Retrieve all employees in the organisation.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Employees: [Employee]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.employees.create",
+    "summary": "Add one or more employees.",
+    "description": "Add one or more employees.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{Employees: [Employee with EmployeeID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Employees: [{FirstName (required), LastName (required), Status, ExternalLink: {LinkType, Url}}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Employees/{EmployeeID}": {
+   "get": {
+    "operationId": "xero.employees.get",
+    "summary": "Fetch a single employee by their identifier.",
+    "description": "Fetch a single employee by their identifier.",
+    "parameters": [
+     {
+      "name": "EmployeeID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Employees: [Employee]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.employees.update",
+    "summary": "Modify an existing employee record.",
+    "description": "Modify an existing employee record.",
+    "parameters": [
+     {
+      "name": "EmployeeID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Employees: [updated Employee]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Employee fields to update: {FirstName, LastName, Status, ExternalLink, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BankTransfers": {
+   "get": {
+    "operationId": "xero.banktransfers.list",
+    "summary": "Retrieve inter-account bank transfers.",
+    "description": "Retrieve inter-account bank transfers.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransfers: [BankTransfer]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.banktransfers.create",
+    "summary": "Move funds between two bank accounts. Transfers are immutable after creation.",
+    "description": "Move funds between two bank accounts. Transfers are immutable after creation.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{BankTransfers: [BankTransfer with BankTransferID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{BankTransfers: [{FromBankAccount (required - {AccountID or Code}), ToBankAccount (required - {AccountID or Code}), Amount (required), Date, Reference}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BankTransfers/{BankTransferID}": {
+   "get": {
+    "operationId": "xero.banktransfers.get",
+    "summary": "Fetch a single bank transfer.",
+    "description": "Fetch a single bank transfer.",
+    "parameters": [
+     {
+      "name": "BankTransferID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BankTransfers: [BankTransfer]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/TaxRates": {
+   "get": {
+    "operationId": "xero.taxrates.list",
+    "summary": "Retrieve all tax rates configured for the organisation.",
+    "description": "Retrieve all tax rates configured for the organisation.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{TaxRates: [TaxRate]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.taxrates.create",
+    "summary": "Create a new tax rate with one or more components.",
+    "description": "Create a new tax rate with one or more components.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{TaxRates: [TaxRate]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{TaxRates: [{Name (required), TaxComponents (required - [{Name, Rate, IsCompound}]), ReportTaxType}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.taxrates.update",
+    "summary": "Update an existing tax rate.",
+    "description": "Update an existing tax rate.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{TaxRates: [updated TaxRate]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{TaxRates: [{TaxType (required), Name, Status, TaxComponents}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Currencies": {
+   "get": {
+    "operationId": "xero.currencies.list",
+    "summary": "Retrieve all currencies enabled for the organisation.",
+    "description": "Retrieve all currencies enabled for the organisation.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Currencies: [Currency]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.currencies.create",
+    "summary": "Enable a new currency for the organisation.",
+    "description": "Enable a new currency for the organisation.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{Currencies: [Currency]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Code (required - ISO 4217 code), Description}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BrandingThemes": {
+   "get": {
+    "operationId": "xero.brandingthemes.list",
+    "summary": "Retrieve all branding themes available for invoices and other documents. Read-only.",
+    "description": "Retrieve all branding themes available for invoices and other documents. Read-only.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{BrandingThemes: [BrandingTheme]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/BrandingThemes/{BrandingThemeID}": {
+   "get": {
+    "operationId": "xero.brandingthemes.get",
+    "summary": "Fetch a single branding theme.",
+    "description": "Fetch a single branding theme.",
+    "parameters": [
+     {
+      "name": "BrandingThemeID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{BrandingThemes: [BrandingTheme]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/TrackingCategories": {
+   "get": {
+    "operationId": "xero.trackingcategories.list",
+    "summary": "Retrieve all tracking categories and their options.",
+    "description": "Retrieve all tracking categories and their options.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "includeArchived",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{TrackingCategories: [TrackingCategory]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.trackingcategories.create",
+    "summary": "Create a new tracking category.",
+    "description": "Create a new tracking category.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{TrackingCategories: [TrackingCategory with TrackingCategoryID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Name (required)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/TrackingCategories/{TrackingCategoryID}": {
+   "get": {
+    "operationId": "xero.trackingcategories.get",
+    "summary": "Fetch a single tracking category with its options.",
+    "description": "Fetch a single tracking category with its options.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{TrackingCategories: [TrackingCategory]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.trackingcategories.update",
+    "summary": "Rename or archive a tracking category.",
+    "description": "Rename or archive a tracking category.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{TrackingCategories: [updated TrackingCategory]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Name, Status}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.trackingcategories.delete",
+    "summary": "Remove a tracking category.",
+    "description": "Remove a tracking category.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{TrackingCategories: [deleted TrackingCategory]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/TrackingCategories/{TrackingCategoryID}/Options": {
+   "put": {
+    "operationId": "xero.trackingcategories.options.create",
+    "summary": "Add new options to a tracking category.",
+    "description": "Add new options to a tracking category.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Options: [TrackingOption with TrackingOptionID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Options: [{Name (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/TrackingCategories/{TrackingCategoryID}/Options/{TrackingOptionID}": {
+   "post": {
+    "operationId": "xero.trackingcategories.options.update",
+    "summary": "Rename or archive a tracking option.",
+    "description": "Rename or archive a tracking option.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "TrackingOptionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Options: [updated TrackingOption]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Name, Status}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.trackingcategories.options.delete",
+    "summary": "Remove a tracking option from a category.",
+    "description": "Remove a tracking option from a category.",
+    "parameters": [
+     {
+      "name": "TrackingCategoryID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "TrackingOptionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Options: [deleted TrackingOption]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Organisation": {
+   "get": {
+    "operationId": "xero.organisation.get",
+    "summary": "Retrieve information about the connected organisation including name, address, currency, and financial year settings. Re",
+    "description": "Retrieve information about the connected organisation including name, address, currency, and financial year settings. Read-only.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{Organisations: [{OrganisationID, Name, LegalName, Version, OrganisationType, BaseCurrency, CountryCode, IsDemoCompany, OrganisationStatus, TaxNumber, FinancialYearEndDay, FinancialYearEndMonth, SalesTaxBasis, SalesTaxPeriod, PeriodLockDate, EndOfYearLockDate, Addresses, Phones, Timezone}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ExpenseClaims": {
+   "get": {
+    "operationId": "xero.expenseclaims.list",
+    "summary": "Retrieve expense claims submitted by employees.",
+    "description": "Retrieve expense claims submitted by employees.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ExpenseClaims: [ExpenseClaim]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.expenseclaims.create",
+    "summary": "Submit a new expense claim with associated receipts.",
+    "description": "Submit a new expense claim with associated receipts.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{ExpenseClaims: [ExpenseClaim with ExpenseClaimID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{ExpenseClaims: [{User (required - {UserID}), Receipts (required - [{ReceiptID}]), Status}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ExpenseClaims/{ExpenseClaimID}": {
+   "get": {
+    "operationId": "xero.expenseclaims.get",
+    "summary": "Fetch a single expense claim.",
+    "description": "Fetch a single expense claim.",
+    "parameters": [
+     {
+      "name": "ExpenseClaimID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ExpenseClaims: [ExpenseClaim]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.expenseclaims.update",
+    "summary": "Update an expense claim (e.g., approve, void).",
+    "description": "Update an expense claim (e.g., approve, void).",
+    "parameters": [
+     {
+      "name": "ExpenseClaimID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ExpenseClaims: [updated ExpenseClaim]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Status (AUTHORISED|VOIDED|DELETED)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Receipts": {
+   "get": {
+    "operationId": "xero.receipts.list",
+    "summary": "Retrieve expense receipts with optional filtering.",
+    "description": "Retrieve expense receipts with optional filtering.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Receipts: [Receipt]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.receipts.create",
+    "summary": "Create one or more expense receipts.",
+    "description": "Create one or more expense receipts.",
+    "parameters": [
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Receipts: [Receipt with ReceiptID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Receipts: [{Contact (required), User (required - {UserID}), LineItems (required), Date, Reference, LineAmountTypes, Status}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Receipts/{ReceiptID}": {
+   "get": {
+    "operationId": "xero.receipts.get",
+    "summary": "Fetch a single receipt.",
+    "description": "Fetch a single receipt.",
+    "parameters": [
+     {
+      "name": "ReceiptID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Receipts: [Receipt]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.receipts.update",
+    "summary": "Modify an existing receipt.",
+    "description": "Modify an existing receipt.",
+    "parameters": [
+     {
+      "name": "ReceiptID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Receipts: [updated Receipt]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Receipt fields to update: {Contact, LineItems, Date, Reference, Status, ...}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Overpayments": {
+   "get": {
+    "operationId": "xero.overpayments.list",
+    "summary": "Retrieve overpayments. These are created automatically through bank transactions and cannot be created directly.",
+    "description": "Retrieve overpayments. These are created automatically through bank transactions and cannot be created directly.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Overpayments: [Overpayment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Overpayments/{OverpaymentID}": {
+   "get": {
+    "operationId": "xero.overpayments.get",
+    "summary": "Fetch a single overpayment.",
+    "description": "Fetch a single overpayment.",
+    "parameters": [
+     {
+      "name": "OverpaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Overpayments: [Overpayment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Overpayments/{OverpaymentID}/Allocations": {
+   "put": {
+    "operationId": "xero.overpayments.allocate",
+    "summary": "Apply an overpayment against one or more invoices.",
+    "description": "Apply an overpayment against one or more invoices.",
+    "parameters": [
+     {
+      "name": "OverpaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Allocations: [Allocation]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Allocations: [{Invoice: {InvoiceID} (required), Amount (required), Date (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Prepayments": {
+   "get": {
+    "operationId": "xero.prepayments.list",
+    "summary": "Retrieve prepayments. These are created automatically through bank transactions and cannot be created directly.",
+    "description": "Retrieve prepayments. These are created automatically through bank transactions and cannot be created directly.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Prepayments: [Prepayment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Prepayments/{PrepaymentID}": {
+   "get": {
+    "operationId": "xero.prepayments.get",
+    "summary": "Fetch a single prepayment.",
+    "description": "Fetch a single prepayment.",
+    "parameters": [
+     {
+      "name": "PrepaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "unitdp",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Prepayments: [Prepayment]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Prepayments/{PrepaymentID}/Allocations": {
+   "put": {
+    "operationId": "xero.prepayments.allocate",
+    "summary": "Apply a prepayment against one or more invoices.",
+    "description": "Apply a prepayment against one or more invoices.",
+    "parameters": [
+     {
+      "name": "PrepaymentID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "summarizeErrors",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Allocations: [Allocation]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Allocations: [{Invoice: {InvoiceID} (required), Amount (required), Date (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ContactGroups": {
+   "get": {
+    "operationId": "xero.contactgroups.list",
+    "summary": "Retrieve all contact groups.",
+    "description": "Retrieve all contact groups.",
+    "parameters": [
+     {
+      "name": "where",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ContactGroups: [ContactGroup]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.contactgroups.create",
+    "summary": "Create a new contact group.",
+    "description": "Create a new contact group.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{ContactGroups: [ContactGroup with ContactGroupID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{ContactGroups: [{Name (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ContactGroups/{ContactGroupID}": {
+   "get": {
+    "operationId": "xero.contactgroups.get",
+    "summary": "Fetch a single contact group with its members.",
+    "description": "Fetch a single contact group with its members.",
+    "parameters": [
+     {
+      "name": "ContactGroupID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ContactGroups: [ContactGroup]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "xero.contactgroups.update",
+    "summary": "Rename or archive a contact group.",
+    "description": "Rename or archive a contact group.",
+    "parameters": [
+     {
+      "name": "ContactGroupID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{ContactGroups: [updated ContactGroup]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Name, Status}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ContactGroups/{ContactGroupID}/Contacts": {
+   "put": {
+    "operationId": "xero.contactgroups.contacts.add",
+    "summary": "Add contacts to an existing contact group.",
+    "description": "Add contacts to an existing contact group.",
+    "parameters": [
+     {
+      "name": "ContactGroupID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Contacts: [Contact]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{Contacts: [{ContactID (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.contactgroups.contacts.removeAll",
+    "summary": "Remove all contacts from a contact group.",
+    "description": "Remove all contacts from a contact group.",
+    "parameters": [
+     {
+      "name": "ContactGroupID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/ContactGroups/{ContactGroupID}/Contacts/{ContactID}": {
+   "delete": {
+    "operationId": "xero.contactgroups.contacts.remove",
+    "summary": "Unlink a particular contact from the group.",
+    "description": "Unlink a particular contact from the group.",
+    "parameters": [
+     {
+      "name": "ContactGroupID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ContactID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/LinkedTransactions": {
+   "get": {
+    "operationId": "xero.linkedtransactions.list",
+    "summary": "Retrieve linked transactions that connect billable expenses to sales invoices.",
+    "description": "Retrieve linked transactions that connect billable expenses to sales invoices.",
+    "parameters": [
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "SourceTransactionID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "ContactID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "Status",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "TargetTransactionID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{LinkedTransactions: [LinkedTransaction]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "operationId": "xero.linkedtransactions.create",
+    "summary": "Create a link between a billable expense line and a sales invoice.",
+    "description": "Create a link between a billable expense line and a sales invoice.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{LinkedTransactions: [LinkedTransaction with LinkedTransactionID]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{LinkedTransactions: [{SourceTransactionID (required), SourceLineItemID (required), ContactID (required)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/LinkedTransactions/{LinkedTransactionID}": {
+   "post": {
+    "operationId": "xero.linkedtransactions.update",
+    "summary": "Modify an existing linked transaction.",
+    "description": "Modify an existing linked transaction.",
+    "parameters": [
+     {
+      "name": "LinkedTransactionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{LinkedTransactions: [updated LinkedTransaction]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{SourceTransactionID, SourceLineItemID, ContactID, TargetTransactionID, TargetLineItemID}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "xero.linkedtransactions.delete",
+    "summary": "Remove a linked transaction.",
+    "description": "Remove a linked transaction.",
+    "parameters": [
+     {
+      "name": "LinkedTransactionID",
+      "in": "path",
+      "required": true,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "204 No Content on success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/ProfitAndLoss": {
+   "get": {
+    "operationId": "xero.reports.profitandloss",
+    "summary": "Generate a profit and loss statement for a specified period.",
+    "description": "Generate a profit and loss statement for a specified period.",
+    "parameters": [
+     {
+      "name": "fromDate",
+      "in": "query",
+      "required": false,
+      "description": "Start of reporting period (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "toDate",
+      "in": "query",
+      "required": false,
+      "description": "End of reporting period (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "periods",
+      "in": "query",
+      "required": false,
+      "description": "Number of comparison periods to include.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "timeframe",
+      "in": "query",
+      "required": false,
+      "description": "Comparison timeframe (MONTH, QUARTER, YEAR).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "trackingCategoryID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "trackingOptionID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "standardLayout",
+      "in": "query",
+      "required": false,
+      "description": "Use standard or custom report layout.",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "paymentsOnly",
+      "in": "query",
+      "required": false,
+      "description": "Cash-basis reporting.",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, ReportDate, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/BalanceSheet": {
+   "get": {
+    "operationId": "xero.reports.balancesheet",
+    "summary": "Generate a balance sheet showing assets, liabilities, and equity as of a given date.",
+    "description": "Generate a balance sheet showing assets, liabilities, and equity as of a given date.",
+    "parameters": [
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "Report as-of date (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "periods",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "timeframe",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "trackingOptionID",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "standardLayout",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     },
+     {
+      "name": "paymentsOnly",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, ReportDate, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/TrialBalance": {
+   "get": {
+    "operationId": "xero.reports.trialbalance",
+    "summary": "Generate a trial balance listing all accounts with their debit and credit totals.",
+    "description": "Generate a trial balance listing all accounts with their debit and credit totals.",
+    "parameters": [
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "Report as-of date (YYYY-MM-DD).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "paymentsOnly",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, ReportDate, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/BankSummary": {
+   "get": {
+    "operationId": "xero.reports.banksummary",
+    "summary": "Generate a summary of balances and activity across all bank accounts for a specified period.",
+    "description": "Generate a summary of balances and activity across all bank accounts for a specified period.",
+    "parameters": [
+     {
+      "name": "fromDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "toDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/AgedReceivablesByContact": {
+   "get": {
+    "operationId": "xero.reports.agedreceivables",
+    "summary": "Generate an aged receivables report showing outstanding customer invoices bucketed by age.",
+    "description": "Generate an aged receivables report showing outstanding customer invoices bucketed by age.",
+    "parameters": [
+     {
+      "name": "contactID",
+      "in": "query",
+      "required": false,
+      "description": "Filter to a specific contact.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "Report as-of date.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "fromDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "toDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, ReportDate, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/AgedPayablesByContact": {
+   "get": {
+    "operationId": "xero.reports.agedpayables",
+    "summary": "Generate an aged payables report showing outstanding vendor bills bucketed by age.",
+    "description": "Generate an aged payables report showing outstanding vendor bills bucketed by age.",
+    "parameters": [
+     {
+      "name": "contactID",
+      "in": "query",
+      "required": false,
+      "description": "Filter to a specific contact.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "fromDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "toDate",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, ReportDate, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/ExecutiveSummary": {
+   "get": {
+    "operationId": "xero.reports.executivesummary",
+    "summary": "Generate a high-level executive summary of the organisation's financial position including income, expenses, cash, and r",
+    "description": "Generate a high-level executive summary of the organisation's financial position including income, expenses, cash, and receivables.",
+    "parameters": [
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api.xro/2.0/Reports/BudgetSummary": {
+   "get": {
+    "operationId": "xero.reports.budgetsummary",
+    "summary": "Generate a summary comparing actual figures against budgeted amounts.",
+    "description": "Generate a summary comparing actual figures against budgeted amounts.",
+    "parameters": [
+     {
+      "name": "date",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "periods",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "timeframe",
+      "in": "query",
+      "required": false,
+      "description": "",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{Reports: [{ReportID, ReportName, ReportType, Rows}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Address": {
+    "type": "object",
+    "description": "A postal or street address associated with a contact or organisation.",
+    "properties": {
+     "AddressType": {
+      "type": "string",
+      "enum": [
+       "POBOX",
+       "STREET"
+      ],
+      "description": "Distinguishes between mailing (POBOX) and physical (STREET) addresses."
+     },
+     "AddressLine1": {
+      "type": "string"
+     },
+     "AddressLine2": {
+      "type": "string"
+     },
+     "AddressLine3": {
+      "type": "string"
+     },
+     "AddressLine4": {
+      "type": "string"
+     },
+     "City": {
+      "type": "string"
+     },
+     "Region": {
+      "type": "string",
+      "description": "State, province, or region."
+     },
+     "PostalCode": {
+      "type": "string"
+     },
+     "Country": {
+      "type": "string"
+     },
+     "AttentionTo": {
+      "type": "string"
+     }
+    }
+   },
+   "Phone": {
+    "type": "object",
+    "description": "A phone number with type classification and optional area/country codes.",
+    "properties": {
+     "PhoneType": {
+      "type": "string",
+      "enum": [
+       "DEFAULT",
+       "DDI",
+       "MOBILE",
+       "FAX",
+       "OFFICE"
+      ]
+     },
+     "PhoneNumber": {
+      "type": "string"
+     },
+     "PhoneAreaCode": {
+      "type": "string"
+     },
+     "PhoneCountryCode": {
+      "type": "string"
+     }
+    }
+   },
+   "ContactPerson": {
+    "type": "object",
+    "description": "An individual associated with a contact record, typically for multi-person organisations.",
+    "properties": {
+     "FirstName": {
+      "type": "string"
+     },
+     "LastName": {
+      "type": "string"
+     },
+     "EmailAddress": {
+      "type": "string"
+     },
+     "IncludeInEmails": {
+      "type": "boolean",
+      "description": "Whether this person receives email communications."
+     }
+    }
+   },
+   "LineItem": {
+    "type": "object",
+    "description": "An individual line on a transaction such as an invoice, bill, or bank transaction.",
+    "properties": {
+     "LineItemID": {
+      "type": "string",
+      "description": "System-generated unique identifier for this line."
+     },
+     "Description": {
+      "type": "string",
+      "description": "Text describing the goods or services on this line."
+     },
+     "Quantity": {
+      "type": "number",
+      "description": "Number of units."
+     },
+     "UnitAmount": {
+      "type": "number",
+      "description": "Price per unit before tax."
+     },
+     "ItemCode": {
+      "type": "string",
+      "description": "Code of the associated item, if applicable."
+     },
+     "AccountCode": {
+      "type": "string",
+      "description": "Chart of accounts code to post this line against."
+     },
+     "AccountID": {
+      "type": "string",
+      "description": "Account UUID as an alternative to AccountCode."
+     },
+     "TaxType": {
+      "type": "string",
+      "description": "Tax rate identifier applied to this line."
+     },
+     "TaxAmount": {
+      "type": "number",
+      "description": "Tax calculated for this line. Read-only when auto-calculated."
+     },
+     "LineAmount": {
+      "type": "number",
+      "description": "Total for this line (Quantity x UnitAmount). Read-only when auto-calculated."
+     },
+     "DiscountRate": {
+      "type": "number",
+      "description": "Discount percentage. Only available on sales invoices (ACCREC)."
+     },
+     "DiscountAmount": {
+      "type": "number",
+      "description": "Flat monetary reduction for this line. Applicable to ACCREC records and quotations."
+     },
+     "Tracking": {
+      "type": "array",
+      "description": "Up to two tracking category assignments for this line.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "TrackingCategoryID": {
+         "type": "string"
+        },
+        "Name": {
+         "type": "string"
+        },
+        "Option": {
+         "type": "string"
+        },
+        "TrackingOptionID": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   },
+   "Allocation": {
+    "type": "object",
+    "description": "Links a credit note, overpayment, or prepayment to an invoice, applying a portion of the credit against the invoice balance.",
+    "properties": {
+     "AllocationID": {
+      "type": "string"
+     },
+     "Invoice": {
+      "type": "object",
+      "description": "The invoice this allocation applies to.",
+      "properties": {
+       "InvoiceID": {
+        "type": "string"
+       },
+       "InvoiceNumber": {
+        "type": "string"
+       }
+      }
+     },
+     "Amount": {
+      "type": "number",
+      "description": "Amount allocated against the invoice."
+     },
+     "Date": {
+      "type": "string",
+      "format": "date",
+      "description": "When this allocation was applied."
+     },
+     "CreditNote": {
+      "type": "object"
+     },
+     "Overpayment": {
+      "type": "object"
+     },
+     "Prepayment": {
+      "type": "object"
+     }
+    }
+   },
+   "Contact": {
+    "type": "object",
+    "description": "A customer, supplier, or other party involved in transactions. Contacts are automatically flagged as customers or suppliers based on transaction activity.",
+    "properties": {
+     "ContactID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "ContactNumber": {
+      "type": "string",
+      "description": "User-defined external identifier (max 50 chars)."
+     },
+     "AccountNumber": {
+      "type": "string",
+      "description": "Account number used for reference (max 50 chars)."
+     },
+     "ContactStatus": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "ARCHIVED",
+       "GDPRREQUEST"
+      ],
+      "description": "Whether the contact is active, archived, or flagged for GDPR deletion."
+     },
+     "Name": {
+      "type": "string",
+      "description": "Person or company name. Up to 255 characters."
+     },
+     "FirstName": {
+      "type": "string"
+     },
+     "LastName": {
+      "type": "string"
+     },
+     "CompanyNumber": {
+      "type": "string"
+     },
+     "EmailAddress": {
+      "type": "string"
+     },
+     "ContactPersons": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "BankAccountDetails": {
+      "type": "string",
+      "description": "Bank account info for payment purposes."
+     },
+     "TaxNumber": {
+      "type": "string",
+      "description": "Tax identification number (ABN, GST, VAT, etc.)."
+     },
+     "AccountsReceivableTaxType": {
+      "type": "string"
+     },
+     "AccountsPayableTaxType": {
+      "type": "string"
+     },
+     "Addresses": {
+      "type": "array",
+      "description": "Up to two addresses: one POBOX type and one STREET type.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Phones": {
+      "type": "array",
+      "description": "Phone numbers by type: DEFAULT, DDI, MOBILE, FAX.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "IsSupplier": {
+      "type": "boolean",
+      "description": "Automatically set to true when a purchase transaction exists. Read-only."
+     },
+     "IsCustomer": {
+      "type": "boolean",
+      "description": "Automatically set to true when a sales transaction exists. Read-only."
+     },
+     "DefaultCurrency": {
+      "type": "string"
+     },
+     "SalesDefaultAccountCode": {
+      "type": "string"
+     },
+     "PurchasesDefaultAccountCode": {
+      "type": "string"
+     },
+     "SalesDefaultLineAmountType": {
+      "type": "string",
+      "enum": [
+       "INCLUSIVE",
+       "EXCLUSIVE",
+       "NONE"
+      ]
+     },
+     "PurchasesDefaultLineAmountType": {
+      "type": "string",
+      "enum": [
+       "INCLUSIVE",
+       "EXCLUSIVE",
+       "NONE"
+      ]
+     },
+     "PaymentTerms": {
+      "type": "object",
+      "description": "Default payment terms for bills and sales.",
+      "properties": {
+       "Bills": {
+        "type": "object",
+        "properties": {
+         "Day": {
+          "type": "integer"
+         },
+         "Type": {
+          "type": "string",
+          "enum": [
+           "DAYSAFTERBILLDATE",
+           "DAYSAFTERBILLMONTH",
+           "OFCURRENTMONTH",
+           "OFFOLLOWINGMONTH"
+          ]
+         }
+        }
+       },
+       "Sales": {
+        "type": "object",
+        "properties": {
+         "Day": {
+          "type": "integer"
+         },
+         "Type": {
+          "type": "string",
+          "enum": [
+           "DAYSAFTERBILLDATE",
+           "DAYSAFTERBILLMONTH",
+           "OFCURRENTMONTH",
+           "OFFOLLOWINGMONTH"
+          ]
+         }
+        }
+       }
+      }
+     },
+     "ContactGroups": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Website": {
+      "type": "string"
+     },
+     "Discount": {
+      "type": "number",
+      "description": "Standard percentage reduction applied to this contact's transactions. Read-only."
+     },
+     "Balances": {
+      "type": "object",
+      "description": "Outstanding and overdue amounts for receivables and payables. Read-only.",
+      "properties": {
+       "AccountsReceivable": {
+        "type": "object",
+        "properties": {
+         "Outstanding": {
+          "type": "number"
+         },
+         "Overdue": {
+          "type": "number"
+         }
+        }
+       },
+       "AccountsPayable": {
+        "type": "object",
+        "properties": {
+         "Outstanding": {
+          "type": "number"
+         },
+         "Overdue": {
+          "type": "number"
+         }
+        }
+       }
+      }
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Account": {
+    "type": "object",
+    "description": "An entry in the chart of accounts representing a category for tracking financial activity (assets, liabilities, income, expenses, etc.).",
+    "properties": {
+     "AccountID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "Code": {
+      "type": "string",
+      "description": "Short alphanumeric code (max 10 chars)."
+     },
+     "Name": {
+      "type": "string",
+      "description": "Label shown in the ledger. Up to 150 characters."
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "BANK",
+       "CURRENT",
+       "CURRLIAB",
+       "DEPRECIATN",
+       "DIRECTCOSTS",
+       "EQUITY",
+       "EXPENSE",
+       "FIXED",
+       "INVENTORY",
+       "LIABILITY",
+       "NONCURRENT",
+       "OTHERINCOME",
+       "OVERHEADS",
+       "PREPAYMENT",
+       "REVENUE",
+       "SALES",
+       "TERMLIAB"
+      ],
+      "description": "Classification of the account."
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "ARCHIVED"
+      ]
+     },
+     "Description": {
+      "type": "string",
+      "description": "Explanatory text (max 4000 chars). Not available for bank accounts."
+     },
+     "BankAccountNumber": {
+      "type": "string",
+      "description": "Required for bank-type accounts."
+     },
+     "BankAccountType": {
+      "type": "string",
+      "enum": [
+       "BANK",
+       "CREDITCARD",
+       "PAYPAL",
+       "NONE"
+      ]
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "TaxType": {
+      "type": "string"
+     },
+     "EnablePaymentsToAccount": {
+      "type": "boolean",
+      "description": "Controls whether the account can receive payment allocations."
+     },
+     "ShowInExpenseClaims": {
+      "type": "boolean",
+      "description": "Whether this account appears in expense claim options."
+     },
+     "Class": {
+      "type": "string",
+      "enum": [
+       "ASSET",
+       "EQUITY",
+       "EXPENSE",
+       "LIABILITY",
+       "REVENUE"
+      ],
+      "description": "Top-level classification. Read-only."
+     },
+     "SystemAccount": {
+      "type": "string",
+      "description": "System account designation (e.g., DEBTORS, CREDITORS). Read-only."
+     },
+     "ReportingCode": {
+      "type": "string"
+     },
+     "ReportingCodeName": {
+      "type": "string"
+     },
+     "AddToWatchlist": {
+      "type": "boolean"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Invoice": {
+    "type": "object",
+    "description": "A sales invoice (ACCREC) or vendor bill (ACCPAY). Invoices track amounts owed and can be emailed, paid, voided, or deleted.",
+    "properties": {
+     "InvoiceID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "ACCPAY",
+       "ACCREC"
+      ],
+      "description": "ACCPAY for bills from suppliers; ACCREC for invoices to customers."
+     },
+     "Contact": {
+      "type": "object",
+      "description": "The customer or supplier. Required on creation."
+     },
+     "LineItems": {
+      "type": "array",
+      "description": "Transaction lines with amounts, quantities, and account codes. Required on creation.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Date": {
+      "type": "string",
+      "format": "date",
+      "description": "Issue date. Defaults to today."
+     },
+     "DueDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ],
+      "description": "How tax is applied to line amounts."
+     },
+     "InvoiceNumber": {
+      "type": "string",
+      "description": "User-visible reference number (max 255). Auto-generated for ACCREC if omitted."
+     },
+     "Reference": {
+      "type": "string",
+      "description": "Supplementary identifier for sales invoices. Not available on bills."
+     },
+     "BrandingThemeID": {
+      "type": "string",
+      "description": "Branding theme to apply to the invoice layout."
+     },
+     "Url": {
+      "type": "string",
+      "description": "Link back to the source document in an external system."
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number",
+      "description": "Exchange rate for multicurrency invoices."
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SUBMITTED",
+       "AUTHORISED",
+       "PAID",
+       "VOIDED",
+       "DELETED"
+      ],
+      "description": "Lifecycle state of the invoice."
+     },
+     "SentToContact": {
+      "type": "boolean",
+      "description": "Marks the invoice as sent without actually emailing it."
+     },
+     "ExpectedPaymentDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Anticipated payment date. ACCREC only."
+     },
+     "PlannedPaymentDate": {
+      "type": "string",
+      "format": "date",
+      "description": "Scheduled payment date. ACCPAY only."
+     },
+     "SubTotal": {
+      "type": "number",
+      "description": "Sum of line amounts before tax. Read-only."
+     },
+     "TotalTax": {
+      "type": "number",
+      "description": "Computed sum of tax amounts across all lines. Read-only."
+     },
+     "Total": {
+      "type": "number",
+      "description": "Grand total including tax. Read-only."
+     },
+     "TotalDiscount": {
+      "type": "number",
+      "description": "Sum of all discounts. Read-only."
+     },
+     "AmountDue": {
+      "type": "number",
+      "description": "Remaining unpaid balance. Read-only."
+     },
+     "AmountPaid": {
+      "type": "number",
+      "description": "Total payments received. Read-only."
+     },
+     "AmountCredited": {
+      "type": "number",
+      "description": "Total credits applied. Read-only."
+     },
+     "FullyPaidOnDate": {
+      "type": "string",
+      "format": "date",
+      "description": "When the outstanding balance reached zero. Read-only."
+     },
+     "HasAttachments": {
+      "type": "boolean"
+     },
+     "IsDiscounted": {
+      "type": "boolean"
+     },
+     "Payments": {
+      "type": "array",
+      "description": "Payments applied to this invoice. Read-only.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "CreditNotes": {
+      "type": "array",
+      "description": "Credit notes applied. Read-only.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Prepayments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Overpayments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Item": {
+    "type": "object",
+    "description": "A product or service that can be referenced on invoices, bills, and other transactions. Items can optionally track inventory.",
+    "properties": {
+     "ItemID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "Code": {
+      "type": "string",
+      "description": "Short code for the item (max 30 chars). Required on creation."
+     },
+     "Name": {
+      "type": "string",
+      "description": "Display name (max 50 chars)."
+     },
+     "Description": {
+      "type": "string",
+      "description": "Text shown on invoices and quotes. Up to 4000 characters."
+     },
+     "PurchaseDescription": {
+      "type": "string",
+      "description": "Text shown on bills and purchase orders. Up to 4000 characters."
+     },
+     "IsSold": {
+      "type": "boolean",
+      "description": "Whether the item appears on sales transactions. Defaults to true."
+     },
+     "IsPurchased": {
+      "type": "boolean",
+      "description": "Whether the item appears on purchase transactions. Defaults to true."
+     },
+     "SalesDetails": {
+      "type": "object",
+      "description": "Default pricing and account for sales.",
+      "properties": {
+       "UnitPrice": {
+        "type": "number"
+       },
+       "AccountCode": {
+        "type": "string"
+       },
+       "TaxType": {
+        "type": "string"
+       }
+      }
+     },
+     "PurchaseDetails": {
+      "type": "object",
+      "description": "Default pricing and accounts for purchases.",
+      "properties": {
+       "UnitPrice": {
+        "type": "number"
+       },
+       "AccountCode": {
+        "type": "string"
+       },
+       "COGSAccountCode": {
+        "type": "string",
+        "description": "COGS ledger account. Mandatory when tracking inventory."
+       },
+       "TaxType": {
+        "type": "string"
+       }
+      }
+     },
+     "IsTrackedAsInventory": {
+      "type": "boolean",
+      "description": "Whether stock levels are tracked for this item."
+     },
+     "InventoryAssetAccountCode": {
+      "type": "string",
+      "description": "Ledger account for holding stock value. Mandatory when tracking inventory levels."
+     },
+     "TotalCostPool": {
+      "type": "number",
+      "description": "Average cost value of current stock. Read-only."
+     },
+     "QuantityOnHand": {
+      "type": "number",
+      "description": "Current stock level. Read-only."
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Payment": {
+    "type": "object",
+    "description": "A record of money received from a customer or paid to a supplier, applied against an invoice, credit note, or other document.",
+    "properties": {
+     "PaymentID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "Invoice": {
+      "type": "object",
+      "description": "The invoice this payment is applied to.",
+      "properties": {
+       "InvoiceID": {
+        "type": "string"
+       },
+       "InvoiceNumber": {
+        "type": "string"
+       }
+      }
+     },
+     "CreditNote": {
+      "type": "object",
+      "properties": {
+       "CreditNoteID": {
+        "type": "string"
+       },
+       "CreditNoteNumber": {
+        "type": "string"
+       }
+      }
+     },
+     "Prepayment": {
+      "type": "object"
+     },
+     "Overpayment": {
+      "type": "object"
+     },
+     "Account": {
+      "type": "object",
+      "description": "The bank account used for this payment.",
+      "properties": {
+       "AccountID": {
+        "type": "string"
+       },
+       "Code": {
+        "type": "string"
+       }
+      }
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Amount": {
+      "type": "number",
+      "description": "Payment amount in the invoice currency."
+     },
+     "BankAmount": {
+      "type": "number",
+      "description": "Converted value in the settlement account's denomination. Relevant for cross-currency payments."
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "IsReconciled": {
+      "type": "boolean",
+      "description": "Whether this payment has been matched to a bank statement line."
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "AUTHORISED",
+       "DELETED"
+      ]
+     },
+     "PaymentType": {
+      "type": "string",
+      "enum": [
+       "ACCRECPAYMENT",
+       "ACCPAYPAYMENT",
+       "ARCREDITPAYMENT",
+       "APCREDITPAYMENT",
+       "AROVERPAYMENTPAYMENT",
+       "ARPREPAYMENTPAYMENT",
+       "APPREPAYMENTPAYMENT",
+       "APOVERPAYMENTPAYMENT"
+      ],
+      "description": "System-determined type based on the associated transaction. Read-only."
+     },
+     "BatchPaymentID": {
+      "type": "string"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "BankTransaction": {
+    "type": "object",
+    "description": "A transaction recorded directly against a bank account, such as money received or spent.",
+    "properties": {
+     "BankTransactionID": {
+      "type": "string",
+      "description": "System-generated unique identifier."
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "RECEIVE",
+       "RECEIVE-OVERPAYMENT",
+       "RECEIVE-PREPAYMENT",
+       "SPEND",
+       "SPEND-OVERPAYMENT",
+       "SPEND-PREPAYMENT",
+       "RECEIVE-TRANSFER",
+       "SPEND-TRANSFER"
+      ],
+      "description": "Nature of the bank transaction. Required."
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "LineItems": {
+      "type": "array",
+      "description": "Transaction lines. Required.",
+      "items": {
+       "type": "object"
+      }
+     },
+     "BankAccount": {
+      "type": "object",
+      "description": "The bank account this transaction is recorded against. Required.",
+      "properties": {
+       "AccountID": {
+        "type": "string"
+       },
+       "Code": {
+        "type": "string"
+       }
+      }
+     },
+     "IsReconciled": {
+      "type": "boolean"
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "Url": {
+      "type": "string"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "AUTHORISED",
+       "DELETED",
+       "VOIDED"
+      ]
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ]
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "PrepaymentID": {
+      "type": "string"
+     },
+     "OverpaymentID": {
+      "type": "string"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "CreditNote": {
+    "type": "object",
+    "description": "A document that reduces the amount a customer owes (ACCRECCREDIT) or the amount owed to a supplier (ACCPAYCREDIT). Credit can be allocated against invoices.",
+    "properties": {
+     "CreditNoteID": {
+      "type": "string"
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "ACCPAYCREDIT",
+       "ACCRECCREDIT"
+      ]
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "DueDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SUBMITTED",
+       "AUTHORISED",
+       "PAID",
+       "VOIDED",
+       "DELETED"
+      ]
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ]
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "CreditNoteNumber": {
+      "type": "string"
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "RemainingCredit": {
+      "type": "number",
+      "description": "Amount not yet allocated to invoices. Read-only."
+     },
+     "AppliedAmount": {
+      "type": "number",
+      "description": "Total amount allocated. Read-only."
+     },
+     "Allocations": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Payments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "BrandingThemeID": {
+      "type": "string"
+     },
+     "HasAttachments": {
+      "type": "boolean"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "PurchaseOrder": {
+    "type": "object",
+    "description": "A document sent to a supplier requesting goods or services at agreed prices.",
+    "properties": {
+     "PurchaseOrderID": {
+      "type": "string"
+     },
+     "PurchaseOrderNumber": {
+      "type": "string"
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "DeliveryDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "ExpectedArrivalDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SUBMITTED",
+       "AUTHORISED",
+       "BILLED",
+       "DELETED"
+      ]
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ]
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "DeliveryAddress": {
+      "type": "string",
+      "description": "Free-text delivery address (max 500 chars)."
+     },
+     "AttentionTo": {
+      "type": "string"
+     },
+     "Telephone": {
+      "type": "string"
+     },
+     "DeliveryInstructions": {
+      "type": "string",
+      "description": "Special delivery notes (max 500 chars)."
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "BrandingThemeID": {
+      "type": "string"
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "HasAttachments": {
+      "type": "boolean"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Quote": {
+    "type": "object",
+    "description": "A proposal or estimate sent to a customer before a sale is confirmed. Can be converted to an invoice once accepted.",
+    "properties": {
+     "QuoteID": {
+      "type": "string"
+     },
+     "QuoteNumber": {
+      "type": "string"
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "ExpiryDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SENT",
+       "DECLINED",
+       "ACCEPTED",
+       "INVOICED",
+       "DELETED"
+      ]
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "EXCLUSIVE",
+       "INCLUSIVE",
+       "NOTAX"
+      ]
+     },
+     "Title": {
+      "type": "string"
+     },
+     "Summary": {
+      "type": "string"
+     },
+     "Terms": {
+      "type": "string"
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "BrandingThemeID": {
+      "type": "string"
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "TotalDiscount": {
+      "type": "number"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "ManualJournal": {
+    "type": "object",
+    "description": "A manually created journal entry with debit and credit lines for adjustments and reclassifications.",
+    "properties": {
+     "ManualJournalID": {
+      "type": "string"
+     },
+     "Narration": {
+      "type": "string",
+      "description": "Descriptive text explaining the journal entry. Required."
+     },
+     "JournalLines": {
+      "type": "array",
+      "description": "Debit and credit lines. Positive LineAmount = debit, negative = credit.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "LineAmount": {
+         "type": "number",
+         "description": "Positive for debit, negative for credit."
+        },
+        "AccountCode": {
+         "type": "string"
+        },
+        "AccountID": {
+         "type": "string"
+        },
+        "Description": {
+         "type": "string"
+        },
+        "TaxType": {
+         "type": "string"
+        },
+        "TaxAmount": {
+         "type": "number"
+        },
+        "Tracking": {
+         "type": "array",
+         "items": {
+          "type": "object"
+         }
+        },
+        "IsBlank": {
+         "type": "boolean"
+        }
+       }
+      }
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "POSTED",
+       "DELETED",
+       "VOIDED",
+       "ARCHIVED"
+      ]
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ]
+     },
+     "Url": {
+      "type": "string"
+     },
+     "ShowOnCashBasisReports": {
+      "type": "boolean",
+      "description": "Whether this journal appears on cash-basis reports. Defaults to true."
+     },
+     "HasAttachments": {
+      "type": "boolean"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Employee": {
+    "type": "object",
+    "description": "A person employed by the organisation. Used for expense claims and receipt recording.",
+    "properties": {
+     "EmployeeID": {
+      "type": "string"
+     },
+     "FirstName": {
+      "type": "string"
+     },
+     "LastName": {
+      "type": "string"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "ARCHIVED",
+       "GDPRREQUEST",
+       "DELETED"
+      ]
+     },
+     "ExternalLink": {
+      "type": "object",
+      "properties": {
+       "LinkType": {
+        "type": "string"
+       },
+       "Url": {
+        "type": "string"
+       }
+      }
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "BankTransfer": {
+    "type": "object",
+    "description": "A movement of funds between two bank accounts within the same organisation. Transfers are immutable once created.",
+    "properties": {
+     "BankTransferID": {
+      "type": "string"
+     },
+     "FromBankAccount": {
+      "type": "object",
+      "description": "Source bank account. Required.",
+      "properties": {
+       "AccountID": {
+        "type": "string"
+       },
+       "Code": {
+        "type": "string"
+       },
+       "Name": {
+        "type": "string"
+       }
+      }
+     },
+     "ToBankAccount": {
+      "type": "object",
+      "description": "Destination bank account. Required.",
+      "properties": {
+       "AccountID": {
+        "type": "string"
+       },
+       "Code": {
+        "type": "string"
+       },
+       "Name": {
+        "type": "string"
+       }
+      }
+     },
+     "Amount": {
+      "type": "number",
+      "description": "Transfer amount. Required."
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "FromIsReconciled": {
+      "type": "boolean"
+     },
+     "ToIsReconciled": {
+      "type": "boolean"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "FromBankTransactionID": {
+      "type": "string"
+     },
+     "ToBankTransactionID": {
+      "type": "string"
+     },
+     "CreatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "TaxRate": {
+    "type": "object",
+    "description": "A named tax rate configuration including one or more component rates that can be compound.",
+    "properties": {
+     "Name": {
+      "type": "string"
+     },
+     "TaxType": {
+      "type": "string",
+      "description": "Identifier used to reference this tax rate on transactions."
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "DELETED",
+       "ARCHIVED",
+       "PENDING"
+      ]
+     },
+     "TaxComponents": {
+      "type": "array",
+      "description": "Individual tax components that make up this rate.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "Name": {
+         "type": "string"
+        },
+        "Rate": {
+         "type": "number"
+        },
+        "IsCompound": {
+         "type": "boolean"
+        },
+        "IsNonRecoverable": {
+         "type": "boolean"
+        }
+       }
+      }
+     },
+     "ReportTaxType": {
+      "type": "string"
+     },
+     "DisplayTaxRate": {
+      "type": "number",
+      "description": "Combined display rate. Read-only."
+     },
+     "EffectiveRate": {
+      "type": "number",
+      "description": "Effective rate after compounding. Read-only."
+     },
+     "CanApplyToAssets": {
+      "type": "boolean"
+     },
+     "CanApplyToEquity": {
+      "type": "boolean"
+     },
+     "CanApplyToExpenses": {
+      "type": "boolean"
+     },
+     "CanApplyToLiabilities": {
+      "type": "boolean"
+     },
+     "CanApplyToRevenue": {
+      "type": "boolean"
+     }
+    }
+   },
+   "TrackingCategory": {
+    "type": "object",
+    "description": "A dimension for categorising transactions (e.g., department, region, project). Each category has a set of options.",
+    "properties": {
+     "TrackingCategoryID": {
+      "type": "string"
+     },
+     "Name": {
+      "type": "string",
+      "description": "Category name (max 100 chars)."
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "ARCHIVED",
+       "DELETED"
+      ]
+     },
+     "Options": {
+      "type": "array",
+      "description": "Available values within this category.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "TrackingOptionID": {
+         "type": "string"
+        },
+        "Name": {
+         "type": "string"
+        },
+        "Status": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   },
+   "Currency": {
+    "type": "object",
+    "description": "A currency enabled for the organisation.",
+    "properties": {
+     "Code": {
+      "type": "string",
+      "description": "ISO 4217 currency code."
+     },
+     "Description": {
+      "type": "string"
+     }
+    }
+   },
+   "BrandingTheme": {
+    "type": "object",
+    "description": "A visual template applied to invoices, quotes, and other customer-facing documents. Read-only via the API.",
+    "properties": {
+     "BrandingThemeID": {
+      "type": "string"
+     },
+     "Name": {
+      "type": "string"
+     },
+     "LogoUrl": {
+      "type": "string"
+     },
+     "Type": {
+      "type": "string",
+      "description": "Always 'INVOICE'."
+     },
+     "SortOrder": {
+      "type": "integer"
+     },
+     "CreatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "ExpenseClaim": {
+    "type": "object",
+    "description": "An employee's request for reimbursement of out-of-pocket expenses, backed by one or more receipts.",
+    "properties": {
+     "ExpenseClaimID": {
+      "type": "string"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "SUBMITTED",
+       "AUTHORISED",
+       "PAID",
+       "VOIDED",
+       "DELETED"
+      ]
+     },
+     "User": {
+      "type": "object"
+     },
+     "Receipts": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Payments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Total": {
+      "type": "number"
+     },
+     "AmountDue": {
+      "type": "number"
+     },
+     "AmountPaid": {
+      "type": "number"
+     },
+     "PaymentDueDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "ReportingDate": {
+      "type": "string",
+      "format": "date"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Receipt": {
+    "type": "object",
+    "description": "A record of an expense incurred by an employee, typically attached to an expense claim.",
+    "properties": {
+     "ReceiptID": {
+      "type": "string"
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "User": {
+      "type": "object",
+      "description": "The employee who incurred the expense."
+     },
+     "Reference": {
+      "type": "string"
+     },
+     "LineAmountTypes": {
+      "type": "string",
+      "enum": [
+       "Exclusive",
+       "Inclusive",
+       "NoTax"
+      ]
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "SUBMITTED",
+       "AUTHORISED",
+       "DECLINED",
+       "VOIDED"
+      ]
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "ReceiptNumber": {
+      "type": "string"
+     },
+     "Url": {
+      "type": "string"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Overpayment": {
+    "type": "object",
+    "description": "An excess payment beyond what was owed. Cannot be created directly; arises from bank transactions. The surplus can be allocated to future invoices.",
+    "properties": {
+     "OverpaymentID": {
+      "type": "string"
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "RECEIVE-OVERPAYMENT",
+       "SPEND-OVERPAYMENT",
+       "AROVERPAYMENT"
+      ]
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "AUTHORISED",
+       "PAID",
+       "VOIDED"
+      ]
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "RemainingCredit": {
+      "type": "number"
+     },
+     "AppliedAmount": {
+      "type": "number"
+     },
+     "Allocations": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Payments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Prepayment": {
+    "type": "object",
+    "description": "An advance payment made before an invoice is raised. Cannot be created directly; arises from bank transactions. Can be allocated to invoices when they are issued.",
+    "properties": {
+     "PrepaymentID": {
+      "type": "string"
+     },
+     "Type": {
+      "type": "string",
+      "enum": [
+       "RECEIVE-PREPAYMENT",
+       "SPEND-PREPAYMENT",
+       "ARPREPAYMENT",
+       "APPREPAYMENT"
+      ]
+     },
+     "Contact": {
+      "type": "object"
+     },
+     "Date": {
+      "type": "string",
+      "format": "date"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "AUTHORISED",
+       "PAID",
+       "VOIDED"
+      ]
+     },
+     "LineItems": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "SubTotal": {
+      "type": "number"
+     },
+     "TotalTax": {
+      "type": "number"
+     },
+     "Total": {
+      "type": "number"
+     },
+     "CurrencyCode": {
+      "type": "string"
+     },
+     "CurrencyRate": {
+      "type": "number"
+     },
+     "RemainingCredit": {
+      "type": "number"
+     },
+     "AppliedAmount": {
+      "type": "number"
+     },
+     "Allocations": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "Payments": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "ContactGroup": {
+    "type": "object",
+    "description": "A named group for organising contacts into logical collections.",
+    "properties": {
+     "ContactGroupID": {
+      "type": "string"
+     },
+     "Name": {
+      "type": "string"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "ACTIVE",
+       "DELETED"
+      ]
+     },
+     "Contacts": {
+      "type": "array",
+      "items": {
+       "type": "object"
+      }
+     }
+    }
+   },
+   "LinkedTransaction": {
+    "type": "object",
+    "description": "A link between a billable expense line on a purchase transaction and a sales invoice line, enabling pass-through billing.",
+    "properties": {
+     "LinkedTransactionID": {
+      "type": "string"
+     },
+     "SourceTransactionID": {
+      "type": "string"
+     },
+     "SourceLineItemID": {
+      "type": "string"
+     },
+     "SourceTransactionTypeCode": {
+      "type": "string"
+     },
+     "ContactID": {
+      "type": "string"
+     },
+     "TargetTransactionID": {
+      "type": "string"
+     },
+     "TargetLineItemID": {
+      "type": "string"
+     },
+     "Status": {
+      "type": "string",
+      "enum": [
+       "DRAFT",
+       "APPROVED",
+       "ONDRAFT",
+       "BILLED",
+       "VOIDED"
+      ]
+     },
+     "Type": {
+      "type": "string"
+     },
+     "UpdatedDateUTC": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  }
+ }
+}

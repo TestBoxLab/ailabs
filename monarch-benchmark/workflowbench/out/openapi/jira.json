@@ -1,0 +1,244 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "jira (WorkflowBench simulated)",
+  "version": "v3",
+  "description": "Jira Cloud REST API v3. Authorization: Bearer {api_token} or Basic base64(email:token). Issue keys look like 'PROJ-123'. Project keys are short uppercase identifiers like 'PROJ'."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/jira"
+  }
+ ],
+ "paths": {
+  "/rest/api/3/project/search": {
+   "get": {
+    "operationId": "jira.projects.search",
+    "summary": "Query Jira projects by name or key. Returns the project key required when creating new issues.",
+    "description": "Query Jira projects by name or key. Returns the project key required when creating new issues.",
+    "parameters": [
+     {
+      "name": "query",
+      "in": "query",
+      "required": false,
+      "description": "Text to match against project name or key.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "maxResults",
+      "in": "query",
+      "required": false,
+      "description": "Maximum number of results to return (default 50).",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{values: [{id, key, name, projectTypeKey}], total, isLast}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/rest/api/3/issue": {
+   "post": {
+    "operationId": "jira.issues.create",
+    "summary": "Submit a new Jira issue. Requires a project key, issue type, and summary. Priority is optional (Highest, High, Medium, L",
+    "description": "Submit a new Jira issue. Requires a project key, issue type, and summary. Priority is optional (Highest, High, Medium, Low, Lowest).",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, key (e.g. PROJ-42), self}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {fields: {project: {key: 'PROJ'} (required), issuetype: {name: 'Task'} (required \u00e2\u20ac\u201d 'Bug', 'Task', 'Story', 'Epic', etc.), summary: 'issue title' (required), priority: {name: 'High'} (optional \u00e2\u20ac\u201d 'Highest'|'High'|'Medium'|'Low'|'Lowest'), description: {type: 'doc', version: 1, content: [...]} (optional \u00e2\u20ac\u201d ADF format)}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/rest/api/3/issue/{issueIdOrKey}/comment": {
+   "post": {
+    "operationId": "jira.issues.comment",
+    "summary": "Post a comment on a Jira issue. Provide plain text and it will be automatically converted to ADF format.",
+    "description": "Post a comment on a Jira issue. Provide plain text and it will be automatically converted to ADF format.",
+    "parameters": [
+     {
+      "name": "issueIdOrKey",
+      "in": "path",
+      "required": true,
+      "description": "Issue key (e.g. PROJ-42) or numeric issue ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, body, created, updated, author: {displayName, accountId}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {body (required, string \u00e2\u20ac\u201d plain text comment body, automatically wrapped in ADF format)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Issue": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Numeric identifier for the issue."
+     },
+     "key": {
+      "type": "string",
+      "description": "Issue key in the format PROJ-42."
+     },
+     "self": {
+      "type": "string",
+      "description": "API URL pointing to this issue."
+     },
+     "fields": {
+      "type": "object",
+      "properties": {
+       "summary": {
+        "type": "string"
+       },
+       "description": {
+        "type": "object",
+        "description": "Issue description in Atlassian Document Format (ADF)."
+       },
+       "status": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         }
+        }
+       },
+       "priority": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         }
+        }
+       },
+       "issuetype": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         }
+        }
+       },
+       "project": {
+        "type": "object",
+        "properties": {
+         "key": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "Comment": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "body": {
+      "type": "object",
+      "description": "Comment body in ADF format."
+     },
+     "created": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updated": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "author": {
+      "type": "object",
+      "properties": {
+       "displayName": {
+        "type": "string"
+       },
+       "accountId": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "Project": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string",
+      "description": "Abbreviated project key, e.g. 'PROJ'."
+     },
+     "name": {
+      "type": "string"
+     },
+     "projectTypeKey": {
+      "type": "string",
+      "description": "software, business, or service_desk."
+     }
+    }
+   }
+  }
+ }
+}

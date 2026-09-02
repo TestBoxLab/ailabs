@@ -1,0 +1,250 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "helpcrunch (WorkflowBench simulated)",
+  "version": "v1",
+  "description": "Simulated helpcrunch API for benchmarking. Derived from public documentation; no live service is called."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/helpcrunch"
+  }
+ ],
+ "paths": {
+  "/customers": {
+   "get": {
+    "operationId": "helpcrunch.customers.list",
+    "summary": "Retrieve all customers from HelpCrunch. Fetch a full listing of contacts or users in the system.",
+    "description": "Retrieve all customers from HelpCrunch. Fetch a full listing of contacts or users in the system.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{data: [CustomerObject], total: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "helpcrunch.customers.create",
+    "summary": "Register a new customer or contact in HelpCrunch. Add a user record with details such as email, name, phone, and company",
+    "description": "Register a new customer or contact in HelpCrunch. Add a user record with details such as email, name, phone, and company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "CustomerObject (201 Created)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{email?, name?, userId?, phone?, company?, tags?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customer_id}": {
+   "patch": {
+    "operationId": "helpcrunch.customers.update",
+    "summary": "Edit an existing HelpCrunch customer record. Change the customer's email, name, phone number, or company affiliation.",
+    "description": "Edit an existing HelpCrunch customer record. Change the customer's email, name, phone number, or company affiliation.",
+    "parameters": [
+     {
+      "name": "customer_id",
+      "in": "path",
+      "required": true,
+      "description": "HelpCrunch customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "CustomerObject (200 OK)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{email?, name?, phone?, company?}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/search": {
+   "post": {
+    "operationId": "helpcrunch.customers.search",
+    "summary": "Look up a HelpCrunch customer using email, userId, or a free-text search query.",
+    "description": "Look up a HelpCrunch customer using email, userId, or a free-text search query.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{data: [CustomerObject], total: int}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{filter: [{field: string, operator: string, value: string}], comparison?: 'AND'|'OR', limit?: integer, offset?: integer, sort?: string, order?: 'asc'|'desc'}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customer_id}/tags": {
+   "put": {
+    "operationId": "helpcrunch.customers.tag",
+    "summary": "Apply a tag to a HelpCrunch customer. Assign a label or category marker to a contact.",
+    "description": "Apply a tag to a HelpCrunch customer. Assign a label or category marker to a contact.",
+    "parameters": [
+     {
+      "name": "customer_id",
+      "in": "path",
+      "required": true,
+      "description": "HelpCrunch customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "CustomerObject (200 OK)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{tags: [{name (required, string), color (optional, string \u00e2\u20ac\u201d hex color code)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "helpcrunch.customers.untag",
+    "summary": "Strip a tag from a HelpCrunch customer. Withdraw or clear a label previously assigned to a contact.",
+    "description": "Strip a tag from a HelpCrunch customer. Withdraw or clear a label previously assigned to a contact.",
+    "parameters": [
+     {
+      "name": "customer_id",
+      "in": "path",
+      "required": true,
+      "description": "HelpCrunch customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "CustomerObject (200 OK)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{tags: [{name (required, string)}]}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/events": {
+   "post": {
+    "operationId": "helpcrunch.events.create",
+    "summary": "Record a custom event against a HelpCrunch customer. Log a specific action or behavioral occurrence for a user.",
+    "description": "Record a custom event against a HelpCrunch customer. Log a specific action or behavioral occurrence for a user.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success: bool, event: EventObject, event_id: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "{name: string, customer: integer, data?: object}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {}
+ }
+}

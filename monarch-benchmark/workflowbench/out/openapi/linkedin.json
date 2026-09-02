@@ -1,0 +1,669 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "linkedin (WorkflowBench simulated)",
+  "version": "v2",
+  "description": "LinkedIn API v2. All requests require Authorization: Bearer {token}. Resources are identified by URNs (e.g. urn:li:person:{id}, urn:li:organization:{id})."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/linkedin"
+  }
+ ],
+ "paths": {
+  "/me": {
+   "get": {
+    "operationId": "linkedin.me.get",
+    "summary": "Retrieve the currently authenticated member's profile. Returns profile data including name, headline, location, industry",
+    "description": "Retrieve the currently authenticated member's profile. Returns profile data including name, headline, location, industry, and contact details.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, id, localizedFirstName, localizedLastName, headline, location, summary, public_profile_url, profile_picture_url, phone}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/people/{profile_id}": {
+   "get": {
+    "operationId": "linkedin.people.get",
+    "summary": "Fetch a LinkedIn member's profile by their ID. Returns complete profile information for the specified person.",
+    "description": "Fetch a LinkedIn member's profile by their ID. Returns complete profile information for the specified person.",
+    "parameters": [
+     {
+      "name": "profile_id",
+      "in": "path",
+      "required": true,
+      "description": "The member's profile ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, profile: Profile}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/people": {
+   "get": {
+    "operationId": "linkedin.people.search",
+    "summary": "Query LinkedIn profiles using keywords, company, job title, or location. Returns matching profiles from the user's conne",
+    "description": "Query LinkedIn profiles using keywords, company, job title, or location. Returns matching profiles from the user's connections and wider network.",
+    "parameters": [
+     {
+      "name": "keywords",
+      "in": "query",
+      "required": false,
+      "description": "Search terms matched against name, headline, summary, or email.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "company",
+      "in": "query",
+      "required": false,
+      "description": "Narrow results to profiles at this company.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "title",
+      "in": "query",
+      "required": false,
+      "description": "Narrow results by job title.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "location",
+      "in": "query",
+      "required": false,
+      "description": "Narrow results by geographic location.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "count",
+      "in": "query",
+      "required": false,
+      "description": "Maximum profiles to return (default 10).",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, profiles: [Profile], count}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/connections": {
+   "get": {
+    "operationId": "linkedin.connections.list",
+    "summary": "Retrieve the authenticated member's first-degree connections. Optionally filter by keywords matching name, headline, or ",
+    "description": "Retrieve the authenticated member's first-degree connections. Optionally filter by keywords matching name, headline, or company.",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "description": "Query type \u00e2\u20ac\u201d use 'viewer' to fetch the authenticated member's connections.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "keywords",
+      "in": "query",
+      "required": false,
+      "description": "Restrict connections by name, headline, or company.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "start",
+      "in": "query",
+      "required": false,
+      "description": "Starting offset for pagination (default 0).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "count",
+      "in": "query",
+      "required": false,
+      "description": "Connections to return per page (default 50, recommended max 50).",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{elements: [{to: 'urn:li:person:xxx'}], paging: {count, start, total}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/organizations": {
+   "get": {
+    "operationId": "linkedin.organizations.list",
+    "summary": "Enumerate LinkedIn organizations and companies. Filter by name or restrict to organizations the current user manages.",
+    "description": "Enumerate LinkedIn organizations and companies. Filter by name or restrict to organizations the current user manages.",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "query",
+      "required": false,
+      "description": "Filter organizations by partial name match.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "role_type",
+      "in": "query",
+      "required": false,
+      "description": "Restrict results by the user's role type.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, companies: [Company], total_count}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/organizations/{company_id}": {
+   "get": {
+    "operationId": "linkedin.organizations.get",
+    "summary": "Retrieve detailed information for a specific LinkedIn organization or company by ID.",
+    "description": "Retrieve detailed information for a specific LinkedIn organization or company by ID.",
+    "parameters": [
+     {
+      "name": "company_id",
+      "in": "path",
+      "required": true,
+      "description": "The organization or company ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, company: Company}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/jobs/{job_id}": {
+   "get": {
+    "operationId": "linkedin.jobs.get",
+    "summary": "Fetch information for a LinkedIn job posting by its ID. Returns the job title, company, location, description, and requi",
+    "description": "Fetch information for a LinkedIn job posting by its ID. Returns the job title, company, location, description, and requirements.",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "description": "The job posting ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, id, title, company_id, company_name, location, is_active, description, workplace_type, employment_type, seniority_level, industry, job_functions, skills_required, experience_years, salary_range, apply_url, posted_at, expires_at}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/ugcPosts": {
+   "post": {
+    "operationId": "linkedin.ugcPosts.create",
+    "summary": "Publish a UGC post or article on behalf of the authenticated user. Accepts both the standard LinkedIn UGC nested format ",
+    "description": "Publish a UGC post or article on behalf of the authenticated user. Accepts both the standard LinkedIn UGC nested format and a simplified flat parameter format.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, post: Post, id, author, visibility}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: Standard LinkedIn format: {author (required, string \u00e2\u20ac\u201d URN e.g. urn:li:person:{id} or urn:li:organization:{id}), lifecycleState (required, string \u00e2\u20ac\u201d must be 'PUBLISHED'), specificContent: {'com.linkedin.ugc.ShareContent': {shareCommentary: {text (required, string \u00e2\u20ac\u201d post text, max 3000 chars)}, shareMediaCategory (required, string \u00e2\u20ac\u201d 'NONE'|'ARTICLE'|'IMAGE'|'VIDEO'|'RICH'|'CAROUSEL'|'NATIVE_DOCUMENT'|'LIVE_VIDEO')}}, visibility: {'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC'|'CONNECTIONS'|'LOGGED_IN'}}. Simplified format: {comment (string \u00e2\u20ac\u201d post text), visibility__code ('PUBLIC' or 'CONNECTIONS'), content__title, content__description, content__submitted_url, content__submitted_image_url}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "linkedin.ugcPosts.search",
+    "summary": "Locate UGC posts by author. The official API accepts q=authors with an authors=List(URN) parameter. This endpoint additi",
+    "description": "Locate UGC posts by author. The official API accepts q=authors with an authors=List(URN) parameter. This endpoint additionally supports filtering by author profile ID or matching against post text.",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "description": "Query mode \u00e2\u20ac\u201d use 'authors' to retrieve posts from a specific author.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "author",
+      "in": "query",
+      "required": false,
+      "description": "Restrict posts to this author's profile ID.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sortBy",
+      "in": "query",
+      "required": false,
+      "description": "Ordering criterion. Enum: 'CREATED'|'LAST_MODIFIED'. Default: LAST_MODIFIED.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success, posts: [Post], count}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/companyUpdates": {
+   "post": {
+    "operationId": "linkedin.companyUpdates.create",
+    "summary": "Publish an update or post to a company page. The authenticated user must hold administrator privileges for the specified",
+    "description": "Publish an update or post to a company page. The authenticated user must hold administrator privileges for the specified company.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, post: Post, id, company_id, company_name}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {company or company_id (required, string \u00e2\u20ac\u201d company ID), comment (required, string \u00e2\u20ac\u201d update text), submitted_url (optional, string \u00e2\u20ac\u201d link URL), image_url (optional, string \u00e2\u20ac\u201d image URL), title (optional, string \u00e2\u20ac\u201d content title), description (optional, string \u00e2\u20ac\u201d content description)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/invitations": {
+   "post": {
+    "operationId": "linkedin.invitations.create",
+    "summary": "Dispatch a connection invitation to another LinkedIn member. Identify the recipient by profile URL, profile ID, or invit",
+    "description": "Dispatch a connection invitation to another LinkedIn member. Identify the recipient by profile URL, profile ID, or invitee identifier. Sending duplicate invitations to the same profile will be rejected.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, id, invitation_id, profile_url, status ('sent'), sent_at, message, invitation_type, sender_profile_id, recipient_profile_url}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {profile_url or invitee_url or invitee (required, string \u00e2\u20ac\u201d target LinkedIn profile URL or profile ID), message (optional, string \u00e2\u20ac\u201d custom invitation note), tracking_token (optional, string)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/messages": {
+   "post": {
+    "operationId": "linkedin.messages.create",
+    "summary": "Deliver a direct message to a LinkedIn connection. Identify the recipient by profile ID, email, profile URL, or a recipi",
+    "description": "Deliver a direct message to a LinkedIn connection. Identify the recipient by profile ID, email, profile URL, or a recipients array.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{success, message: Message}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {text or body (required, string \u00e2\u20ac\u201d message text), profile_id (string \u00e2\u20ac\u201d recipient profile ID), email (string \u00e2\u20ac\u201d recipient email address), profile_url (string \u00e2\u20ac\u201d recipient profile URL), recipients (array of person URN strings e.g. ['urn:li:person:{id}']), subject (optional, string \u00e2\u20ac\u201d conversation title)}. Provide at least one of profile_id, email, profile_url, or recipients to identify the recipient.",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Profile": {
+    "type": "object",
+    "description": "A LinkedIn member's profile record.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the member's profile."
+     },
+     "localizedFirstName": {
+      "type": "string",
+      "description": "Given name in the member's locale."
+     },
+     "localizedLastName": {
+      "type": "string",
+      "description": "Family name in the member's locale."
+     },
+     "headline": {
+      "type": "string",
+      "description": "The member's professional tagline."
+     },
+     "location": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string",
+      "description": "The About/bio section of the member's profile."
+     },
+     "public_profile_url": {
+      "type": "string"
+     },
+     "profile_picture_url": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     }
+    }
+   },
+   "Connection": {
+    "type": "object",
+    "description": "A first-degree LinkedIn connection entry.",
+    "properties": {
+     "to": {
+      "type": "string",
+      "description": "URN identifying the connected member (e.g. urn:li:person:xxx)."
+     }
+    }
+   },
+   "Company": {
+    "type": "object",
+    "description": "A LinkedIn company or organization page.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "industry": {
+      "type": "string"
+     },
+     "website": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "admin_ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Profile IDs of users who administer the page."
+     }
+    }
+   },
+   "Post": {
+    "type": "object",
+    "description": "A LinkedIn post such as a UGC share or company update.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "author": {
+      "type": "string",
+      "description": "URN of the post author (e.g. urn:li:person:{id} or urn:li:organization:{id})."
+     },
+     "text": {
+      "type": "string",
+      "description": "The body text of the post."
+     },
+     "visibility": {
+      "type": "string",
+      "enum": [
+       "PUBLIC",
+       "CONNECTIONS"
+      ]
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Job": {
+    "type": "object",
+    "description": "A job listing on LinkedIn.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "company_id": {
+      "type": "string"
+     },
+     "company_name": {
+      "type": "string"
+     },
+     "location": {
+      "type": "string"
+     },
+     "is_active": {
+      "type": "boolean"
+     },
+     "description": {
+      "type": "string"
+     },
+     "workplace_type": {
+      "type": "string"
+     },
+     "employment_type": {
+      "type": "string"
+     },
+     "seniority_level": {
+      "type": "string"
+     },
+     "industry": {
+      "type": "string"
+     },
+     "skills_required": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "salary_range": {
+      "type": "string"
+     },
+     "apply_url": {
+      "type": "string"
+     }
+    }
+   },
+   "Invitation": {
+    "type": "object",
+    "description": "A LinkedIn connection request sent to another member.",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "sender_profile_id": {
+      "type": "string"
+     },
+     "recipient_profile_url": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "sent",
+       "accepted",
+       "declined"
+      ]
+     },
+     "sent_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Message": {
+    "type": "object",
+    "description": "A private direct message on LinkedIn.",
+    "properties": {
+     "sender_profile_id": {
+      "type": "string"
+     },
+     "recipient_profile_id": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string",
+      "description": "The content of the message."
+     },
+     "subject": {
+      "type": "string"
+     },
+     "sent_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  }
+ }
+}

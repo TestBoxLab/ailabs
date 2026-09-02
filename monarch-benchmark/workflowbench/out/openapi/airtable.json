@@ -1,0 +1,391 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "airtable (WorkflowBench simulated)",
+  "version": "v0",
+  "description": "Airtable REST API. Authorization: Bearer {token}. Rate limit: 5 req/sec per base. The {baseId} is the Airtable base (application) ID, {tableId} is the table name or ID."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/airtable"
+  }
+ ],
+ "paths": {
+  "/meta/bases": {
+   "get": {
+    "operationId": "airtable.meta.bases",
+    "summary": "Enumerate the Airtable bases (applications) this account can access. Use this to discover a base's ID before reading its",
+    "description": "Enumerate the Airtable bases (applications) this account can access. Use this to discover a base's ID before reading its tables or records.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{bases: [{id, name, permissionLevel}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/meta/bases/{baseId}/tables": {
+   "get": {
+    "operationId": "airtable.meta.tables",
+    "summary": "Enumerate the tables inside a given Airtable base. Returns each table's ID and display name for use with the record endp",
+    "description": "Enumerate the tables inside a given Airtable base. Returns each table's ID and display name for use with the record endpoints.",
+    "parameters": [
+     {
+      "name": "baseId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the Airtable base whose tables should be listed.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{tables: [{id, name}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/{baseId}/{tableId}": {
+   "get": {
+    "operationId": "airtable.records.list",
+    "summary": "Fetch or search records from an Airtable table. Use filterByFormula to narrow results to matching entries (e.g., \"{Name}",
+    "description": "Fetch or search records from an Airtable table. Use filterByFormula to narrow results to matching entries (e.g., \"{Name}='Acme'\").",
+    "parameters": [
+     {
+      "name": "baseId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier for the Airtable base (application).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tableId",
+      "in": "path",
+      "required": true,
+      "description": "Name or identifier of the target table.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "filterByFormula",
+      "in": "query",
+      "required": false,
+      "description": "An Airtable formula expression used to filter records, e.g. \"{Status}='Active'\".",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sort",
+      "in": "query",
+      "required": false,
+      "description": "A list of sort configuration objects, e.g. [{field: 'Name', direction: 'asc'}]. Each object specifies a field (string) and direction ('asc'|'desc').",
+      "schema": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     {
+      "name": "fields",
+      "in": "query",
+      "required": false,
+      "description": "List of field names to include in the response. Only the listed fields will be returned.",
+      "schema": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     {
+      "name": "pageSize",
+      "in": "query",
+      "required": false,
+      "description": "How many records to return per page (maximum 100).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "description": "Continuation token from a prior response, used to retrieve the next page of results.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "cellFormat",
+      "in": "query",
+      "required": false,
+      "description": "Determines how cell values are formatted: 'json' (default) or 'string'.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "json",
+        "string"
+       ]
+      }
+     },
+     {
+      "name": "timeZone",
+      "in": "query",
+      "required": false,
+      "description": "Timezone to apply when rendering date values (e.g. 'America/New_York').",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "userLocale",
+      "in": "query",
+      "required": false,
+      "description": "Locale setting used for value formatting (e.g. 'en-us').",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "maxRecords",
+      "in": "query",
+      "required": false,
+      "description": "Upper limit on the total number of records to return.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "view",
+      "in": "query",
+      "required": false,
+      "description": "Name or ID of a specific view to use when listing records.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{records: [{id, fields: {fieldName: value, ...}, createdTime}], offset (pagination token if more records exist)}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "airtable.records.create",
+    "summary": "Insert one or more new records into an Airtable table. Provide field values as a key/value object that matches the table",
+    "description": "Insert one or more new records into an Airtable table. Provide field values as a key/value object that matches the table's field names.",
+    "parameters": [
+     {
+      "name": "baseId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier for the Airtable base.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tableId",
+      "in": "path",
+      "required": true,
+      "description": "Name or identifier of the target table.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, fields: {...}, createdTime}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {fields (required, object \u00e2\u20ac\u201d field name \u00e2\u2020\u2019 value pairs, e.g. {\"Name\": \"Acme\", \"Status\": \"Active\"})}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/{baseId}/{tableId}/{recordId}": {
+   "patch": {
+    "operationId": "airtable.records.update",
+    "summary": "Modify an existing record in an Airtable table. Include only the fields you wish to update.",
+    "description": "Modify an existing record in an Airtable table. Include only the fields you wish to update.",
+    "parameters": [
+     {
+      "name": "baseId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier for the Airtable base.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tableId",
+      "in": "path",
+      "required": true,
+      "description": "Name or identifier of the target table.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "recordId",
+      "in": "path",
+      "required": true,
+      "description": "The unique record identifier (rec...).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, fields: {...}, createdTime}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {fields (required, object \u00e2\u20ac\u201d field name \u00e2\u2020\u2019 value pairs to update)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/{baseId}/{tableId}/{recordId}/comments": {
+   "post": {
+    "operationId": "airtable.records.comment",
+    "summary": "Post a comment on a particular record within an Airtable table.",
+    "description": "Post a comment on a particular record within an Airtable table.",
+    "parameters": [
+     {
+      "name": "baseId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier for the Airtable base.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "tableId",
+      "in": "path",
+      "required": true,
+      "description": "Name or identifier of the target table.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "recordId",
+      "in": "path",
+      "required": true,
+      "description": "The unique record identifier (rec...).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id (comment ID), text, createdTime, author: {id, name}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {text (required, string \u00e2\u20ac\u201d the comment text)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Record": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique record identifier (rec...)."
+     },
+     "fields": {
+      "type": "object",
+      "description": "A mapping of field names to their corresponding values."
+     },
+     "createdTime": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  }
+ }
+}

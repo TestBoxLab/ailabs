@@ -1,0 +1,478 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "google_ads (WorkflowBench simulated)",
+  "version": "v19",
+  "description": "Google Ads API (REST). Requires Authorization: Bearer {token}, developer-token header, and optionally login-customer-id for manager accounts. customerId is the Google Ads customer ID (digits only, no dashes). Most read operations use GAQL (Google Ads Query Language) via the googleAds:search endpoint."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/google_ads"
+  }
+ ],
+ "paths": {
+  "/customers/{customerId}/googleAds:search": {
+   "post": {
+    "operationId": "google_ads.googleAds.search",
+    "summary": "Run a GAQL (Google Ads Query Language) query against the account. This environment provides campaign and user-list rows,",
+    "description": "Run a GAQL (Google Ads Query Language) query against the account. This environment provides campaign and user-list rows, including their seeded metric fields. Example queries: 'SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type FROM campaign', 'SELECT user_list.id, user_list.name, user_list.description FROM user_list'.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID \u00e2\u20ac\u201d digits only, no dashes.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [{campaign?, adGroup?, userList?, ...resource fields}], nextPageToken?, totalResultsCount?}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {query: string (required, GAQL query), pageToken?: string}. Google Ads API v19 uses fixed pages of up to 10,000 rows and rejects pageSize.",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/campaigns/{campaignId}": {
+   "get": {
+    "operationId": "google_ads.campaigns.get",
+    "summary": "Fetch a single campaign using its resource name or numeric ID.",
+    "description": "Fetch a single campaign using its resource name or numeric ID.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "campaignId",
+      "in": "path",
+      "required": true,
+      "description": "Numeric ID of the campaign to retrieve.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{resourceName, id, name, status, advertisingChannelType, startDate, endDate, campaignBudget}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/campaigns:mutate": {
+   "post": {
+    "operationId": "google_ads.campaigns.mutate",
+    "summary": "Apply a batch of create, update, or remove operations across one or more campaigns in a single call.",
+    "description": "Apply a batch of create, update, or remove operations across one or more campaigns in a single call.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [{resourceName}], partialFailureError?}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {operations: [{create?: Campaign, update?: Campaign, remove?: string (resource name), updateMask?: string}], partialFailure?: boolean, validateOnly?: boolean}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/userLists/{listId}:removeMembers": {
+   "post": {
+    "operationId": "google_ads.userLists.removeMembers",
+    "summary": "Delete a member (identified by email) from a Google Ads customer match user list. Use this to exclude a contact from a r",
+    "description": "Delete a member (identified by email) from a Google Ads customer match user list. Use this to exclude a contact from a remarketing audience.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID \u00e2\u20ac\u201d digits only, no dashes.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "listId",
+      "in": "path",
+      "required": true,
+      "description": "ID of the user list (audience) from which the member should be removed.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{success: true, list_id: string, email: string}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {email: string (required \u00e2\u20ac\u201d the email address to remove from the list)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/offlineUserDataJobs:create": {
+   "post": {
+    "operationId": "google_ads.offlineUserDataJobs.create",
+    "summary": "Instantiate an offline user data job for adding or removing members in a customer match list. After creating the job, qu",
+    "description": "Instantiate an offline user data job for adding or removing members in a customer match list. After creating the job, queue operations, then execute the job.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{resourceName: string (the job resource name)}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {job: {type: 'CUSTOMER_MATCH_USER_LIST', customerMatchUserListMetadata: {userList: string (resource name, e.g. 'customers/{customerId}/userLists/{listId}')}}}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/offlineUserDataJobs/{offlineUserDataJobId}:addOperations": {
+   "post": {
+    "operationId": "google_ads.offlineUserDataJobs.addOperations",
+    "summary": "Enqueue user identifiers to be added or removed as part of an offline user data job.",
+    "description": "Enqueue user identifiers to be added or removed as part of an offline user data job.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "offlineUserDataJobId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the offline user data job to update.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {operations: [{create?: {userIdentifiers: [{hashedEmail?: string, hashedPhoneNumber?: string}]}, remove?: {userIdentifiers: [{hashedEmail?: string, hashedPhoneNumber?: string}]}}], enablePartialFailure?: boolean}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}/offlineUserDataJobs/{offlineUserDataJobId}:run": {
+   "post": {
+    "operationId": "google_ads.offlineUserDataJobs.run",
+    "summary": "Trigger execution of an offline user data job to apply its queued operations. This is an asynchronous long-running opera",
+    "description": "Trigger execution of an offline user data job to apply its queued operations. This is an asynchronous long-running operation.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "offlineUserDataJobId",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the offline user data job to execute.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{name: string (long-running operation resource name)}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/customers/{customerId}:uploadClickConversions": {
+   "post": {
+    "operationId": "google_ads.conversions.uploadClickConversions",
+    "summary": "Submit offline click conversion events to Google Ads, matched by gclid (Google click ID). Used to attribute sales or sig",
+    "description": "Submit offline click conversion events to Google Ads, matched by gclid (Google click ID). Used to attribute sales or sign-ups that originated from an ad click but were completed outside the browser.",
+    "parameters": [
+     {
+      "name": "customerId",
+      "in": "path",
+      "required": true,
+      "description": "Google Ads customer ID.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{results: [{gclid, conversionAction, conversionDateTime}], partialFailureError?}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {conversions: [{gclid: string, conversionAction: string (resource name), conversionDateTime: string, conversionValue?: number, currencyCode?: string}], partialFailure?: boolean, validateOnly?: boolean}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Campaign": {
+    "type": "object",
+    "description": "A campaign within Google Ads.",
+    "properties": {
+     "resource_name": {
+      "type": "string",
+      "description": "Fully qualified resource path: customers/{customerId}/campaigns/{campaignId}."
+     },
+     "id": {
+      "type": "string",
+      "description": "Numeric campaign identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the campaign."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ENABLED",
+       "PAUSED",
+       "REMOVED"
+      ],
+      "description": "Current serving state of the campaign."
+     },
+     "campaign_budget": {
+      "type": "string",
+      "description": "Resource path pointing to the budget associated with this campaign."
+     },
+     "start_date": {
+      "type": "string",
+      "description": "Date the campaign begins running (YYYY-MM-DD)."
+     },
+     "end_date": {
+      "type": "string",
+      "description": "Date the campaign stops running (YYYY-MM-DD), if set."
+     },
+     "advertising_channel_type": {
+      "type": "string",
+      "description": "Channel type for this campaign: SEARCH, DISPLAY, VIDEO, SHOPPING, etc."
+     }
+    }
+   },
+   "UserList": {
+    "type": "object",
+    "description": "A user list (audience or customer match list) in Google Ads.",
+    "properties": {
+     "resource_name": {
+      "type": "string",
+      "description": "Fully qualified resource path: customers/{customerId}/userLists/{userListId}."
+     },
+     "id": {
+      "type": "string",
+      "description": "Numeric user list identifier."
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name of the user list."
+     },
+     "description": {
+      "type": "string"
+     },
+     "membership_life_span": {
+      "type": "integer",
+      "description": "Number of days a user remains in the list (1\u00e2\u20ac\u201c10000)."
+     },
+     "size_for_display": {
+      "type": "integer",
+      "description": "Approximate audience size for Display Network targeting."
+     },
+     "size_for_search": {
+      "type": "integer",
+      "description": "Approximate audience size for Search targeting."
+     }
+    }
+   },
+   "OfflineConversion": {
+    "type": "object",
+    "description": "An offline conversion event from a click that is uploaded to Google Ads.",
+    "properties": {
+     "conversion_action": {
+      "type": "string",
+      "description": "Resource path of the conversion action to record against."
+     },
+     "conversion_date_time": {
+      "type": "string",
+      "description": "Date and time the conversion took place (YYYY-MM-DD HH:MM:SS+/-HH:MM)."
+     },
+     "conversion_value": {
+      "type": "number",
+      "description": "Revenue or monetary value attributed to this conversion."
+     },
+     "currency_code": {
+      "type": "string",
+      "description": "Three-letter ISO 4217 currency code, e.g. USD."
+     },
+     "gclid": {
+      "type": "string",
+      "description": "Google click identifier captured from the originating ad click."
+     },
+     "hashed_email": {
+      "type": "string",
+      "description": "SHA-256 hashed and lowercased email address of the converting user."
+     }
+    }
+   }
+  }
+ }
+}

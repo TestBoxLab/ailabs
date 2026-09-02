@@ -1,0 +1,369 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "trello (WorkflowBench simulated)",
+  "version": "1",
+  "description": "Trello REST API. Authentication via query params: key={apiKey}&token={userToken}. Board IDs, card IDs, and list IDs are 24-character alphanumeric strings."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:8765/trello"
+  }
+ ],
+ "paths": {
+  "/members/{memberId}/boards": {
+   "get": {
+    "operationId": "trello.members.boards",
+    "summary": "Retrieve all boards belonging to a member. Pass memberId='me' to get the authenticated user's boards. Useful for discove",
+    "description": "Retrieve all boards belonging to a member. Pass memberId='me' to get the authenticated user's boards. Useful for discovering board IDs by name before querying lists or cards.",
+    "parameters": [
+     {
+      "name": "memberId",
+      "in": "path",
+      "required": true,
+      "description": "The member ID, or 'me' to refer to the authenticated user.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "filter",
+      "in": "query",
+      "required": false,
+      "description": "Scope of boards to return: all, open, closed, members, organization, public (defaults to open).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, name, closed, url}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/cards": {
+   "post": {
+    "operationId": "trello.cards.create",
+    "summary": "Add a new card to a Trello list.",
+    "description": "Add a new card to a Trello list.",
+    "parameters": [],
+    "responses": {
+     "200": {
+      "description": "{id, name, desc, idList, idBoard, due, dueComplete, closed, labels, pos}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {idList (required, string \u00e2\u20ac\u201d list ID), name (required, string \u00e2\u20ac\u201d card title), desc (optional, string), due (optional, ISO 8601), idBoard (optional, string \u00e2\u20ac\u201d board context), pos (optional: 'top'|'bottom'|number)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/boards/{id}/lists": {
+   "get": {
+    "operationId": "trello.boards.lists",
+    "summary": "Retrieve all lists present on a given Trello board.",
+    "description": "Retrieve all lists present on a given Trello board.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the board.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "filter",
+      "in": "query",
+      "required": false,
+      "description": "Scope of lists to return: all, open, closed, none (defaults to all).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, name, closed, idBoard}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/boards/{id}/cards": {
+   "get": {
+    "operationId": "trello.boards.cards",
+    "summary": "Retrieve all cards on a given Trello board.",
+    "description": "Retrieve all cards on a given Trello board.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the board.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "filter",
+      "in": "query",
+      "required": false,
+      "description": "Scope of cards to return: all, closed, none, open, visible (defaults to all).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, name, desc, idList, idBoard, due, dueComplete, closed, labels}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/cards/{id}": {
+   "put": {
+    "operationId": "trello.cards.update",
+    "summary": "Edit properties of an existing Trello card. Only include the fields you wish to change; all others remain unchanged.",
+    "description": "Edit properties of an existing Trello card. Only include the fields you wish to change; all others remain unchanged.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The card ID or shortLink.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, name, desc, idList, idBoard, due, dueComplete, closed, labels, pos}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {name (optional, string), desc (optional, string), due (optional, ISO 8601 datetime or null), dueComplete (optional, bool), closed (optional, bool \u00e2\u20ac\u201d true to archive), idBoard (optional, string \u00e2\u20ac\u201d board ID to move card to), idList (optional, string \u00e2\u20ac\u201d list ID to move card to), pos (optional: 'top'|'bottom'|number)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/cards/{id}/idLabels": {
+   "post": {
+    "operationId": "trello.cards.addLabel",
+    "summary": "Attach a label to a Trello card using its label ID. Label IDs can be found via GET /1/boards/{id}/labels.",
+    "description": "Attach a label to a Trello card using its label ID. Label IDs can be found via GET /1/boards/{id}/labels.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the card.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "[{id, idBoard, name, color}]",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "JSON request body.",
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "value": {
+          "type": "string",
+          "description": "The label ID to attach to the card."
+         }
+        },
+        "required": [
+         "value"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  "/cards/{id}/actions/comments": {
+   "post": {
+    "operationId": "trello.cards.comment",
+    "summary": "Post a comment on a Trello card.",
+    "description": "Post a comment on a Trello card.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "Identifier of the card.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{id, type: 'commentCard', date, data: {text, card: {id, name}, board: {id, name}}}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "description": "Body: {text (required, string \u00e2\u20ac\u201d comment text)}",
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Card": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "Unique identifier for the card."
+     },
+     "name": {
+      "type": "string",
+      "description": "The title of the card."
+     },
+     "desc": {
+      "type": "string",
+      "description": "Body text or description of the card."
+     },
+     "idList": {
+      "type": "string",
+      "description": "Identifier of the list this card belongs to."
+     },
+     "idBoard": {
+      "type": "string",
+      "description": "Identifier of the board this card belongs to."
+     },
+     "due": {
+      "type": "string",
+      "description": "Deadline for the card in ISO 8601 format."
+     },
+     "dueComplete": {
+      "type": "boolean"
+     },
+     "closed": {
+      "type": "boolean",
+      "description": "Indicates whether the card has been archived."
+     },
+     "labels": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "color": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   },
+   "List": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "closed": {
+      "type": "boolean"
+     },
+     "idBoard": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}
