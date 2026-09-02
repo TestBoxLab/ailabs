@@ -101,9 +101,13 @@ def build_arm_for(competitor: config_mod.Competitor):
             raise ValueError(f"launcher {h.launcher!r} is not runnable yet")
         from wb_arms.cli_claude_code import ClaudeCodeArm
         m = competitor.model
-        rendered = {k: v.format(model=m.name if m else "", provider=m.provider if m else "",
-                                key_env=m.key_env if m else "")
-                    for k, v in (h.env or {}).items()}
+        fields = dict(model=m.name, provider=m.provider, key_env=m.key_env) if m else {}
+        rendered = {}
+        for k, v in h.env.items():
+            try:
+                rendered[k] = v.format_map(fields)
+            except (KeyError, ValueError, IndexError) as e:
+                raise ValueError(f"harness {h.name!r}: env {k!r}: bad placeholder {e}") from e
         arm = ClaudeCodeArm(env=rendered)
     else:
         from wb_arms.monarch import MonarchArm

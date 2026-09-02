@@ -46,6 +46,11 @@ def load_audiences(path: str | Path = _AUDIENCES_FILE) -> dict[str, list[str]]:
     return audiences
 
 
+def is_lab(name: str) -> bool:
+    """Lab competitors are watermarked in internal and never rendered elsewhere."""
+    return name.startswith("monarch-lab")
+
+
 def _allowed(arm: str, allowlist: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(arm, pat) for pat in allowlist)
 
@@ -79,7 +84,7 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
         raise GateError(
             f"audience {audience!r} allows none of the run's arms {all_arms}; "
             "nothing to render")
-    if audience != "internal" and any(a.startswith("monarch-lab") for a in arms):
+    if audience != "internal" and any(is_lab(a) for a in arms):
         raise GateError("monarch-lab* may never render outside the internal audience")
 
     k = k or config.get("k") or 1
@@ -161,7 +166,7 @@ def render_md(report: dict[str, Any]) -> str:
              "",
              f"audience: **{report['audience']}** · suite `{report['suite']}` · "
              f"config `{report['config_hash']}` · k={report['k']}"]
-    if report["audience"] == "internal" and any(a.startswith("monarch-lab") for a in report["arms"]):
+    if report["audience"] == "internal" and any(is_lab(a) for a in report["arms"]):
         lines.append("\n> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**")
     if report["arms_stripped_by_gate"]:
         if report["audience"] == "internal":

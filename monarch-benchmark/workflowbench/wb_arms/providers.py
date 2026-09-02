@@ -42,7 +42,7 @@ def register(p: Provider) -> Provider:
 
 def load_models(folder: str | Path) -> dict[str, Provider]:
     """One Provider per model file in `folder`, keyed by name (research.md R4)."""
-    from wb_orchestrator.config import load_model
+    from wb_orchestrator.config import load_model  # lazy: config pulls wb_world/automationbench at import
     out = {}
     for path in sorted(Path(folder).glob("*.yaml")):
         m = load_model(path)

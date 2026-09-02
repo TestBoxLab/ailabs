@@ -165,3 +165,15 @@ def test_build_arm_for_renders_cli_env_from_model(site, monkeypatch):
     arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
     assert captured["env"]["ANTHROPIC_MODEL"] == "claude-opus-4-8"
     assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-test"
+
+
+@pytest.mark.parametrize("value", ['{"a":1}', "{modle}"])
+def test_build_arm_for_names_harness_and_key_on_bad_placeholder(site, monkeypatch, value):
+    from wb_arms import cli_claude_code
+    from wb_orchestrator.orchestrator import build_arm_for
+    monkeypatch.setattr(cli_claude_code, "claude_version", lambda: "0.0-test")
+    harness = config.load_harness(site / "config/harnesses/claude-code.yaml")
+    harness.env["WB_BAD"] = value
+    model = config.load_model(site / "config/models/claude-opus-4-8.yaml")
+    with pytest.raises(ValueError, match="harness 'claude-code': env 'WB_BAD': bad placeholder"):
+        build_arm_for(config.Competitor("claude-opus-4-8/claude-code", model, harness))
