@@ -1,0 +1,54 @@
+# Paid smoke run: 10 pilot tasks x k=2 x the chosen competitors (about US$ 2).
+# Never runs a full round. Manual by default; the weekly schedule is commented
+# out until the team turns it on.
+name: smoke
+on:
+  workflow_dispatch:
+    inputs:
+      arms:
+        description: "Comma-separated competitors"
+        default: "oracle,claude-opus-4-8,gpt-5.6-sol"
+      k:
+        description: "Trials per task (smoke stays at 2)"
+        default: "2"
+  # schedule:
+  #   - cron: "0 9 * * 1"   # Mondays 09:00 UTC
+
+defaults:
+  run:
+    working-directory: monarch-benchmark/workflowbench
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: git clone -q https://github.com/zapier/AutomationBench.git vendor/automation-bench && git -C vendor/automation-bench checkout -q 4a8e106
+      - run: uv sync --frozen
+      - name: Guard - smoke scale only
+        run: |
+          if [ "${{ inputs.k || '2' }}" -gt 2 ]; then echo "k > 2 is not a smoke run; start full rounds by hand" >&2; exit 1; fi
+      - name: Doctor
+        run: uv run wb doctor --arms "$(echo '${{ inputs.arms }}' | tr ',' '\n' | grep -v '^oracle$\|^sloppy$\|^null$' | paste -sd,)"
+      - name: Smoke run
+        id: run
+        run: |
+          RUN_ID="smoke-$(date -u +%Y%m%d-%H%M)"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          uv run wb run --suite tasks/ --arms "${{ inputs.arms }}" --k "${{ inputs.k || '2' }}" --run-id "$RUN_ID"
+          uv run wb report "$RUN_ID" --audience internal --baseline bare/api/claude-opus-4-8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.run.outputs.run_id }}
+          path: |
+            monarch-benchmark/workflowbench/out/report-*.md
+            monarch-benchmark/workflowbench/out/report-*.html
+            monarch-benchmark/workflowbench/out/${{ steps.run.outputs.run_id }}/episodes.jsonl
