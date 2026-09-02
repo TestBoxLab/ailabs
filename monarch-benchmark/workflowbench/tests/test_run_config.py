@@ -9,6 +9,7 @@ import pytest
 
 from tests.test_config import PLAN, edit, site, write  # noqa: F401  (site is a fixture)
 from wb_orchestrator import config
+from wb_orchestrator.cli import _banner, main
 from wb_orchestrator.config import ConfigError
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.store import Store
@@ -108,6 +109,28 @@ def test_resolve_name_or_path(site):
         config.DEFAULT_CONFIG_DIR / "plans/smoke-frontier.yaml"
     p = site / "config/plans/smoke-frontier.yaml"
     assert config.resolve_name_or_path(str(p), "plan") == p
-    assert config.resolve_name_or_path("x/y.yaml", "plan") == Path("x/y.yaml")
     with pytest.raises(ConfigError, match="unknown plan 'nope'; available: smoke-frontier"):
         config.resolve_name_or_path("nope", "plan", site / "config")
+
+
+# -- the wb run command itself -------------------------------------------------
+
+def test_run_unknown_plan_name_exits_2(tmp_path, capsys):
+    rc = main(["--db", str(tmp_path / "wb.sqlite3"), "run", "--product", "simulated-apps", "--plan", "nope"])
+    assert rc == 2
+    assert "available: smoke-frontier" in capsys.readouterr().err
+
+
+def test_banner_matches_contract(site):
+    plan = edit(PLAN, "competitors")
+    plan = edit(plan, "baseline", "oracle")
+    plan = edit(plan, "tasks", f'"{(site / "tasks").as_posix()}"')
+    plan += "competitors:\n  - {harness: oracle}\n"
+    write(site / "config/plans", plan)
+    rc = config.resolve(site / "config/products/simulated-apps.yaml",
+                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+    assert _banner(rc).splitlines() == [
+        "product   simulated-apps (simulated, mutable data)",
+        "plan      smoke-frontier  mode=create-run  audience=internal",
+        f"tasks     2 in {(site / 'tasks').as_posix()}/   repetitions 2   competitors 1   attempts 4",
+        "ceiling   US$ 5.00   approved_by: —"]

@@ -103,6 +103,7 @@ def build_arm_for(competitor: config_mod.Competitor):
     else:
         from wb_arms.monarch import MonarchArm
         arm = MonarchArm("monarch/stock")
+        arm.model_label = h.release  # recorded as EpisodeRow.model (R6)
     arm.name = competitor.name
     return arm
 
@@ -115,15 +116,16 @@ class Orchestrator:
         # arms=[] skips the old key validation; competitor names are set below.
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
-                   provider_concurrency=provider_concurrency or plan.concurrency)
-        self.tasks = run_config.tasks
+                   provider_concurrency=provider_concurrency or plan.concurrency,
+                   tasks=run_config.tasks)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
         return self
 
     def __init__(self, store: Store, suite_dir: str | Path, arms: list[str], k: int,
                  out_dir: str | Path, timeout_s: float = 600.0,
-                 provider_concurrency: int = 4, stop_after: int | None = None):
+                 provider_concurrency: int = 4, stop_after: int | None = None,
+                 tasks: list[dict] | None = None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         if len(set(arms)) != len(arms):
@@ -133,7 +135,7 @@ class Orchestrator:
         self.store = store
         self.run_config: config_mod.RunConfig | None = None
         self.suite_dir = str(suite_dir)
-        self.tasks = load_suite(suite_dir)
+        self.tasks = tasks if tasks is not None else load_suite(suite_dir)
         self.arm_keys = arms
         self.k = k
         self.out_dir = Path(out_dir)
@@ -315,13 +317,9 @@ class Orchestrator:
             # REAL-mode reset (or an auditor) knows this wasn't a clean no-op.
             result.flags.append("partial_writes_before_failure")
 
-        model = getattr(getattr(arm, "provider", None), "model_id", None)
-        test_mode = None
-        if self.run_config:
-            test_mode = self.run_config.plan.mode
-            harness = self.run_config.harnesses[arm.name.rsplit("/", 1)[-1]]
-            if harness.kind == "monarch":
-                model = harness.release
+        model = (getattr(arm, "model_label", None)
+                 or getattr(getattr(arm, "provider", None), "model_id", None))
+        test_mode = self.run_config.plan.mode if self.run_config else None
         row = EpisodeRow(
             episode_id=eid, run_id=run_id, task_id=task_id, suite=SUITE,
             contract_sha256=contract_hash(task), arm=arm.name, trial=trial,

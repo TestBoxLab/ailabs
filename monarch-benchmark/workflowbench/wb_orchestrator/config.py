@@ -457,7 +457,7 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
 def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
     """`smoke-frontier` -> config/plans/smoke-frontier.yaml; a path is used as given."""
     p = Path(value)
-    if p.suffix or p.is_file():
+    if p.is_file():
         return p
     folder = Path(config_dir) / f"{kind}s"
     if not (folder / f"{value}.yaml").is_file():
@@ -465,8 +465,9 @@ def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
     return folder / f"{value}.yaml"
 
 
-def pick(kind, folder, stdin=sys.stdin, stdout=sys.stdout) -> Path:
+def pick(kind, folder, stdin=None, stdout=None) -> Path:
     """Numbered picker for a missing --product/--plan (research.md R8)."""
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     names = known(folder).split(", ")
     if not stdin.isatty():
         raise ConfigError(folder, f"--{kind}", f"--{kind} is required without a terminal; available: {known(folder)}")

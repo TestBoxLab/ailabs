@@ -58,6 +58,8 @@ def _banner(rc) -> str:
 
 
 def cmd_run(args) -> int:
+    # Two error formats per contracts/cli.md: `wb run: ...` for picker and
+    # name errors, `config error in <file>: <field>: <why>` for file errors.
     try:
         product_path = _pick_or_flag(args.product, "product")
         plan_path = _pick_or_flag(args.plan, "plan")
@@ -130,10 +132,7 @@ def cmd_grade(args) -> int:
     if run is None:
         print(f"unknown run {args.run_id}", file=sys.stderr)
         return 1
-    cfg = json.loads(run["config_json"])
-    suite_dir = Path(args.suite or cfg.get("tasks_dir") or cfg["suite_dir"])
-    if not suite_dir.is_absolute():
-        suite_dir = config.DEFAULT_CONFIG_DIR.parent / suite_dir  # as resolve() does
+    suite_dir = args.suite or json.loads(run["config_json"])["suite_dir"]
     res = regrade(store, args.run_id, suite_dir)
     print(f"regraded {res['regraded']} episodes, {res['changed']} verdicts changed")
     for k in ("contract_drift", "task_missing", "artifacts_missing"):
