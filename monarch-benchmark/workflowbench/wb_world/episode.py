@@ -9,6 +9,7 @@ Design ref: T0-INGESTION-SPEC.md (Deliverable 1, 4).
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,3 +85,16 @@ def _resolve_clock(frozen_time: str | None, initial: dict[str, Any]) -> datetime
 
 def load_task_file(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text())
+
+
+def load_suite(suite_dir: str | Path) -> list[dict]:
+    paths = sorted(Path(suite_dir).glob("*.json"))
+    if not paths:
+        raise FileNotFoundError(f"no task files in {suite_dir}")
+    return [load_task_file(p) for p in paths]
+
+
+def contract_hash(task: dict) -> str:
+    blob = json.dumps({"task": task.get("task"), "prompt": task.get("prompt"),
+                       "info": task.get("info")}, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]

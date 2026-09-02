@@ -11,10 +11,13 @@ import datetime
 import hashlib
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
+
+from wb_world.episode import contract_hash, load_suite
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
 MODES = ("full-flow", "create-run", "run-only")
@@ -24,6 +27,7 @@ ADAPTERS = ("openai", "openai_responses", "gemini", "anthropic")
 HARNESS_KINDS = ("api", "cli", "scripted", "monarch")
 LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
+DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
 class ConfigError(Exception):
@@ -330,6 +334,7 @@ class RunConfig:
     plan_path: str
     models: dict[str, Model]
     harnesses: dict[str, Harness]
+    tasks_dir: str  # absolute; `plan.tasks` as written stays in the hash
 
     @property
     def attempts_per_competitor(self) -> int:
@@ -341,7 +346,6 @@ class RunConfig:
 
     def _hashed(self) -> dict:
         """Everything the hash covers (research.md R2): guard fields out, secrets by name."""
-        from wb_orchestrator.orchestrator import contract_hash
         plan = asdict(self.plan)
         del plan["cost_ceiling_usd"], plan["approved_by"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
@@ -359,7 +363,8 @@ class RunConfig:
     def config_json(self) -> dict:
         return {**self._hashed(), "product_path": self.product_path, "plan_path": self.plan_path,
                 "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
-                "attempts_total": self.attempts_total}
+                "attempts_total": self.attempts_total,
+                "suite_dir": self.tasks_dir}  # ponytail: old readers (wb grade) key on suite_dir
 
 
 def known(folder) -> str:
@@ -431,7 +436,6 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
     if plan.baseline not in names:
         c.fail("baseline", f"{plan.baseline!r} is not a competitor; have: {', '.join(names)}")
 
-    from wb_orchestrator.orchestrator import load_suite
     tasks_dir = Path(plan.tasks)
     if not tasks_dir.is_absolute():
         tasks_dir = config_dir.parent / tasks_dir  # the workflowbench dir, whatever the cwd
@@ -447,4 +451,36 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
 
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
-                     models=models, harnesses=harnesses)
+                     models=models, harnesses=harnesses, tasks_dir=str(tasks_dir))
+
+
+def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
+    """`smoke-frontier` -> config/plans/smoke-frontier.yaml; a path is used as given."""
+    p = Path(value)
+    if p.suffix or p.is_file():
+        return p
+    folder = Path(config_dir) / f"{kind}s"
+    if not (folder / f"{value}.yaml").is_file():
+        raise ConfigError(folder, f"--{kind}", f"unknown {kind} {value!r}; available: {known(folder)}")
+    return folder / f"{value}.yaml"
+
+
+def pick(kind, folder, stdin=sys.stdin, stdout=sys.stdout) -> Path:
+    """Numbered picker for a missing --product/--plan (research.md R8)."""
+    names = known(folder).split(", ")
+    if not stdin.isatty():
+        raise ConfigError(folder, f"--{kind}", f"--{kind} is required without a terminal; available: {known(folder)}")
+    print(f"{kind.capitalize()}s:", file=stdout)
+    for i, name in enumerate(names, 1):
+        print(f"  {i}) {name}", file=stdout)
+    while True:
+        print(f"Pick a {kind} [1-{len(names)}]: ", end="", file=stdout, flush=True)
+        raw = stdin.readline()
+        if not raw:  # EOF
+            raise ConfigError(folder, f"--{kind}", f"no {kind} chosen; available: {known(folder)}")
+        answer = raw.strip()
+        if answer in names:
+            return Path(folder) / f"{answer}.yaml"
+        if answer.isdigit() and 1 <= int(answer) <= len(names):
+            return Path(folder) / f"{names[int(answer) - 1]}.yaml"
+        print(f"not a choice: {answer!r}", file=stdout)

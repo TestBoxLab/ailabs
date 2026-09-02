@@ -40,6 +40,7 @@ class EpisodeRow(BaseModel):
     contract_sha256: str | None = None
     arm: str                      # e.g. "oracle/scripted", "bare/cli/claude-code@x.y"
     mode: str = "synthetic"
+    test_mode: str | None = None   # the plan's mode: full-flow | create-run | run-only
     agent: str | None = None
     model: str | None = None
     trial: int = 0

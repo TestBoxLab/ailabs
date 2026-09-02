@@ -27,7 +27,8 @@ from runner.schema import EpisodeRow, PhaseMetrics, TokenUsage
 from wb_arms.api_loop import ApiLoopArm, ArmResult, EpisodeTimeout, InfraError
 from wb_arms import providers
 from wb_results.store import Store
-from wb_world.episode import Episode, load_task_file
+from wb_orchestrator import config as config_mod
+from wb_world.episode import Episode, contract_hash, load_suite  # noqa: F401  (re-exported)
 
 MAX_INFRA_RETRIES = 2
 SUITE = "workflowbench-synthetic@0.1"
@@ -39,19 +40,6 @@ class RunKilled(Exception):
 
 class ConfigDrift(Exception):
     pass
-
-
-def load_suite(suite_dir: str | Path) -> list[dict]:
-    paths = sorted(Path(suite_dir).glob("*.json"))
-    if not paths:
-        raise FileNotFoundError(f"no task files in {suite_dir}")
-    return [load_task_file(p) for p in paths]
-
-
-def contract_hash(task: dict) -> str:
-    blob = json.dumps({"task": task.get("task"), "prompt": task.get("prompt"),
-                       "info": task.get("info")}, sort_keys=True, default=str)
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def config_hash(tasks: list[dict], arms: list[str], k: int, timeout_s: float) -> str:
@@ -99,7 +87,40 @@ def build_arm(key: str):
     return arm
 
 
+def build_arm_for(competitor: config_mod.Competitor):
+    """Build the arm a plan competitor names; the arm reports under the competitor's name (R1)."""
+    h = competitor.harness
+    if h.kind == "api":
+        arm = ApiLoopArm(competitor.model.name)
+        arm.provider_key = competitor.model.name
+    elif h.kind == "scripted":
+        arm = _ScriptedAdapter(h.script)
+    elif h.kind == "cli":
+        if h.launcher != "claude-code":
+            raise ValueError(f"launcher {h.launcher!r} is not runnable yet")
+        from wb_arms.cli_claude_code import ClaudeCodeArm
+        arm = ClaudeCodeArm()
+    else:
+        from wb_arms.monarch import MonarchArm
+        arm = MonarchArm("monarch/stock")
+    arm.name = competitor.name
+    return arm
+
+
 class Orchestrator:
+    @classmethod
+    def from_config(cls, store: Store, run_config: config_mod.RunConfig, out_dir: str | Path,
+                    provider_concurrency: int | None = None) -> "Orchestrator":
+        plan = run_config.plan
+        # arms=[] skips the old key validation; competitor names are set below.
+        self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
+                   timeout_s=plan.timeout_s,
+                   provider_concurrency=provider_concurrency or plan.concurrency)
+        self.tasks = run_config.tasks
+        self.arm_keys = [c.name for c in run_config.competitors]
+        self.run_config = run_config
+        return self
+
     def __init__(self, store: Store, suite_dir: str | Path, arms: list[str], k: int,
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None):
@@ -110,6 +131,7 @@ class Orchestrator:
         for a in arms:
             _validate_arm_key(a)
         self.store = store
+        self.run_config: config_mod.RunConfig | None = None
         self.suite_dir = str(suite_dir)
         self.tasks = load_suite(suite_dir)
         self.arm_keys = arms
@@ -125,10 +147,14 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
 
     def _config(self) -> dict:
+        if self.run_config:
+            return self.run_config.config_json
         return {"suite_dir": self.suite_dir, "arms": self.arm_keys, "k": self.k,
                 "timeout_s": self.timeout_s, "n_tasks": len(self.tasks)}
 
     def _hash(self) -> str:
+        if self.run_config:
+            return self.run_config.hash
         return config_hash(self.tasks, self.arm_keys, self.k, self.timeout_s)
 
     def run(self, run_id: str | None = None) -> str:
@@ -149,7 +175,8 @@ class Orchestrator:
         return run_id
 
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]]) -> None:
-        arms = [build_arm(k) for k in self.arm_keys]
+        arms = ([build_arm_for(c) for c in self.run_config.competitors] if self.run_config
+                else [build_arm(k) for k in self.arm_keys])
         threads = []
         for arm in arms:
             work = [(task, trial) for task in self.tasks for trial in range(self.k)
@@ -288,10 +315,17 @@ class Orchestrator:
             # REAL-mode reset (or an auditor) knows this wasn't a clean no-op.
             result.flags.append("partial_writes_before_failure")
 
+        model = getattr(getattr(arm, "provider", None), "model_id", None)
+        test_mode = None
+        if self.run_config:
+            test_mode = self.run_config.plan.mode
+            harness = self.run_config.harnesses[arm.name.rsplit("/", 1)[-1]]
+            if harness.kind == "monarch":
+                model = harness.release
         row = EpisodeRow(
             episode_id=eid, run_id=run_id, task_id=task_id, suite=SUITE,
             contract_sha256=contract_hash(task), arm=arm.name, trial=trial,
-            model=getattr(getattr(arm, "provider", None), "model_id", None),
+            model=model, test_mode=test_mode,
             passed=g["passed"] and termination == "completed",
             assertions_passed=g["assertions_passed"],
             invariant_passed=g["invariant"]["passed"],
