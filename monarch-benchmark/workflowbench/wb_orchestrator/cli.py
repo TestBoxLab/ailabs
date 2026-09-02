@@ -38,6 +38,11 @@ def _print_run_report(store: Store, run_id: str) -> None:
         strict = f"{a['strict_pass_rate']:.2%}" if a["strict_pass_rate"] is not None else "n/a"
         print(f"{arm:<28} {a['passed']:>3}/{a['non_infra']:<3} {strict:>7} {a['infra']:>6} "
               f"{a['cost_usd']:>10.4f} {hit:>9} {a['tokens_cached']:>12,}/{a['tokens_prompt']:<,}")
+    if s["stop_reason"] == "cost_ceiling":
+        print(f"stopped: cost_ceiling (spend US$ {s['spend_usd']:.2f} / "
+              f"ceiling US$ {cfg.get('cost_ceiling_usd', 0):.2f})")
+    elif s["stop_reason"]:
+        print(f"stopped: {s['stop_reason']}")
 
 
 def _pick_or_flag(value, kind) -> Path:
@@ -60,6 +65,8 @@ def _banner(rc) -> str:
 def cmd_run(args) -> int:
     # Two error formats per contracts/cli.md: `wb run: ...` for picker and
     # name errors, `config error in <file>: <field>: <why>` for file errors.
+    # Order matters: resolve (all guards) -> banner -> orchestrator; no arm is
+    # built, and nothing is spent, before the config is fully validated.
     try:
         product_path = _pick_or_flag(args.product, "product")
         plan_path = _pick_or_flag(args.plan, "plan")

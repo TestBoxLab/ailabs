@@ -28,6 +28,7 @@ from wb_arms.api_loop import ApiLoopArm, ArmResult, EpisodeTimeout, InfraError
 from wb_arms import providers
 from wb_results.store import Store
 from wb_orchestrator import config as config_mod
+from wb_orchestrator.config import ConfigError
 from wb_world.episode import Episode, contract_hash, load_suite  # noqa: F401  (re-exported)
 
 MAX_INFRA_RETRIES = 2
@@ -147,6 +148,8 @@ class Orchestrator:
         self._abort = threading.Event()
         self._count_lock = threading.Lock()
         self._thread_errors: list[BaseException] = []
+        self._spent = 0.0            # cumulative cost_usd, carried over on resume
+        self._stop_reason: str | None = None
 
     def _config(self) -> dict:
         if self.run_config:
@@ -173,6 +176,15 @@ class Orchestrator:
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
                 "refusing to resume")
+        if run["stop_reason"] == "cost_ceiling" and self.run_config:
+            spent = self.store.status(run_id)["spend_usd"]
+            ceiling = self.run_config.plan.cost_ceiling_usd
+            if ceiling <= spent:
+                raise ConfigError(self.run_config.plan_path, "cost_ceiling_usd",
+                                  f"run {run_id} stopped on cost ceiling: spend US$ {spent:.2f}, "
+                                  f"ceiling US$ {ceiling:.2f}; raise cost_ceiling_usd in the plan to continue")
+            self._spent = spent  # the ceiling counts cumulative spend, not spend since resume
+            self.store.set_stop_reason(run_id, None)
         self._execute(run_id, skip=self.store.completed_identities(run_id))
         return run_id
 
@@ -198,13 +210,21 @@ class Orchestrator:
             self._abort.set()
             for t in threads:
                 t.join()
+            self.store.set_stop_reason(run_id, "interrupted")
             raise RunKilled(
                 f"run {run_id} interrupted after {self._recorded} episodes; "
                 f"resume with: wb resume {run_id}") from None
         if self._thread_errors:
             # A crashed episode worker must never let the run be marked
             # finished with rows silently missing — fail the run loudly.
+            self.store.set_stop_reason(run_id, "worker_error")
             raise self._thread_errors[0]
+        if self._stop_reason == "cost_ceiling":
+            self.store.set_stop_reason(run_id, "cost_ceiling")
+            raise RunKilled(
+                f"run {run_id} stopped: spend US$ {self._spent:.2f} exceeds ceiling "
+                f"US$ {self.run_config.plan.cost_ceiling_usd:.2f} after {self._recorded} attempts; "
+                f"raise cost_ceiling_usd in the plan and run: wb resume {run_id}")
         if self._abort.is_set():
             raise RunKilled(f"run {run_id} killed after {self._recorded} episodes")
         self.store.finish_run(run_id)
@@ -351,7 +371,12 @@ class Orchestrator:
 
         with self._count_lock:
             self._recorded += 1
+            self._spent += row.cost_usd or 0.0
             if self._stop_after is not None and self._recorded >= self._stop_after:
+                self._abort.set()
+            if (self.run_config and self._spent > self.run_config.plan.cost_ceiling_usd
+                    and self._stop_reason is None):
+                self._stop_reason = "cost_ceiling"
                 self._abort.set()
 
 

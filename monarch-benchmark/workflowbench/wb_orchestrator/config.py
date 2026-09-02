@@ -2,7 +2,7 @@
 
 Loaders do single-file checks (data-model.md validation rules 1-2);
 `resolve` joins a product and a plan into a `RunConfig` and applies the
-cross-file rules 3-8 and 10. Every error names the file and the field.
+cross-file rules 3-10. Every error names the file and the field.
 Environment variables are referenced by name only; values are never stored.
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ ADAPTERS = ("openai", "openai_responses", "gemini", "anthropic")
 HARNESS_KINDS = ("api", "cli", "scripted", "monarch")
 LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
+SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without approved_by (rule 9)
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
@@ -364,6 +365,7 @@ class RunConfig:
         return {**self._hashed(), "product_path": self.product_path, "plan_path": self.plan_path,
                 "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
                 "attempts_total": self.attempts_total,
+                "cost_ceiling_usd": self.plan.cost_ceiling_usd,  # not hashed; wb status reads it
                 "suite_dir": self.tasks_dir}  # ponytail: old readers (wb grade) key on suite_dir
 
 
@@ -373,11 +375,10 @@ def known(folder) -> str:
 
 
 def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:
-    """Join a product and a plan; apply validation rules 3-8 and 10 (data-model.md).
+    """Join a product and a plan; apply validation rules 3-10 (data-model.md).
 
     Models and harnesses are read from `config_dir` (default: the folder above
-    the product file). `env` is only asked whether a name is set. Rule 9, the
-    smoke-scale guard, is applied by the caller. A relative `plan.tasks` is
+    the product file). `env` is only asked whether a name is set. A relative `plan.tasks` is
     taken from the folder above `config_dir`; the hash keeps the string as written.
     """
     product_path, plan_path = Path(product_path), Path(plan_path)
@@ -448,6 +449,11 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
             if service not in product.services:
                 raise ConfigError(product_path, "services",
                                   f"task {t['task']} touches {service!r}, which {product_path} does not list")
+
+    per_competitor = len(tasks) * plan.repetitions
+    if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
+        c.fail("approved_by", f"{per_competitor} attempts per competitor exceed smoke scale "
+                              f"({SMOKE_SCALE_ATTEMPTS}); set approved_by")
 
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
