@@ -5,7 +5,7 @@ contract hashes it covers.
 
 The gate is code: audiences.yaml maps audience -> arm allowlist; a disallowed
 arm in the input raises GateError, never warns. The public-rung2 audience
-strips bare/* and monarch/lab@* at query level (arms are filtered before any
+strips everything but `monarch` at query level (arms are filtered before any
 stat is computed, not by editing rendered output) and swaps exact dollars for
 cost ratios (DESIGN descope: no external cost-per-workflow dollars).
 """
@@ -79,8 +79,8 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
         raise GateError(
             f"audience {audience!r} allows none of the run's arms {all_arms}; "
             "nothing to render")
-    if audience != "internal" and any(a.startswith("monarch/lab") for a in arms):
-        raise GateError("monarch/lab@* may never render outside the internal audience")
+    if audience != "internal" and any(a.startswith("monarch-lab") for a in arms):
+        raise GateError("monarch-lab* may never render outside the internal audience")
 
     k = k or config.get("k") or 1
     show_dollars = audience == "internal"
@@ -161,7 +161,7 @@ def render_md(report: dict[str, Any]) -> str:
              "",
              f"audience: **{report['audience']}** · suite `{report['suite']}` · "
              f"config `{report['config_hash']}` · k={report['k']}"]
-    if report["audience"] == "internal" and any(a.startswith("monarch/lab") for a in report["arms"]):
+    if report["audience"] == "internal" and any(a.startswith("monarch-lab") for a in report["arms"]):
         lines.append("\n> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**")
     if report["arms_stripped_by_gate"]:
         if report["audience"] == "internal":

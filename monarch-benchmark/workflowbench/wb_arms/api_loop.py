@@ -293,7 +293,7 @@ class _OpenAIResponsesAdapter:
         self.tools = tools
         self.client = openai.OpenAI(api_key=key, base_url=provider.base_url,
                                     timeout=timeout, max_retries=0)
-        self.effort = os.environ.get("WB_OPENAI_EFFORT", "xhigh")
+        self.effort = os.environ.get("WB_OPENAI_EFFORT") or provider.effort
         self.instructions = ""
 
     def start(self, system: str, brief: str) -> list[dict]:
@@ -363,9 +363,9 @@ class _AnthropicAdapter:
         self.provider = provider
         self.tools = tools
         self.client = anthropic.Anthropic(api_key=key, timeout=timeout, max_retries=0)
-        # Monarch runs its authoring brain at xhigh (RECIPE_BRAIN_EFFORT); the
-        # control arm matches it unless overridden for an ablation.
-        self.effort = os.environ.get("WB_ANTHROPIC_EFFORT", "xhigh")
+        # The model file sets the effort (Monarch's brain runs xhigh); the env
+        # override is for ablations.
+        self.effort = os.environ.get("WB_ANTHROPIC_EFFORT") or provider.effort
         self.system: list[dict] = []
 
     def start(self, system: str, brief: str) -> list[dict]:

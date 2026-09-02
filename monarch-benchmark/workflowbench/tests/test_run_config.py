@@ -134,3 +134,34 @@ def test_banner_matches_contract(site):
         "plan      smoke-frontier  mode=create-run  audience=internal",
         f"tasks     2 in {(site / 'tasks').as_posix()}/   repetitions 2   competitors 1   attempts 4",
         "ceiling   US$ 5.00   approved_by: —"]
+
+
+# -- T037: cli harness env reaches the subprocess ------------------------------
+
+def test_build_arm_for_renders_cli_env_from_model(site, monkeypatch):
+    import subprocess
+    from wb_arms import cli_claude_code
+    from wb_orchestrator.orchestrator import build_arm_for
+    from wb_world.episode import Episode, load_suite
+    monkeypatch.setattr(cli_claude_code, "claude_version", lambda: "0.0-test")
+    harness = config.load_harness(site / "config/harnesses/claude-code.yaml")
+    harness.env["WB_KEY_ENV"] = "{key_env}"
+    harness.env["WB_PROVIDER"] = "{provider}"
+    model = config.load_model(site / "config/models/claude-opus-4-8.yaml")
+    arm = build_arm_for(config.Competitor("claude-opus-4-8/claude-code", model, harness))
+    assert arm.name == "claude-opus-4-8/claude-code"
+    assert arm.env == {"ANTHROPIC_MODEL": "claude-opus-4-8", "WB_KEY_ENV": "ANTHROPIC_API_KEY",
+                       "WB_PROVIDER": "anthropic"}
+
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured.update(kw)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(cli_claude_code.shutil, "which", lambda _: "claude")
+    monkeypatch.setattr(cli_claude_code.subprocess, "run", fake_run)
+    arm.workdir_root = site / "cc-work"
+    arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
+    assert captured["env"]["ANTHROPIC_MODEL"] == "claude-opus-4-8"
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-test"

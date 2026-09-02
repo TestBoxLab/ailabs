@@ -514,3 +514,72 @@ def test_config_json_has_no_secrets(site):
     assert j["attempts_total"] == 12 and "cost_ceiling_usd" not in j["plan"] and "approved_by" not in j["plan"]
     assert j["models"]["claude-opus-4-8"]["prices_verified"] == "2026-09-02"
     assert j["tasks"] == sorted(j["tasks"]) and len(j["tasks"]) == 2
+
+
+# ---------------------------------------------------------------- T034/T039: registry from files
+
+def test_load_models_matches_the_seven_shipped_files():
+    from wb_arms import providers
+    got = providers.load_models(config.DEFAULT_CONFIG_DIR / "models")
+    assert sorted(got) == ["claude-opus-4-8", "gemini-3.7-flash", "glm-5.3", "gpt-5.6-sol",
+                           "gpt-5.6-terra", "kimi-k3", "kimi-k3-fireworks"]
+    want = {
+        "glm-5.3": dict(model_id="glm-5.3", key_env="ZAI_API_KEY", adapter="openai",
+                        base_url="https://api.z.ai/api/paas/v4", price_in=1.40, price_cached=0.26,
+                        price_out=4.40, price_cache_write=1.40, cache_min_prompt_tokens=0,
+                        header_fallbacks=()),
+        "kimi-k3": dict(model_id="kimi-k3", key_env="MOONSHOT_API_KEY", adapter="openai",
+                        base_url="https://api.moonshot.ai/v1", price_in=3.00, price_cached=0.30,
+                        price_out=15.00, price_cache_write=3.00, cache_min_prompt_tokens=256,
+                        header_fallbacks=()),
+        "kimi-k3-fireworks": dict(model_id="accounts/fireworks/models/kimi-k3",
+                                  key_env="FIREWORKS_API_KEY", adapter="openai",
+                                  base_url="https://api.fireworks.ai/inference/v1", price_in=3.00,
+                                  price_cached=0.30, price_out=15.00, price_cache_write=3.00,
+                                  cache_min_prompt_tokens=0,
+                                  header_fallbacks=("fireworks-cached-prompt-tokens",)),
+        "claude-opus-4-8": dict(model_id="claude-opus-4-8", key_env="ANTHROPIC_API_KEY",
+                                adapter="anthropic", base_url=None, price_in=5.00, price_cached=0.50,
+                                price_out=25.00, price_cache_write=6.25, cache_min_prompt_tokens=1024,
+                                header_fallbacks=()),
+        "gpt-5.6-sol": dict(model_id="gpt-5.6-sol", key_env="OPENAI_API_KEY", adapter="openai_responses",
+                            base_url=None, price_in=4.00, price_cached=0.40, price_out=20.00,
+                            price_cache_write=4.00, cache_min_prompt_tokens=0, header_fallbacks=()),
+        "gpt-5.6-terra": dict(model_id="gpt-5.6-terra", key_env="OPENAI_API_KEY", adapter="openai_responses",
+                              base_url=None, price_in=2.00, price_cached=0.20, price_out=12.00,
+                              price_cache_write=2.00, cache_min_prompt_tokens=0, header_fallbacks=()),
+        "gemini-3.7-flash": dict(model_id="gemini-3.7-flash", key_env="GEMINI_API_KEY", adapter="gemini",
+                                 base_url=None, price_in=0.75, price_cached=0.075, price_out=3.75,
+                                 price_cache_write=0.75, cache_min_prompt_tokens=4096, header_fallbacks=()),
+    }
+    for key, fields in want.items():
+        p = got[key]
+        assert isinstance(p, providers.Provider) and p.key == key and p.effort == "xhigh"
+        for f, v in fields.items():
+            assert getattr(p, f) == v, (key, f, getattr(p, f), v)
+
+
+@pytest.mark.parametrize("provider,adapter", [("anthropic", "anthropic"), ("openai", "openai_responses"),
+                                              ("google", "gemini"), ("zai", "openai"), ("moonshot", "openai")])
+def test_load_models_default_adapter_by_provider(tmp_path, provider, adapter):
+    from wb_arms import providers
+    write(tmp_path, edit(edit(MODEL_OPENAI, "provider", provider), "name", "m"), stem="m")
+    assert providers.load_models(tmp_path)["m"].adapter == adapter
+
+
+def test_load_models_explicit_adapter_and_effort(tmp_path):
+    from wb_arms import providers
+    write(tmp_path, edit(MODEL_OPENAI_COMPAT, "effort", "low"))
+    p = providers.load_models(tmp_path)["kimi-k3"]
+    assert p.adapter == "openai" and p.effort == "low"
+
+
+def test_registry_is_the_seven_files_and_doctor_resolves_through_get(monkeypatch):
+    from wb_arms import providers
+    from wb_orchestrator import doctor
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert sorted(providers.REGISTRY) == sorted(p.stem for p in (config.DEFAULT_CONFIG_DIR / "models").glob("*.yaml"))
+    assert providers.get("claude-opus-4-8").model_id == "claude-opus-4-8"
+    report = doctor.check_provider("claude-opus-4-8")  # no key: fails before any call
+    assert report["provider"] == "claude-opus-4-8" and report["error"] == "ANTHROPIC_API_KEY not set"
+    assert "unknown provider" in doctor.check_provider("nope")["error"]

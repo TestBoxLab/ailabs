@@ -100,7 +100,11 @@ def build_arm_for(competitor: config_mod.Competitor):
         if h.launcher != "claude-code":
             raise ValueError(f"launcher {h.launcher!r} is not runnable yet")
         from wb_arms.cli_claude_code import ClaudeCodeArm
-        arm = ClaudeCodeArm()
+        m = competitor.model
+        rendered = {k: v.format(model=m.name if m else "", provider=m.provider if m else "",
+                                key_env=m.key_env if m else "")
+                    for k, v in (h.env or {}).items()}
+        arm = ClaudeCodeArm(env=rendered)
     else:
         from wb_arms.monarch import MonarchArm
         arm = MonarchArm("monarch/stock")
