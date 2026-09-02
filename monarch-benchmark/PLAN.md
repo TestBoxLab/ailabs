@@ -143,6 +143,17 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [x] A6 Smoke `smoke-frontier-001` (2 Sep): 10 tasks × k=2 × {oracle, claude-opus-4-8, gpt-5.6-sol}, 60 episodes, US$ 1.93 total. Opus 90% (US$ 1.39, cache 77%), GPT-5.6 Sol 100% (US$ 0.54, cache 75%), no infra errors, no cache-degraded flags. Report: `workflowbench/out/report-smoke-frontier-001-internal.md`.
 - [ ] A7 Full round on `corpus/imported-simple` (200 tasks), k=2, internal report. → **D3, D4, D5**
 
+### WS-F · CI and corpus contracts (added 2 Sep, after the smoke)
+
+- [x] F1 Repository: work moved into the clone of `TestBoxLab/ailabs` (`ailabs/monarch-benchmark/`); two local commits, nothing pushed yet. **The GitHub repo is public**; decide visibility before the first push.
+- [x] F2 `.github/workflows/ci.yml`: tests + corpus validation on every push/PR, no keys, free.
+- [x] F3 `.github/workflows/smoke.yml`: manual paid smoke (10 tasks, k ≤ 2 enforced), report as artifact. Weekly schedule present but commented out. Needs repo secrets.
+- [x] F4 `wb corpus declare`: derives `expected_changes` from assertion types and `allowed_changes` from a short per-service side-effect list (`wb_orchestrator/declare.py`). Reproduces all 10 manual pilot contracts exactly; offline regrade of smoke-frontier-001 flips only the two `closed_won` Opus verdicts to pass.
+- [x] F5 Corpus `imported-simple` declared in place (200/200, 0 unmapped types); no-op and validation green.
+- [ ] F6 Pilot `tasks/` still carry Lucas's manual contracts (missing the Salesforce close pair). Replace with the derived ones after Lucas agrees; contract hashes change.
+- [ ] F7 Scripted oracle covers only Salesforce field updates: 184 of 200 corpus tasks have no oracle check in CI. Extend the oracle per assertion type, or accept no-op + smoke as the guard.
+- [ ] F8 Slack post from the smoke workflow (needs a webhook secret).
+
 ### WS-B · Monarch on the simulated target, three modes
 
 - [ ] B1 Bring up the Monarch stack locally (`just dev`); confirm workflow creation works with Bedrock from this machine.
@@ -193,10 +204,13 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 2 Sep 2026 | Knowledge base for the simulated apps comes from an OpenAPI document via FD's `api_spec` discovery (full flow) or its seed generator (create + run). No hand-insertion. | from code |
 | 2 Sep 2026 | GPT competitors use the Responses API: chat-completions rejects function tools when reasoning is on, and reasoning off would be an unfair control against Opus at xhigh. Effort `xhigh` on both. | from doctor |
 | 2 Sep 2026 | Full rounds cost real money: only smoke scale (10 tasks, k=2) without explicit approval of the specific run. | Carlos |
+| 2 Sep 2026 | Code lives in `TestBoxLab/ailabs` under `monarch-benchmark/`; no separate repo. | Carlos |
+| 2 Sep 2026 | Corpus invariants are derived mechanically from assertion types plus a reviewed side-effect list, not hand-written per task. | Carlos |
 | 2 Sep 2026 | Repo language: English for every file; conversation in Portuguese. Plain language, no internal jargon in shared docs. | Carlos |
 
 ## 5. Open questions
 
+- **Repo visibility:** `TestBoxLab/ailabs` is public. Specs contain vendor legal notes and internal names. Make it private, or scrub, before pushing. (Carlos)
 - **Task contract gap found by the smoke** (`simple.sf_opp_closed_won`): Opus set `is_closed`/`is_won` alongside the stage, which real Salesforce does automatically; the simulated Salesforce does not, and the contract does not allow those fields, so the invariant fails. GPT only set the stage and passed. Proposed fix: add `is_closed` and `is_won` on that opportunity to `allowed_changes` (changes the contract hash; old rows will not regrade). Not applied: task edits after seeing results need Lucas's sign-off, and his `evalrepair` patches may already cover it. (Carlos + Lucas)
 
 - Lucas's AutomationBench patches (`evalrepair.10`): where are they, and are they needed for the 200-task corpus? (Lucas)

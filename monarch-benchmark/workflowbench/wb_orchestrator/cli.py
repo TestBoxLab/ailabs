@@ -127,6 +127,14 @@ def cmd_corpus(args) -> int:
         v = corpus_mod.validate_corpus(args.dir)
         print(corpus_mod.format_validation(v, verbose=args.verbose))
         return 0 if v["ok"] else 1
+    if args.corpus_cmd == "declare":
+        from wb_orchestrator.declare import declare_dir
+        r = declare_dir(args.dir, args.out, overwrite=args.overwrite)
+        print(f"declared {r['declared']} tasks, {r['already_declared']} already declared, "
+              f"{len(r['unmapped'])} with unmapped assertion types")
+        for t, types in r["unmapped"].items():
+            print(f"  ! {t}: {types}")
+        return 0 if not r["unmapped"] else 1
     return 2
 
 
@@ -188,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
     cv = csub.add_parser("validate")
     cv.add_argument("dir")
     cv.add_argument("--verbose", action="store_true")
+    cd = csub.add_parser("declare", help="derive expected/allowed changes from assertions")
+    cd.add_argument("dir")
+    cd.add_argument("--out", default=None, help="write copies here; default: in place (needs --overwrite)")
+    cd.add_argument("--overwrite", action="store_true", help="rewrite tasks in place (contract hashes change)")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("legacy-import")
