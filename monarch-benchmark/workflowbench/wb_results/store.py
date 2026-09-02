@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS runs (
   suite TEXT NOT NULL,
   config_json TEXT NOT NULL,
   started TEXT NOT NULL,
-  finished TEXT
+  finished TEXT,
+  stop_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS episodes (
   episode_id TEXT PRIMARY KEY,

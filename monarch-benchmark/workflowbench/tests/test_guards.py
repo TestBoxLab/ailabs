@@ -165,6 +165,26 @@ def test_resume_counts_spend_before_the_interruption(site, tmp_path, mock_server
     assert store.run("run-partial")["stop_reason"] == "cost_ceiling"
 
 
+def test_resume_refused_when_spend_meets_ceiling_whatever_stopped_it(site, tmp_path, mock_server):
+    _mock_site(site)
+    _set_ceiling(site, 100)
+    store = Store(tmp_path / "wb.sqlite3")
+    orch = Orchestrator.from_config(store, _resolve(site), tmp_path / "out")
+    orch._stop_after = 1
+    with pytest.raises(RunKilled):
+        orch.run("run-stopped")
+    spent = store.status("run-stopped")["spend_usd"]
+    n_rows = len(store.episodes(run="run-stopped")["rows"])
+    assert store.run("run-stopped")["stop_reason"] is None  # not a ceiling stop
+
+    _set_ceiling(site, spent / 2)
+    with pytest.raises(ConfigError) as exc:
+        Orchestrator.from_config(store, _resolve(site), tmp_path / "out").resume("run-stopped")
+    msg = str(exc.value)
+    assert f"spend US$ {spent:.2f}" in msg and f"ceiling US$ {spent / 2:.2f}" in msg
+    assert len(store.episodes(run="run-stopped")["rows"]) == n_rows
+
+
 def test_worker_error_sets_stop_reason(site, tmp_path, mock_server, monkeypatch):
     _mock_site(site)
 
