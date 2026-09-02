@@ -1,5 +1,9 @@
-"""Loader and validator for the four config kinds (single files, no cross-file resolution)."""
+"""Tests for wb_orchestrator.config: single-file loading, cross-file resolve, run hash."""
 import datetime
+import json
+import re
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -123,7 +127,7 @@ def edit(text, key, value=None):
     """Replace the top-level `key:` block (or drop it when value is None)."""
     lines, skipping = [], False
     for l in text.splitlines():
-        if l.startswith(f"{key}:"):
+        if re.match(rf"{re.escape(key)}:(\s|$)", l):
             skipping = True
         elif skipping and l[:1] in (" ", "-"):
             continue  # indented continuation of the dropped block
@@ -263,3 +267,233 @@ def test_top_level_must_be_mapping(tmp_path):
     p = tmp_path / "api.yaml"
     p.write_text("- just\n- a list\n")
     check_error(config.load_harness, p, "<root>")
+
+
+def test_malformed_yaml(tmp_path):
+    p = tmp_path / "api.yaml"
+    p.write_text("a: [")
+    assert "cannot read" in check_error(config.load_harness, p, "<root>")
+
+
+# ---------------------------------------------------------------- resolve
+
+MODEL_OPENAI = """\
+name: gpt-5.6-sol
+provider: openai
+model: gpt-5.6-sol
+effort: xhigh
+usd_per_million: {input: 4.00, cached: 0.40, output: 20.00}
+key_env: OPENAI_API_KEY
+"""
+
+HARNESS_CODEX = """\
+name: codex
+kind: cli
+launcher: codex
+accepts: [openai]
+runnable: false
+command: codex exec
+"""
+
+TASKS = Path(__file__).resolve().parent.parent / "tasks"
+TASK_FILES = ("simple.sf_opp_closed_won.json", "simple.email_sf_contact_city_update.json")
+ENV = {"ANTHROPIC_API_KEY": "sk-ant-secret", "OPENAI_API_KEY": "sk-oai-secret", "MONARCH_TOKEN": "mon-secret"}
+AUDIENCES = {"internal": ["*"], "public-rung2": ["monarch"]}
+
+
+@pytest.fixture
+def site(tmp_path):
+    """A config tree and a task dir laid out like the shipped ones."""
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    for name in TASK_FILES:
+        shutil.copy(TASKS / name, tasks / name)
+    plan = edit(PLAN, "tasks", f'"{tasks.as_posix()}"')
+    for sub, texts in {"products": [PRODUCT], "models": [MODEL, MODEL_OPENAI_COMPAT, MODEL_OPENAI],
+                       "harnesses": [HARNESS_API, HARNESS_CLI, HARNESS_SCRIPTED, HARNESS_MONARCH, HARNESS_CODEX],
+                       "plans": [plan]}.items():
+        (tmp_path / "config" / sub).mkdir(parents=True)
+        for t in texts:
+            write(tmp_path / "config" / sub, t)
+    return tmp_path
+
+
+def paths(site):
+    return site / "config/products/simulated-apps.yaml", site / "config/plans/smoke-frontier.yaml"
+
+
+def resolve(site, env=ENV, audiences=AUDIENCES):
+    return config.resolve(*paths(site), env=env, audiences=audiences)
+
+
+def rewrite(site, sub, text, key, value=None):
+    """Rewrite one config file with a top-level key changed."""
+    return write(site / "config" / sub, edit(text, key, value))
+
+
+def plan_text(site):
+    return (site / "config/plans/smoke-frontier.yaml").read_text()
+
+
+def check_resolve_error(site, path, field):
+    return check_error(lambda _: resolve(site), path, field)
+
+
+def test_resolve_names_and_counts(site):
+    rc = resolve(site)
+    assert [c.name for c in rc.competitors] == ["oracle", "claude-opus-4-8/api", "gpt-5.6-sol/api"]
+    assert rc.competitors[0].model is None and rc.competitors[0].harness.script == "oracle"
+    assert rc.competitors[1].model.name == "claude-opus-4-8" and rc.competitors[1].harness.kind == "api"
+    assert [t["task"] for t in rc.tasks] == ["simple.email_sf_contact_city_update", "simple.sf_opp_closed_won"]
+    assert rc.attempts_per_competitor == 4 and rc.attempts_total == 12
+    assert set(rc.models) == {"claude-opus-4-8", "gpt-5.6-sol"} and set(rc.harnesses) == {"oracle", "api"}
+    assert rc.product.name == "simulated-apps" and rc.plan.name == "smoke-frontier"
+
+
+def test_resolve_rule3_missing_env(site):
+    env = {k: v for k, v in ENV.items() if k != "OPENAI_API_KEY"}
+    with pytest.raises(ConfigError) as exc:
+        resolve(site, env=env)
+    assert exc.value.path == str(site / "config/models/gpt-5.6-sol.yaml") and exc.value.field == "key_env"
+    assert "OPENAI_API_KEY" in str(exc.value)
+
+
+def runnable_monarch(site, modes="[full-flow, create-run, run-only]"):
+    text = edit(HARNESS_MONARCH, "runnable", "true").replace(
+        "modes: [full-flow, create-run, run-only]", f"modes: {modes}")
+    write(site / "config/harnesses", text)
+    write(site / "config/plans", plan_text(site).replace("  - {harness: oracle}\n", "  - {harness: monarch}\n"))
+
+
+def test_resolve_rule3_missing_credential_env(site):
+    runnable_monarch(site)
+    env = {k: v for k, v in ENV.items() if k != "MONARCH_TOKEN"}
+    with pytest.raises(ConfigError) as exc:
+        resolve(site, env=env)
+    assert exc.value.path == str(site / "config/harnesses/monarch.yaml") and exc.value.field == "credential_env"
+
+
+def test_resolve_rule4_mode_unsupported_by_product(site):
+    rewrite(site, "products", PRODUCT, "modes", "[full-flow]")
+    msg = check_resolve_error(site, paths(site)[1], "mode")
+    assert "create-run" in msg and "simulated-apps.yaml" in msg
+
+
+def test_resolve_rule4_mode_unsupported_by_monarch_harness(site):
+    runnable_monarch(site, modes="[full-flow]")
+    msg = check_resolve_error(site, paths(site)[1], "competitors[0].harness")
+    assert "create-run" in msg
+
+
+def test_resolve_rule5_unknown_model(site):
+    write(site / "config/plans", plan_text(site).replace("model: gpt-5.6-sol", "model: gpt-6"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[2].model")
+    assert "unknown model 'gpt-6'" in msg and "known: claude-opus-4-8, gpt-5.6-sol, kimi-k3" in msg
+
+
+def test_resolve_rule5_unknown_harness(site):
+    write(site / "config/plans", plan_text(site).replace("{harness: oracle}", "{harness: magic}"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[0].harness")
+    assert "unknown harness 'magic'" in msg and "known:" in msg
+
+
+def test_resolve_rule5_harness_rejects_provider(site):
+    write(site / "config/plans", plan_text(site).replace("{model: gpt-5.6-sol, harness: api}",
+                                                          "{model: gpt-5.6-sol, harness: claude-code}"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[2].model")
+    assert "openai" in msg and "claude-code" in msg
+
+
+def test_resolve_rule5_model_given_to_none_harness(site):
+    write(site / "config/plans", plan_text(site).replace("{harness: oracle}", "{model: kimi-k3, harness: oracle}"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[0].model")
+    assert "no model" in msg
+
+
+def test_resolve_rule5_model_missing_for_api_harness(site):
+    write(site / "config/plans", plan_text(site).replace("{harness: oracle}", "{harness: api}"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[0].model")
+    assert "needs a model" in msg
+
+
+def test_resolve_rule6_harness_not_runnable(site):
+    write(site / "config/plans", plan_text(site).replace("{model: gpt-5.6-sol, harness: api}",
+                                                          "{model: gpt-5.6-sol, harness: codex}"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[2].harness")
+    assert "not runnable" in msg
+
+
+def test_resolve_rule7_duplicate_competitor(site):
+    write(site / "config/plans", plan_text(site).replace("  - {harness: oracle}\n",
+                                                          "  - {harness: oracle}\n  - {harness: oracle}\n"))
+    msg = check_resolve_error(site, paths(site)[1], "competitors[1]")
+    assert "duplicate" in msg and "'oracle'" in msg
+
+
+def test_resolve_rule7_baseline_absent(site):
+    write(site / "config/plans", edit(plan_text(site), "baseline", "kimi-k3/api"))
+    msg = check_resolve_error(site, paths(site)[1], "baseline")
+    assert "kimi-k3/api" in msg and "oracle, claude-opus-4-8/api, gpt-5.6-sol/api" in msg
+
+
+def test_resolve_rule8_task_service_outside_product(site):
+    rewrite(site, "products", PRODUCT, "services", "[salesforce]")
+    msg = check_resolve_error(site, paths(site)[0], "services")
+    assert "simple.email_sf_contact_city_update" in msg and "'gmail'" in msg and "simulated-apps.yaml" in msg
+
+
+def test_resolve_rule10_unknown_audience(site):
+    write(site / "config/plans", edit(plan_text(site), "audience", "press"))
+    msg = check_resolve_error(site, paths(site)[1], "audience")
+    assert "'press'" in msg and "internal" in msg
+
+
+def test_resolve_missing_task_dir(site):
+    write(site / "config/plans", edit(plan_text(site), "tasks", f'"{(site / "nowhere").as_posix()}"'))
+    check_resolve_error(site, paths(site)[1], "tasks")
+
+
+# ---------------------------------------------------------------- hash
+
+def test_hash_changes_with_experimental_inputs(site):
+    h0 = resolve(site).hash
+    assert re.fullmatch(r"[0-9a-f]{16}", h0)
+    assert resolve(site).hash == h0  # deterministic
+
+    write(site / "config/models", MODEL_OPENAI.replace("cached: 0.40", "cached: 0.45"))
+    h_price = resolve(site).hash
+    write(site / "config/models", MODEL_OPENAI)
+
+    write(site / "config/harnesses", edit(HARNESS_API, "description", "Tweaked."))
+    h_harness = resolve(site).hash
+    write(site / "config/harnesses", HARNESS_API)
+
+    rewrite(site, "products", PRODUCT, "description", "Tweaked.")
+    h_product = resolve(site).hash
+    write(site / "config/products", PRODUCT)
+
+    write(site / "config/plans", edit(plan_text(site), "timeout_s", "601"))
+    h_timeout = resolve(site).hash
+    assert len({h0, h_price, h_harness, h_product, h_timeout}) == 5
+
+
+def test_hash_ignores_guard_fields(site):
+    h0 = resolve(site).hash
+    write(site / "config/plans", edit(plan_text(site), "cost_ceiling_usd", "500"))
+    assert resolve(site).hash == h0
+    write(site / "config/plans", edit(plan_text(site), "approved_by", "carlos"))
+    assert resolve(site).hash == h0
+
+
+def test_config_json_has_no_secrets(site):
+    rc = resolve(site)
+    blob = json.dumps(rc.config_json)  # must be plain JSON (dates as strings)
+    for secret in ENV.values():
+        assert secret not in blob
+    assert "ANTHROPIC_API_KEY" in blob and "OPENAI_API_KEY" in blob  # names only
+    j = rc.config_json
+    assert j["product_path"] == str(paths(site)[0]) and j["plan_path"] == str(paths(site)[1])
+    assert j["tasks_dir"] == rc.plan.tasks and j["n_tasks"] == 2 and j["mode"] == "create-run"
+    assert j["attempts_total"] == 12 and "cost_ceiling_usd" not in j["plan"] and "approved_by" not in j["plan"]
+    assert j["models"]["claude-opus-4-8"]["prices_verified"] == "2026-09-02"
+    assert j["tasks"] == sorted(j["tasks"]) and len(j["tasks"]) == 2

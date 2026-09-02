@@ -1,13 +1,17 @@
 """Load and validate the four config kinds: products, models, harnesses, plans.
 
-Single-file checks only (data-model.md validation rules 1-2). Cross-file
-resolution (models named by plans exist, env vars set, ...) lives elsewhere.
-Every error names the file and the field.
+Loaders do single-file checks (data-model.md validation rules 1-2);
+`resolve` joins a product and a plan into a `RunConfig` and applies the
+cross-file rules 3-8 and 10. Every error names the file and the field.
+Environment variables are referenced by name only; values are never stored.
 """
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass, field
+import hashlib
+import json
+import os
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
@@ -131,6 +135,11 @@ class _Checker:
             if k not in self.data:
                 self.fail(k, "required key missing")
 
+    def require(self, key, types, **kw):
+        if key not in self.data:
+            self.fail(key, "required key missing")
+        return self.get(key, types, **kw)
+
     def get(self, key, types, default=None, enum=None, minimum=None, strict=False):
         """Typed lookup. `types` is a type or tuple; bool never passes as int."""
         if key not in self.data:
@@ -174,7 +183,7 @@ def _read(path, kind):
     if not isinstance(data, dict):
         raise ConfigError(path, "<root>", f"{kind} file must be a mapping")
     c = _Checker(path, data)
-    name = c.get("name", str) if "name" in data else c.fail("name", "required key missing")
+    name = c.require("name", str)
     if name != path.stem:
         c.fail("name", f"must equal the file stem {path.stem!r}; got {name!r}")
     return c
@@ -242,7 +251,7 @@ _HARNESS_KEYS = {
 
 def load_harness(path) -> Harness:
     c = _read(path, "harness")
-    kind = c.get("kind", str, enum=HARNESS_KINDS) if "kind" in c.data else c.fail("kind", "required key missing")
+    kind = c.require("kind", str, enum=HARNESS_KINDS)
     req, opt = _HARNESS_KEYS[kind]
     c.keys(("name", "kind", "accepts", *req), ("runnable", "description", *opt))
     accepts = c.data["accepts"]
@@ -300,3 +309,137 @@ def load_plan(path) -> Plan:
         approved_by=approved,
         description=c.get("description", str),
     )
+
+
+# ---------------------------------------------------------------- resolve
+
+@dataclass
+class Competitor:
+    name: str  # "model/harness", or the harness name alone
+    model: Model | None
+    harness: Harness
+
+
+@dataclass
+class RunConfig:
+    product: Product
+    plan: Plan
+    competitors: list[Competitor]
+    tasks: list[dict]
+    product_path: str
+    plan_path: str
+    models: dict[str, Model]
+    harnesses: dict[str, Harness]
+
+    @property
+    def attempts_per_competitor(self) -> int:
+        return len(self.tasks) * self.plan.repetitions
+
+    @property
+    def attempts_total(self) -> int:
+        return self.attempts_per_competitor * len(self.competitors)
+
+    def _hashed(self) -> dict:
+        """Everything the hash covers (research.md R2): guard fields out, secrets by name."""
+        from wb_orchestrator.orchestrator import contract_hash
+        plan = asdict(self.plan)
+        del plan["cost_ceiling_usd"], plan["approved_by"]
+        d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
+             "product": asdict(self.product), "plan": plan,
+             "models": {k: asdict(v) for k, v in self.models.items()},
+             "harnesses": {k: asdict(v) for k, v in self.harnesses.items()}}
+        return json.loads(json.dumps(d, default=str))  # dates -> ISO strings
+
+    @property
+    def hash(self) -> str:
+        blob = json.dumps(self._hashed(), sort_keys=True)
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+    @property
+    def config_json(self) -> dict:
+        return {**self._hashed(), "product_path": self.product_path, "plan_path": self.plan_path,
+                "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
+                "attempts_total": self.attempts_total}
+
+
+def _known(folder) -> str:
+    return ", ".join(sorted(p.stem for p in Path(folder).glob("*.yaml")))
+
+
+def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:
+    """Join a product and a plan; apply validation rules 3-8 and 10 (data-model.md).
+
+    Models and harnesses are read from `config_dir` (default: the folder above
+    the product file). `env` is only asked whether a name is set. Rule 9, the
+    smoke-scale guard, is applied by the caller.
+    """
+    product_path, plan_path = Path(product_path), Path(plan_path)
+    config_dir = Path(config_dir) if config_dir else product_path.parent.parent
+    env = os.environ if env is None else env
+    if audiences is None:
+        from wb_report.report import load_audiences
+        audiences = load_audiences()
+    product, plan = load_product(product_path), load_plan(plan_path)
+    c = _Checker(plan_path, {})
+
+    if plan.mode not in product.modes:
+        c.fail("mode", f"{plan.mode!r} is not in the modes of {product_path}: {', '.join(product.modes)}")
+    if plan.audience not in audiences:
+        c.fail("audience", f"unknown audience {plan.audience!r}; known: {', '.join(audiences)}")
+
+    models, harnesses, competitors = {}, {}, []
+    for i, spec in enumerate(plan.competitors):
+        hpath = config_dir / "harnesses" / f"{spec.harness}.yaml"
+        if not hpath.exists():
+            c.fail(f"competitors[{i}].harness",
+                   f"unknown harness {spec.harness!r}; known: {_known(hpath.parent)}")
+        h = harnesses.get(spec.harness) or load_harness(hpath)
+        model = None
+        if spec.model is None:
+            if h.accepts != "none":
+                c.fail(f"competitors[{i}].model", f"harness {h.name!r} needs a model (accepts {', '.join(h.accepts)})")
+        else:
+            mpath = config_dir / "models" / f"{spec.model}.yaml"
+            if not mpath.exists():
+                c.fail(f"competitors[{i}].model", f"unknown model {spec.model!r}; known: {_known(mpath.parent)}")
+            model = models.get(spec.model) or load_model(mpath)
+            if h.accepts == "none":
+                c.fail(f"competitors[{i}].model", f"harness {h.name!r} takes no model")
+            if model.provider not in h.accepts:
+                c.fail(f"competitors[{i}].model", f"harness {h.name!r} accepts {', '.join(h.accepts)}; "
+                       f"model {model.name!r} is from {model.provider!r}")
+        if not h.runnable:
+            c.fail(f"competitors[{i}].harness", f"harness {h.name!r} is not runnable yet")
+        if h.kind == "monarch" and plan.mode not in h.modes:
+            c.fail(f"competitors[{i}].harness",
+                   f"mode {plan.mode!r} is not in the modes of {hpath}: {', '.join(h.modes)}")
+        if model and not env.get(model.key_env):
+            raise ConfigError(mpath, "key_env", f"environment variable {model.key_env} is not set")
+        if h.credential_env and not env.get(h.credential_env):
+            raise ConfigError(hpath, "credential_env", f"environment variable {h.credential_env} is not set")
+        name = f"{spec.model}/{spec.harness}" if spec.model else spec.harness
+        if any(x.name == name for x in competitors):
+            c.fail(f"competitors[{i}]", f"duplicate competitor {name!r}")
+        competitors.append(Competitor(name, model, h))
+        harnesses[h.name] = h
+        if model:
+            models[model.name] = model
+
+    names = [x.name for x in competitors]
+    if plan.baseline not in names:
+        c.fail("baseline", f"{plan.baseline!r} is not a competitor; have: {', '.join(names)}")
+
+    from wb_orchestrator.orchestrator import load_suite
+    try:
+        tasks = load_suite(plan.tasks)
+    except (OSError, ValueError) as e:
+        c.fail("tasks", str(e))
+    for t in tasks:
+        for service in t["info"]["initial_state"]:
+            if service not in product.services:
+                raise ConfigError(product_path, "services",
+                                  f"task {t['task']} touches {service!r}, which {product_path} does not list")
+
+    return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
+                     product_path=str(product_path), plan_path=str(plan_path),
+                     models=models, harnesses=harnesses)
