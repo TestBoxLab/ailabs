@@ -1,12 +1,14 @@
-# Free checks on every push and pull request: no API keys, no model calls.
+# Free checks: no API keys, no model calls.
 # - unit/integration tests against the simulated world
 # - corpus validation: contract hashes unchanged, every check fails on the
 #   untouched world (no-op), scripted oracle passes where one exists
+# Pushing a branch never triggers anything. Runs only when a pull request
+# targets main, or when started by hand from the Actions tab.
 name: ci
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 defaults:
   run:
