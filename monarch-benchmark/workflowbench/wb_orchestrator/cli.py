@@ -173,8 +173,10 @@ def cmd_corpus(args) -> int:
         print(corpus_mod.format_validation(v, verbose=args.verbose))
         return 0 if v["ok"] else 1
     if args.corpus_cmd == "declare":
-        from wb_orchestrator.declare import declare_dir
-        r = declare_dir(args.dir, args.out, overwrite=args.overwrite)
+        from wb_orchestrator import declare
+        product = config.load_product(config.resolve_name_or_path(args.product, "product"))
+        side_effects = declare.load_side_effects(declare.side_effects_path(product.side_effects))
+        r = declare.declare_dir(args.dir, args.out, overwrite=args.overwrite, side_effects=side_effects)
         print(f"declared {r['declared']} tasks, {r['already_declared']} already declared, "
               f"{len(r['unmapped'])} with unmapped assertion types")
         for t, types in r["unmapped"].items():
@@ -242,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("dir")
     cd.add_argument("--out", default=None, help="write copies here; default: in place (needs --overwrite)")
     cd.add_argument("--overwrite", action="store_true", help="rewrite tasks in place (contract hashes change)")
+    cd.add_argument("--product", default="simulated-apps",
+                    help="product whose side-effect list to use (name or path)")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("legacy-import")

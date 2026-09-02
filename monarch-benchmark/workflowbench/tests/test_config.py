@@ -452,7 +452,14 @@ def test_resolve_rule7_baseline_absent(site):
 def test_resolve_rule8_task_service_outside_product(site):
     rewrite(site, "products", PRODUCT, "services", "[salesforce]")
     msg = check_resolve_error(site, paths(site)[0], "services")
-    assert "simple.email_sf_contact_city_update" in msg and "'gmail'" in msg and "simulated-apps.yaml" in msg
+    assert "simple.email_sf_contact_city_update" in msg and "service gmail" in msg and "simulated-apps.yaml" in msg
+
+
+def test_resolve_rule8_names_task_service_and_product_file(site):
+    rewrite(site, "products", PRODUCT, "services", "[gmail]")  # every task here seeds salesforce
+    msg = check_resolve_error(site, paths(site)[0], "services")
+    assert "task simple.email_sf_contact_city_update" in msg and "service salesforce" in msg
+    assert "simulated-apps.yaml" in msg and "services" in msg.split(": ", 2)[-1]
 
 
 def test_resolve_rule10_unknown_audience(site):

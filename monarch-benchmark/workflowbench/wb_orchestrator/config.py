@@ -448,7 +448,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         for service in t["info"]["initial_state"]:
             if service not in product.services:
                 raise ConfigError(product_path, "services",
-                                  f"task {t['task']} touches {service!r}, which {product_path} does not list")
+                                  f"task {t['task']} touches service {service}, which {product_path} "
+                                  f"does not list in services")
 
     per_competitor = len(tasks) * plan.repetitions
     if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
