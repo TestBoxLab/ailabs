@@ -35,6 +35,10 @@ class Scenario:
     run_refusal: str | None = None            # e.g. "RUN_HOST_BLOCKED"
     run_outcome: dict = field(default_factory=lambda: {"status": "succeeded"})
     engine_calls: list[tuple] = field(default_factory=list)   # (method, path, json|None)
+    # Per-episode override of engine_calls, keyed by the x-bench-episode-id the
+    # workflow run carried. A run whose episode is not listed falls back to
+    # engine_calls, so a one-story scenario needs neither key nor lookup.
+    engine_calls_by_episode: dict[str, list[tuple]] = field(default_factory=dict)
     shim_url: str | None = None
     delay_s: dict[str, float] = field(default_factory=dict)   # login/authoring/frame/run/poll
     run_never_finishes: bool = False
@@ -60,6 +64,7 @@ class FakeMonarch:
         self.requests: list[dict] = []
         self.replies_received: list[dict] = []
         self.deleted_workflows: list[str] = []
+        self.deleted_at: list[float] = []          # monotonic clock of every delete request
         self.episode_headers: list[str] = []
         self.engine_responses: list[dict] = []
         self.authoring_started_at: list[float] = []
@@ -81,11 +86,11 @@ class FakeMonarch:
         with self._lock:
             return self._reply_events.setdefault(request_id, threading.Event())
 
-    def _fire_engine_calls(self, run_id: str) -> None:
+    def _fire_engine_calls(self, run_id: str, episode_id: str = "") -> None:
         sc = self.scenario
         time.sleep(sc.delay_s.get("run", 0))
         transport_error = None
-        for method, path, body in sc.engine_calls:
+        for method, path, body in sc.engine_calls_by_episode.get(episode_id, sc.engine_calls):
             data = json.dumps(body).encode() if body is not None else None
             req = urllib.request.Request((sc.shim_url or "") + path, data=data, method=method,
                                          headers={"Content-Type": "application/json"})
@@ -237,6 +242,7 @@ class FakeMonarch:
                     return
                 wfid = path.rsplit("/", 1)[-1]
                 with outer._lock:          # decide under the lock, answer outside it
+                    outer.deleted_at.append(time.monotonic())
                     if sc.delete_fails_once and not outer._delete_failed_once:
                         outer._delete_failed_once = True
                         answer = (500, {"error": "delete_failed"})
@@ -259,7 +265,8 @@ class FakeMonarch:
                     run_id = f"run-{outer._run_n}"
                     outer.run_started_at.append(time.monotonic())
                     outer._run_done[run_id] = False
-                threading.Thread(target=outer._fire_engine_calls, args=(run_id,),
+                episode_id = self.headers.get("x-bench-episode-id") or ""
+                threading.Thread(target=outer._fire_engine_calls, args=(run_id, episode_id),
                                  daemon=True).start()
                 self._reply(201, {"id": run_id, "engine": {"runId": run_id, "status": "running"}})
 

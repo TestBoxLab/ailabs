@@ -28,12 +28,18 @@ from wb_world.episode import Episode
 from wb_world.openapi import build_spec, load_schemas
 
 
+class _Server(ThreadingHTTPServer):
+    # A busy fixed port must fail loudly: on Windows the SO_REUSEADDR that
+    # HTTPServer sets lets a second bind steal a port that is already serving.
+    allow_reuse_address = False
+
+
 class EpisodeHTTPShim:
     def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None,
                  host: str = "127.0.0.1"):
         self.episode = episode
         self.schemas = load_schemas()
-        self.httpd = ThreadingHTTPServer((host, port), self._handler())
+        self.httpd = _Server((host, port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://{host}:{self.port}"
         self.public_url = (public_url or os.environ.get("WB_SHIM_PUBLIC_URL") or self.url).rstrip("/")

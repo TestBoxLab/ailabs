@@ -335,3 +335,59 @@ def test_build_arm_for_monarch_competitor(site):
     arm = build_arm_for(competitor, rc)
     assert competitor.name == "monarch"
     assert arm.name.startswith("monarch@") and arm.model_label == arm.name
+
+
+# -- T029/T030: a drifted knowledge base stops the run before any authoring ----
+
+def fd_serving(kb: dict[str, str]):
+    """A fake discovery service whose /v1/seeds answers exactly `kb`."""
+    from tests.fake_fd import FakeFD
+
+    fd = FakeFD()
+    fd._seeds = lambda: [{"slug": s, "kb_hash": h, "action_count": 1, "in_sync": True}
+                         for s, h in sorted(kb.items())]
+    return fd
+
+
+def test_kb_drift_refuses(site, tmp_path):
+    """One app whose hash moved: the run stops naming it, before Monarch is asked anything."""
+    from tests.fake_monarch import FakeMonarch
+    from wb_arms.api_loop import InfraError
+    from tests.test_monarch_arm import arm_against, free_port, repo  # noqa: F401
+
+    on_disk = {"bench-airtable": "6d07bde6f1c2", "bench-asana": "272673e3a9b0",
+               "bench-gmail": "9b1f0c4a5e77", "bench-salesforce": "DRIFTED"}
+    port = free_port()
+    with FakeMonarch() as monarch, fd_serving(on_disk) as fd:
+        git_repo = tmp_path / "monarch-checkout"
+        git_repo.mkdir()
+        _git_init(git_repo)
+        arm = arm_against(site, monarch, port, git_repo, fd=fd)
+        store = Store(tmp_path / "wb.sqlite3")
+        rc = resolve_monarch(site)
+        orch = Orchestrator.from_config(store, rc, tmp_path / "out")
+        with pytest.raises(InfraError) as exc:
+            orch.run("run-drift")
+
+    assert "bench-salesforce" in str(exc.value) and not exc.value.retryable
+    assert not [r for r in monarch.requests if r["path"] == "/api/workflows/recipe/runs"]
+
+
+def _git_init(d) -> None:
+    import subprocess
+    for args in (["init", "-q"],
+                 ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-q",
+                  "-m", "x"],
+                 ["checkout", "-q", "-B", "main"]):
+        subprocess.run(["git", "-C", str(d), *args], check=True, capture_output=True)
+
+
+def test_banner_names_the_monarch_build(site, tmp_path):
+    """T032: a plan with Monarch says which build, how big the kb is, and which prices."""
+    git_repo = tmp_path / "checkout"
+    git_repo.mkdir()
+    _git_init(git_repo)
+    monarch_site(site, monarch_repo=str(git_repo))
+    line = _banner(resolve_monarch(site)).splitlines()[-1]
+    assert line.startswith("monarch   monarch@")
+    assert "kb 4 apps" in line and "price table monarch-team-bedrock@2026-09-03" in line

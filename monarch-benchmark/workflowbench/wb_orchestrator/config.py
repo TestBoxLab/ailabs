@@ -515,6 +515,7 @@ class RunConfig:
     tasks_dir: str  # absolute; `plan.tasks` as written stays in the hash
     monarch_kb: MonarchKb | None = None      # only when a Monarch competitor runs
     price_tables: dict[str, PriceTable] = field(default_factory=dict)
+    config_dir: str = ""                     # where models/ and harnesses/ were read from
 
     @property
     def attempts_per_competitor(self) -> int:
@@ -667,7 +668,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
-                     monarch_kb=monarch_kb, price_tables=price_tables)
+                     monarch_kb=monarch_kb, price_tables=price_tables,
+                     config_dir=str(config_dir))
 
 
 def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:

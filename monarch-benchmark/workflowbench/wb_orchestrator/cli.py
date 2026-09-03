@@ -53,15 +53,30 @@ def _pick_or_flag(value, kind) -> Path:
     return config.pick(kind, config.DEFAULT_CONFIG_DIR / f"{kind}s")
 
 
+def _monarch_line(rc) -> str:
+    """`monarch   <name>, kb <n> apps, price table <name>@<date>` when Monarch runs."""
+    from wb_arms.monarch import monarch_version
+    h = next(c.harness for c in rc.competitors if c.harness.kind == "monarch")
+    try:
+        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir))
+    except ValueError:
+        name = "version unreadable"
+    table = rc.price_tables.get(h.price_table)
+    return (f"monarch   {name}, kb {len(rc.monarch_kb.kb)} apps, "
+            f"price table {h.price_table}@{table.prices_verified if table else '—'}")
+
+
 def _banner(rc) -> str:
     p, plan = rc.product, rc.plan
     data = "mutable data" if p.data.mutable else "read-only data"
+    monarch = [_monarch_line(rc)] if rc.monarch_kb else []
     return "\n".join([
         f"product   {p.name} ({p.kind}, {data})",
         f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
         f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/   repetitions {plan.repetitions}   "
         f"competitors {len(rc.competitors)}   attempts {rc.attempts_total}",
-        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}"])
+        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}",
+        *monarch])
 
 
 def cmd_run(args) -> int:

@@ -119,7 +119,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         from wb_arms.monarch import MonarchArm, monarch_version
         if run_config is None:
             raise ValueError("a Monarch competitor needs the run config to build its arm")
-        config_dir = Path(run_config.product_path).parent.parent
+        config_dir = Path(run_config.config_dir)
         repo = config_mod.from_workflowbench(h.monarch_repo, config_dir)
         try:
             name = monarch_version(repo)
@@ -255,6 +255,15 @@ class Orchestrator:
         self.store.export_jsonl(run_id, self._run_dir(run_id) / "episodes.jsonl")
 
     def _run_arm_group(self, run_id: str, arm, work: list[tuple[dict, int]]) -> None:
+        if hasattr(arm, "prepare"):   # ponytail: hasattr check; only Monarch has one
+            # A refused competitor stops the whole run before any attempt: the
+            # thread body's exception is invisible to the joiner otherwise.
+            try:
+                arm.prepare()
+            except BaseException as e:      # noqa: BLE001  re-raised by _execute
+                self._thread_errors.append(e)
+                self._abort.set()
+                return
         sem_key = arm.provider_key or "local"
         sem = self._sems.setdefault(sem_key, threading.Semaphore(self.provider_concurrency))
         with ThreadPoolExecutor(max_workers=self.provider_concurrency,
