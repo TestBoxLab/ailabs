@@ -22,7 +22,7 @@ The first deliverable is a paired pilot: 10 tasks × 2 repetitions ×
 
 | Decision | Choice | Why |
 |---|---|---|
-| Scope of feature 002 | Create + run only. Full flow = feature 003, run only = feature 004; both reuse the competitor built here. | Ten items and three modes are too much for one spec. Create + run is Lucas's original design, deterministic, and has no open question for Deyton. |
+| Scope of feature 002 | Create + run only. Full flow = feature 003, run only = feature 004; both reuse the competitor built here. | Ten items and three modes are too much for one spec. Create + run is Lucas's original design, deterministic, with one open question for Deyton (product grant, §3 step 4). |
 | Where Monarch runs | Docker on this machine (`just dev-otel` in `monarch-enterprise`). The bench's HTTP front door runs on the host on a fixed port, reachable from containers as `host.docker.internal:<port>`. | Already verified live on 2–3 Sep (`docs/benchmark-access.md` in the Monarch repo). |
 | Product shape in Monarch | 47 products, one per simulated app, slug `bench-<service>`. | That is how Monarch represents real SaaS. One combined product would not be comparable with real use. |
 | Monarch asks a question during authoring | Fixed automatic reply, identical for every attempt, hardcoded: "No further information is available. Proceed with your best judgment." The result row counts the questions. | Keeps the same-request rule; leaks nothing from the answer key; raw models get no clarification either. |
@@ -119,8 +119,8 @@ Result mapping:
 | Deadline hit | `timeout` | `POST .../recipe/runs/:id/cancel` for authoring; `DELETE /api/workflows/:id` for a run in flight (there is no run-cancel route) |
 | Monarch down, login refused, 5xx, Langfuse unreachable for the health check | `infra:*` | retried by the orchestrator (rule 11); nothing else is |
 
-`infra:*` rows are retried and never counted against Monarch (rule 7 on cost
-completeness has the same spirit: the product pays only for its own failures).
+`infra:*` rows are retried and leave the denominator (rule 7): the product is
+charged only for its own failures.
 
 The checker runs later, from the snapshot, exactly as for every competitor.
 
