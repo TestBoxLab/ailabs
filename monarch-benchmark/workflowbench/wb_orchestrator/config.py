@@ -394,7 +394,8 @@ class RunConfig:
                 "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
                 "attempts_total": self.attempts_total,
                 "cost_ceiling_usd": self.plan.cost_ceiling_usd,  # not hashed; wb status reads it
-                "suite_dir": self.tasks_dir}  # ponytail: old readers (wb grade) key on suite_dir
+                "suite_dir": self.tasks_dir,  # ponytail: old readers (wb grade) key on suite_dir
+                "k": self.plan.repetitions}  # ponytail: old readers (wb report) key on k
 
 
 def from_workflowbench(p, config_dir=DEFAULT_CONFIG_DIR) -> Path:
@@ -507,7 +508,9 @@ def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
 def pick(kind, folder, stdin=None, stdout=None) -> Path:
     """Numbered picker for a missing --product/--plan (research.md R8)."""
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
-    names = known(folder).split(", ")
+    names = [p.stem for p in sorted(Path(folder).glob("*.yaml"))]
+    if not names:
+        raise ConfigError(folder, f"--{kind}", f"no {kind} files in {folder}")
     if not stdin.isatty():
         raise ConfigError(folder, f"--{kind}", f"--{kind} is required without a terminal; available: {known(folder)}")
     print(f"{kind.capitalize()}s:", file=stdout)

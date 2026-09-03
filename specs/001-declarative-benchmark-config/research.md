@@ -57,7 +57,9 @@ re-resolves product and plan from `config_json` paths, recomputes the hash,
 then: if `stop_reason == "cost_ceiling"` and the plan's ceiling is not greater
 than the recorded spend, refuse with a message naming both numbers; otherwise
 clear `stop_reason` and continue. Pending attempts have no rows; `wb status`
-shows them as remaining and prints `stop_reason` when set.
+shows them as remaining and prints `stop_reason` when set. The check runs after
+each attempt is recorded, so at most concurrency × competitors in-flight attempts
+can still finish (and spend) after the ceiling trips.
 
 **Rationale**: the abort path already exists for Ctrl-C and worker crashes;
 the ceiling reuses it. One column is the smallest durable record.

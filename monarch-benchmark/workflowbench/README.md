@@ -73,7 +73,9 @@ Field tables and examples: `config/README.md` and
 
 Two guards live in the plan file. A plan with more than 20 attempts per competitor
 is refused until `approved_by` names who approved it. `cost_ceiling_usd` stops the
-run once spend passes it; raise it and `wb resume <run_id>` to continue.
+run once spend passes it; raise it and `wb resume <run_id>` to continue. The check
+runs as attempts finish, so up to concurrency × competitors attempts already in
+flight can still complete after the ceiling trips.
 
 Deriving approval rules for a corpus also takes the product:
 `uv run wb corpus declare corpus/ --product simulated-apps`.

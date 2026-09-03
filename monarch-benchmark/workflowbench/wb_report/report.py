@@ -138,7 +138,8 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
 
     return {"run_id": run_id, "suite": run["suite"], "config_hash": run["config_hash"],
             "audience": audience, "arms": arms, "arms_stripped_by_gate": stripped,
-            "baseline": baseline, "k": k, "figures": figures}
+            "baseline": baseline, "k": k, "stop_reason": run.get("stop_reason"),
+            "figures": figures}
 
 
 def _fmt_pm(block: dict, pct: bool = True) -> str:
@@ -166,6 +167,8 @@ def render_md(report: dict[str, Any]) -> str:
              "",
              f"audience: **{report['audience']}** · suite `{report['suite']}` · "
              f"config `{report['config_hash']}` · k={report['k']}"]
+    if report.get("stop_reason"):
+        lines.append(f"\nstopped: {report['stop_reason']}")
     if report["audience"] == "internal" and any(is_lab(a) for a in report["arms"]):
         lines.append("\n> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**")
     if report["arms_stripped_by_gate"]:

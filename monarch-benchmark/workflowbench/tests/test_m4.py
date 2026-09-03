@@ -115,6 +115,12 @@ def test_report_internal_has_everything(seeded_store):
         assert "source" in f and f["source"]["denominator"] > 0
 
 
+def test_report_names_stop_reason(seeded_store):
+    seeded_store.set_stop_reason("run-x", "cost_ceiling")
+    md = render_md(build_report(seeded_store, "run-x", audience="internal"))
+    assert "stopped: cost_ceiling" in md
+
+
 def test_report_public_strips_at_query_level(seeded_store):
     rep = build_report(seeded_store, "run-x", audience="public-rung2")
     assert rep["arms"] == ["monarch"]

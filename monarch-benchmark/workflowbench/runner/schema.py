@@ -38,7 +38,7 @@ class EpisodeRow(BaseModel):
     suite: str = "workflowbench-synthetic@0.1"
     task_id: str
     contract_sha256: str | None = None
-    arm: str                      # e.g. "oracle/scripted", "bare/cli/claude-code@x.y"
+    arm: str                      # e.g. "oracle", "claude-opus-4-8/api"
     mode: str = "synthetic"
     test_mode: str | None = None   # the plan's mode: full-flow | create-run | run-only
     agent: str | None = None

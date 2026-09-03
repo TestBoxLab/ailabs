@@ -50,6 +50,21 @@ def test_from_config_runs_plan_with_competitor_names(site, tmp_path, mock_server
     assert '"plan_path"' in run["config_json"]
 
 
+def test_report_reads_k_from_file_driven_run(site, tmp_path, mock_server):
+    from wb_report.report import build_report
+    write(site / "config/models", MODEL_MOCK)
+    plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
+    plan = edit(plan, "baseline", "oracle")
+    plan += "competitors:\n  - {harness: oracle}\n"
+    write(site / "config/plans", plan)
+    rc = config.resolve(site / "config/products/simulated-apps.yaml",
+                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+    assert rc.plan.repetitions == 2
+    store = Store(tmp_path / "wb.sqlite3")
+    run_id = Orchestrator.from_config(store, rc, tmp_path / "out").run("run-k")
+    assert build_report(store, run_id, audience="internal")["k"] == rc.plan.repetitions
+
+
 # -- T016: the shipped smoke plan reproduces smoke-frontier-001 --------------
 
 def test_smoke_plan_reproduces_smoke_frontier_001(monkeypatch):
@@ -100,6 +115,11 @@ def test_pick_retries_on_bad_input(site):
 def test_pick_without_terminal_is_an_error(site):
     with pytest.raises(ConfigError, match="--plan is required without a terminal; available: smoke-frontier"):
         pick(site / "config/plans", "1\n", tty=False)
+
+
+def test_pick_empty_folder_is_an_error(tmp_path):
+    with pytest.raises(ConfigError, match="no plan files"):
+        pick(tmp_path, "1\n")
 
 
 def test_resolve_name_or_path(site):

@@ -43,6 +43,7 @@ class ConfigDrift(Exception):
     pass
 
 
+# legacy: runs recorded before product/plan files
 def config_hash(tasks: list[dict], arms: list[str], k: int, timeout_s: float) -> str:
     blob = json.dumps({"tasks": sorted(contract_hash(t) for t in tasks),
                        "arms": sorted(arms), "k": k, "timeout_s": timeout_s},
@@ -65,6 +66,7 @@ class _ScriptedAdapter:
         return ArmResult(tool_calls=len(ep.tool_calls))
 
 
+# legacy: runs recorded before product/plan files
 def _validate_arm_key(key: str) -> None:
     known = (key in _ScriptedAdapter._CLASSES or key == "claude-code"
              or key.startswith("monarch/") or key in providers.REGISTRY)
@@ -74,6 +76,7 @@ def _validate_arm_key(key: str) -> None:
             f"'claude-code' + 'monarch/stock|lab' + providers {sorted(providers.REGISTRY)}")
 
 
+# legacy: runs recorded before product/plan files
 def build_arm(key: str):
     if key in _ScriptedAdapter._CLASSES:
         return _ScriptedAdapter(key)
@@ -381,6 +384,9 @@ class Orchestrator:
             self._spent += row.cost_usd or 0.0
             if self._stop_after is not None and self._recorded >= self._stop_after:
                 self._abort.set()
+            # ponytail: at most concurrency x competitors in-flight attempts can finish
+            # after the ceiling trips; a per-attempt pre-check before the provider call
+            # is the upgrade.
             if (self.run_config and self._spent > self.run_config.plan.cost_ceiling_usd
                     and self._stop_reason is None):
                 self._stop_reason = "cost_ceiling"
