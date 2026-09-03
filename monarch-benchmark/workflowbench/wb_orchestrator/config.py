@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -80,6 +81,24 @@ class Model:
 
 
 @dataclass
+class PriceEntry:
+    family: str
+    match: list[str]
+    usd_per_million: Prices
+
+
+@dataclass
+class PriceTable:
+    """Prices for models a competitor calls through someone else's account (e.g. Monarch on Bedrock)."""
+    name: str
+    provider: str
+    region: str
+    prices_verified: datetime.date
+    models: list[PriceEntry]
+    description: str | None = None
+
+
+@dataclass
 class Harness:
     name: str
     kind: str
@@ -96,7 +115,16 @@ class Harness:
     # kind = monarch
     base_url: str | None = None
     credential_env: str | None = None
-    release: str | None = None
+    login_email: str | None = None
+    login_password_env: str | None = None
+    fd_url: str | None = None
+    shim_port: int | None = None
+    shim_public_host: str = "host.docker.internal"
+    langfuse_url: str | None = None
+    langfuse_public_key_env: str | None = None
+    langfuse_secret_key_env: str | None = None
+    price_table: str | None = None
+    monarch_repo: str | None = None
     modes: list[str] = field(default_factory=list)
 
 
@@ -180,7 +208,8 @@ def _tname(types):
     return "/".join(t.__name__ for t in (types if isinstance(types, tuple) else (types,)))
 
 
-def _read(path, kind):
+def _read(path, kind, name_key: str | None = "name"):
+    """Parse a mapping file into a _Checker; `name_key=None` skips the name-equals-stem rule."""
     path = Path(path)
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -189,9 +218,10 @@ def _read(path, kind):
     if not isinstance(data, dict):
         raise ConfigError(path, "<root>", f"{kind} file must be a mapping")
     c = _Checker(path, data)
-    name = c.require("name", str)
-    if name != path.stem:
-        c.fail("name", f"must equal the file stem {path.stem!r}; got {name!r}")
+    if name_key:
+        name = c.require(name_key, str)
+        if name != path.stem:
+            c.fail(name_key, f"must equal the file stem {path.stem!r}; got {name!r}")
     return c
 
 
@@ -240,24 +270,39 @@ def load_side_effects(path: str | Path) -> SideEffects:
     return out
 
 
+def _date(c, key) -> datetime.date | None:
+    v = c.get(key, (datetime.date, str))
+    if isinstance(v, str):
+        try:
+            return datetime.date.fromisoformat(v)
+        except ValueError:
+            c.fail(key, f"expected a date (YYYY-MM-DD); got {v!r}")
+    return v
+
+
+def _prices(c, key="usd_per_million", cache_write_required=False) -> Prices:
+    """The four per-million prices; `cache_write` defaults to `input` unless required.
+
+    float() so `5` and `5.00` are the same price (and the same hash).
+    """
+    p = c.sub(key)
+    p.keys(("input", "cached", "output", *(("cache_write",) if cache_write_required else ())),
+           () if cache_write_required else ("cache_write",))
+    num = (int, float)
+    return Prices(input=float(p.get("input", num)), cached=float(p.get("cached", num)),
+                  output=float(p.get("output", num)),
+                  cache_write=float(p.get("cache_write", num, default=p.get("input", num))))
+
+
 def load_model(path) -> Model:
     c = _read(path, "model")
+    if c.data.get("kind") == "price-table":
+        c.fail("kind", "this is a price-table file, not a model; see load_price_table")
     c.keys(("name", "provider", "model", "effort", "usd_per_million", "key_env"),
            ("adapter", "base_url", "cache_min_prompt_tokens", "header_fallbacks",
             "prices_verified", "description"))
-    p = c.sub("usd_per_million")
-    p.keys(("input", "cached", "output"), ("cache_write",))
-    num = (int, float)
-    # float() so `5` and `5.00` are the same price (and the same hash)
-    prices = Prices(input=float(p.get("input", num)), cached=float(p.get("cached", num)),
-                    output=float(p.get("output", num)),
-                    cache_write=float(p.get("cache_write", num, default=p.get("input", num))))
-    verified = c.get("prices_verified", (datetime.date, str))
-    if isinstance(verified, str):
-        try:
-            verified = datetime.date.fromisoformat(verified)
-        except ValueError:
-            c.fail("prices_verified", f"expected a date (YYYY-MM-DD); got {verified!r}")
+    prices = _prices(c)
+    verified = _date(c, "prices_verified")
     return Model(
         name=c.data["name"],
         provider=c.get("provider", str, enum=PROVIDERS),
@@ -278,8 +323,49 @@ _HARNESS_KEYS = {
     "api": ((), ()),
     "cli": (("launcher", "command"), ("env", "output")),
     "scripted": (("script",), ()),
-    "monarch": (("base_url", "credential_env", "release", "modes"), ()),
+    "monarch": (("base_url", "credential_env", "login_email", "login_password_env", "fd_url",
+                 "shim_port", "langfuse_url", "langfuse_public_key_env", "langfuse_secret_key_env",
+                 "price_table", "monarch_repo", "modes"), ("shim_public_host",)),
 }
+
+
+def is_price_table(path) -> bool:
+    """True for a `kind: price-table` file; they share the models/ folder but are not competitors."""
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    return isinstance(data, dict) and data.get("kind") == "price-table"
+
+
+def load_price_table(path) -> PriceTable:
+    """Prices for a competitor that bills through its own account (data-model.md: price table)."""
+    c = _read(path, "price table")
+    c.keys(("name", "kind", "provider", "region", "prices_verified", "models"), ("description",))
+    c.get("kind", str, enum=("price-table",))
+    entries, seen = [], set()
+    for i, item in enumerate(c.get("models", list)):
+        if not isinstance(item, dict):
+            c.fail(f"models[{i}]", "expected a mapping {family, match, usd_per_million}")
+        e = _Checker(c.path, item, f"models[{i}].")
+        e.keys(("family", "match", "usd_per_million"))
+        family = e.get("family", str)
+        if family in seen:
+            e.fail("family", f"duplicate family {family!r}")
+        seen.add(family)
+        match = e.str_list("match")
+        if not match:
+            e.fail("match", "must list at least one model-id fragment")
+        entries.append(PriceEntry(family=family, match=match,
+                                  usd_per_million=_prices(e, cache_write_required=True)))
+    return PriceTable(
+        name=c.data["name"],
+        provider=c.get("provider", str),
+        region=c.get("region", str),
+        prices_verified=_date(c, "prices_verified"),
+        models=entries,
+        description=c.get("description", str),
+    )
 
 
 def load_harness(path) -> Harness:
@@ -291,6 +377,9 @@ def load_harness(path) -> Harness:
     if accepts != "none":
         accepts = c.str_list("accepts", enum=PROVIDERS) if isinstance(accepts, list) else \
             c.fail("accepts", f"expected a list of providers or 'none'; got {accepts!r}")
+    port = c.get("shim_port", int)
+    if port is not None and not 1024 <= port <= 65535:
+        c.fail("shim_port", f"must be between 1024 and 65535; got {port}")
     env = c.get("env", dict, default={})
     for k, v in env.items():
         if not isinstance(k, str) or not isinstance(v, str):
@@ -308,7 +397,16 @@ def load_harness(path) -> Harness:
         script=c.get("script", str, enum=SCRIPTS),
         base_url=c.get("base_url", str),
         credential_env=c.get("credential_env", str),
-        release=c.get("release", str),
+        login_email=c.get("login_email", str),
+        login_password_env=c.get("login_password_env", str),
+        fd_url=c.get("fd_url", str),
+        shim_port=port,
+        shim_public_host=c.get("shim_public_host", str, default=Harness.shim_public_host),
+        langfuse_url=c.get("langfuse_url", str),
+        langfuse_public_key_env=c.get("langfuse_public_key_env", str),
+        langfuse_secret_key_env=c.get("langfuse_secret_key_env", str),
+        price_table=c.get("price_table", str),
+        monarch_repo=c.get("monarch_repo", str),
         modes=c.str_list("modes", enum=MODES, default=[]),
     )
 
@@ -347,10 +445,62 @@ def load_plan(path) -> Plan:
 # ---------------------------------------------------------------- resolve
 
 @dataclass
+class MonarchKb:
+    """What Monarch was taught about the product, by `wb monarch setup` (contracts/config-files.md)."""
+    product: str
+    generated_at: str
+    seeds_format: str
+    shim_public_url: str
+    kb: dict[str, str]  # "bench-<service>" -> knowledge-base hash
+
+
+def load_monarch_kb(path, product: Product) -> MonarchKb:
+    """The knowledge-base hashes `wb monarch setup` wrote for one product."""
+    c = _read(path, "knowledge-base file", name_key=None)
+    c.keys(("product", "generated_at", "seeds_format", "shim_public_url", "kb"))
+    if c.get("product", str) != product.name:
+        c.fail("product", f"must equal the product under test {product.name!r}; got {c.data['product']!r}")
+    kb = c.get("kb", dict)
+    for k, v in kb.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            c.fail("kb", "keys and hashes must be strings")
+    want = {f"bench-{s}" for s in product.services}
+    for slug in sorted(want - set(kb)):
+        c.fail(f"kb.{slug}", "no entry; run `wb monarch setup` again")
+    for slug in sorted(set(kb) - want):
+        c.fail(f"kb.{slug}", f"not a service of {product.name}")
+    return MonarchKb(product=c.data["product"],
+                     generated_at=str(c.require("generated_at", (str, datetime.datetime))),
+                     seeds_format=c.get("seeds_format", str),
+                     shim_public_url=c.get("shim_public_url", str), kb=kb)
+
+
+@dataclass
 class Competitor:
     name: str  # "model/harness", or the harness name alone
     model: Model | None
     harness: Harness
+
+
+_PRE_002_MONARCH_KEYS = ("base_url", "credential_env", "modes")  # also on the pre-002 Harness
+_MONARCH_ONLY = tuple(k for k in sum(_HARNESS_KEYS["monarch"], ()) if k not in _PRE_002_MONARCH_KEYS)
+
+
+def _hashed_harness(h: Harness) -> dict:
+    """Keep the pre-002 shape for non-Monarch harnesses so their run hashes stay regradable.
+
+    Every Monarch-only field is dropped here, so adding one to `_HARNESS_KEYS["monarch"]`
+    never moves the hash of a plan without Monarch.
+
+    ponytail: the dropped `release` is spelled back in as null rather than rehashing every
+    stored run; drop that line the next time the hash is allowed to move.
+    """
+    d = asdict(h)
+    if h.kind != "monarch":
+        for k in _MONARCH_ONLY:
+            del d[k]
+        d["release"] = None
+    return d
 
 
 @dataclass
@@ -364,6 +514,9 @@ class RunConfig:
     models: dict[str, Model]
     harnesses: dict[str, Harness]
     tasks_dir: str  # absolute; `plan.tasks` as written stays in the hash
+    monarch_kb: MonarchKb | None = None      # only when a Monarch competitor runs
+    price_tables: dict[str, PriceTable] = field(default_factory=dict)
+    config_dir: str = ""                     # where models/ and harnesses/ were read from
 
     @property
     def attempts_per_competitor(self) -> int:
@@ -380,7 +533,13 @@ class RunConfig:
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
              "product": asdict(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},
-             "harnesses": {k: asdict(v) for k, v in self.harnesses.items()}}
+             "harnesses": {k: _hashed_harness(v) for k, v in self.harnesses.items()}}
+        if self.monarch_kb:  # absent for plans without Monarch, so their hashes do not move
+            d["monarch_kb"] = {"kb": self.monarch_kb.kb,  # generated_at is not an input
+                               "seeds_format": self.monarch_kb.seeds_format,
+                               "shim_public_url": self.monarch_kb.shim_public_url}
+        if self.price_tables:
+            d["price_tables"] = {k: asdict(v) for k, v in self.price_tables.items()}
         return json.loads(json.dumps(d, default=str))  # dates -> ISO strings
 
     @property
@@ -407,6 +566,27 @@ def from_workflowbench(p, config_dir=DEFAULT_CONFIG_DIR) -> Path:
 def known(folder) -> str:
     """Names of the config files in `folder`, comma-joined (messages and the picker)."""
     return ", ".join(sorted(p.stem for p in Path(folder).glob("*.yaml")))
+
+
+_PLACEHOLDER = re.compile(r"\$\{(\w+)\}")
+
+
+def _check_monarch_env(h, hpath, env) -> None:
+    """Every address and key the Monarch competitor needs, before a cent is spent.
+
+    An address is only checked when it is written as a `${VAR}` placeholder; a
+    literal one needs nothing from the environment. Checked here rather than at
+    first use so a missing variable stops the run at `wb run`, not halfway
+    through it (FR-029).
+    """
+    for field in ("base_url", "fd_url", "langfuse_url"):
+        for name in _PLACEHOLDER.findall(getattr(h, field) or ""):
+            if not env.get(name):
+                raise ConfigError(hpath, field, f"environment variable {name} is not set")
+    for field in ("langfuse_public_key_env", "langfuse_secret_key_env"):
+        name = getattr(h, field)
+        if name and not env.get(name):
+            raise ConfigError(hpath, field, f"environment variable {name} is not set")
 
 
 def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:
@@ -461,12 +641,32 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         if h.kind == "monarch" and plan.mode not in h.modes:
             c.fail(f"competitors[{i}].harness",
                    f"mode {plan.mode!r} is not in the modes of {hpath}: {', '.join(h.modes)}")
-        if h.credential_env and not env.get(h.credential_env):
-            raise ConfigError(hpath, "credential_env", f"environment variable {h.credential_env} is not set")
+        has_token = bool(h.credential_env and env.get(h.credential_env))
+        has_password = bool(h.login_password_env and env.get(h.login_password_env))
+        if h.credential_env and not has_token and not has_password:
+            names = h.credential_env + (f" or {h.login_password_env}" if h.login_password_env else "")
+            raise ConfigError(hpath, "credential_env", f"environment variable {names} is not set")
+        if h.kind == "monarch":
+            _check_monarch_env(h, hpath, env)
         competitors.append(Competitor(name, model, h))
         harnesses[h.name] = h
         if model:
             models[model.name] = model
+
+    monarch_kb, price_tables = None, {}
+    for h in harnesses.values():
+        if h.kind != "monarch":
+            continue
+        if monarch_kb is None:
+            kb_path = config_dir / "products" / f"{product.name}.monarch-kb.yaml"
+            if not kb_path.exists():
+                raise ConfigError(kb_path, "kb", "file is missing; run `wb monarch setup` first")
+            monarch_kb = load_monarch_kb(kb_path, product)
+        tpath = config_dir / "models" / f"{h.price_table}.yaml"
+        if not tpath.exists():
+            raise ConfigError(config_dir / "harnesses" / f"{h.name}.yaml", "price_table",
+                              f"unknown price table {h.price_table!r}; known: {known(tpath.parent)}")
+        price_tables[h.price_table] = load_price_table(tpath)
 
     names = [x.name for x in competitors]
     if plan.baseline not in names:
@@ -491,7 +691,9 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
 
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
-                     models=models, harnesses=harnesses, tasks_dir=str(tasks_dir))
+                     models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
+                     monarch_kb=monarch_kb, price_tables=price_tables,
+                     config_dir=str(config_dir))
 
 
 def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
@@ -499,7 +701,7 @@ def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
     p = Path(value)
     if p.is_file():
         return p
-    folder = Path(config_dir) / f"{kind}s"
+    folder = Path(config_dir) / ("harnesses" if kind == "harness" else f"{kind}s")
     if not (folder / f"{value}.yaml").is_file():
         raise ConfigError(folder, f"--{kind}", f"unknown {kind} {value!r}; available: {known(folder)}")
     return folder / f"{value}.yaml"

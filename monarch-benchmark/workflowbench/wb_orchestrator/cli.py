@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from wb_arms.monarch import monarch_version
 from wb_orchestrator import config
 from wb_orchestrator import doctor as doctor_mod
+from wb_orchestrator import monarch_setup
 from wb_orchestrator.config import ConfigError
 from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RunKilled, regrade
 from wb_results.store import Store
@@ -51,15 +54,31 @@ def _pick_or_flag(value, kind) -> Path:
     return config.pick(kind, config.DEFAULT_CONFIG_DIR / f"{kind}s")
 
 
+def _monarch_line(rc) -> str | None:
+    """`monarch   <name>, kb <n> apps, price table <name>@<date>` when Monarch runs."""
+    h = next((c.harness for c in rc.competitors if c.harness.kind == "monarch"), None)
+    if h is None:
+        return None
+    try:
+        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir))
+    except ValueError:
+        name = "version unreadable"
+    table = rc.price_tables.get(h.price_table)
+    return (f"monarch   {name}, kb {len(rc.monarch_kb.kb)} apps, "
+            f"price table {h.price_table}@{table.prices_verified if table else '—'}")
+
+
 def _banner(rc) -> str:
     p, plan = rc.product, rc.plan
     data = "mutable data" if p.data.mutable else "read-only data"
+    monarch = [line for line in [_monarch_line(rc)] if line]
     return "\n".join([
         f"product   {p.name} ({p.kind}, {data})",
         f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
         f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/   repetitions {plan.repetitions}   "
         f"competitors {len(rc.competitors)}   attempts {rc.attempts_total}",
-        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}"])
+        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}",
+        *monarch])
 
 
 def cmd_run(args) -> int:
@@ -128,7 +147,7 @@ def cmd_status(args) -> int:
 
 def cmd_doctor(args) -> int:
     keys = args.arms.split(",") if args.arms else None
-    reports = doctor_mod.run_doctor(keys)
+    reports = doctor_mod.run_doctor(keys, monarch_probe=args.monarch_probe)
     print(doctor_mod.format_report(reports))
     return 0 if all(r.get("ok") for r in reports) else 1
 
@@ -195,6 +214,16 @@ def cmd_legacy(args) -> int:
     return 0
 
 
+def cmd_monarch_setup(args) -> int:
+    try:
+        return monarch_setup.run(config.resolve_name_or_path(args.product, "product"),
+                                 config.resolve_name_or_path(args.harness, "harness"),
+                                 args.out, os.environ, sys.stdout)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()   # keys live in workflowbench/.env (gitignored), never in code
     ap = argparse.ArgumentParser(prog="wb", description="WorkflowBench runner")
@@ -218,7 +247,11 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("doctor")
-    p.add_argument("--arms", default=None, help="comma list of provider keys; default: all registered")
+    p.add_argument("--arms", default=None,
+                   help="comma list of provider keys, plus 'monarch' for the Monarch checks; "
+                        "default: all registered providers and monarch")
+    p.add_argument("--monarch-probe", action="store_true",
+                   help="also start and immediately cancel one Monarch authoring run; costs model money")
     p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("grade")
@@ -247,6 +280,14 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("--product", default="simulated-apps",
                     help="product whose side-effect list to use (name or path)")
     p.set_defaults(fn=cmd_corpus)
+
+    p = sub.add_parser("monarch", help="prepare Monarch for a product")
+    msub = p.add_subparsers(dest="monarch_cmd", required=True)
+    ms = msub.add_parser("setup", help="generate seeds, import them, write the knowledge-base hashes")
+    ms.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
+    ms.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
+    ms.add_argument("--out", default="out/monarch-seeds", help="where the seed folders are written")
+    ms.set_defaults(fn=cmd_monarch_setup)
 
     p = sub.add_parser("legacy-import")
     p.add_argument("runs_dir", help=r"e.g. C:\...\Monarch_Main\bench-host-state\runs")

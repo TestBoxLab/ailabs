@@ -28,14 +28,20 @@ from wb_world.episode import Episode
 from wb_world.openapi import build_spec, load_schemas
 
 
+class _Server(ThreadingHTTPServer):
+    # A busy fixed port must fail loudly: on Windows the SO_REUSEADDR that
+    # HTTPServer sets lets a second bind steal a port that is already serving.
+    allow_reuse_address = False
+
+
 class EpisodeHTTPShim:
-    def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None):
-        outer = self
+    def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None,
+                 host: str = "127.0.0.1"):
         self.episode = episode
         self.schemas = load_schemas()
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
+        self.httpd = _Server((host, port), self._handler())
         self.port = self.httpd.server_address[1]
-        self.url = f"http://127.0.0.1:{self.port}"
+        self.url = f"http://{host}:{self.port}"
         self.public_url = (public_url or os.environ.get("WB_SHIM_PUBLIC_URL") or self.url).rstrip("/")
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
@@ -154,3 +160,25 @@ def _as_json_str(v) -> str | None:
     if v is None or isinstance(v, str):
         return v
     return json.dumps(v)
+
+
+if __name__ == "__main__":   # serve one task's world by hand, for the live checklist
+    import argparse
+    from pathlib import Path
+
+    from wb_world.episode import load_task_file
+
+    ap = argparse.ArgumentParser(description="Serve one episode's front door.")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=9105)
+    ap.add_argument("--task", default=None, help="task JSON (default: first in tasks/)")
+    a = ap.parse_args()
+    tasks = Path(__file__).resolve().parents[1] / "tasks"
+    path = Path(a.task) if a.task else sorted(tasks.glob("*.json"))[0]
+    shim = EpisodeHTTPShim(Episode(load_task_file(path), episode_id="manual"),
+                           port=a.port, host=a.host).start()
+    print(f"{shim.url} (advertised: {shim.public_url}) serving {path.name}; Ctrl-C to stop")
+    try:
+        shim._thread.join()
+    except KeyboardInterrupt:
+        shim.stop()

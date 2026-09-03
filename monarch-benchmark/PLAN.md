@@ -124,10 +124,10 @@ post summary to Slack #benchmarks; link Langfuse traces
 | D4 | Frontier baselines | `bare/api/claude-opus-4-8` and one GPT competitor run the 10-task pilot with cost and cache reported. |
 | D5 | First round on the simulated target, no Monarch | 200 tasks, baselines + cheap models, k=2, internal report with source lines, summary in #benchmarks. |
 | D6 | OpenAPI document for the simulated apps | Generated from the 47 `.jsonc` files, served by the HTTP front door, validated against the FD `api_spec` handler. |
-| D7 | Monarch, create + run mode | `monarch/stock` completes the 10-task pilot paired against D4; phases split; model-team cost summed. |
+| D7 | Monarch, create + run mode | `monarch@<version>` completes the 10-task pilot paired against D4; phases split (authoring, execution) with wall-clock and cost per phase and per model, read from Langfuse and priced by a versioned Bedrock table; questions asked recorded. Absorbs D10 (feature 002, `specs/002-monarch-create-run/`). |
 | D8 | Monarch, full-flow mode | Same pilot with discovery inside the run; discovery phase cost and time recorded. |
 | D9 | Monarch, run-only mode | Oracle workflows converted to recipes; engine-only results. |
-| D10 | Monarch phase telemetry | Spans per stage with tokens, exported to Langfuse, joined to bench rows by episode id. |
+| D10 | Monarch phase telemetry | Merged into D7 — feature 002 reads phase spans and token usage from Langfuse instead of a separate deliverable. |
 | D11 | Langfuse + Slack output | One Langfuse trace per test; Slack post rendered from the report. |
 | D12 | Second target platform design | Which real platform, tenant, reset, scoped checker, legal check. |
 
@@ -161,20 +161,20 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [ ] B1 Bring up the Monarch stack locally (`just dev`); confirm workflow creation works with Bedrock from this machine.
 - [x] B2 Generate `openapi.json` (`wb_world/openapi.py`: 47 docs, 686 operations, all valid; 72 same-path variants merged, not dropped) for the 47 apps from the `.jsonc` files; serve it from the HTTP front door; validate with FD's `api_spec` handler. → **D6**
 - [x] B3 Finish `wb_arms/http_shim.py` (REST routes per service + `/openapi/*.json`; AB error envelopes become HTTP status; validated with FD's `api_spec` handler still pending, see B5): `POST`/`GET` routes per endpoint over one `Episode`, one instance per test, plus `/openapi.json`.
-- [ ] B4 Create + run mode: seed generator from the OpenAPI document (follow `public-api-seeds-runbook.md`), load once, run authoring + execution. → **D7**
+- [ ] B4 Create + run mode: seed generator from the OpenAPI document (follow `public-api-seeds-runbook.md`), load once, run authoring + execution. → **D7** → feature 002 (`specs/002-monarch-create-run/`)
 - [ ] B5 Full-flow mode: register an `api_spec` discovery configuration (credential `none`, target = the front door's `/openapi.json`); run discovery inside the test; record it as a phase. → **D8**
 - [ ] B6 Run-only mode: convert each task's oracle actions into a saved recipe; run the engine only. → **D9**
-- [ ] B7 Rewrite `wb_arms/monarch.py` against the real endpoints: session login → `POST /api/workflows/recipe/runs {goal}` → SSE until saved → `POST /api/workflows/:id/run {mode: live}` → poll. Drop the `events.jsonl` assumption.
-- [ ] B8 Cost: read the authoring token ledger + engine LLM calls per run; price with a versioned table; store per phase.
-- [ ] B9 Paired pilot in each mode: 10 tasks × {monarch/stock, bare/api/claude-opus-4-8, oracle} × k=2.
+- [ ] B7 Rewrite `wb_arms/monarch.py` against the real endpoints: session login → `POST /api/workflows/recipe/runs {goal}` → SSE until saved → `POST /api/workflows/:id/run {mode: live}` → poll. Drop the `events.jsonl` assumption. → feature 002 (`specs/002-monarch-create-run/`)
+- [ ] B8 Cost: read the authoring token ledger + engine LLM calls per run; price with a versioned table; store per phase. → feature 002 (`specs/002-monarch-create-run/`)
+- [ ] B9 Paired pilot in each mode: 10 tasks × {monarch@<version>, claude-opus-4-8/api, oracle} × 2 repetitions.
 - [ ] B10 Decide hosting for the Monarch stack used by the bench: laptop, a Docker VM, or staging with IP allowlist. Railway cannot host it (Lambda emulation needs the Docker socket).
 
 ### WS-C · Monarch phase telemetry (parallel, in the Monarch repo)
 
-- [ ] C1 Read `apps/backend/src/telemetry/llm-spans.ts` and `recipe-agent/token-usage.ts`; list which stages already have spans.
-- [ ] C2 Add stage spans (`discovery.run`, `recipe.triage`, `recipe.select`, `recipe.plan`, `recipe.critic`, `recipe.review`, `engine.run`, `engine.step`) with token attributes, behind the existing Langfuse switch.
-- [ ] C3 Accept a `bench.episode_id` attribute (header or request field) so traces join to bench rows.
-- [ ] C4 Expose per-run token totals by stage on the run read endpoint, so the bench does not scrape SSE. → **D10**
+- [ ] C1 Read `apps/backend/src/telemetry/llm-spans.ts` and `recipe-agent/token-usage.ts`; list which stages already have spans. → feature 002 (`specs/002-monarch-create-run/`)
+- [ ] C2 Add stage spans (`discovery.run`, `recipe.triage`, `recipe.select`, `recipe.plan`, `recipe.critic`, `recipe.review`, `engine.run`, `engine.step`) with token attributes, behind the existing Langfuse switch. → feature 002 (`specs/002-monarch-create-run/`)
+- [ ] C3 Accept a `bench.episode_id` attribute (header or request field) so traces join to bench rows. → feature 002 (`specs/002-monarch-create-run/`)
+- [ ] C4 Expose per-run token totals by stage on the run read endpoint, so the bench does not scrape SSE. → **D10** — superseded: the bench reads Langfuse
 
 ### WS-D · Output: Langfuse and Slack
 
@@ -210,6 +210,8 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 2 Sep 2026 | Corpus invariants are derived mechanically from assertion types plus a reviewed side-effect list, not hand-written per task. | Carlos |
 | 2 Sep 2026 | Repo language: English for every file; conversation in Portuguese. Plain language, no internal jargon in shared docs. | Carlos |
 | 2 Sep 2026 | Benchmark inputs are files: products, models, harnesses, plans; run = product × plan. | Carlos |
+| 3 Sep 2026 | Monarch cost and phases come from Langfuse priced by a versioned Bedrock table, not from Monarch's Postgres. | Carlos |
+| 3 Sep 2026 | A question during authoring gets one fixed reply, hardcoded; questions counted per attempt. | Carlos |
 
 ## 5. Open questions
 
@@ -221,3 +223,20 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 - Does `FD_MODE=public_api_extractor` need anything beyond the OpenAPI URL (auth, product slug registration)? (Deyton / code)
 - Which second target platform, and does FD's existing map for it cover the task shapes we want? (Lucas)
 - Owner A / Owner B naming by 2 Oct: is Carlos one of them? (Lucas + Sam)
+
+**Feature 002 open questions** (`specs/002-monarch-create-run/spec.md`; none blocks the spec, the plan,
+or the offline implementation; all three block the live pilot):
+
+- **Model-provider permission.** None of Carlos's AWS SSO roles may call `bedrock:InvokeModel` in the
+  region Monarch uses (tested 3 Sep, all denied). Monarch's authoring uses that provider only.
+  Owner: Deyton or infra.
+- **Product access grant.** The mechanism that grants the 47 `bench-<service>` products to the bench
+  user's organisation is not named in Monarch's benchmark-access notes; until it is, setup prints the
+  missing products and the step is manual. Owner: Deyton.
+- **Credential binding for credential-free actions.** Whether products whose actions need no credential
+  still require a credential binding, or a declaration in Monarch's discovery catalogue, for the engine
+  to execute them. Owner: Carlos, verified live against the runbook before the first attempt.
+
+Note: Monarch attempts are named `monarch@<version>`; `wb_report/audiences.yaml`'s `public-rung2`
+today allows only the exact name `monarch`. A public report with the real Monarch competitor needs a
+`monarch@*` pattern (or equivalent) added there before publication.

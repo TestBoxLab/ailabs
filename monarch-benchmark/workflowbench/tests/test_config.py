@@ -81,9 +81,43 @@ accepts: none
 runnable: false
 base_url: ${MONARCH_URL}
 credential_env: MONARCH_TOKEN
-release: "1.4"
+login_email: dev-root@testbox.com
+login_password_env: MONARCH_PASSWORD
+fd_url: ${MONARCH_FD_URL}
+shim_port: 9105
+shim_public_host: host.docker.internal
+langfuse_url: ${LANGFUSE_URL}
+langfuse_public_key_env: LANGFUSE_PUBLIC_KEY
+langfuse_secret_key_env: LANGFUSE_SECRET_KEY
+price_table: monarch-team-bedrock
+monarch_repo: ../../../monarch
 modes: [full-flow, create-run, run-only]
 description: The product under comparison.
+"""
+
+PRICE_TABLE = """\
+name: monarch-team-bedrock
+kind: price-table
+provider: bedrock
+region: us-west-2
+prices_verified: 2026-09-03
+description: Bedrock prices for the models Monarch may call.
+models:
+  - family: claude-opus-4-8
+    match: [opus-4-8]
+    usd_per_million: {input: 5.00, cached: 0.50, cache_write: 6.25, output: 25.00}
+  - family: claude-opus-5
+    match: [opus-5]
+    usd_per_million: {input: 5.00, cached: 0.50, cache_write: 6.25, output: 25.00}
+  - family: claude-sonnet-5
+    match: [sonnet-5]
+    usd_per_million: {input: 2.00, cached: 0.20, cache_write: 2.50, output: 10.00}
+  - family: claude-sonnet-4-6
+    match: [sonnet-4-6]
+    usd_per_million: {input: 3.00, cached: 0.30, cache_write: 3.75, output: 15.00}
+  - family: claude-haiku-4-5
+    match: [haiku-4-5]
+    usd_per_million: {input: 1.00, cached: 0.10, cache_write: 1.25, output: 5.00}
 """
 
 PLAN = """\
@@ -163,7 +197,13 @@ def test_loaded_fields(tmp_path):
     o = config.load_harness(write(tmp_path, HARNESS_SCRIPTED))
     assert o.accepts == "none" and o.script == "oracle"
     mo = config.load_harness(write(tmp_path, HARNESS_MONARCH))
-    assert mo.runnable is False and mo.release == "1.4"
+    assert mo.runnable is False and mo.login_email == "dev-root@testbox.com"
+    assert mo.shim_port == 9105 and mo.shim_public_host == "host.docker.internal"
+    assert mo.login_password_env == "MONARCH_PASSWORD" and mo.fd_url == "${MONARCH_FD_URL}"
+    assert mo.langfuse_url == "${LANGFUSE_URL}"
+    assert mo.langfuse_public_key_env == "LANGFUSE_PUBLIC_KEY"
+    assert mo.langfuse_secret_key_env == "LANGFUSE_SECRET_KEY"
+    assert mo.price_table == "monarch-team-bedrock" and mo.monarch_repo == "../../../monarch"
 
     pl = config.load_plan(write(tmp_path, PLAN))
     assert pl.approved_by is None and pl.timeout_s == 600 and pl.repetitions == 2
@@ -261,6 +301,56 @@ def test_harness_kind_specific_keys(tmp_path):
     # monarch modes are enum-checked
     text = HARNESS_MONARCH.replace("modes: [full-flow, create-run, run-only]", "modes: [warp]")
     check_error(config.load_harness, write(tmp_path, text), "modes[0]")
+    # `release` is gone from the monarch harness (the version is read from the checkout)
+    msg = check_error(config.load_harness, write(tmp_path, HARNESS_MONARCH + "release: '1.4'\n"), "release")
+    assert "unknown" in msg
+
+
+@pytest.mark.parametrize("port", ["1023", "65536", "0"])
+def test_monarch_shim_port_must_be_a_usable_port(tmp_path, port):
+    check_error(config.load_harness, write(tmp_path, edit(HARNESS_MONARCH, "shim_port", port)), "shim_port")
+
+
+# ---------------------------------------------------------------- price table
+
+def test_price_table_loads_five_families(tmp_path):
+    table = config.load_price_table(write(tmp_path, PRICE_TABLE))
+    assert table.name == "monarch-team-bedrock" and table.provider == "bedrock"
+    assert table.region == "us-west-2" and table.prices_verified == datetime.date(2026, 9, 3)
+    assert [e.family for e in table.models] == ["claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
+                                                "claude-sonnet-4-6", "claude-haiku-4-5"]
+    assert table.models[0].match == ["opus-4-8"]
+    assert table.models[2].usd_per_million == config.Prices(input=2.0, cached=0.2, output=10.0,
+                                                            cache_write=2.5)
+
+
+def test_price_table_needs_all_four_prices(tmp_path):
+    text = PRICE_TABLE.replace("{input: 1.00, cached: 0.10, cache_write: 1.25, output: 5.00}",
+                               "{input: 1.00, cached: 0.10, output: 5.00}")
+    check_error(config.load_price_table, write(tmp_path, text), "models[4].usd_per_million.cache_write")
+
+
+def test_price_table_family_must_be_unique(tmp_path):
+    text = PRICE_TABLE.replace("family: claude-opus-5", "family: claude-opus-4-8")
+    msg = check_error(config.load_price_table, write(tmp_path, text), "models[1].family")
+    assert "duplicate" in msg
+
+
+def test_price_table_match_must_be_a_non_empty_list(tmp_path):
+    text = PRICE_TABLE.replace("match: [opus-5]", "match: []")
+    check_error(config.load_price_table, write(tmp_path, text), "models[1].match")
+
+
+def test_load_model_rejects_a_price_table(tmp_path):
+    msg = check_error(config.load_model, write(tmp_path, PRICE_TABLE), "kind")
+    assert "price-table" in msg
+
+
+def test_load_models_skips_price_tables(tmp_path):
+    from wb_arms import providers
+    write(tmp_path, MODEL)
+    write(tmp_path, PRICE_TABLE)
+    assert sorted(providers.load_models(tmp_path)) == ["claude-opus-4-8"]
 
 
 def test_top_level_must_be_mapping(tmp_path):
@@ -371,9 +461,14 @@ def test_resolve_relative_tasks_dir(site, monkeypatch):
     assert rc.attempts_per_competitor == 4 and rc.plan.tasks == "tasks" and rc.config_json["tasks_dir"] == "tasks"
 
 
-def runnable_monarch(site, modes="[full-flow, create-run, run-only]"):
+def runnable_monarch(site, modes="[full-flow, create-run, run-only]", price_table=None,
+                     monarch_repo=None):
     text = edit(HARNESS_MONARCH, "runnable", "true").replace(
         "modes: [full-flow, create-run, run-only]", f"modes: {modes}")
+    if price_table is not None:
+        text = edit(text, "price_table", price_table)
+    if monarch_repo is not None:
+        text = edit(text, "monarch_repo", monarch_repo)
     write(site / "config/harnesses", text)
     write(site / "config/plans", plan_text(site).replace("  - {harness: oracle}\n", "  - {harness: monarch}\n"))
 
@@ -585,8 +680,23 @@ def test_registry_is_the_seven_files_and_doctor_resolves_through_get(monkeypatch
     from wb_arms import providers
     from wb_orchestrator import doctor
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert sorted(providers.REGISTRY) == sorted(p.stem for p in (config.DEFAULT_CONFIG_DIR / "models").glob("*.yaml"))
+    assert sorted(providers.REGISTRY) == sorted(  # price tables share the folder but are not competitors
+        p.stem for p in (config.DEFAULT_CONFIG_DIR / "models").glob("*.yaml") if not config.is_price_table(p))
     assert providers.get("claude-opus-4-8").model_id == "claude-opus-4-8"
     report = doctor.check_provider("claude-opus-4-8")  # no key: fails before any call
     assert report["provider"] == "claude-opus-4-8" and report["error"] == "ANTHROPIC_API_KEY not set"
     assert "unknown provider" in doctor.check_provider("nope")["error"]
+
+
+# -- T040: the reply to Monarch's questions is code, never config --------------
+
+def test_fixed_reply_not_in_config(tmp_path):
+    """Nobody can tune the sentence per run: it would make attempts uncomparable."""
+    from wb_arms.monarch import FIXED_REPLY
+    for key in ("reply", "fixed_reply"):
+        msg = check_error(config.load_harness,
+                          write(tmp_path, HARNESS_MONARCH + f"{key}: hello\n"), key)
+        assert "unknown" in msg
+    shipped = [p for p in (Path(__file__).resolve().parents[1] / "config").rglob("*.yaml")
+               if FIXED_REPLY in p.read_text(encoding="utf-8")]
+    assert shipped == []

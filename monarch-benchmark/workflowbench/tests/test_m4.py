@@ -184,3 +184,42 @@ def test_telemetry_collect(tmp_path):
     assert c["retries"] == 1
     assert c["workflow_outcome"] == "workflow_saved"
     assert c["unknown_events"] == []
+
+
+# -- source line: price table + missing cost (T045) ---------------------------
+
+@pytest.fixture()
+def monarch_store(tmp_path):
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-m", "cfg456", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch@abc1234", "oracle"],
+                      "k": 1, "n_tasks": 3, "timeout_s": 600,
+                      "price_tables": {"monarch-team-bedrock": {
+                          "name": "monarch-team-bedrock",
+                          "provider": "bedrock", "region": "us-east-1",
+                          "prices_verified": "2026-09-03", "models": []}}})
+    for i, task in enumerate(("t1", "t2", "t3")):
+        row = _row(task, "monarch@abc1234", 0, True, run="run-m")
+        if i == 0:
+            row.flags = ["cost_missing"]
+        store.record_episode(row)
+        store.record_episode(_row(task, "oracle", 0, True, run="run-m"))
+    store.finish_run("run-m")
+    return store
+
+
+def test_source_line_carries_price_table_and_missing_cost(monarch_store):
+    md = render_md(build_report(monarch_store, "run-m", audience="internal"))
+    assert "price table monarch-team-bedrock@2026-09-03" in md
+    assert "cost missing on 1/3 attempts" in md
+
+
+def test_source_line_unchanged_without_price_tables_or_monarch(tmp_path):
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-n", "cfg", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["kimi-k3/api"], "k": 1,
+                      "n_tasks": 1, "timeout_s": 600})
+    store.record_episode(_row("t1", "kimi-k3/api", 0, True, run="run-n"))
+    md = render_md(build_report(store, "run-n", audience="internal"))
+    assert "price table" not in md and "cost missing" not in md
+    assert "`src: workflowbench-synthetic@0.1 · v0.1 · n=1 · kimi-k3/api · run-n`" in md
