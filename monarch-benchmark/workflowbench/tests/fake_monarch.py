@@ -48,6 +48,11 @@ _REFUSAL_STATUS = {"RUN_ALREADY_ACTIVE": 409, "product_not_granted": 403}
 # ponytail: a cap so a test that never replies still ends; lower it in a test if needed
 REPLY_GATE_TIMEOUT_S = 30.0
 
+# Generous on purpose: a loaded CI box can take many seconds to answer a
+# localhost request, and a timeout here used to surface as a confusing
+# "hits == []" failure in the caller rather than as an engine error.
+ENGINE_CALL_TIMEOUT_S = 60.0
+
 
 class FakeMonarch:
     def __init__(self, scenario: Scenario | None = None):
@@ -62,6 +67,7 @@ class FakeMonarch:
         self.token = "sess-1"
         self._reply_events: dict[str, threading.Event] = {}
         self._run_done: dict[str, bool] = {}
+        self._run_error: dict[str, dict] = {}      # run id -> outcome when an engine call failed
         self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
         self._run_n = 0                            # workflow runs get run-1, run-2, ...
@@ -78,21 +84,30 @@ class FakeMonarch:
     def _fire_engine_calls(self, run_id: str) -> None:
         sc = self.scenario
         time.sleep(sc.delay_s.get("run", 0))
+        transport_error = None
         for method, path, body in sc.engine_calls:
             data = json.dumps(body).encode() if body is not None else None
             req = urllib.request.Request((sc.shim_url or "") + path, data=data, method=method,
                                          headers={"Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=10) as r:
+                with urllib.request.urlopen(req, timeout=ENGINE_CALL_TIMEOUT_S) as r:
                     out = {"path": path, "status": r.status, "body": r.read().decode("utf-8", "replace")}
-            except urllib.error.HTTPError as e:
+            except urllib.error.HTTPError as e:                     # the front door answered
                 out = {"path": path, "status": e.code, "body": e.read().decode("utf-8", "replace")}
-            except Exception as e:                                  # noqa: BLE001
+            except Exception as e:                                  # noqa: BLE001  never reached it
                 out = {"path": path, "status": None, "error": str(e)}
+                transport_error = transport_error or f"{path}: {e}"
             with self._lock:
                 self.engine_responses.append(out)
         if not sc.run_never_finishes:
             with self._lock:
+                # A call that never reached the front door is a failed run, not a
+                # succeeded one: reporting success here would hide the real error
+                # behind whatever run_outcome the scenario asked for.
+                if transport_error:
+                    self._run_error[run_id] = {"status": "failed",
+                                               "errorCode": "ENGINE_CALL_FAILED",
+                                               "error": transport_error}
                 self._run_done[run_id] = True
 
     def _handler(self):
@@ -158,7 +173,11 @@ class FakeMonarch:
                     time.sleep(outer.scenario.delay_s.get("poll", 0))
                     with outer._lock:
                         done = outer._run_done.get(run_id, False)
-                    self._reply(200, dict(outer.scenario.run_outcome) if done else {"status": "running"})
+                        failed = outer._run_error.get(run_id)
+                    if not done:
+                        self._reply(200, {"status": "running"})
+                    else:
+                        self._reply(200, dict(failed or outer.scenario.run_outcome))
                 else:
                     self._reply(404, {"error": "not_found"})
 

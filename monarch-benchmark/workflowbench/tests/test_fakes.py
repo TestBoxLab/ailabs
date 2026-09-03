@@ -164,8 +164,11 @@ def test_fake_monarch_routes_and_engine_calls():
                 status, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
                 if poll["status"] != "running":
                     break
+            # engine_responses first: it names the transport error if the call
+            # never landed, where a bare `hits == []` would not.
+            assert m.engine_responses[0]["status"] == 200, m.engine_responses
             assert poll == {"status": "succeeded"}
-            assert hits == ["/salesforce/x"] and m.engine_responses[0]["status"] == 200
+            assert hits == ["/salesforce/x"]
 
             assert _http("POST", f"{m.url}/api/workflows/recipe/runs/rr-1/cancel", {},
                          headers=sess) == (200, {"status": "cancelled"})
@@ -208,6 +211,28 @@ def test_fake_monarch_cancel_ends_a_stream_parked_on_the_account_prompt():
         assert not reader.is_alive()           # the stream ended, it did not hit the reply gate
         assert frames[-1] == {"status": "error", "error": "cancelled"}
         assert len(frames) == 2                # the frame after the prompt is never sent
+
+
+def test_fake_monarch_run_fails_when_an_engine_call_never_lands():
+    """An engine call that never reaches the front door must not report success:
+    that used to surface as a confusing empty-hits failure in the caller."""
+    dead = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = dead.server_address[1]
+    dead.server_close()                        # nothing listens on this port now
+
+    sc = Scenario(engine_calls=[("PATCH", "/salesforce/x", {"c": "Denver"})],
+                  shim_url=f"http://127.0.0.1:{port}")
+    with FakeMonarch(sc) as m:
+        sess = {"x-monarch-session": m.token}
+        assert _http("POST", f"{m.url}/api/workflows/wf-1/run", {}, headers=sess)[0] == 201
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            time.sleep(0.01)
+            _, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
+            if poll["status"] != "running":
+                break
+        assert poll["status"] == "failed" and poll["errorCode"] == "ENGINE_CALL_FAILED"
+        assert m.engine_responses[0]["status"] is None
 
 
 def test_fake_monarch_refusal_and_server_error():
