@@ -1,9 +1,18 @@
 name: monarch
 kind: monarch
 accepts: none
-runnable: false
-base_url: ${MONARCH_URL}
-credential_env: MONARCH_TOKEN
-release: "1.4"
-modes: [full-flow, create-run, run-only]
-description: The product under comparison. Model team fixed by the release.
+runnable: true
+base_url: ${MONARCH_URL}                 # http://localhost:4174
+credential_env: MONARCH_TOKEN            # set -> login skipped
+login_email: dev-root@testbox.com
+login_password_env: MONARCH_PASSWORD     # seeded default: monarch-dev
+fd_url: ${MONARCH_FD_URL}                # http://localhost:3001
+shim_port: 9105                          # front door on the host, fixed
+shim_public_host: host.docker.internal
+langfuse_url: ${LANGFUSE_URL}            # http://localhost:3000
+langfuse_public_key_env: LANGFUSE_PUBLIC_KEY
+langfuse_secret_key_env: LANGFUSE_SECRET_KEY
+price_table: monarch-team-bedrock
+monarch_repo: ../../../monarch           # relative to workflowbench/, or absolute
+modes: [create-run]                      # full-flow and run-only return in 003/004
+description: The product under comparison, driven through its own API. Version read from the checkout.

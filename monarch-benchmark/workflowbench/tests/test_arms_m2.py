@@ -43,30 +43,6 @@ def test_claude_code_stock_invocation_documented():
     assert "--permission-mode" in inv["flags"]      # non-default flags are named
 
 
-def test_monarch_arm_blocked_without_entrypoints(monkeypatch, tmp_path):
-    for var in ("MONARCH_AUTHORING_CMD", "MONARCH_ENGINE_CMD"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("MONARCH_VERSION", "0.9-test")
-    arm = build_arm("monarch/stock")
-    assert arm.name == "monarch/stock@0.9-test"
-    from wb_world.episode import load_task_file, Episode
-    task = load_task_file(sorted((ROOT / "tasks").glob("*.json"))[0])
-    with pytest.raises(InfraError) as ei:
-        arm.run(Episode(task, "m2-block"))
-    assert "Deyton" in str(ei.value)                # blocked loudly, names the blocker
-
-
-def test_monarch_lab_requires_config_and_hashes_it(monkeypatch, tmp_path):
-    monkeypatch.delenv("MONARCH_LAB_CONFIG", raising=False)
-    with pytest.raises(InfraError):
-        build_arm("monarch/lab")
-    cfg = tmp_path / "lab.json"
-    cfg.write_text('{"experiment": "graph-hints-v2"}')
-    monkeypatch.setenv("MONARCH_LAB_CONFIG", str(cfg))
-    arm = build_arm("monarch/lab")
-    assert arm.name.startswith("monarch/lab@") and len(arm.name.split("@")[1]) == 16
-
-
 def test_corpus_validate_t0_tasks():
     v = validate_corpus(ROOT / "tasks")
     assert v["n_tasks"] == 10
