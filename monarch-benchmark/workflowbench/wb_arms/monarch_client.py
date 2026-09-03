@@ -19,6 +19,8 @@ import urllib.request
 from http.cookies import SimpleCookie
 from typing import Iterator
 
+from wb_arms.api_loop import EpisodeTimeout, InfraError
+
 DEFAULT_TIMEOUT_S = 30.0
 
 
@@ -38,6 +40,9 @@ class MonarchClient:
     # -- plumbing --------------------------------------------------------------
 
     def _budget(self, deadline: float | None) -> float:
+        # ponytail: 1 s floor, never 0: urlopen reads a non-positive timeout as
+        # "no timeout". A call past the deadline still gets that second; the
+        # caller (stream, the arm's poll loop) enforces the ceiling.
         return DEFAULT_TIMEOUT_S if deadline is None else max(1.0, deadline - time.monotonic())
 
     def _request(self, method: str, path: str, body: dict | None = None,
@@ -52,7 +57,6 @@ class MonarchClient:
               headers: dict | None = None, deadline: float | None = None,
               ok_status: tuple[int, ...] = ()) -> dict:
         """One JSON call. 4xx with a `code` -> MonarchRefused; 5xx and transport -> InfraError."""
-        from wb_arms.api_loop import InfraError
         req = self._request(method, path, body, headers)
         try:
             with urllib.request.urlopen(req, timeout=self._budget(deadline)) as r:
@@ -74,7 +78,6 @@ class MonarchClient:
     # -- session ---------------------------------------------------------------
 
     def login(self, email: str, password: str, deadline: float | None = None) -> str:
-        from wb_arms.api_loop import InfraError
         req = self._request("POST", "/api/auth/login", {"email": email, "password": password})
         try:
             with urllib.request.urlopen(req, timeout=self._budget(deadline)) as r:
@@ -95,14 +98,11 @@ class MonarchClient:
         return self._call("GET", "/api/health", deadline=deadline)
 
     def liveness(self, deadline: float | None = None) -> bool:
-        from wb_arms.api_loop import InfraError
         try:
             with urllib.request.urlopen(self._request("GET", "/api", accept="text/plain"),
                                         timeout=self._budget(deadline)) as r:
                 return r.status == 200
         except (urllib.error.HTTPError, OSError):
-            return False
-        except InfraError:                                  # pragma: no cover - not raised here
             return False
 
     # -- authoring -------------------------------------------------------------
@@ -119,7 +119,6 @@ class MonarchClient:
         timeout is the remaining budget, so a stalled stream raises rather than
         hanging; the deadline is also checked between frames.
         """
-        from wb_arms.api_loop import EpisodeTimeout, InfraError
         req = self._request("GET", f"/api/workflows/recipe/runs/{run_id}/stream",
                             accept="text/event-stream")
         try:
@@ -144,7 +143,7 @@ class MonarchClient:
                     return
                 line = line.decode("utf-8", "replace").strip()
                 if line.startswith("data:"):
-                    frame = _json_or_none(line[len("data:"):].strip().encode())
+                    frame = _json_or_none(line[len("data:"):].strip())
                     if frame is not None:
                         yield frame
 
@@ -173,8 +172,8 @@ class MonarchClient:
                           ok_status=(404,))
 
 
-def _json_or_none(raw: bytes):
+def _json_or_none(raw: str | bytes):
     try:
-        return json.loads(raw or b"null")
+        return json.loads(raw or "null")
     except json.JSONDecodeError:
         return None
