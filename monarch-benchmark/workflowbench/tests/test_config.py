@@ -459,7 +459,7 @@ def test_resolve_rule8_names_task_service_and_product_file(site):
     rewrite(site, "products", PRODUCT, "services", "[gmail]")  # every task here seeds salesforce
     msg = check_resolve_error(site, paths(site)[0], "services")
     assert "task simple.email_sf_contact_city_update" in msg and "service salesforce" in msg
-    assert "simulated-apps.yaml" in msg and "services" in msg.split(": ", 2)[-1]
+    assert "simulated-apps.yaml" in msg and "does not list in services" in msg
 
 
 def test_resolve_rule10_unknown_audience(site):

@@ -29,6 +29,7 @@ LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
 SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without approved_by (rule 9)
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+SideEffects = list[tuple[str, str | None, list[dict]]]
 
 
 class ConfigError(Exception):
@@ -212,6 +213,33 @@ def load_product(path) -> Product:
     )
 
 
+def load_side_effects(path: str | Path) -> SideEffects:
+    """Read a side-effect file (research.md R7; data-model.md Side effects) into (service, when, matchers) tuples."""
+    path = Path(path)
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        raise ConfigError(path, "<root>", f"cannot read side effects: {e}") from e
+    if not isinstance(data, list):
+        raise ConfigError(path, "<root>", "side-effects file must be a list")
+    out: SideEffects = []
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ConfigError(path, f"[{i}]", "expected a mapping {service, when?, allowed}")
+        c = _Checker(path, entry, f"[{i}].")
+        c.keys(("service", "allowed"), ("when",))
+        service, cond = c.get("service", str), c.get("when", str)
+        matchers = []
+        for j, m in enumerate(c.get("allowed", list)):
+            if not isinstance(m, dict):
+                c.fail(f"allowed[{j}]", "expected a mapping {service, op, path}")
+            mc = _Checker(path, m, f"[{i}].allowed[{j}].")
+            mc.keys(("service", "op", "path"))
+            matchers.append({k: mc.get(k, str) for k in ("service", "op", "path")})
+        out.append((service, cond, matchers))
+    return out
+
+
 def load_model(path) -> Model:
     c = _read(path, "model")
     c.keys(("name", "provider", "model", "effort", "usd_per_million", "key_env"),
@@ -369,6 +397,12 @@ class RunConfig:
                 "suite_dir": self.tasks_dir}  # ponytail: old readers (wb grade) key on suite_dir
 
 
+def from_workflowbench(p, config_dir=DEFAULT_CONFIG_DIR) -> Path:
+    """Absolute stays; relative is rooted at the folder above `config_dir` (the workflowbench dir)."""
+    p = Path(p)
+    return p if p.is_absolute() else Path(config_dir).parent / p
+
+
 def known(folder) -> str:
     """Names of the config files in `folder`, comma-joined (messages and the picker)."""
     return ", ".join(sorted(p.stem for p in Path(folder).glob("*.yaml")))
@@ -437,9 +471,7 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
     if plan.baseline not in names:
         c.fail("baseline", f"{plan.baseline!r} is not a competitor; have: {', '.join(names)}")
 
-    tasks_dir = Path(plan.tasks)
-    if not tasks_dir.is_absolute():
-        tasks_dir = config_dir.parent / tasks_dir  # the workflowbench dir, whatever the cwd
+    tasks_dir = from_workflowbench(plan.tasks, config_dir)  # whatever the cwd
     try:
         tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:

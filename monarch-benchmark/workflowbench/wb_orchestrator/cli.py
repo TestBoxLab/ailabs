@@ -175,7 +175,7 @@ def cmd_corpus(args) -> int:
     if args.corpus_cmd == "declare":
         from wb_orchestrator import declare
         product = config.load_product(config.resolve_name_or_path(args.product, "product"))
-        side_effects = declare.load_side_effects(declare.side_effects_path(product.side_effects))
+        side_effects = config.load_side_effects(config.from_workflowbench(product.side_effects))
         r = declare.declare_dir(args.dir, args.out, overwrite=args.overwrite, side_effects=side_effects)
         print(f"declared {r['declared']} tasks, {r['already_declared']} already declared, "
               f"{len(r['unmapped'])} with unmapped assertion types")

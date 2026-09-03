@@ -25,13 +25,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from wb_orchestrator import config
-from wb_orchestrator.config import ConfigError, _Checker
+from wb_orchestrator.config import SideEffects, load_side_effects  # noqa: F401  (re-export)
 from wb_orchestrator.orchestrator import contract_hash
-
-SideEffects = list[tuple[str, str | None, list[dict[str, Any]]]]
 
 # assertion type -> (service, collection or "*", id key or None)
 _TYPES: dict[str, tuple[str, str, str | None]] = {
@@ -69,43 +65,10 @@ _TYPES: dict[str, tuple[str, str, str | None]] = {
 # Assertion field names that differ from the world-model field they check.
 _FIELD_ALIAS = {"stage": "stage_name"}
 
-def load_side_effects(path: str | Path) -> SideEffects:
-    """Read a side-effect file (research.md R7) into (service, when, matchers) tuples."""
-    path = Path(path)
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as e:
-        raise ConfigError(path, "<root>", f"cannot read side effects: {e}") from e
-    if not isinstance(data, list):
-        raise ConfigError(path, "<root>", "side-effects file must be a list")
-    out: SideEffects = []
-    for i, entry in enumerate(data):
-        if not isinstance(entry, dict):
-            raise ConfigError(path, f"[{i}]", "expected a mapping {service, when?, allowed}")
-        c = _Checker(path, entry, f"[{i}].")
-        c.keys(("service", "allowed"), ("when",))
-        service, cond = c.get("service", str), c.get("when", str)
-        matchers = []
-        for j, m in enumerate(c.get("allowed", list)):
-            if not isinstance(m, dict):
-                c.fail(f"allowed[{j}]", "expected a mapping {service, op, path}")
-            mc = _Checker(path, m, f"[{i}].allowed[{j}].")
-            mc.keys(("service", "op", "path"))
-            matchers.append({k: mc.get(k, str) for k in ("service", "op", "path")})
-        out.append((service, cond, matchers))
-    return out
-
-
 def default_side_effects() -> SideEffects:
     """The simulated-apps product's side-effect list."""
-    product = config.load_product(config.DEFAULT_CONFIG_DIR / "products" / "simulated-apps.yaml")
-    return load_side_effects(side_effects_path(product.side_effects))
-
-
-def side_effects_path(path: str) -> Path:
-    """A product's `side_effects` entry; relative means from the workflowbench dir."""
-    p = Path(path)
-    return p if p.is_absolute() else config.DEFAULT_CONFIG_DIR.parent / p
+    product = config.load_product(config.resolve_name_or_path("simulated-apps", "product"))
+    return load_side_effects(config.from_workflowbench(product.side_effects))
 
 
 def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
