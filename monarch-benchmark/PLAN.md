@@ -92,11 +92,13 @@ Contract: `launch(episode) -> ArmResult`.
 | `monarch/stock@<release>` in each test mode | the product | blocked, see WS-B |
 | `monarch/lab@<cfg-hash>` | Lucas's experiments, internal only | after stock |
 
+From 2 Sep 2026 competitor names in results are `model/harness` or the harness name (e.g. `claude-opus-4-8/api`, `oracle`, `monarch`).
+
 ### 1.6 Triggers
 
 | Trigger | Status |
 |---|---|
-| Manual `wb run --suite ... --arms ... --k N` | today |
+| Manual `wb run --product <product> --plan <plan>` | today |
 | Weekly schedule | later (decision: manual for now) |
 | Monarch release tag | later |
 
@@ -104,9 +106,9 @@ Contract: `launch(episode) -> ArmResult`.
 
 ```
 wb doctor                                     # every provider reachable, cache hit proven
-wb corpus validate <suite>                    # tasks are frozen and non-empty
-wb run --suite <suite> --arms <arms> --k <k>  # resumable
-wb report <run_id> --audience internal --baseline bare/api/claude-opus-4-8
+wb corpus validate <task set>                 # tasks are frozen and non-empty
+wb run --product simulated-apps --plan <plan>  # resumable
+wb report <run_id> --audience internal --baseline claude-opus-4-8/api
 post summary to Slack #benchmarks; link Langfuse traces
 ```
 
@@ -207,6 +209,7 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 2 Sep 2026 | Code lives in `TestBoxLab/ailabs` under `monarch-benchmark/`; no separate repo. | Carlos |
 | 2 Sep 2026 | Corpus invariants are derived mechanically from assertion types plus a reviewed side-effect list, not hand-written per task. | Carlos |
 | 2 Sep 2026 | Repo language: English for every file; conversation in Portuguese. Plain language, no internal jargon in shared docs. | Carlos |
+| 2 Sep 2026 | Benchmark inputs are files: products, models, harnesses, plans; run = product × plan. | Carlos |
 
 ## 5. Open questions
 

@@ -48,8 +48,9 @@ class ClaudeCodeArm:
     name = "bare/cli/claude-code"
     provider_key = "claude-code"   # its own concurrency bucket
 
-    def __init__(self, workdir_root: str | Path = "out/cc-work"):
+    def __init__(self, workdir_root: str | Path = "out/cc-work", env: dict[str, str] | None = None):
         self.workdir_root = Path(workdir_root)
+        self.env = dict(env or {})  # from the harness file, merged over os.environ at launch
         self.version = claude_version()
         self.name = f"bare/cli/claude-code@{self.version or 'missing'}"
 
@@ -81,6 +82,7 @@ class ClaudeCodeArm:
         sysprompt = ep.task["prompt"][0]["content"]
         timeout = max((deadline - time.monotonic()) if deadline else 600.0, 1.0)
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_CODE_OAUTH")}
+        env.update(self.env)
         try:
             proc = subprocess.run(
                 [exe, "-p", goal, "--append-system-prompt", sysprompt, *_FLAGS],

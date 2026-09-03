@@ -1,5 +1,8 @@
 """monarch/stock@release and monarch/lab@cfg-hash arms per BUILD-SPEC §2.2.
 
+Arm names now come from the plan (build_arm_for overwrites `name`); the
+env-driven naming below is the pre-file legacy path.
+
 Two integration points, both configured by env until Deyton names the real
 entrypoints (open question #1 — blocks running, not building):
 

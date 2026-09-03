@@ -76,12 +76,12 @@ def test_mean_sem():
 def seeded_store(tmp_path):
     store = Store(tmp_path / "wb.sqlite3")
     store.create_run("run-x", "cfg123", "workflowbench-synthetic@0.1",
-                     {"suite_dir": "tasks", "arms": ["bare/api/kimi-k3", "monarch/stock@1.0",
-                                                     "monarch/lab@deadbeef"], "k": 2, "n_tasks": 2,
+                     {"suite_dir": "tasks", "arms": ["kimi-k3/api", "monarch",
+                                                     "monarch-lab"], "k": 2, "n_tasks": 2,
                       "timeout_s": 600})
-    for arm, passes in [("bare/api/kimi-k3", [True, False, True, True]),
-                        ("monarch/stock@1.0", [True, True, False, True]),
-                        ("monarch/lab@deadbeef", [True, True, True, True])]:
+    for arm, passes in [("kimi-k3/api", [True, False, True, True]),
+                        ("monarch", [True, True, False, True]),
+                        ("monarch-lab", [True, True, True, True])]:
         i = 0
         for task in ("t1", "t2"):
             for trial in (0, 1):
@@ -94,17 +94,17 @@ def seeded_store(tmp_path):
 def test_audience_gate_allowlists():
     aud = load_audiences()
     assert set(aud) == {"internal", "public-rung2"}
-    arms = ["bare/api/kimi-k3", "monarch/stock@1.0", "monarch/lab@deadbeef"]
+    arms = ["kimi-k3/api", "monarch", "monarch-lab"]
     assert gate_arms(arms, "internal") == arms
-    assert gate_arms(arms, "public-rung2") == ["monarch/stock@1.0"]
+    assert gate_arms(arms, "public-rung2") == ["monarch"]
     with pytest.raises(GateError):
         gate_arms(arms, "nonexistent")
 
 
 def test_report_internal_has_everything(seeded_store):
     rep = build_report(seeded_store, "run-x", audience="internal",
-                       baseline_arm="bare/api/kimi-k3")
-    assert sorted(rep["arms"]) == ["bare/api/kimi-k3", "monarch/lab@deadbeef", "monarch/stock@1.0"]
+                       baseline_arm="kimi-k3/api")
+    assert sorted(rep["arms"]) == ["kimi-k3/api", "monarch", "monarch-lab"]
     md = render_md(rep)
     assert "DO NOT EXPORT" in md            # lab arm watermark
     assert "cost (USD)" in md               # internal sees dollars
@@ -115,14 +115,27 @@ def test_report_internal_has_everything(seeded_store):
         assert "source" in f and f["source"]["denominator"] > 0
 
 
+def test_report_names_stop_reason(seeded_store):
+    seeded_store.set_stop_reason("run-x", "cost_ceiling")
+    md = render_md(build_report(seeded_store, "run-x", audience="internal"))
+    assert "stopped: cost_ceiling" in md
+
+
 def test_report_public_strips_at_query_level(seeded_store):
     rep = build_report(seeded_store, "run-x", audience="public-rung2")
-    assert rep["arms"] == ["monarch/stock@1.0"]
-    assert sorted(rep["arms_stripped_by_gate"]) == ["bare/api/kimi-k3", "monarch/lab@deadbeef"]
+    assert rep["arms"] == ["monarch"]
+    assert sorted(rep["arms_stripped_by_gate"]) == ["kimi-k3/api", "monarch-lab"]
     md = render_md(rep)
-    assert "kimi" not in md and "deadbeef" not in md   # gated arms never named publicly
+    assert "kimi" not in md and "monarch-lab" not in md   # gated arms never named publicly
     assert "2 arm(s) withheld" in md
     assert "cost (USD)" not in md            # public: ratios only, no dollars
+
+
+def test_lab_never_renders_outside_internal_even_if_allowlisted(seeded_store, tmp_path):
+    leaky = tmp_path / "audiences.yaml"
+    leaky.write_text('internal:\n  - "*"\nleaky:\n  - "*"\n')
+    with pytest.raises(GateError, match="monarch-lab"):
+        build_report(seeded_store, "run-x", audience="leaky", audiences_path=leaky)
 
 
 def test_report_write_files(seeded_store, tmp_path):
@@ -136,9 +149,9 @@ def test_report_write_files(seeded_store, tmp_path):
 def test_gate_raises_when_nothing_renderable(tmp_path):
     store = Store(tmp_path / "wb.sqlite3")
     store.create_run("run-b", "cfg", "workflowbench-synthetic@0.1",
-                     {"suite_dir": "tasks", "arms": ["bare/api/x"], "k": 1,
+                     {"suite_dir": "tasks", "arms": ["kimi-k3/api"], "k": 1,
                       "n_tasks": 1, "timeout_s": 600})
-    store.record_episode(_row("t1", "bare/api/x", 0, True, run="run-b"))
+    store.record_episode(_row("t1", "kimi-k3/api", 0, True, run="run-b"))
     with pytest.raises(GateError):
         build_report(store, "run-b", audience="public-rung2")
 

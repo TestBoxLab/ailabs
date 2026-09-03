@@ -8,7 +8,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from wb_orchestrator import config
 from wb_orchestrator import doctor as doctor_mod
+from wb_orchestrator.config import ConfigError
 from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RunKilled, regrade
 from wb_results.store import Store
 
@@ -22,7 +24,10 @@ def _store(args) -> Store:
 
 def _print_run_report(store: Store, run_id: str) -> None:
     s = store.status(run_id)
-    print(f"\nrun {s['run_id']}  suite={s['suite']}  config={s['config_hash']}")
+    cfg = json.loads(store.run(run_id)["config_json"])
+    what = (f"product={cfg['product']['name']} plan={cfg['plan']['name']}" if "plan" in cfg
+            else f"suite={s['suite']}")
+    print(f"\nrun {s['run_id']}  {what}  config={s['config_hash']}")
     print(f"episodes {s['episodes_done']}/{s['episodes_total']}  terminations={s['terminations']}")
     hdr = (f"{'arm':<28} {'pass':>6} {'strict':>7} {'infra':>6} {'cost_usd':>10} "
            f"{'cache_hit':>9} {'tokens(cached/prompt)':>24}")
@@ -33,13 +38,49 @@ def _print_run_report(store: Store, run_id: str) -> None:
         strict = f"{a['strict_pass_rate']:.2%}" if a["strict_pass_rate"] is not None else "n/a"
         print(f"{arm:<28} {a['passed']:>3}/{a['non_infra']:<3} {strict:>7} {a['infra']:>6} "
               f"{a['cost_usd']:>10.4f} {hit:>9} {a['tokens_cached']:>12,}/{a['tokens_prompt']:<,}")
+    if s["stop_reason"] == "cost_ceiling":
+        print(f"stopped: cost_ceiling (spend US$ {s['spend_usd']:.2f} / "
+              f"ceiling US$ {cfg.get('cost_ceiling_usd', 0):.2f})")
+    elif s["stop_reason"]:
+        print(f"stopped: {s['stop_reason']}")
+
+
+def _pick_or_flag(value, kind) -> Path:
+    if value:
+        return config.resolve_name_or_path(value, kind)
+    return config.pick(kind, config.DEFAULT_CONFIG_DIR / f"{kind}s")
+
+
+def _banner(rc) -> str:
+    p, plan = rc.product, rc.plan
+    data = "mutable data" if p.data.mutable else "read-only data"
+    return "\n".join([
+        f"product   {p.name} ({p.kind}, {data})",
+        f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
+        f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/   repetitions {plan.repetitions}   "
+        f"competitors {len(rc.competitors)}   attempts {rc.attempts_total}",
+        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}"])
 
 
 def cmd_run(args) -> int:
+    # Two error formats per contracts/cli.md: `wb run: ...` for picker and
+    # name errors, `config error in <file>: <field>: <why>` for file errors.
+    # Order matters: resolve (all guards) -> banner -> orchestrator; no arm is
+    # built, and nothing is spent, before the config is fully validated.
+    try:
+        product_path = _pick_or_flag(args.product, "product")
+        plan_path = _pick_or_flag(args.plan, "plan")
+    except ConfigError as e:
+        print(f"wb run: {e.why}", file=sys.stderr)
+        return 2
+    try:
+        rc = config.resolve(product_path, plan_path)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(_banner(rc))
     store = _store(args)
-    orch = Orchestrator(store, args.suite, args.arms.split(","), args.k,
-                        out_dir=args.out, timeout_s=args.timeout,
-                        provider_concurrency=args.concurrency)
+    orch = Orchestrator.from_config(store, rc, args.out)
     try:
         run_id = orch.run(args.run_id)
     except RunKilled as e:
@@ -56,12 +97,16 @@ def cmd_resume(args) -> int:
         print(f"unknown run {args.run_id}", file=sys.stderr)
         return 1
     cfg = json.loads(run["config_json"])
-    orch = Orchestrator(store, cfg["suite_dir"], cfg["arms"], cfg["k"],
-                        out_dir=args.out, timeout_s=cfg["timeout_s"],
-                        provider_concurrency=args.concurrency)
     try:
+        if "plan_path" in cfg:
+            rc = config.resolve(cfg["product_path"], cfg["plan_path"])
+            orch = Orchestrator.from_config(store, rc, args.out, provider_concurrency=args.concurrency)
+        else:  # a run from before product/plan files
+            orch = Orchestrator(store, cfg["suite_dir"], cfg["arms"], cfg["k"],
+                                out_dir=args.out, timeout_s=cfg["timeout_s"],
+                                provider_concurrency=args.concurrency or 4)
         orch.resume(args.run_id)
-    except ConfigDrift as e:
+    except (ConfigError, ConfigDrift) as e:
         print(e, file=sys.stderr)
         return 2
     except RunKilled as e:
@@ -128,8 +173,10 @@ def cmd_corpus(args) -> int:
         print(corpus_mod.format_validation(v, verbose=args.verbose))
         return 0 if v["ok"] else 1
     if args.corpus_cmd == "declare":
-        from wb_orchestrator.declare import declare_dir
-        r = declare_dir(args.dir, args.out, overwrite=args.overwrite)
+        from wb_orchestrator import declare
+        product = config.load_product(config.resolve_name_or_path(args.product, "product"))
+        side_effects = config.load_side_effects(config.from_workflowbench(product.side_effects))
+        r = declare.declare_dir(args.dir, args.out, overwrite=args.overwrite, side_effects=side_effects)
         print(f"declared {r['declared']} tasks, {r['already_declared']} already declared, "
               f"{len(r['unmapped'])} with unmapped assertion types")
         for t, types in r["unmapped"].items():
@@ -156,17 +203,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("run")
-    p.add_argument("--suite", required=True)
-    p.add_argument("--arms", required=True, help="comma list: provider keys and/or oracle|sloppy|null")
-    p.add_argument("--k", type=int, default=1)
-    p.add_argument("--timeout", type=float, default=600.0)
-    p.add_argument("--concurrency", type=int, default=4)
+    p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
+    p.add_argument("--plan", default=None, help="name in config/plans or a path; asked if omitted")
     p.add_argument("--run-id", default=None)
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("resume")
     p.add_argument("run_id")
-    p.add_argument("--concurrency", type=int, default=4)
+    p.add_argument("--concurrency", type=int, default=None, help="default: the plan's (4 for old runs)")
     p.set_defaults(fn=cmd_resume)
 
     p = sub.add_parser("status")
@@ -200,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("dir")
     cd.add_argument("--out", default=None, help="write copies here; default: in place (needs --overwrite)")
     cd.add_argument("--overwrite", action="store_true", help="rewrite tasks in place (contract hashes change)")
+    cd.add_argument("--product", default="simulated-apps",
+                    help="product whose side-effect list to use (name or path)")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("legacy-import")

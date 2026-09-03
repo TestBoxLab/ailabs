@@ -5,7 +5,7 @@ contract hashes it covers.
 
 The gate is code: audiences.yaml maps audience -> arm allowlist; a disallowed
 arm in the input raises GateError, never warns. The public-rung2 audience
-strips bare/* and monarch/lab@* at query level (arms are filtered before any
+strips everything but `monarch` at query level (arms are filtered before any
 stat is computed, not by editing rendered output) and swaps exact dollars for
 cost ratios (DESIGN descope: no external cost-per-workflow dollars).
 """
@@ -46,6 +46,11 @@ def load_audiences(path: str | Path = _AUDIENCES_FILE) -> dict[str, list[str]]:
     return audiences
 
 
+def is_lab(name: str) -> bool:
+    """Lab competitors are watermarked in internal and never rendered elsewhere."""
+    return name.startswith("monarch-lab")
+
+
 def _allowed(arm: str, allowlist: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(arm, pat) for pat in allowlist)
 
@@ -79,8 +84,8 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
         raise GateError(
             f"audience {audience!r} allows none of the run's arms {all_arms}; "
             "nothing to render")
-    if audience != "internal" and any(a.startswith("monarch/lab") for a in arms):
-        raise GateError("monarch/lab@* may never render outside the internal audience")
+    if audience != "internal" and any(is_lab(a) for a in arms):
+        raise GateError("monarch-lab* may never render outside the internal audience")
 
     k = k or config.get("k") or 1
     show_dollars = audience == "internal"
@@ -133,7 +138,8 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
 
     return {"run_id": run_id, "suite": run["suite"], "config_hash": run["config_hash"],
             "audience": audience, "arms": arms, "arms_stripped_by_gate": stripped,
-            "baseline": baseline, "k": k, "figures": figures}
+            "baseline": baseline, "k": k, "stop_reason": run.get("stop_reason"),
+            "figures": figures}
 
 
 def _fmt_pm(block: dict, pct: bool = True) -> str:
@@ -161,7 +167,9 @@ def render_md(report: dict[str, Any]) -> str:
              "",
              f"audience: **{report['audience']}** · suite `{report['suite']}` · "
              f"config `{report['config_hash']}` · k={report['k']}"]
-    if report["audience"] == "internal" and any(a.startswith("monarch/lab") for a in report["arms"]):
+    if report.get("stop_reason"):
+        lines.append(f"\nstopped: {report['stop_reason']}")
+    if report["audience"] == "internal" and any(is_lab(a) for a in report["arms"]):
         lines.append("\n> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**")
     if report["arms_stripped_by_gate"]:
         if report["audience"] == "internal":

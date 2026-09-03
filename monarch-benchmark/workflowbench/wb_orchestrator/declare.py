@@ -9,10 +9,11 @@ invariant without judgment calls:
       *_exists / *_sent / *_in_* (a record must appear)
           -> op "added" on <service>.<collection>[*]  (collection from the
              world model; "*" when the service only logs actions)
-  allowed_changes   <- SIDE_EFFECTS: housekeeping a real platform performs
-      alongside the asked-for write (read markers, thread updates, the
-      Salesforce is_closed/is_won pair when a stage closes). Kept short; the
-      next run's unexpected_changes is the review queue for additions.
+  allowed_changes   <- the product's side-effect file (config/side-effects.yaml
+      for simulated-apps): housekeeping a real platform performs alongside
+      the asked-for write (read markers, thread updates, the Salesforce
+      is_closed/is_won pair when a stage closes). Kept short; the next run's
+      unexpected_changes is the review queue for additions.
 
 Derivation is deterministic, so re-running is idempotent. The contract hash
 changes; tasks that already ran under the old contract will not regrade.
@@ -24,6 +25,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from wb_orchestrator import config
+from wb_orchestrator.config import SideEffects, load_side_effects  # noqa: F401  (re-export)
 from wb_orchestrator.orchestrator import contract_hash
 
 # assertion type -> (service, collection or "*", id key or None)
@@ -62,32 +65,13 @@ _TYPES: dict[str, tuple[str, str, str | None]] = {
 # Assertion field names that differ from the world-model field they check.
 _FIELD_ALIAS = {"stage": "stage_name"}
 
-# Legitimate side effects: (service, condition, matchers). condition is a
-# substring of any expected path that must be present, or None for "always
-# when the service is seeded".
-SIDE_EFFECTS: list[tuple[str, str | None, list[dict[str, Any]]]] = [
-    ("gmail", None, [
-        {"service": "gmail", "op": "*", "path": "gmail.messages[*].is_read"},
-        {"service": "gmail", "op": "*", "path": "gmail.messages[*].label_ids"},
-        {"service": "gmail", "op": "*", "path": "gmail.threads*"},
-    ]),
-    ("salesforce", ".stage_name", [
-        {"service": "salesforce", "op": "*", "path": "salesforce.opportunities[*].is_closed"},
-        {"service": "salesforce", "op": "*", "path": "salesforce.opportunities[*].is_won"},
-        {"service": "salesforce", "op": "*", "path": "salesforce.opportunities[*].probability"},
-    ]),
-    ("google_sheets", None, [
-        {"service": "google_sheets", "op": "changed", "path": "google_sheets.worksheets*"},
-        {"service": "google_sheets", "op": "changed", "path": "google_sheets.spreadsheets*"},
-    ]),
-    ("slack", None, [
-        {"service": "slack", "op": "changed", "path": "slack.channels*"},
-        {"service": "slack", "op": "changed", "path": "slack.dms*"},
-    ]),
-]
+def default_side_effects() -> SideEffects:
+    """The simulated-apps product's side-effect list."""
+    product = config.load_product(config.resolve_name_or_path("simulated-apps", "product"))
+    return load_side_effects(config.from_workflowbench(product.side_effects))
 
 
-def derive(task: dict[str, Any]) -> dict[str, Any]:
+def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
     """Return {"expected": [...], "allowed": [...], "unmapped": [types]}."""
     expected: list[dict[str, Any]] = []
     unmapped: list[str] = []
@@ -117,15 +101,20 @@ def derive(task: dict[str, Any]) -> dict[str, Any]:
     touched = seeded | {m["service"] for m in expected}
     allowed: list[dict[str, Any]] = []
     paths = " ".join(m["path"] for m in expected)
-    for service, cond, matchers in SIDE_EFFECTS:
+    for service, cond, matchers in side_effects:
         if service in touched and (cond is None or cond in paths):
             allowed.extend(m for m in matchers if m not in allowed)
     return {"expected": expected, "allowed": allowed, "unmapped": sorted(set(unmapped))}
 
 
 def declare_dir(src: str | Path, out: str | Path | None = None,
-                overwrite: bool = False) -> dict[str, Any]:
-    """Write declared copies. out=None means in place (only with overwrite)."""
+                overwrite: bool = False, side_effects: SideEffects | None = None) -> dict[str, Any]:
+    """Write declared copies. out=None means in place (only with overwrite).
+
+    `side_effects` is a loaded list; None means the simulated-apps product's file.
+    """
+    if side_effects is None:
+        side_effects = default_side_effects()
     src = Path(src)
     dst = Path(out) if out else src
     if dst == src and not overwrite:
@@ -140,7 +129,7 @@ def declare_dir(src: str | Path, out: str | Path | None = None,
             if dst != src:
                 (dst / p.name).write_text(json.dumps(task, indent=1, default=str), encoding="utf-8")
             continue
-        d = derive(task)
+        d = derive(task, side_effects)
         if d["unmapped"]:
             report["unmapped"][task["task"]] = d["unmapped"]
         info["expected_changes"] = d["expected"]

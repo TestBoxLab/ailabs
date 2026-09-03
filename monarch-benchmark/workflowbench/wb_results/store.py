@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS runs (
   suite TEXT NOT NULL,
   config_json TEXT NOT NULL,
   started TEXT NOT NULL,
-  finished TEXT
+  finished TEXT,
+  stop_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS episodes (
   episode_id TEXT PRIMARY KEY,
@@ -65,6 +66,10 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        # runs.stop_reason arrived after the first databases were written
+        if "stop_reason" not in {r[1] for r in self._conn.execute("PRAGMA table_info(runs)")}:
+            with self._conn:
+                self._conn.execute("ALTER TABLE runs ADD COLUMN stop_reason TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -78,7 +83,13 @@ class Store:
 
     def finish_run(self, run_id: str) -> None:
         with self._lock, self._conn:
-            self._conn.execute("UPDATE runs SET finished=? WHERE run_id=?", (_now(), run_id))
+            self._conn.execute("UPDATE runs SET finished=?, stop_reason=NULL WHERE run_id=?",
+                               (_now(), run_id))
+
+    def set_stop_reason(self, run_id: str, reason: str | None) -> None:
+        """One of cost_ceiling, interrupted, worker_error, or None (data-model.md, State: run)."""
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE runs SET stop_reason=? WHERE run_id=?", (reason, run_id))
 
     def run(self, run_id: str) -> dict | None:
         with self._lock:
@@ -195,9 +206,12 @@ class Store:
                 "cost_usd": round(r["cost"] or 0.0, 6),
             }
         config = json.loads(run["config_json"])
-        total = config.get("n_tasks", 0) * len(config.get("arms", [])) * config.get("k", 0)
+        total = config.get("attempts_total") or (
+            config.get("n_tasks", 0) * len(config.get("arms", [])) * config.get("k", 0))
         done = sum(a["episodes"] for a in by_arm.values())
         return {"run_id": run_id, "suite": run["suite"], "config_hash": run["config_hash"],
                 "started": run["started"], "finished": run["finished"],
+                "stop_reason": run["stop_reason"],
+                "spend_usd": round(sum(a["cost_usd"] for a in by_arm.values()), 6),
                 "episodes_done": done, "episodes_total": total or done,
                 "terminations": terminations, "arms": by_arm}

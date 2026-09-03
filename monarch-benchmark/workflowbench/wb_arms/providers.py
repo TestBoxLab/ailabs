@@ -1,17 +1,19 @@
 """Provider registry + cached-token normalization.
 
-Field shapes and prices verified 31 Aug 2026 against vendor docs (see
-CLAUDE-CODE-PROMPT.md table). Prices are $/Mtok: input / cached-input / output.
-Gemini prices double Jan 1 2027 per vendor announcement — update then.
-
-All four providers cache automatically on prefix match; nothing here creates
-caches. The registry's job is to say where each provider reports cached tokens
-and what they cost, so EpisodeRow.tokens.cached is comparable across arms.
+Providers come from the model files in `config/models/` (prices, adapter,
+cache fields, provenance notes); see `load_models`. All providers cache
+automatically on prefix match; nothing here creates caches. The registry's
+job is to say where each provider reports cached tokens and what they cost,
+so EpisodeRow.tokens.cached is comparable across arms.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+DEFAULT_MODELS_DIR = Path(__file__).resolve().parent.parent / "config" / "models"
+_DEFAULT_ADAPTER = {"anthropic": "anthropic", "openai": "openai_responses", "google": "gemini"}
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class Provider:
     price_cache_write: float | None = None  # $/Mtok cache creation; None -> price_in
     cache_min_prompt_tokens: int = 0  # provider's minimum cacheable prefix
     header_fallbacks: tuple[str, ...] = field(default_factory=tuple)
+    effort: str = "xhigh"             # default reasoning effort; WB_*_EFFORT env overrides
 
 
 REGISTRY: dict[str, Provider] = {}
@@ -37,51 +40,23 @@ def register(p: Provider) -> Provider:
     return p
 
 
-register(Provider(
-    key="glm-5.3", model_id="glm-5.3", key_env="ZAI_API_KEY", adapter="openai",
-    base_url="https://api.z.ai/api/paas/v4",
-    price_in=1.40, price_cached=0.26, price_out=4.40))
+def load_models(folder: str | Path) -> dict[str, Provider]:
+    """One Provider per model file in `folder`, keyed by name (research.md R4)."""
+    from wb_orchestrator.config import load_model  # lazy: config pulls wb_world/automationbench at import
+    out = {}
+    for path in sorted(Path(folder).glob("*.yaml")):
+        m = load_model(path)
+        out[m.name] = Provider(
+            key=m.name, model_id=m.model, key_env=m.key_env,
+            adapter=m.adapter or _DEFAULT_ADAPTER.get(m.provider, "openai"),
+            price_in=m.usd_per_million.input, price_cached=m.usd_per_million.cached,
+            price_out=m.usd_per_million.output, price_cache_write=m.usd_per_million.cache_write,
+            base_url=m.base_url, cache_min_prompt_tokens=m.cache_min_prompt_tokens,
+            header_fallbacks=tuple(m.header_fallbacks), effort=m.effort)
+    return out
 
-register(Provider(
-    key="kimi-k3", model_id="kimi-k3", key_env="MOONSHOT_API_KEY", adapter="openai",
-    base_url="https://api.moonshot.ai/v1",
-    price_in=3.00, price_cached=0.30, price_out=15.00,
-    cache_min_prompt_tokens=256))
 
-register(Provider(
-    key="kimi-k3-fireworks", model_id="accounts/fireworks/models/kimi-k3",
-    key_env="FIREWORKS_API_KEY", adapter="openai",
-    base_url="https://api.fireworks.ai/inference/v1",
-    price_in=3.00, price_cached=0.30, price_out=15.00,
-    header_fallbacks=("fireworks-cached-prompt-tokens",)))
-
-# Anthropic first-party rates, verified 2 Sep 2026 (claude-api skill table):
-# input 5.00, cache read 0.10x, cache write (5 min) 1.25x, output 25.00.
-# claude-opus-4-8 is Monarch's authoring brain (monarch config/env.ts), so it
-# is the control arm: same model, no product.
-register(Provider(
-    key="claude-opus-4-8", model_id="claude-opus-4-8", key_env="ANTHROPIC_API_KEY",
-    adapter="anthropic",
-    price_in=5.00, price_cached=0.50, price_out=25.00, price_cache_write=6.25,
-    cache_min_prompt_tokens=1024))
-
-# OpenAI standard rates, verified 2 Sep 2026 at developers.openai.com/api/docs/pricing.
-# gpt-5.6-sol is promotional pricing through at least 21 Nov 2026. Responses
-# API: chat-completions rejects function tools when reasoning is on (doctor,
-# 2 Sep 2026), and reasoning off would be an unfair control.
-register(Provider(
-    key="gpt-5.6-sol", model_id="gpt-5.6-sol", key_env="OPENAI_API_KEY",
-    adapter="openai_responses", price_in=4.00, price_cached=0.40, price_out=20.00))
-
-register(Provider(
-    key="gpt-5.6-terra", model_id="gpt-5.6-terra", key_env="OPENAI_API_KEY",
-    adapter="openai_responses", price_in=2.00, price_cached=0.20, price_out=12.00))
-
-register(Provider(
-    key="gemini-3.7-flash", model_id="gemini-3.7-flash", key_env="GEMINI_API_KEY",
-    adapter="gemini",  # native google-genai: implicit-cache reporting via OpenAI-compat is undocumented
-    price_in=0.75, price_cached=0.075, price_out=3.75,
-    cache_min_prompt_tokens=4096))
+REGISTRY.update(load_models(DEFAULT_MODELS_DIR))
 
 
 def get(key: str) -> Provider:
