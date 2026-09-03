@@ -160,6 +160,7 @@ def test_fake_monarch_routes_and_engine_calls():
             assert status == 201 and started["engine"]["status"] == "running"
             deadline = time.monotonic() + 20           # poll to a deadline, no fixed sleep
             while time.monotonic() < deadline:
+                time.sleep(0.01)
                 status, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
                 if poll["status"] != "running":
                     break
@@ -197,6 +198,7 @@ def test_fake_monarch_cancel_ends_a_stream_parked_on_the_account_prompt():
         reader.start()
         deadline = time.monotonic() + 10       # wait for the account prompt, no fixed sleep
         while not frames and time.monotonic() < deadline:
+            time.sleep(0.01)
             assert reader.is_alive()
         assert frames[0]["awaiting_reply"]["kind"] == "account"
 
@@ -209,7 +211,8 @@ def test_fake_monarch_cancel_ends_a_stream_parked_on_the_account_prompt():
 
 
 def test_fake_monarch_refusal_and_server_error():
-    with FakeMonarch(Scenario(run_refusal="RUN_HOST_BLOCKED")) as m:
+    # preset_token: this story skips login, like the MONARCH_TOKEN path
+    with FakeMonarch(Scenario(run_refusal="RUN_HOST_BLOCKED", preset_token="t")) as m:
         sess = {"x-monarch-session": "t"}
         status, err = _http("POST", f"{m.url}/api/workflows/wf-1/run", {"mode": "test"},
                             headers=sess)

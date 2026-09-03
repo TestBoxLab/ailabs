@@ -39,6 +39,7 @@ class Scenario:
     delay_s: dict[str, float] = field(default_factory=dict)   # login/authoring/frame/run/poll
     run_never_finishes: bool = False
     delete_fails_once: bool = False
+    preset_token: str | None = None           # accept this session token without a login
     server_error: bool = False                # every route answers 500
 
 
@@ -63,6 +64,7 @@ class FakeMonarch:
         self._run_done: dict[str, bool] = {}
         self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
+        self._run_n = 0                            # workflow runs get run-1, run-2, ...
         self._lock = threading.Lock()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.httpd.server_address[1]
@@ -131,7 +133,8 @@ class FakeMonarch:
                 self.wfile.write(payload)
 
             def _authed(self) -> bool:
-                return bool(self.headers.get("x-monarch-session"))
+                got = self.headers.get("x-monarch-session")
+                return bool(got) and got in {outer.token, outer.scenario.preset_token}
 
             # -- routing ------------------------------------------------------
             def do_GET(self):
@@ -214,15 +217,16 @@ class FakeMonarch:
                     self._reply(401, {"error": "unauthenticated"})
                     return
                 wfid = path.rsplit("/", 1)[-1]
-                if sc.delete_fails_once and not outer._delete_failed_once:
-                    outer._delete_failed_once = True
-                    self._reply(500, {"error": "delete_failed"})
-                    return
-                if wfid in outer.deleted_workflows:
-                    self._reply(404, {"error": "not_found"})
-                    return
-                outer.deleted_workflows.append(wfid)
-                self._reply(200, {})
+                with outer._lock:          # decide under the lock, answer outside it
+                    if sc.delete_fails_once and not outer._delete_failed_once:
+                        outer._delete_failed_once = True
+                        answer = (500, {"error": "delete_failed"})
+                    elif wfid in outer.deleted_workflows:
+                        answer = (404, {"error": "not_found"})
+                    else:
+                        outer.deleted_workflows.append(wfid)
+                        answer = (200, {})
+                self._reply(*answer)
 
             # -- the two interesting routes ------------------------------------
             def _workflow_run(self):
@@ -231,8 +235,9 @@ class FakeMonarch:
                     code = _REFUSAL_STATUS.get(sc.run_refusal, 422)
                     self._reply(code, {"code": sc.run_refusal, "error": sc.run_refusal})
                     return
-                run_id = "run-1"
                 with outer._lock:
+                    outer._run_n += 1
+                    run_id = f"run-{outer._run_n}"
                     outer.run_started_at.append(time.monotonic())
                     outer._run_done[run_id] = False
                 threading.Thread(target=outer._fire_engine_calls, args=(run_id,),
