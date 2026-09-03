@@ -158,15 +158,12 @@ def test_fake_monarch_routes_and_engine_calls():
             status, started = _http("POST", f"{m.url}/api/workflows/wf-1/run", {"mode": "test"},
                                     headers=sess)
             assert status == 201 and started["engine"]["status"] == "running"
-            deadline = time.monotonic() + 20           # poll to a deadline, no fixed sleep
-            while time.monotonic() < deadline:
-                time.sleep(0.01)
-                status, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
-                if poll["status"] != "running":
-                    break
-            # engine_responses first: it names the transport error if the call
-            # never landed, where a bare `hits == []` would not.
+            # Wait on the run's own completion signal, not a guessed deadline:
+            # the engine call is allowed ENGINE_CALL_TIMEOUT_S, so any shorter
+            # wait here races it and reports an empty engine_responses instead.
+            assert m.wait_for_run("run-1"), "run never turned terminal"
             assert m.engine_responses[0]["status"] == 200, m.engine_responses
+            _, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
             assert poll == {"status": "succeeded"}
             assert hits == ["/salesforce/x"]
 
@@ -225,14 +222,54 @@ def test_fake_monarch_run_fails_when_an_engine_call_never_lands():
     with FakeMonarch(sc) as m:
         sess = {"x-monarch-session": m.token}
         assert _http("POST", f"{m.url}/api/workflows/wf-1/run", {}, headers=sess)[0] == 201
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            time.sleep(0.01)
-            _, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
-            if poll["status"] != "running":
-                break
+        assert m.wait_for_run("run-1"), "run never turned terminal"
+        _, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
         assert poll["status"] == "failed" and poll["errorCode"] == "ENGINE_CALL_FAILED"
         assert m.engine_responses[0]["status"] is None
+
+
+def test_fake_monarch_wait_for_run_outlasts_a_slow_engine_call():
+    """A slow engine call must still be observed, not raced.
+
+    The old test polled to a hand-picked 20 s deadline while the engine call is
+    allowed ENGINE_CALL_TIMEOUT_S (60 s); on a loaded box the loop gave up first
+    and the caller died on an empty engine_responses. Here the call is slower
+    than any such deadline would be, so waiting on the run's own signal is the
+    only thing that works.
+    """
+    started = threading.Event()
+
+    class SlowEngine(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_PATCH(self):
+            started.set()
+            time.sleep(1.0)                    # outlives a tight poll deadline
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    engine = ThreadingHTTPServer(("127.0.0.1", 0), SlowEngine)
+    threading.Thread(target=engine.serve_forever, daemon=True).start()
+    sc = Scenario(engine_calls=[("PATCH", "/salesforce/x", {"c": "Denver"})],
+                  shim_url=f"http://127.0.0.1:{engine.server_address[1]}")
+    try:
+        with FakeMonarch(sc) as m:
+            sess = {"x-monarch-session": m.token}
+            assert _http("POST", f"{m.url}/api/workflows/wf-1/run", {}, headers=sess)[0] == 201
+            # A 0.1 s budget is the old racy shape: it gives up while the call runs.
+            assert not m.wait_for_run("run-1", timeout=0.1)
+            assert started.is_set() and m.engine_responses == []
+            # The real wait outlasts the call and sees the response.
+            assert m.wait_for_run("run-1"), "run never turned terminal"
+            assert m.engine_responses[0]["status"] == 200
+            _, poll = _http("GET", f"{m.url}/api/workflows/runs/run-1", headers=sess)
+            assert poll == {"status": "succeeded"}
+    finally:
+        engine.shutdown()
+        engine.server_close()
 
 
 def test_fake_monarch_refusal_and_server_error():

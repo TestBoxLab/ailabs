@@ -73,6 +73,7 @@ class FakeMonarch:
         self._reply_events: dict[str, threading.Event] = {}
         self._run_done: dict[str, bool] = {}
         self._run_error: dict[str, dict] = {}      # run id -> outcome when an engine call failed
+        self._run_events: dict[str, threading.Event] = {}   # run id -> set when it turns terminal
         self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
         self._run_n = 0                            # workflow runs get run-1, run-2, ...
@@ -114,6 +115,19 @@ class FakeMonarch:
                                                "errorCode": "ENGINE_CALL_FAILED",
                                                "error": transport_error}
                 self._run_done[run_id] = True
+            self._run_finished(run_id).set()
+
+    def _run_finished(self, run_id: str) -> threading.Event:
+        """Set once the engine calls for this run are done and it turned terminal."""
+        with self._lock:
+            return self._run_events.setdefault(run_id, threading.Event())
+
+    def wait_for_run(self, run_id: str, timeout: float | None = None) -> bool:
+        """Block until the run turns terminal. Tests use this instead of polling
+        against a hand-picked deadline: the engine call may take up to
+        ENGINE_CALL_TIMEOUT_S, so any shorter wait is a race by construction."""
+        budget = ENGINE_CALL_TIMEOUT_S + 5 if timeout is None else timeout
+        return self._run_finished(run_id).wait(timeout=budget)
 
     def _handler(self):
         outer = self
