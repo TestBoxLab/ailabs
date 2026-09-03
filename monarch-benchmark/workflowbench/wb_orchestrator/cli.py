@@ -130,7 +130,7 @@ def cmd_status(args) -> int:
 
 def cmd_doctor(args) -> int:
     keys = args.arms.split(",") if args.arms else None
-    reports = doctor_mod.run_doctor(keys)
+    reports = doctor_mod.run_doctor(keys, monarch_probe=args.monarch_probe)
     print(doctor_mod.format_report(reports))
     return 0 if all(r.get("ok") for r in reports) else 1
 
@@ -231,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("doctor")
     p.add_argument("--arms", default=None, help="comma list of provider keys; default: all registered")
+    p.add_argument("--monarch-probe", action="store_true",
+                   help="also start and immediately cancel one Monarch authoring run; costs model money")
     p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("grade")
