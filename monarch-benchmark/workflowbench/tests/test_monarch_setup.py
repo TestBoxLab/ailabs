@@ -95,7 +95,7 @@ def test_discovery_service_unreachable_names_the_address(workspace):
     fd.stop()
     code, text = _run(product, out, url)
     assert code == 4
-    assert url in text
+    assert text.startswith("[ok] generate") and f"[stop] mounted: discovery service unreachable at {url}/v1/seeds" in text
 
 
 def test_missing_environment_variable_is_named(workspace):
@@ -103,7 +103,7 @@ def test_missing_environment_variable_is_named(workspace):
     buf = io.StringIO()
     code = monarch_setup.run(product, HARNESS, out, {}, buf)
     assert code == 4
-    assert "MONARCH_FD_URL" in buf.getvalue()
+    assert "[stop] config: fd_url: environment variable MONARCH_FD_URL is not set" in buf.getvalue()
 
 
 def test_generation_gap_stops_before_anything_is_written(workspace, monkeypatch):
@@ -116,6 +116,7 @@ def test_generation_gap_stops_before_anything_is_written(workspace, monkeypatch)
         assert fd.products == {}
     assert code == 2
     assert "response_template.extract is empty" in text
+    assert "[stop] generate: 1 gap(s); nothing written" in text
     assert not out.exists()
     assert not product.with_name("simulated-apps.monarch-kb.yaml").exists()
 
@@ -132,15 +133,15 @@ def test_import_failure_names_the_slug(workspace, monkeypatch):
     with FakeFD(fixtures_dir=out) as fd:
         real = monarch_setup._post
 
-        def flaky(url, payload, timeout=None):
+        def flaky(url, payload, step, timeout=None):
             if url.endswith("/bench-slack/import"):
-                raise OSError("boom")
-            return real(url, payload, timeout)
+                raise monarch_setup._Stop(4, step, "boom")
+            return real(url, payload, step)
 
         monkeypatch.setattr(monarch_setup, "_post", flaky)
         code, text = _run(product, out, fd.url)
     assert code == 4
-    assert "bench-slack" in text
+    assert "[stop] import bench-slack: " in text
 
 
 def test_cli_wires_the_subcommand(workspace, monkeypatch, capsys):

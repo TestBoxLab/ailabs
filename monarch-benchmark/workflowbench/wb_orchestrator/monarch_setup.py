@@ -27,7 +27,7 @@ from wb_orchestrator import config
 from wb_world import seeds
 
 # The path inside the discovery-service container that its seed catalogue scans.
-# Confirmed against the Monarch image during the live setup (T053).
+# ponytail: taken from seed-catalog.ts; verify against the running image at T053 (live gate).
 FIXTURES_MOUNT_PATH = "/app/api/src/seeds/fixtures/public-api-seeds/bench-mounted"
 SEEDS_FORMAT = "public-api-seeds@1"
 TIMEOUT_S = 30.0
@@ -35,35 +35,43 @@ _VAR = re.compile(r"\$\{(\w+)\}")
 
 
 class _Stop(Exception):
-    def __init__(self, code: int, message: str):
-        self.code, self.message = code, message
-        super().__init__(message)
+    def __init__(self, code: int, step: str, message: str):
+        self.code, self.step, self.message = code, step, message
+        super().__init__(f"{step}: {message}")
 
 
 def _expand(value: str | None, env: dict, field: str) -> str:
     """Replace ${NAME} with env[NAME]; an unset variable stops the command."""
     if not value:
-        raise _Stop(4, f"{field} is not set in the harness file")
+        raise _Stop(4, "config", f"{field} is not set in the harness file")
 
     def sub(m):
         name = m.group(1)
         if not env.get(name):
-            raise _Stop(4, f"{field}: environment variable {name} is not set")
+            raise _Stop(4, "config", f"{field}: environment variable {name} is not set")
         return env[name]
 
     return _VAR.sub(sub, value).rstrip("/")
 
 
-def _get(url: str, timeout: float = TIMEOUT_S):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return json.loads(r.read() or b"{}")
+def _get(url: str, step: str, timeout: float = TIMEOUT_S):
+    """GET JSON; any transport or decoding failure stops the command naming `step`."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
+        raise _Stop(4, step, f"discovery service unreachable at {url}: {e}") from e
 
 
-def _post(url: str, payload: dict, timeout: float = TIMEOUT_S):
+def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S):
+    """POST JSON; any transport or decoding failure stops the command naming `step`."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read() or b"{}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
+        raise _Stop(4, step, f"{url} failed: {e}") from e
 
 
 def _display_name(service: str) -> str:
@@ -87,16 +95,13 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         except seeds.SeedGap as e:
             for g in e.gaps:
                 print(f"      {g.file}: {g.gap}", file=stdout)
-            raise _Stop(2, f"generate: {len(e.gaps)} gap(s); nothing written") from e
+            raise _Stop(2, "generate", f"{len(e.gaps)} gap(s); nothing written") from e
         say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
                               f"files_written={summary.files_written} folders={len(summary.folders)}")
 
         # 2. mounted
         want = sorted(f"bench-{s}" for s in product.services)
-        try:
-            listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds").get("items", [])}
-        except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
-            raise _Stop(4, f"mounted: discovery service unreachable at {fd_url}: {e}") from e
+        listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds", "mounted").get("items", [])}
         missing = [s for s in want if s not in listed]
         if missing:
             say("stop", "mounted", f"{len(missing)} of {len(want)} seed folders are not visible "
@@ -107,15 +112,15 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
 
         # 3. register
         for slug in want:
-            _step(f"register: {slug}", lambda: _post(f"{fd_url}/v1/products",
-                                                     {"slug": slug,
-                                                      "display_name": _display_name(slug.removeprefix("bench-"))}))
+            _post(f"{fd_url}/v1/products",
+                  {"slug": slug, "display_name": _display_name(slug.removeprefix("bench-"))},
+                  f"register {slug}")
         say("ok", "register", f"{len(want)} products")
 
         # 4. import
         kb: dict[str, str] = {}
         for slug in want:
-            res = _step(f"import: {slug}", lambda: _post(f"{fd_url}/v1/seeds/{slug}/import", {}))
+            res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}")
             kb[slug] = str((res.get("after") or {}).get("kb_hash") or "")
             print(f"      {slug}: actions_imported={res.get('actions_imported')} "
                   f"kb_hash={kb[slug][:12]}", file=stdout)
@@ -130,15 +135,8 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         say("ok", "write", f"{path} ({'changed' if changed else 'unchanged'})")
         return 0
     except _Stop as stop:
-        say("stop", stop.message)
+        say("stop", stop.step, stop.message)
         return stop.code
-
-
-def _step(what: str, call):
-    try:
-        return call()
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
-        raise _Stop(4, f"{what} failed: {e}") from e
 
 
 def _override_snippet(out: Path) -> str:

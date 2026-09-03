@@ -22,7 +22,7 @@ from typing import Any
 
 from wb_world.openapi import build_all
 
-STAMP = "2026-09-03T00:00:00.000Z"   # fixed: the folder's bytes must not move between runs
+STAMP = "2026-09-03T00:00:00.000Z"   # arbitrary fixed sentinel: the folder's bytes must not move between runs
 DOMAIN = "host.docker.internal"
 _PATH_VAR = re.compile(r"\{(\w+)\}")
 _VERB_BY_METHOD = {"post": "create", "put": "update", "patch": "update", "delete": "delete"}
@@ -77,8 +77,9 @@ def _extract(schema: dict[str, Any]) -> dict[str, str]:
     if props:
         first = sorted(props)[0]
         return {first: f"$.{first}"}
-    # ponytail: the simulated OpenAPI responses carry no properties, so every action
-    # extracts $.id. Narrow this if the schemas ever describe their response bodies.
+    # ponytail: today every simulated response schema is a bare {"type": "object"}, so this
+    # is the only branch that ever runs and every action extracts $.id. The id-detection
+    # above is for when openapi.py starts describing response bodies.
     return {"id": "$.id"}
 
 
