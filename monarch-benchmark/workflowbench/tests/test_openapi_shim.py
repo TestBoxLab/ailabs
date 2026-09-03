@@ -73,3 +73,25 @@ def test_rest_round_trip_mutates_the_episode_world(shim):
     assert status == 404 and "error" in err
     status, err = _http("GET", f"{s.url}/not-a-service/x")
     assert status == 404
+
+
+def test_host_and_public_url_are_configurable():
+    ep = Episode(load_task_file(TASK), episode_id="shim-bind")
+    s = EpisodeHTTPShim(ep, host="0.0.0.0", port=0,
+                        public_url="http://host.docker.internal:9105").start()
+    try:
+        assert s.url == f"http://0.0.0.0:{s.port}"
+        status, idx = _http("GET", f"http://127.0.0.1:{s.port}/openapi/index.json")
+        assert status == 200
+        assert idx["salesforce"]["url"] == "http://host.docker.internal:9105/openapi/salesforce.json"
+    finally:
+        s.stop()
+
+
+def test_default_host_stays_loopback():
+    ep = Episode(load_task_file(TASK), episode_id="shim-default")
+    s = EpisodeHTTPShim(ep)
+    try:
+        assert s.url == f"http://127.0.0.1:{s.port}"
+    finally:
+        s.httpd.server_close()
