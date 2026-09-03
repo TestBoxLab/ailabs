@@ -41,13 +41,13 @@ the GitHub repo is public. 199 tests green. Feature 001, declarative benchmark
 configuration, is merged: `wb run --product --plan`, inputs in `workflowbench/config/`,
 approval gate and cost ceiling in code. Two smoke runs (`smoke-frontier-001`, `-002`)
 agree: Opus 90%, GPT-5.6 Sol 100%. Feature 002 (Monarch as a competitor, create + run
-mode, cost from Langfuse) is specified and planned: `specs/002-monarch-create-run/`
-(spec, plan, tasks, contracts). Implementation is in progress on branch
-`002-monarch-create-run`, subagent-driven, offline only; see
-`monarch-benchmark/docs/HANDOFF-2026-09-03.md` for what is done versus pending.
-The Monarch competitor is no longer a placeholder in `wb_arms/monarch.py`; it is
-being rewritten against the real endpoints. Live pilot blocked on
-`bedrock:InvokeModel` for Carlos's AWS roles.
+mode, cost from Langfuse) is merged into `main` and pushed (merge `5468dbf`,
+`origin/main` at `89172ac`, 321 tests green offline): `wb monarch setup`, the
+real Monarch competitor in `wb_arms/monarch.py`, doctor checks, report source
+line. Live gates T053–T057 in `specs/002-monarch-create-run/tasks.md` are
+pending: Monarch running (locally, or on Railway with a public host for the
+front door), `bedrock:InvokeModel` for Carlos's AWS roles, and the Monarch-side
+telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
