@@ -565,3 +565,19 @@ def test_a_timed_out_row_keeps_its_spend(site, repo, tmp_path, monkeypatch):
     assert row["termination"] == "timeout"
     assert row["cost_usd"] > 0
     free(port)
+
+
+def test_an_infra_failure_keeps_its_spend(site, repo):
+    """Rule 9 on the infrastructure path too: authoring was paid for before the refusal."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_refusal="RUN_HOST_BLOCKED")
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
+        arm = arm_against(site, fake, port, repo, langfuse=lf,
+                          env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+        both_phases(lf, EPISODE)
+        with pytest.raises(InfraError) as exc:
+            arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
+
+    assert exc.value.kind == "infra:monarch_setup" and exc.value.retryable
+    assert exc.value.partial.cost_usd > 0
+    free(port)

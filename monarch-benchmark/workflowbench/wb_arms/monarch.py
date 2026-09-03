@@ -91,6 +91,8 @@ class MonarchArm:
         self._token: str | None = None   # one login per run, cached here
         self._infra: InfraError | None = None   # raised after cleanup, see run()
         self._leftover: list[str] = []   # workflows a failed delete left behind
+        # the attempt in flight; a timeout or infra failure reports what it reached
+        self._partial = ArmResult()
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -124,8 +126,9 @@ class MonarchArm:
         never eats another attempt's budget. `deadline` is therefore ignored.
         """
         h = self.harness
-        timed_out = None
+        failed = None
         with _LOCK:
+            self._infra = None          # reset and read in this function only
             attempt_deadline = time.monotonic() + self.timeout_s
             port = h.shim_port
             try:
@@ -136,24 +139,24 @@ class MonarchArm:
                                  f"front door port {port} busy: {e}", retryable=True) from e
             try:
                 res = self._attempt(ep, attempt_deadline)
-            except EpisodeTimeout as e:
-                # Rule 9: the attempt still spent money, so the timeout row must
-                # carry it. `partial` is what the orchestrator merges, exactly as
-                # it already does for an InfraError.
-                timed_out, res = e, self._partial
+            except (EpisodeTimeout, InfraError) as e:
+                # Rule 9: the attempt spent money whatever ended it, so the row
+                # must carry it. `partial` is what the orchestrator merges; it
+                # already does that for an InfraError, and now for a timeout.
+                failed, res = e, self._partial
             finally:
                 shim.stop()
         # Cost is read after the front door is down and the lock is free: it is
         # bookkeeping, and a slow Langfuse must not hold the next attempt.
         self._add_cost(res, ep.episode_id)
-        if timed_out is not None:
-            timed_out.partial = res
-            raise timed_out
-        # After the cleanup and outside the lock, so the orchestrator's retry
-        # starts against a free port and an idle Monarch (FR-011).
-        if self._infra is not None:
-            infra, self._infra = self._infra, None
-            raise infra
+        # A refusal classified as infrastructure was stored rather than raised,
+        # so cleanup could finish first (FR-011); it is raised here, outside the
+        # lock and against a free port. `_add_cost` may have stored one of its
+        # own; the `or` guard there keeps whichever came first.
+        failed = failed or self._infra
+        if failed is not None:
+            failed.partial = res
+            raise failed
         return res
 
     def _add_cost(self, res: ArmResult, episode_id: str) -> None:
@@ -225,7 +228,6 @@ class MonarchArm:
     def _attempt(self, ep: Episode, deadline: float) -> ArmResult:
         # Held on the arm so a timeout can still report the phases it reached.
         res = self._partial = ArmResult()
-        self._infra = None
         client = self._client(deadline)
         self._sweep(client)
         goal = ep.task["prompt"][1]["content"]
@@ -333,6 +335,11 @@ class MonarchArm:
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
         try:
+            # Same discipline as the poll loop: never start work the deadline
+            # has already passed, however long authoring took.
+            if time.monotonic() >= deadline:
+                raise EpisodeTimeout(
+                    "deadline passed in the execution phase, before the run started")
             try:
                 started = client.run_workflow(workflow_id, ep.episode_id, deadline=deadline)
             except MonarchRefused as e:
