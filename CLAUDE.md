@@ -40,7 +40,7 @@ OneDrive after sync deleted working-tree files; see
 declarative benchmark configuration, is merged: `wb run --product --plan`, inputs
 in `workflowbench/config/`, approval gate and cost ceiling in code. Two smoke runs
 (`smoke-frontier-001`, `-002`) agree: Opus 90%, GPT-5.6 Sol 100%. The Monarch
-competitor is still a placeholder (`wb_arms/monarch.py`); `.env` must be recreated.
+competitor is still a placeholder (`wb_arms/monarch.py`).
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
