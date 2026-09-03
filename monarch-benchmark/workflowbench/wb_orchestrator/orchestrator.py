@@ -115,7 +115,8 @@ def build_arm_for(competitor: config_mod.Competitor):
     else:
         from wb_arms.monarch import MonarchArm
         arm = MonarchArm("monarch/stock")
-        arm.model_label = h.release  # recorded as EpisodeRow.model (R6)
+        # ponytail: stopgap until T024 rewrites this branch (the version comes from the checkout)
+        arm.model_label = competitor.name  # recorded as EpisodeRow.model (R6)
     arm.name = competitor.name
     return arm
 

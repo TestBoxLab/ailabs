@@ -322,3 +322,12 @@ def test_resolve_accepts_login_password_instead_of_a_token(site):
         resolve_monarch(site, env=env)
     assert exc.value.field == "credential_env"
     assert "MONARCH_TOKEN" in str(exc.value) and "MONARCH_PASSWORD" in str(exc.value)
+
+
+def test_build_arm_for_monarch_competitor(site):
+    """The monarch branch of build_arm_for survives the removal of Harness.release."""
+    from wb_orchestrator.orchestrator import build_arm_for
+    rc = resolve_monarch(monarch_site(site))
+    competitor = next(c for c in rc.competitors if c.harness.kind == "monarch")
+    arm = build_arm_for(competitor)
+    assert arm.name == competitor.name == "monarch" and arm.model_label == "monarch"

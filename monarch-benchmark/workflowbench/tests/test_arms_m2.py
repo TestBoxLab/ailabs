@@ -1,5 +1,4 @@
-"""Tests for the M2-facing arms: claude-code result parsing, monarch gating,
-corpus tooling."""
+"""Tests for the M2-facing arms: claude-code result parsing and corpus tooling."""
 from __future__ import annotations
 
 import json
@@ -7,10 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from wb_arms.api_loop import InfraError
 from wb_arms.cli_claude_code import invocation, parse_result
 from wb_orchestrator.corpus import validate_corpus
-from wb_orchestrator.orchestrator import build_arm
 
 ROOT = Path(__file__).resolve().parents[1]
 
