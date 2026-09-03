@@ -150,3 +150,11 @@ class FakeFD:
 
     def __exit__(self, *exc):
         self.stop()
+
+
+def fd_serving(kb: dict[str, str]) -> FakeFD:
+    """A discovery service whose /v1/seeds answers exactly `kb`, with no fixtures on disk."""
+    fd = FakeFD()
+    fd._seeds = lambda: [{"slug": slug, "kb_hash": h, "action_count": 1, "in_sync": True}
+                         for slug, h in sorted(kb.items())]
+    return fd

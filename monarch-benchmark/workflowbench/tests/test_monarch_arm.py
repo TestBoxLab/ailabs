@@ -23,12 +23,14 @@ import pytest
 import yaml
 
 from runner.arms import _sf_updates_from_assertions
+from tests.fake_fd import fd_serving
+from tests.fake_langfuse import FakeLangfuse
 from tests.fake_monarch import FakeMonarch, Scenario
 from tests.test_config import (  # noqa: F401  (site is a fixture)
     HARNESS_MONARCH, HARNESS_SCRIPTED, PLAN, PRICE_TABLE, edit, site, write)
 from tests.test_monarch_client import header
-from tests.test_run_config import KB, MONARCH_ENV, fd_serving, monarch_site, resolve_monarch
-from wb_arms.api_loop import InfraError
+from tests.test_run_config import KB, MONARCH_ENV, monarch_site, resolve_monarch
+from wb_arms.api_loop import EpisodeTimeout, InfraError
 from wb_arms.monarch import MonarchArm
 from wb_orchestrator import config
 from wb_orchestrator.config import ConfigError, load_product
@@ -108,7 +110,13 @@ def task(name: str = "simple.email_sf_contact_city_update") -> dict:
     return load_task_file(TASKS_DIR / f"{name}.json")
 
 
-def arm_against(site, fake, port, repo, fd=None, kb=KB):
+@pytest.fixture(autouse=True)
+def fast_polling(monkeypatch):
+    """The fakes answer instantly; a 2 s production poll would only add dead time."""
+    monkeypatch.setattr(MonarchArm, "POLL_INTERVAL_S", 0.02)
+
+
+def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None):
     """A Monarch arm whose harness points at the fakes on their real ports."""
     monarch_site(site, kb=kb, monarch_repo=str(repo))
     text = (site / "config/harnesses/monarch.yaml").read_text()
@@ -117,12 +125,22 @@ def arm_against(site, fake, port, repo, fd=None, kb=KB):
             .replace("shim_public_host: host.docker.internal", "shim_public_host: 127.0.0.1"))
     if fd is not None:
         text = edit(text, "fd_url", fd.url)
+    if langfuse is not None:
+        text = edit(text, "langfuse_url", langfuse.url)
     write(site / "config/harnesses", text)
-    rc = resolve_monarch(site)
+    rc = resolve_monarch(site, env=env) if env else resolve_monarch(site)
     competitor = next(c for c in rc.competitors if c.harness.kind == "monarch")
     arm = build_arm_for(competitor, rc)
-    arm.POLL_INTERVAL_S = 0.02
+    if env is not None:
+        arm.env = env
     return arm
+
+
+def free(port: int) -> None:
+    """The front door let go of its fixed port."""
+    s = socket.socket()
+    s.bind(("0.0.0.0", port))
+    s.close()
 
 
 def city_of(snapshot: dict, contact_id: str = "003004") -> str:
@@ -181,6 +199,7 @@ def test_lock_serialises(site, repo):
             t.start()
         for t in threads:
             t.join(timeout=60)
+            assert not t.is_alive(), "an attempt never returned; the lock is stuck"
 
     assert not errors, errors
     assert len(fake.authoring_started_at) == 2 and len(fake.deleted_at) == 2
@@ -238,10 +257,8 @@ def pilot_site(tmp_path, monarch_url, fd_url, port, repo) -> Path:
     return site
 
 
-def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
+def test_pilot_plan_offline(tmp_path, repo):
     """Answer key and Monarch on the 10 pilot tasks x 2, against fakes on free ports."""
-    # The orchestrator builds its own arms, so the poll interval is set on the class.
-    monkeypatch.setattr(MonarchArm, "POLL_INTERVAL_S", 0.02)
     port = free_port()
     tasks = load_suite(TASKS_DIR)
     kb_hashes = {f"bench-{s}": f"{i:012x}" for i, s in enumerate(load_product(PRODUCT_PATH).services)}
@@ -285,3 +302,282 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     cfg = json.loads(store.run(run_id)["config_json"])
     assert len(cfg["monarch_kb"]["kb"]) == 47
     assert "monarch-team-bedrock" in cfg["price_tables"]
+
+
+# -- T033/T034: the FR-010 termination table ----------------------------------
+
+DONE = {"status": "done", "workflowId": "wf-1", "recipeVersion": 1}
+RUNNING = {"status": "running", "phase": "plan"}
+
+
+def authoring_error(message: str) -> list[dict]:
+    return [RUNNING, {"status": "error", "error": message}]
+
+
+# (id, scenario kwargs, expected outcome). An outcome is either
+# ("infra", kind, retryable) or ("row", termination, error prefix).
+TERMINATION_ROWS = [
+    ("authoring error from the model provider",
+     {"frames": authoring_error("Bedrock AccessDeniedException")},
+     ("infra", "infra:monarch_llm", True)),
+    ("authoring error of the planner's own",
+     {"frames": authoring_error("planner gave up")},
+     ("row", "agent_error", "authoring_error:")),
+    ("run refused: host blocked", {"run_refusal": "RUN_HOST_BLOCKED"},
+     ("infra", "infra:monarch_setup", True)),
+    ("run refused: engine unavailable", {"run_refusal": "ENGINE_UNAVAILABLE"},
+     ("infra", "infra:monarch_setup", True)),
+    ("run refused: already active", {"run_refusal": "RUN_ALREADY_ACTIVE"},
+     ("infra", "infra:monarch_setup", True)),
+    ("run refused: invalid input", {"run_refusal": "INPUT_INVALID"},
+     ("row", "agent_error", "run_refused:INPUT_INVALID")),
+    ("run refused: product not granted", {"run_refusal": "product_not_granted"},
+     ("row", "agent_error", "run_refused:product_not_granted")),
+    ("run refused: unacknowledged loop", {"run_refusal": "LLM_LOOP_UNACKNOWLEDGED"},
+     ("row", "agent_error", "run_refused:LLM_LOOP_UNACKNOWLEDGED")),
+    ("run refused: legacy recipe", {"run_refusal": "RUN_LEGACY_RECIPE"},
+     ("row", "agent_error", "run_refused:RUN_LEGACY_RECIPE")),
+    ("the run itself failed",
+     {"run_outcome": {"status": "failed", "errorCode": "STEP_FAILED", "errorNodeId": "n7"}},
+     ("row", "agent_error", "run_error:STEP_FAILED node=n7")),
+    ("login refused", {"login_ok": False}, ("infra", "infra:harness_crash", True)),
+    ("the stream closed with nothing terminal", {"frames": [RUNNING]},
+     ("row", "agent_error", "stream_closed")),
+    ("Monarch asked for an account",
+     {"frames": [RUNNING, {"status": "awaiting_input",
+                           "awaiting_reply": {"requestId": "req-1", "kind": "account"}}]},
+     ("row", "agent_error", "account_requested")),
+]
+
+
+@pytest.mark.parametrize("kwargs,expected",
+                         [r[1:] for r in TERMINATION_ROWS],
+                         ids=[r[0] for r in TERMINATION_ROWS])
+def test_termination_table(site, repo, kwargs, expected):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", **kwargs)
+    with FakeMonarch(sc) as fake:
+        # No token: the login story needs the arm to actually log in.
+        arm = arm_against(site, fake, port, repo, env={**MONARCH_ENV, "MONARCH_TOKEN": ""})
+        ep = Episode(task(), episode_id="run-x/t/monarch/t0")
+        kind, *rest = expected
+        if kind == "infra":
+            with pytest.raises(InfraError) as exc:
+                arm.run(ep, deadline=time.monotonic() + 60)
+            assert (exc.value.kind, exc.value.retryable) == tuple(rest)
+        else:
+            result = arm.run(ep, deadline=time.monotonic() + 60)
+            assert result.termination == rest[0]
+            assert result.error.startswith(rest[1]), result.error
+
+    # Whatever happened, a workflow that was authored is gone and the port is free.
+    authored = any(r["path"] == "/api/workflows/recipe/runs" for r in fake.requests)         and any(f.get("status") == "done" for f in sc.frames)
+    assert fake.deleted_workflows == (["wf-1"] if authored else [])
+    s = socket.socket()
+    s.bind(("0.0.0.0", port))
+    s.close()
+
+
+# -- T035/T036: the deadline, in either phase ---------------------------------
+
+def test_timeout_during_authoring(site, repo):
+    """The stream stalls past the deadline: cancel, then clean up, then give up."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", delay_s={"frame": 5.0})
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.timeout_s = 0.5
+        with pytest.raises(EpisodeTimeout) as exc:
+            arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                    deadline=time.monotonic() + 60)
+
+    assert "authoring" in str(exc.value)
+    assert [r for r in fake.requests if r["path"].endswith("/cancel")]
+    # Nothing was authored, so there is nothing to delete.
+    assert fake.deleted_workflows == []
+    free(port)
+
+
+def test_timeout_during_run(site, repo):
+    """The engine never finishes: the workflow is deleted before the attempt gives up."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_never_finishes=True)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.timeout_s = 1.0
+        with pytest.raises(EpisodeTimeout) as exc:
+            arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                    deadline=time.monotonic() + 60)
+
+    assert "execution" in str(exc.value)
+    assert fake.deleted_workflows == ["wf-1"]
+    free(port)
+
+
+# -- T037: a workflow the last attempt could not delete -----------------------
+
+def test_leftover_workflow_deleted_next_attempt(site, repo):
+    """A delete that failed is remembered and retried at the start of the next attempt."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", delete_fails_once=True,
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        first = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                        deadline=time.monotonic() + 60)
+        assert "workflow_not_deleted" in first.flags
+        assert arm._leftover == ["wf-1"]
+
+        arm.run(Episode(task(), episode_id="run-x/t/monarch/t1"),
+                deadline=time.monotonic() + 60)
+
+    assert arm._leftover == []
+    assert fake.deleted_workflows == ["wf-1"]     # the retry is what finally landed it
+
+
+# -- T038/T039: every question gets the same sentence -------------------------
+
+def asking(request_id: str, *questions: str) -> dict:
+    return {"status": "awaiting_input",
+            "awaiting_reply": {"requestId": request_id,
+                               "questions": [{"id": q, "text": f"{q}?"} for q in questions]}}
+
+
+def test_questions_get_fixed_reply(site, repo):
+    """Three questions over two prompts, all answered with the one sentence."""
+    from wb_arms.monarch import FIXED_REPLY
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, asking("req-1", "q1", "q2"), RUNNING, asking("req-2", "q3"),
+                          DONE],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert [r["requestId"] for r in fake.replies_received] == ["req-1", "req-2"]
+    answered = [a for r in fake.replies_received for a in r["answers"]]
+    assert [a["id"] for a in answered] == ["q1", "q2", "q3"]
+    assert {a["text"] for a in answered} == {FIXED_REPLY}
+    assert result.phases["authoring"].turns == 3
+    assert "questions_asked=3" in result.flags
+
+
+def test_an_attempt_with_no_questions_records_none(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed" and fake.replies_received == []
+    assert result.phases["authoring"].turns == 0 and "questions_asked=0" in result.flags
+
+
+# -- T043/T044: cost of the attempt, read from Langfuse -----------------------
+
+OPUS = "anthropic.claude-opus-4-8-20260101-v1:0"
+SONNET = "anthropic.claude-sonnet-5-20260101-v1:0"
+EPISODE = "run-x/t/monarch/t0"
+USAGE = {"input": 1000, "output": 200, "cache_read_input_tokens": 500,
+         "cache_creation_input_tokens": 100}
+
+
+def costed_attempt(site, repo, langfuse, trace=None, env=None):
+    """One completed attempt whose traces `trace(langfuse, episode_id)` has laid down."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo, langfuse=langfuse,
+                          env=env or {**MONARCH_ENV, **LANGFUSE_ENV(langfuse)})
+        if trace is not None:
+            trace(langfuse, EPISODE)
+        result = arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
+    free(port)
+    return result
+
+
+def LANGFUSE_ENV(langfuse) -> dict:
+    """Langfuse's address and keys, plus an empty token so the arm logs in."""
+    return {"MONARCH_TOKEN": "", "LANGFUSE_URL": langfuse.url,
+            "LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"}
+
+
+def both_phases(lf, episode_id: str) -> None:
+    lf.add_trace(episode_id,
+                 spans=[("s1", "recipe.plan", None), ("s2", "engine.run", None)],
+                 generations=[("g1", "s1", OPUS, USAGE), ("g2", "s2", SONNET, USAGE)])
+
+
+def test_cost_lands_in_row(site, repo):
+    with FakeLangfuse() as lf:
+        result = costed_attempt(site, repo, lf, trace=both_phases)
+
+    assert result.termination == "completed" and "cost_missing" not in result.flags
+    # The row's prompt count is inclusive of cache (runner/schema.py::TokenUsage),
+    # while Langfuse reports the three disjointly: 2 x (1000 + 500 + 100).
+    assert result.tokens_prompt == 3200
+    assert result.tokens_cached == 1000 and result.tokens_cache_write == 200
+    assert result.tokens_output == 400
+    # Opus 5.00/0.50/6.25/25.00 and Sonnet 2.00/0.20/2.50/10.00 per million.
+    opus = (1000 * 5.00 + 500 * 0.50 + 100 * 6.25 + 200 * 25.00) / 1e6
+    sonnet = (1000 * 2.00 + 500 * 0.20 + 100 * 2.50 + 200 * 10.00) / 1e6
+    assert result.cost_usd == pytest.approx(opus + sonnet)
+    assert result.phases["authoring"].cost_usd == pytest.approx(opus)
+    assert result.phases["execution"].cost_usd == pytest.approx(sonnet)
+    assert result.phases["authoring"].tokens_input == 1600
+    assert result.phases["authoring"].tokens_output == 200
+    assert result.phases["execution"].tokens_input == 1600
+    breakdown = next(t["cost"] for t in result.turn_log if "cost" in t)
+    assert breakdown["authoring"]["claude-opus-4-8"]["cost_usd"] == pytest.approx(opus)
+    assert breakdown["execution"]["claude-sonnet-5"]["cost_usd"] == pytest.approx(sonnet)
+
+
+def test_no_traces_is_cost_missing(site, repo):
+    with FakeLangfuse() as lf:
+        result = costed_attempt(site, repo, lf)
+
+    assert result.termination == "completed" and result.error is None
+    assert result.cost_usd == 0 and "cost_missing" in result.flags
+
+
+def test_a_span_outside_the_contract_is_flagged(site, repo):
+    def trace(lf, episode_id):
+        lf.add_trace(episode_id, spans=[("s1", "recipe.rewrite", None)],
+                     generations=[("g1", "s1", OPUS, USAGE)])
+
+    with FakeLangfuse() as lf:
+        result = costed_attempt(site, repo, lf, trace=trace)
+
+    assert result.termination == "completed"
+    assert "phase_other:recipe.rewrite" in result.flags
+
+
+def test_an_unmapped_model_stops_the_run(site, repo):
+    def trace(lf, episode_id):
+        lf.add_trace(episode_id, spans=[("s1", "recipe.plan", None)],
+                     generations=[("g1", "s1", "meta.llama-4", USAGE)])
+
+    with FakeLangfuse() as lf:
+        with pytest.raises(InfraError) as exc:
+            costed_attempt(site, repo, lf, trace=trace)
+
+    assert not exc.value.retryable and "llama" in str(exc.value)
+
+
+def test_langfuse_unreachable_only_flags(site, repo):
+    lf = FakeLangfuse().start()
+    port = lf.port
+    lf.stop()                       # nothing answers on that address any more
+    with FakeLangfuse() as other:   # a live object, only for its keys
+        result = costed_attempt(site, repo, lf,
+                                env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+
+    assert result.termination == "completed" and result.error is None
+    assert result.cost_usd == 0 and "cost_missing" in result.flags
+    assert port

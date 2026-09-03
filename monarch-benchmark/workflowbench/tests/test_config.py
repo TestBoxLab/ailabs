@@ -686,3 +686,17 @@ def test_registry_is_the_seven_files_and_doctor_resolves_through_get(monkeypatch
     report = doctor.check_provider("claude-opus-4-8")  # no key: fails before any call
     assert report["provider"] == "claude-opus-4-8" and report["error"] == "ANTHROPIC_API_KEY not set"
     assert "unknown provider" in doctor.check_provider("nope")["error"]
+
+
+# -- T040: the reply to Monarch's questions is code, never config --------------
+
+def test_fixed_reply_not_in_config(tmp_path):
+    """Nobody can tune the sentence per run: it would make attempts uncomparable."""
+    from wb_arms.monarch import FIXED_REPLY
+    for key in ("reply", "fixed_reply"):
+        msg = check_error(config.load_harness,
+                          write(tmp_path, HARNESS_MONARCH + f"{key}: hello\n"), key)
+        assert "unknown" in msg
+    shipped = [p for p in (Path(__file__).resolve().parents[1] / "config").rglob("*.yaml")
+               if FIXED_REPLY in p.read_text(encoding="utf-8")]
+    assert shipped == []

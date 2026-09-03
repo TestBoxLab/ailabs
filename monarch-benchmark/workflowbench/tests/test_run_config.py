@@ -339,21 +339,12 @@ def test_build_arm_for_monarch_competitor(site):
 
 # -- T029/T030: a drifted knowledge base stops the run before any authoring ----
 
-def fd_serving(kb: dict[str, str]):
-    """A fake discovery service whose /v1/seeds answers exactly `kb`."""
-    from tests.fake_fd import FakeFD
-
-    fd = FakeFD()
-    fd._seeds = lambda: [{"slug": s, "kb_hash": h, "action_count": 1, "in_sync": True}
-                         for s, h in sorted(kb.items())]
-    return fd
-
-
 def test_kb_drift_refuses(site, tmp_path):
     """One app whose hash moved: the run stops naming it, before Monarch is asked anything."""
+    from tests.fake_fd import fd_serving
     from tests.fake_monarch import FakeMonarch
-    from wb_arms.api_loop import InfraError
     from tests.test_monarch_arm import arm_against, free_port, repo  # noqa: F401
+    from wb_arms.api_loop import InfraError
 
     on_disk = {"bench-airtable": "6d07bde6f1c2", "bench-asana": "272673e3a9b0",
                "bench-gmail": "9b1f0c4a5e77", "bench-salesforce": "DRIFTED"}

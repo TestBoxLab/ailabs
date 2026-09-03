@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from wb_arms.monarch import monarch_version
 from wb_orchestrator import config
 from wb_orchestrator import doctor as doctor_mod
 from wb_orchestrator import monarch_setup
@@ -53,10 +54,11 @@ def _pick_or_flag(value, kind) -> Path:
     return config.pick(kind, config.DEFAULT_CONFIG_DIR / f"{kind}s")
 
 
-def _monarch_line(rc) -> str:
+def _monarch_line(rc) -> str | None:
     """`monarch   <name>, kb <n> apps, price table <name>@<date>` when Monarch runs."""
-    from wb_arms.monarch import monarch_version
-    h = next(c.harness for c in rc.competitors if c.harness.kind == "monarch")
+    h = next((c.harness for c in rc.competitors if c.harness.kind == "monarch"), None)
+    if h is None:
+        return None
     try:
         name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir))
     except ValueError:
@@ -69,7 +71,7 @@ def _monarch_line(rc) -> str:
 def _banner(rc) -> str:
     p, plan = rc.product, rc.plan
     data = "mutable data" if p.data.mutable else "read-only data"
-    monarch = [_monarch_line(rc)] if rc.monarch_kb else []
+    monarch = [line for line in [_monarch_line(rc)] if line]
     return "\n".join([
         f"product   {p.name} ({p.kind}, {data})",
         f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
