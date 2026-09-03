@@ -93,6 +93,9 @@ class MonarchArm:
         self._leftover: list[str] = []   # workflows a failed delete left behind
         # the attempt in flight; a timeout or infra failure reports what it reached
         self._partial = ArmResult()
+        # episode id -> generations already priced, because the orchestrator
+        # retries an episode under its own id and sums every attempt's spend
+        self._billed: dict[str, set[str]] = {}
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -184,10 +187,20 @@ class MonarchArm:
             self._infra = self._infra or InfraError("infra:harness_crash", str(e),
                                                     retryable=False)
             return
-        cost = summarize(gens, self.price_table)
-        if cost.missing:
+        if not gens:
             res.flags.append("cost_missing")
             return
+        # Every read returns all generations tagged with the episode id, and an
+        # infra retry reuses that id, so anything an earlier attempt of this
+        # episode already paid for is dropped before pricing. Nothing new to
+        # bill is not the same as nothing found: the spend is already on the
+        # earlier attempt, so this one reports zero without the flag.
+        billed = self._billed.setdefault(episode_id, set())
+        fresh = [g for g in gens if g.observation_id not in billed]
+        billed.update(g.observation_id for g in fresh)
+        if not fresh:
+            return
+        cost = summarize(fresh, self.price_table)
         res.turn_log.append({"cost": cost.by_phase})
         res.cost_usd = cost.total_usd
         # EpisodeRow.tokens.prompt is the TOTAL input, cache included

@@ -581,3 +581,36 @@ def test_an_infra_failure_keeps_its_spend(site, repo):
     assert exc.value.kind == "infra:monarch_setup" and exc.value.retryable
     assert exc.value.partial.cost_usd > 0
     free(port)
+
+
+def test_each_generation_is_billed_once_across_retries(site, repo):
+    """Retries share the episode id, so a second read must not bill it twice.
+
+    The orchestrator sums the `partial` of every failed attempt into the row,
+    while Langfuse returns every generation ever tagged with the episode id.
+    """
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
+        arm = arm_against(site, fake, port, repo, langfuse=lf,
+                          env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+        both_phases(lf, EPISODE)
+
+        def attempt():
+            return arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
+
+        first = attempt()
+        second = attempt()
+        # A generation the previous attempts never saw: only that one is new.
+        lf.add_trace(EPISODE, spans=[("s3", "recipe.plan", None)],
+                     generations=[("g3", "s3", OPUS, USAGE)])
+        third = attempt()
+
+    assert first.cost_usd > 0 and "cost_missing" not in first.flags
+    # Nothing new to bill is not the same as nothing to find: no flag, no spend.
+    assert second.cost_usd == 0 and "cost_missing" not in second.flags
+    one_opus = (1000 * 5.00 + 500 * 0.50 + 100 * 6.25 + 200 * 25.00) / 1e6
+    assert third.cost_usd == pytest.approx(one_opus)
+    assert "cost_missing" not in third.flags
+    free(port)
