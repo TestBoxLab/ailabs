@@ -41,10 +41,13 @@ the GitHub repo is public. 199 tests green. Feature 001, declarative benchmark
 configuration, is merged: `wb run --product --plan`, inputs in `workflowbench/config/`,
 approval gate and cost ceiling in code. Two smoke runs (`smoke-frontier-001`, `-002`)
 agree: Opus 90%, GPT-5.6 Sol 100%. Feature 002 (Monarch as a competitor, create + run
-mode, cost from Langfuse) is designed, not yet specified:
-`docs/superpowers/specs/2026-09-03-monarch-create-run-design.md`. Next command:
-`/speckit-specify` from that design. The Monarch competitor is still a placeholder
-(`wb_arms/monarch.py`). Live pilot blocked on `bedrock:InvokeModel` for Carlos's AWS roles.
+mode, cost from Langfuse) is specified and planned: `specs/002-monarch-create-run/`
+(spec, plan, tasks, contracts). Implementation is in progress on branch
+`002-monarch-create-run`, subagent-driven, offline only; see
+`monarch-benchmark/docs/HANDOFF-2026-09-03.md` for what is done versus pending.
+The Monarch competitor is no longer a placeholder in `wb_arms/monarch.py`; it is
+being rewritten against the real endpoints. Live pilot blocked on
+`bedrock:InvokeModel` for Carlos's AWS roles.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
@@ -156,6 +159,7 @@ each stage hands its artifact to the next:
 | `.specify/templates/` | Spec Kit spec/plan/tasks/checklist templates. |
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
 | `specs/001-declarative-benchmark-config/` | Feature 001: benchmark inputs as files; `contracts/` holds the CLI and config-file contracts. |
+| `specs/002-monarch-create-run/` | Feature 002: Monarch as a competitor, create + run mode; spec, plan, tasks, `contracts/` (config-files, cli, monarch-telemetry). In progress on branch `002-monarch-create-run`. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
 | `monarch-benchmark/docs/HANDOFF-2026-09-03.md` | Resume-here note: repo move, feature 001, next steps. |
 | `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Previous handoff: background and standing rules. |
@@ -172,7 +176,7 @@ each stage hands its artifact to the next:
 | `workflowbench/wb_orchestrator/orchestrator.py` | Attempt state machine, config hash, resume. |
 | `workflowbench/wb_orchestrator/declare.py` | Approval-rule derivation and the side-effect list. |
 | `workflowbench/wb_arms/providers.py`, `api_loop.py` | Model catalog with prices; generic tool loop (OpenAI chat, OpenAI Responses, Gemini, Anthropic). |
-| `workflowbench/wb_arms/monarch.py` | Monarch competitor (placeholder today). |
+| `workflowbench/wb_arms/monarch.py` | Monarch competitor (feature 002, in progress). |
 | `workflowbench/wb_world/openapi.py`, `wb_arms/http_shim.py` | OpenAPI documents + HTTP front door for Monarch. |
 | `workflowbench/wb_report/audiences.yaml` | Which competitors may appear in which report. |
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |

@@ -153,3 +153,5 @@ approved_by: null
 config error in config/plans/smoke-frontier.yaml: competitors[2].model: unknown model 'gpt-6'; known: claude-opus-4-8, gpt-5.6-sol, ...
 config error in config/plans/full-round.yaml: approved_by: 400 attempts per competitor exceed smoke scale (20); set approved_by
 ```
+
+Feature 002 extends this contract for the Monarch competitor: `specs/002-monarch-create-run/contracts/config-files.md`.
