@@ -25,7 +25,7 @@ The first deliverable is a paired pilot: 10 tasks × 2 repetitions ×
 | Scope of feature 002 | Create + run only. Full flow = feature 003, run only = feature 004; both reuse the competitor built here. | Ten items and three modes are too much for one spec. Create + run is Lucas's original design, deterministic, and has no open question for Deyton. |
 | Where Monarch runs | Docker on this machine (`just dev-otel` in `monarch-enterprise`). The bench's HTTP front door runs on the host on a fixed port, reachable from containers as `host.docker.internal:<port>`. | Already verified live on 2–3 Sep (`docs/benchmark-access.md` in the Monarch repo). |
 | Product shape in Monarch | 47 products, one per simulated app, slug `bench-<service>`. | That is how Monarch represents real SaaS. One combined product would not be comparable with real use. |
-| Monarch asks a question during authoring | Fixed automatic reply, identical for every attempt: "No further information is available. Proceed with your best judgment." The result row counts the questions. | Keeps the same-request rule; leaks nothing from the answer key; raw models get no clarification either. |
+| Monarch asks a question during authoring | Fixed automatic reply, identical for every attempt, hardcoded: "No further information is available. Proceed with your best judgment." The result row counts the questions. | Keeps the same-request rule; leaks nothing from the answer key; raw models get no clarification either. |
 | Cost and phase data | Read from Langfuse (the local instance Monarch already ships with `just dev-otel`), priced by a versioned Bedrock price table in the bench. Not from Monarch's Postgres. | Carlos can change Monarch locally; the missing spans are work worth doing once and are exactly what work front C asked for. Front C therefore merges into 002 (D7 + D10 together). |
 | Split across repositories | Two specs. Feature 002 in `ailabs` covers the bench side and publishes a contract (`specs/002-.../contracts/monarch-telemetry.md`). The Monarch change is a separate PR in the Monarch repo, written to that contract, reviewed by Deyton. | Each repo keeps its owner and its review. |
 | Knowledge-base loading | Generated fixture folders bind-mounted into the FD API container, then `POST /v1/seeds/<slug>/import`. No Monarch code change. | Cheapest path that exists today; re-import is also the reset. |
@@ -48,14 +48,29 @@ A new idempotent command that spends no LLM money:
    `feature-discovery/docs/public-api-seeds-runbook.md`: `auth_scheme: none`,
    `response_template` with `schema` and `extract`, `creates_entities` with
    identifier paths so actions can chain.
-2. Writes them under a bench folder that Monarch's (gitignored)
-   `monarch-enterprise/docker-compose.override.yaml` bind-mounts into the FD API
-   container's `api/src/seeds/fixtures/public-api-seeds/`.
-3. Calls `POST /v1/seeds/bench-<service>/import` for each of the 47 slugs and
-   records the returned `kb_hash`.
-4. Checks that the bench user's organisation has the 47 products granted.
-5. Prints the 47 hashes. They enter the run's config hash: a different
-   knowledge base is a different run.
+2. Writes them under `workflowbench/out/monarch-seeds/`. Monarch's (gitignored)
+   `monarch-enterprise/docker-compose.override.yaml` must bind-mount that folder
+   into the FD API container's `api/src/seeds/fixtures/public-api-seeds/`; the
+   command prints the exact override snippet and refuses to continue while
+   `GET /v1/seeds` does not list the 47 slugs. The Monarch PR documents the mount.
+3. Registers each product with the idempotent `POST /v1/products`
+   (`slug`, `display_name`), then calls `POST /v1/seeds/bench-<service>/import`
+   and records the returned `kb_hash`.
+4. Checks that the bench user's organisation has the 47 products granted on the
+   Monarch side. **Open for Deyton:** the grant mechanism (route or seed script)
+   is not named in `benchmark-access.md`; until it is, the setup prints the
+   missing slugs and the step is manual.
+5. Writes the 47 hashes to `config/products/simulated-apps.monarch-kb.yaml`
+   (covered by the run's config hash: a different knowledge base is a different
+   run). `wb run` re-reads `GET /v1/seeds` before the first Monarch attempt and
+   refuses if any hash differs from the file.
+
+**To verify live before the first attempt (runbook §4–§5):** whether products
+whose actions carry `auth_scheme: none` need a credential binding
+(`PUT /api/workflows/:id/products/:slug/credentials/:kind`) or a declaration in
+`discovery-configuration-catalog.ts` for the engine to execute them. If yes,
+the binding becomes a setup step and the declaration joins the Monarch PR's
+scope; "no Monarch code change" then no longer holds for the knowledge base.
 
 Full flow (feature 003) will decide whether discovery reads the OpenAPI from the
 front door (the `api_spec` path, already proven) or whether Monarch discovers
@@ -65,17 +80,25 @@ through the bench's own search tool. That question stays open there, not here.
 
 Input: the task, a fresh world, a deadline. Steps:
 
-1. Start the HTTP front door (`wb_arms/http_shim.py`) on this world, on the
-   harness's fixed `shim_port`, advertising `http://host.docker.internal:<port>`.
-   Take the global Monarch lock.
+1. Take the global Monarch lock. Then start the HTTP front door
+   (`wb_arms/http_shim.py`) on this world, on the harness's fixed `shim_port`,
+   bound to `0.0.0.0` (today it binds `127.0.0.1`, which containers cannot
+   reach; the bind address becomes a constructor argument), advertising
+   `http://host.docker.internal:<port>`. The live checklist includes fetching
+   `/openapi/index.json` from inside a container.
 2. Log in once per run (`POST /api/auth/login` with the seeded bench user);
    keep the token and send it as `x-monarch-session`. `MONARCH_TOKEN` in the
    environment skips the login.
 3. Authoring clock starts. `POST /api/workflows/recipe/runs` with
    `{"goal": <request text, identical to the other competitors>}` and header
-   `x-bench-episode-id`. Read the SSE stream line by line. On
-   `awaiting_input`, send the fixed reply and count one question. Ends at
-   `done` (with `workflowId`) or `error`.
+   `x-bench-episode-id`. Read the SSE stream line by line (frames are
+   `data: <RecipeJobView JSON>`, status `running|awaiting_input|done|error`).
+   On `awaiting_input`, answer `POST .../runs/:id/reply` with
+   `{"requestId": <awaiting_reply.requestId>, "answers": [{"id": <question id>,
+   "text": <fixed reply>}]}` for every question in the frame, and count them.
+   If the job parks on an account choice instead (the `account` prompt), the
+   attempt ends `agent_error:account_requested`. Ends at `done` (with
+   `workflowId`) or `error`.
 4. Execution clock starts. `POST /api/workflows/:id/run {"mode":"live"}`; poll
    `GET /api/workflows/runs/:runId` until a terminal status. Every REST call
    the engine makes lands on the front door and mutates the attempt's world
@@ -88,12 +111,16 @@ Result mapping:
 | Outcome | Termination | Detail recorded |
 |---|---|---|
 | Authoring `done` and run terminal normal | `completed` | `workflowId`, `runId`, `recipeVersion`, questions asked |
-| Authoring `error` | `agent_error` | `authoring_error: <message>` |
-| Run refused (`RUN_HOST_BLOCKED`, `product_not_granted`, `INPUT_INVALID`, …) | `agent_error` | `run_refused:<code>` |
+| Authoring `error` caused by the model provider (message names Bedrock, AWS, credentials, or the 503 "not configured") | `infra:monarch_llm` | the bench is at fault, not Monarch |
+| Authoring `error`, any other | `agent_error` | `authoring_error: <message>` |
+| Run refused for a setup fault (`RUN_HOST_BLOCKED`, `ENGINE_UNAVAILABLE`, `RUN_ALREADY_ACTIVE`) | `infra:monarch_setup` | our binding, queue or cleanup is wrong |
+| Run refused for the workflow's own fault (`INPUT_INVALID`, `product_not_granted`, `LLM_LOOP_UNACKNOWLEDGED`, `RUN_LEGACY_RECIPE`) | `agent_error` | `run_refused:<code>` |
 | Run finished with error | `agent_error` | `run_error:<code>`, failing node id |
-| Job reports the workflow abandoned | `agent_error` | `workflow_abandoned` |
-| Deadline hit | `timeout` | cancels the authoring job or run in flight |
+| Deadline hit | `timeout` | `POST .../recipe/runs/:id/cancel` for authoring; `DELETE /api/workflows/:id` for a run in flight (there is no run-cancel route) |
 | Monarch down, login refused, 5xx, Langfuse unreachable for the health check | `infra:*` | retried by the orchestrator (rule 11); nothing else is |
+
+`infra:*` rows are retried and never counted against Monarch (rule 7 on cost
+completeness has the same spirit: the product pays only for its own failures).
 
 The checker runs later, from the snapshot, exactly as for every competitor.
 
@@ -136,9 +163,10 @@ the agreed shape.
 ## 7. Configuration
 
 `config/harnesses/monarch.yaml` becomes `runnable: true` and gains:
-`fd_url`, `shim_port`, `langfuse_url`, `price_table`, `question_reply`,
-`monarch_repo` (path used to read the git sha for the competitor name).
-`release` stops being a fixed string.
+`fd_url`, `shim_port`, `langfuse_url`, `price_table`, `monarch_repo` (path used
+to read the git sha for the competitor name). `release` stops being a fixed
+string. The fixed reply to questions is a constant in `monarch.py`, not a
+config field: making it editable would let it drift between runs.
 
 New plan `config/plans/pilot-monarch-create-run.yaml`: `mode: create-run`,
 10 pilot tasks, 2 repetitions, competitors {oracle, claude-opus-4-8/api,

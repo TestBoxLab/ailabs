@@ -34,13 +34,17 @@ paired comparisons only on identical sets, with error bars; every figure carries
 its source line; cost is complete (cached vs not, versioned price table);
 audience rules are code; config hash per run; API-key billing only.
 
-**Where things stand (2026-09-03):** repo at `C:\devilabs` (moved out of
-OneDrive after sync deleted working-tree files; see
-`monarch-benchmark/docs/HANDOFF-2026-09-03.md`). 199 tests green. Feature 001,
-declarative benchmark configuration, is merged: `wb run --product --plan`, inputs
-in `workflowbench/config/`, approval gate and cost ceiling in code. Two smoke runs
-(`smoke-frontier-001`, `-002`) agree: Opus 90%, GPT-5.6 Sol 100%. The Monarch
-competitor is still a placeholder (`wb_arms/monarch.py`).
+**Where things stand (2026-09-03, evening):** repo at
+`C:\Users\cgmat\Desktop\TestBox\ailabs` (off OneDrive; moved twice on 3 Sep, see
+`monarch-benchmark/docs/HANDOFF-2026-09-03.md`). `main` pushed to `origin` on 3 Sep;
+the GitHub repo is public. 199 tests green. Feature 001, declarative benchmark
+configuration, is merged: `wb run --product --plan`, inputs in `workflowbench/config/`,
+approval gate and cost ceiling in code. Two smoke runs (`smoke-frontier-001`, `-002`)
+agree: Opus 90%, GPT-5.6 Sol 100%. Feature 002 (Monarch as a competitor, create + run
+mode, cost from Langfuse) is designed, not yet specified:
+`docs/superpowers/specs/2026-09-03-monarch-create-run-design.md`. Next command:
+`/speckit-specify` from that design. The Monarch competitor is still a placeholder
+(`wb_arms/monarch.py`). Live pilot blocked on `bedrock:InvokeModel` for Carlos's AWS roles.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
@@ -130,8 +134,8 @@ each stage hands its artifact to the next:
 - **The methodology does not change through features.** `PLAN.md` §1 is the
   constant; features change its inputs (files, competitors, products), never
   its rules. A spec that reopens a fixed rule needs Carlos's explicit say-so.
-- **Nothing is pushed** to `TestBoxLab/ailabs` until Carlos decides on repo
-  visibility. The repo is public; the specs carry vendor legal notes.
+- **Pushes to `TestBoxLab/ailabs`** happen only when Carlos asks (first push 3 Sep).
+  The repo is public; the specs carry vendor legal notes.
 - **Language.** Conversation with Carlos in Portuguese. Every file in the repo
   in English, plain language, no internal jargon in shared docs.
 - **Graphify grounds everything.** Read `graphify-out/GRAPH_REPORT.md` before
