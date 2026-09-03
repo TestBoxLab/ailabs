@@ -218,9 +218,9 @@ kb:
 MONARCH_ENV = {**ENV, "MONARCH_PASSWORD": "monarch-dev"}
 
 
-def monarch_site(site, kb=KB):
+def monarch_site(site, kb=KB, monarch_repo=None):
     """The `site` fixture with a runnable Monarch competitor, its price table and its kb file."""
-    runnable_monarch(site, modes="[create-run]")
+    runnable_monarch(site, modes="[create-run]", monarch_repo=monarch_repo)
     write(site / "config/models", PRICE_TABLE)
     if kb is not None:
         (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(kb)
@@ -324,9 +324,14 @@ def test_resolve_accepts_login_password_instead_of_a_token(site):
 
 
 def test_build_arm_for_monarch_competitor(site):
-    """The monarch branch of build_arm_for survives the removal of Harness.release."""
+    """The Monarch row is named for the checkout, not for the plan (T023/T024).
+
+    The shipped harness points `monarch_repo` at the sibling Monarch clone; this
+    repo stands in for it so the test does not depend on that checkout existing.
+    """
     from wb_orchestrator.orchestrator import build_arm_for
-    rc = resolve_monarch(monarch_site(site))
+    rc = resolve_monarch(monarch_site(site, monarch_repo=str(ROOT)))
     competitor = next(c for c in rc.competitors if c.harness.kind == "monarch")
-    arm = build_arm_for(competitor)
-    assert arm.name == competitor.name == "monarch" and arm.model_label == "monarch"
+    arm = build_arm_for(competitor, rc)
+    assert competitor.name == "monarch"
+    assert arm.name.startswith("monarch@") and arm.model_label == arm.name

@@ -195,7 +195,7 @@ def monarch_store(tmp_path):
                      {"suite_dir": "tasks", "arms": ["monarch@abc1234", "oracle"],
                       "k": 1, "n_tasks": 3, "timeout_s": 600,
                       "price_tables": {"monarch-team-bedrock": {
-                          "name": "monarch-team-bedrock", "kind": "price-table",
+                          "name": "monarch-team-bedrock",
                           "provider": "bedrock", "region": "us-east-1",
                           "prices_verified": "2026-09-03", "models": []}}})
     for i, task in enumerate(("t1", "t2", "t3")):

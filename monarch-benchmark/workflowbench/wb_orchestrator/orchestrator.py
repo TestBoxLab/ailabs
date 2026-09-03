@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -69,11 +70,11 @@ class _ScriptedAdapter:
 # legacy: runs recorded before product/plan files
 def _validate_arm_key(key: str) -> None:
     known = (key in _ScriptedAdapter._CLASSES or key == "claude-code"
-             or key.startswith("monarch/") or key in providers.REGISTRY)
+             or key in providers.REGISTRY)
     if not known:
         raise ValueError(
             f"unknown arm {key!r}; known: {sorted(_ScriptedAdapter._CLASSES)} + "
-            f"'claude-code' + 'monarch/stock|lab' + providers {sorted(providers.REGISTRY)}")
+            f"'claude-code' + providers {sorted(providers.REGISTRY)}")
 
 
 # legacy: runs recorded before product/plan files
@@ -83,16 +84,18 @@ def build_arm(key: str):
     if key == "claude-code":
         from wb_arms.cli_claude_code import ClaudeCodeArm
         return ClaudeCodeArm()
-    if key.startswith("monarch/"):
-        from wb_arms.monarch import MonarchArm
-        return MonarchArm(key)
     arm = ApiLoopArm(key)
     arm.provider_key = key
     return arm
 
 
-def build_arm_for(competitor: config_mod.Competitor):
-    """Build the arm a plan competitor names; the arm reports under the competitor's name (R1)."""
+def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.RunConfig | None" = None):
+    """Build the arm a plan competitor names; the arm reports under the competitor's name (R1).
+
+    Monarch is the exception: it reports under the version of the checkout it ran
+    from, so `run_config` is required to build one (it carries the plan, the price
+    table and the knowledge base).
+    """
     h = competitor.harness
     if h.kind == "api":
         arm = ApiLoopArm(competitor.model.name)
@@ -113,10 +116,19 @@ def build_arm_for(competitor: config_mod.Competitor):
                 raise ValueError(f"harness {h.name!r}: env {k!r}: bad placeholder {e}") from e
         arm = ClaudeCodeArm(env=rendered)
     else:
-        from wb_arms.monarch import MonarchArm
-        arm = MonarchArm("monarch/stock")
-        # ponytail: stopgap until T024 rewrites this branch (the version comes from the checkout)
-        arm.model_label = competitor.name  # recorded as EpisodeRow.model (R6)
+        from wb_arms.monarch import MonarchArm, monarch_version
+        if run_config is None:
+            raise ValueError("a Monarch competitor needs the run config to build its arm")
+        config_dir = Path(run_config.product_path).parent.parent
+        repo = config_mod.from_workflowbench(h.monarch_repo, config_dir)
+        try:
+            name = monarch_version(repo)
+        except ValueError as e:
+            raise ConfigError(config_dir / "harnesses" / f"{h.name}.yaml", "monarch_repo",
+                              f"cannot read the Monarch version: {e}") from e
+        return MonarchArm(harness=h, timeout_s=run_config.plan.timeout_s,
+                          price_table=run_config.price_tables.get(h.price_table),
+                          kb=run_config.monarch_kb, env=os.environ, name=name)
     arm.name = competitor.name
     return arm
 
@@ -200,7 +212,8 @@ class Orchestrator:
         return run_id
 
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]]) -> None:
-        arms = ([build_arm_for(c) for c in self.run_config.competitors] if self.run_config
+        arms = ([build_arm_for(c, self.run_config) for c in self.run_config.competitors]
+                if self.run_config
                 else [build_arm(k) for k in self.arm_keys])
         threads = []
         for arm in arms:
