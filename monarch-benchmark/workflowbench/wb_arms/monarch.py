@@ -21,7 +21,7 @@ from wb_arms.http_shim import EpisodeHTTPShim
 from wb_arms.langfuse_cost import (
     LangfuseUnavailable, PriceLookupError, read_generations, summarize)
 from wb_arms.monarch_client import MonarchClient, MonarchRefused
-from wb_orchestrator.monarch_setup import Stop, expand
+from wb_orchestrator.monarch_setup import expand
 from wb_world.episode import Episode
 
 # ponytail: one Monarch at a time, because the front door owns a fixed port and
@@ -124,6 +124,7 @@ class MonarchArm:
         never eats another attempt's budget. `deadline` is therefore ignored.
         """
         h = self.harness
+        timed_out = None
         with _LOCK:
             attempt_deadline = time.monotonic() + self.timeout_s
             port = h.shim_port
@@ -135,11 +136,19 @@ class MonarchArm:
                                  f"front door port {port} busy: {e}", retryable=True) from e
             try:
                 res = self._attempt(ep, attempt_deadline)
+            except EpisodeTimeout as e:
+                # Rule 9: the attempt still spent money, so the timeout row must
+                # carry it. `partial` is what the orchestrator merges, exactly as
+                # it already does for an InfraError.
+                timed_out, res = e, self._partial
             finally:
                 shim.stop()
         # Cost is read after the front door is down and the lock is free: it is
         # bookkeeping, and a slow Langfuse must not hold the next attempt.
         self._add_cost(res, ep.episode_id)
+        if timed_out is not None:
+            timed_out.partial = res
+            raise timed_out
         # After the cleanup and outside the lock, so the orchestrator's retry
         # starts against a free port and an idle Monarch (FR-011).
         if self._infra is not None:
@@ -160,13 +169,17 @@ class MonarchArm:
                 self.env.get(h.langfuse_public_key_env or "") or "",
                 self.env.get(h.langfuse_secret_key_env or "") or "",
                 episode_id, self.price_table)
-        except (LangfuseUnavailable, Stop):
-            # Unreachable, or no address configured: the attempt's verdict stands
-            # and the report shows the cost as missing.
+        except LangfuseUnavailable:
+            # The attempt's verdict stands; the report shows the cost as missing.
+            # An unset address or key never reaches here: resolve() refuses the
+            # run before a cent is spent (FR-029).
             res.flags.append("cost_missing")
             return
         except PriceLookupError as e:
-            self._infra = InfraError("infra:harness_crash", str(e), retryable=False)
+            # `or` so a retryable error already stored for this attempt keeps
+            # its place: the run stops on it either way, and it came first.
+            self._infra = self._infra or InfraError("infra:harness_crash", str(e),
+                                                    retryable=False)
             return
         cost = summarize(gens, self.price_table)
         if cost.missing:
@@ -210,7 +223,8 @@ class MonarchArm:
         return client
 
     def _attempt(self, ep: Episode, deadline: float) -> ArmResult:
-        res = ArmResult()
+        # Held on the arm so a timeout can still report the phases it reached.
+        res = self._partial = ArmResult()
         self._infra = None
         client = self._client(deadline)
         self._sweep(client)

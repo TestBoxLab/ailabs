@@ -26,10 +26,11 @@ from runner.arms import _sf_updates_from_assertions
 from tests.fake_fd import fd_serving
 from tests.fake_langfuse import FakeLangfuse
 from tests.fake_monarch import FakeMonarch, Scenario
+from tests.monarch_helpers import (  # noqa: F401  (repo is a fixture)
+    KB, MONARCH_ENV, arm_against, free, free_port, git, monarch_site, repo, resolve_monarch)
 from tests.test_config import (  # noqa: F401  (site is a fixture)
     HARNESS_MONARCH, HARNESS_SCRIPTED, PLAN, PRICE_TABLE, edit, site, write)
 from tests.test_monarch_client import header
-from tests.test_run_config import KB, MONARCH_ENV, monarch_site, resolve_monarch
 from wb_arms.api_loop import EpisodeTimeout, InfraError
 from wb_arms.monarch import MonarchArm
 from wb_orchestrator import config
@@ -41,23 +42,6 @@ from wb_world.episode import Episode, load_suite, load_task_file
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_PATH = ROOT / "config/products/simulated-apps.yaml"
-
-
-def git(repo, *args) -> str:
-    out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
-    return out.stdout.strip()
-
-
-@pytest.fixture
-def repo(tmp_path):
-    """A one-commit git repo standing in for the Monarch checkout, on `main`."""
-    d = tmp_path / "monarch"
-    d.mkdir()
-    git(d, "init", "-q")
-    git(d, "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "x")
-    git(d, "checkout", "-q", "-B", "main")
-    return d
 
 
 def monarch_arm(site, repo_path):
@@ -97,15 +81,6 @@ TASKS_DIR = ROOT / "tasks"
 SF = "/salesforce/services/data/v61.0/sobjects"
 
 
-def free_port() -> int:
-    """A port nothing listens on right now (the front door binds a fixed one)."""
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 def task(name: str = "simple.email_sf_contact_city_update") -> dict:
     return load_task_file(TASKS_DIR / f"{name}.json")
 
@@ -114,33 +89,6 @@ def task(name: str = "simple.email_sf_contact_city_update") -> dict:
 def fast_polling(monkeypatch):
     """The fakes answer instantly; a 2 s production poll would only add dead time."""
     monkeypatch.setattr(MonarchArm, "POLL_INTERVAL_S", 0.02)
-
-
-def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None):
-    """A Monarch arm whose harness points at the fakes on their real ports."""
-    monarch_site(site, kb=kb, monarch_repo=str(repo))
-    text = (site / "config/harnesses/monarch.yaml").read_text()
-    text = (edit(text, "base_url", fake.url)
-            .replace("shim_port: 9105", f"shim_port: {port}")
-            .replace("shim_public_host: host.docker.internal", "shim_public_host: 127.0.0.1"))
-    if fd is not None:
-        text = edit(text, "fd_url", fd.url)
-    if langfuse is not None:
-        text = edit(text, "langfuse_url", langfuse.url)
-    write(site / "config/harnesses", text)
-    rc = resolve_monarch(site, env=env) if env else resolve_monarch(site)
-    competitor = next(c for c in rc.competitors if c.harness.kind == "monarch")
-    arm = build_arm_for(competitor, rc)
-    if env is not None:
-        arm.env = env
-    return arm
-
-
-def free(port: int) -> None:
-    """The front door let go of its fixed port."""
-    s = socket.socket()
-    s.bind(("0.0.0.0", port))
-    s.close()
 
 
 def city_of(snapshot: dict, contact_id: str = "003004") -> str:
@@ -257,9 +205,12 @@ def pilot_site(tmp_path, monarch_url, fd_url, port, repo) -> Path:
     return site
 
 
-def test_pilot_plan_offline(tmp_path, repo):
+def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     """Answer key and Monarch on the 10 pilot tasks x 2, against fakes on free ports."""
     port = free_port()
+    # The orchestrator builds its arms from os.environ, exactly as `wb run` does.
+    for k, v in MONARCH_ENV.items():
+        monkeypatch.setenv(k, v)
     tasks = load_suite(TASKS_DIR)
     kb_hashes = {f"bench-{s}": f"{i:012x}" for i, s in enumerate(load_product(PRODUCT_PATH).services)}
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}")
@@ -357,8 +308,7 @@ def test_termination_table(site, repo, kwargs, expected):
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", **kwargs)
     with FakeMonarch(sc) as fake:
-        # No token: the login story needs the arm to actually log in.
-        arm = arm_against(site, fake, port, repo, env={**MONARCH_ENV, "MONARCH_TOKEN": ""})
+        arm = arm_against(site, fake, port, repo)
         ep = Episode(task(), episode_id="run-x/t/monarch/t0")
         kind, *rest = expected
         if kind == "infra":
@@ -399,18 +349,24 @@ def test_timeout_during_authoring(site, repo):
 
 
 def test_timeout_during_run(site, repo):
-    """The engine never finishes: the workflow is deleted before the attempt gives up."""
+    """The engine never finishes: the workflow goes, and the spend still lands.
+
+    Rule 9: money spent is money reported, whatever ended the attempt.
+    """
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_never_finishes=True)
-    with FakeMonarch(sc) as fake:
-        arm = arm_against(site, fake, port, repo)
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
+        arm = arm_against(site, fake, port, repo, langfuse=lf,
+                          env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
         arm.timeout_s = 1.0
+        both_phases(lf, EPISODE)
         with pytest.raises(EpisodeTimeout) as exc:
-            arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
-                    deadline=time.monotonic() + 60)
+            arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
 
     assert "execution" in str(exc.value)
     assert fake.deleted_workflows == ["wf-1"]
+    assert exc.value.partial.cost_usd > 0
+    assert exc.value.partial.phases["authoring"].cost_usd > 0
     free(port)
 
 
@@ -503,9 +459,9 @@ def costed_attempt(site, repo, langfuse, trace=None, env=None):
 
 
 def LANGFUSE_ENV(langfuse) -> dict:
-    """Langfuse's address and keys, plus an empty token so the arm logs in."""
-    return {"MONARCH_TOKEN": "", "LANGFUSE_URL": langfuse.url,
-            "LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"}
+    """The address of a fake Langfuse, with the keys it was built with."""
+    return {"LANGFUSE_URL": langfuse.url, "LANGFUSE_PUBLIC_KEY": "pk",
+            "LANGFUSE_SECRET_KEY": "sk"}
 
 
 def both_phases(lf, episode_id: str) -> None:
@@ -572,12 +528,40 @@ def test_an_unmapped_model_stops_the_run(site, repo):
 
 def test_langfuse_unreachable_only_flags(site, repo):
     lf = FakeLangfuse().start()
-    port = lf.port
     lf.stop()                       # nothing answers on that address any more
-    with FakeLangfuse() as other:   # a live object, only for its keys
-        result = costed_attempt(site, repo, lf,
-                                env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+    result = costed_attempt(site, repo, lf, env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
 
     assert result.termination == "completed" and result.error is None
     assert result.cost_usd == 0 and "cost_missing" in result.flags
-    assert port
+
+
+def test_a_timed_out_row_keeps_its_spend(site, repo, tmp_path, monkeypatch):
+    """The recorded row, not just the exception: a timeout still shows what it cost."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_never_finishes=True)
+    kb_hashes = yaml.safe_load(KB)["kb"]     # prepare() must find these unchanged
+    env = {**MONARCH_ENV}
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf, fd_serving(kb_hashes) as fd:
+        env |= LANGFUSE_ENV(lf)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        arm = arm_against(site, fake, port, repo, fd=fd, langfuse=lf, env=env)
+        plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
+        plan = edit(plan, "baseline", "monarch").replace("repetitions: 2", "repetitions: 1")
+        plan = plan.replace("timeout_s: 600", "timeout_s: 1")
+        plan += "competitors:\n  - {harness: monarch}\n"
+        write(site / "config/plans", plan)
+        one_task = site / "tasks" / "simple.email_sf_contact_city_update.json"
+        rc = config.resolve(site / "config/products/simulated-apps.yaml",
+                            site / "config/plans/smoke-frontier.yaml",
+                            env=env, audiences={"internal": ["*"]})
+        rc.tasks = [t for t in rc.tasks if t["task"] == one_task.stem]
+        store = Store(tmp_path / "wb.sqlite3")
+        orch = Orchestrator.from_config(store, rc, tmp_path / "out")
+        both_phases(lf, f"run-t/{one_task.stem}/{arm.name}/t0")
+        orch.run("run-t")
+
+    row = store.episodes(run="run-t")["rows"][0]
+    assert row["termination"] == "timeout"
+    assert row["cost_usd"] > 0
+    free(port)

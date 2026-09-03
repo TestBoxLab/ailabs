@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.monarch_helpers import (  # noqa: F401  (repo is a fixture)
+    KB, MONARCH_ENV, git, monarch_site, repo, resolve_monarch)
 from tests.test_config import (  # noqa: F401  (site is a fixture)
     ENV, PLAN, PRICE_TABLE, edit, runnable_monarch, site, write)
 from wb_orchestrator import config
@@ -203,36 +205,6 @@ def test_build_arm_for_names_harness_and_key_on_bad_placeholder(site, monkeypatc
 
 # -- T007: Monarch competitor -> knowledge-base hash file + price table ---------
 
-KB = """\
-product: simulated-apps
-generated_at: 2026-09-04T12:00:00Z
-seeds_format: public-api-seeds@1
-shim_public_url: http://host.docker.internal:9105
-kb:
-  bench-airtable: 6d07bde6f1c2
-  bench-asana: 272673e3a9b0
-  bench-gmail: 9b1f0c4a5e77
-  bench-salesforce: 3c2e8d90aa41
-"""
-
-MONARCH_ENV = {**ENV, "MONARCH_PASSWORD": "monarch-dev"}
-
-
-def monarch_site(site, kb=KB, monarch_repo=None):
-    """The `site` fixture with a runnable Monarch competitor, its price table and its kb file."""
-    runnable_monarch(site, modes="[create-run]", monarch_repo=monarch_repo)
-    write(site / "config/models", PRICE_TABLE)
-    if kb is not None:
-        (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(kb)
-    return site
-
-
-def resolve_monarch(site, env=MONARCH_ENV):
-    return config.resolve(site / "config/products/simulated-apps.yaml",
-                          site / "config/plans/smoke-frontier.yaml",
-                          env=env, audiences={"internal": ["*"]})
-
-
 def test_resolve_loads_monarch_kb_and_price_table(site):
     rc = resolve_monarch(monarch_site(site))
     assert rc.monarch_kb.product == "simulated-apps"
@@ -343,7 +315,7 @@ def test_kb_drift_refuses(site, tmp_path):
     """One app whose hash moved: the run stops naming it, before Monarch is asked anything."""
     from tests.fake_fd import fd_serving
     from tests.fake_monarch import FakeMonarch
-    from tests.test_monarch_arm import arm_against, free_port, repo  # noqa: F401
+    from tests.monarch_helpers import arm_against, free_port
     from wb_arms.api_loop import InfraError
 
     on_disk = {"bench-airtable": "6d07bde6f1c2", "bench-asana": "272673e3a9b0",
@@ -365,12 +337,10 @@ def test_kb_drift_refuses(site, tmp_path):
 
 
 def _git_init(d) -> None:
-    import subprocess
-    for args in (["init", "-q"],
-                 ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-q",
-                  "-m", "x"],
-                 ["checkout", "-q", "-B", "main"]):
-        subprocess.run(["git", "-C", str(d), *args], check=True, capture_output=True)
+    """A one-commit checkout on `main`, for the version the arm is named after."""
+    git(d, "init", "-q")
+    git(d, "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "x")
+    git(d, "checkout", "-q", "-B", "main")
 
 
 def test_banner_names_the_monarch_build(site, tmp_path):
@@ -382,3 +352,17 @@ def test_banner_names_the_monarch_build(site, tmp_path):
     line = _banner(resolve_monarch(site)).splitlines()[-1]
     assert line.startswith("monarch   monarch@")
     assert "kb 4 apps" in line and "price table monarch-team-bedrock@2026-09-03" in line
+
+
+def test_monarch_needs_its_addresses_and_langfuse_keys(site):
+    """FR-029: a variable the competitor will need stops the run before it starts."""
+    monarch_site(site)
+    for name, field in (("MONARCH_URL", "base_url"), ("MONARCH_FD_URL", "fd_url"),
+                        ("LANGFUSE_URL", "langfuse_url"),
+                        ("LANGFUSE_PUBLIC_KEY", "langfuse_public_key_env"),
+                        ("LANGFUSE_SECRET_KEY", "langfuse_secret_key_env")):
+        env = {k: v for k, v in MONARCH_ENV.items() if k != name}
+        with pytest.raises(ConfigError) as exc:
+            resolve_monarch(site, env=env)
+        assert exc.value.path == str(site / "config/harnesses/monarch.yaml")
+        assert exc.value.field == field and name in str(exc.value)

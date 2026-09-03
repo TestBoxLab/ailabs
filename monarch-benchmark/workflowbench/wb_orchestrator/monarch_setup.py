@@ -30,7 +30,7 @@ from wb_world import seeds
 # ponytail: taken from seed-catalog.ts; verify against the running image at T053 (live gate).
 FIXTURES_MOUNT_PATH = "/app/api/src/seeds/fixtures/public-api-seeds/bench-mounted"
 SEEDS_FORMAT = "public-api-seeds@1"
-TIMEOUT_S = 30.0
+TIMEOUT_S = 60.0   # the 686-file import against the fake has timed out at 30 under load
 _VAR = re.compile(r"\$\{(\w+)\}")
 
 

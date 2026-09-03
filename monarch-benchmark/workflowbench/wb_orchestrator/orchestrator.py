@@ -318,6 +318,10 @@ class Orchestrator:
                 break
             except EpisodeTimeout as e:
                 termination, error = "timeout", str(e)
+                # A timed-out attempt still spent money and still reached some
+                # phases; the row reports both (rule 9). No retry follows, so
+                # the partial result is the result.
+                result = getattr(e, "partial", None) or result
                 break
             except InfraError as e:
                 termination, error = e.kind, str(e)

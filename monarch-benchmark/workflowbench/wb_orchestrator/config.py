@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -567,6 +568,27 @@ def known(folder) -> str:
     return ", ".join(sorted(p.stem for p in Path(folder).glob("*.yaml")))
 
 
+_PLACEHOLDER = re.compile(r"\$\{(\w+)\}")
+
+
+def _check_monarch_env(h, hpath, env) -> None:
+    """Every address and key the Monarch competitor needs, before a cent is spent.
+
+    An address is only checked when it is written as a `${VAR}` placeholder; a
+    literal one needs nothing from the environment. Checked here rather than at
+    first use so a missing variable stops the run at `wb run`, not halfway
+    through it (FR-029).
+    """
+    for field in ("base_url", "fd_url", "langfuse_url"):
+        for name in _PLACEHOLDER.findall(getattr(h, field) or ""):
+            if not env.get(name):
+                raise ConfigError(hpath, field, f"environment variable {name} is not set")
+    for field in ("langfuse_public_key_env", "langfuse_secret_key_env"):
+        name = getattr(h, field)
+        if name and not env.get(name):
+            raise ConfigError(hpath, field, f"environment variable {name} is not set")
+
+
 def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:
     """Join a product and a plan; apply validation rules 3-10 (data-model.md).
 
@@ -624,6 +646,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         if h.credential_env and not has_token and not has_password:
             names = h.credential_env + (f" or {h.login_password_env}" if h.login_password_env else "")
             raise ConfigError(hpath, "credential_env", f"environment variable {names} is not set")
+        if h.kind == "monarch":
+            _check_monarch_env(h, hpath, env)
         competitors.append(Competitor(name, model, h))
         harnesses[h.name] = h
         if model:
