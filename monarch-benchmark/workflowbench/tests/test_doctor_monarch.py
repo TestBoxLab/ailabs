@@ -121,19 +121,42 @@ def test_run_doctor_includes_the_block_only_when_the_harness_is_runnable(tmp_pat
     env = _env(m.url, fd.url, lf.url)
 
     _harness(tmp_path, runnable=True)
-    got = doctor.run_doctor(keys=[], config_dir=tmp_path, env=env)
+    got = doctor.run_doctor(keys=["monarch"], config_dir=tmp_path, env=env)
     assert [r["provider"] for r in got] == ["monarch"]
 
     _harness(tmp_path, runnable=False)
-    assert doctor.run_doctor(keys=[], config_dir=tmp_path, env=env) == []
+    assert doctor.run_doctor(keys=["monarch"], config_dir=tmp_path, env=env) == []
 
-    assert doctor.run_doctor(keys=[], config_dir=tmp_path / "nope", env=env) == []
+    assert doctor.run_doctor(keys=["monarch"], config_dir=tmp_path / "nope", env=env) == []
+
+
+def test_a_providers_only_arms_list_skips_the_monarch_block(tmp_path, stack):
+    """CI runs `wb doctor --arms <providers>` with no Monarch stack up; the block
+    must not run there, let alone fail the job."""
+    m, fd, lf = stack
+    _harness(tmp_path)
+    # ponytail: an unregistered key so check_provider stops at the lookup and
+    # spends nothing; a real key here would bill a call whenever .env is loaded.
+    got = doctor.run_doctor(keys=["not-a-provider"], config_dir=tmp_path,
+                            env=_env(m.url, fd.url, lf.url))
+    assert [r["provider"] for r in got] == ["not-a-provider"]
+    assert m.requests == []
+
+
+def test_arms_monarch_runs_the_block_and_no_provider(tmp_path, stack):
+    m, fd, lf = stack
+    _harness(tmp_path)
+    got = doctor.run_doctor(keys=["monarch"], config_dir=tmp_path,
+                            env=_env(m.url, fd.url, lf.url))
+    assert [r["provider"] for r in got] == ["monarch"]
+    assert got[0]["ok"] is True
+    assert m.requests                       # monarch is not treated as a provider key
 
 
 def test_format_report_prints_the_monarch_block(tmp_path, stack):
     m, fd, lf = stack
     _harness(tmp_path)
-    text = doctor.format_report(doctor.run_doctor(keys=[], config_dir=tmp_path,
+    text = doctor.format_report(doctor.run_doctor(keys=["monarch"], config_dir=tmp_path,
                                                   env=_env(m.url, fd.url, lf.url)))
     assert "[OK ] monarch" in text
     for k in ("backend", "backend_health", "fd", "langfuse"):

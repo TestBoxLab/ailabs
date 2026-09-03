@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from wb_arms import providers
-from wb_arms.api_loop import ApiLoopArm, build_tools_openai
+from wb_arms.api_loop import ApiLoopArm
 from wb_orchestrator import config
 from wb_orchestrator.monarch_setup import _Stop, _expand
 
@@ -202,10 +202,14 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
 
 def run_doctor(keys: list[str] | None = None, monarch_probe: bool = False,
                config_dir=None, env: dict | None = None) -> list[dict[str, Any]]:
-    keys = sorted(providers.REGISTRY) if keys is None else keys
+    # "monarch" is a name --arms accepts but not a provider: it selects the block
+    # below. An explicit list of providers only (as CI passes) skips the block
+    # entirely, so `wb doctor --arms <providers>` never fails on an absent stack.
+    want_monarch = keys is None or "monarch" in keys
+    keys = sorted(providers.REGISTRY) if keys is None else [k for k in keys if k != "monarch"]
     reports = [check_provider(k) for k in keys]
     path = Path(config_dir or config.DEFAULT_CONFIG_DIR) / "harnesses" / "monarch.yaml"
-    if path.is_file():
+    if want_monarch and path.is_file():
         harness = config.load_harness(path)
         if harness.runnable:
             reports.append(check_monarch(harness, env if env is not None else os.environ,

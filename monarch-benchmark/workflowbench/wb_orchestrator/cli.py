@@ -230,7 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("doctor")
-    p.add_argument("--arms", default=None, help="comma list of provider keys; default: all registered")
+    p.add_argument("--arms", default=None,
+                   help="comma list of provider keys, plus 'monarch' for the Monarch checks; "
+                        "default: all registered providers and monarch")
     p.add_argument("--monarch-probe", action="store_true",
                    help="also start and immediately cancel one Monarch authoring run; costs model money")
     p.set_defaults(fn=cmd_doctor)
