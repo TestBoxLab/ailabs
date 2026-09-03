@@ -137,9 +137,24 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
             figures.append(fig)
 
     return {"run_id": run_id, "suite": run["suite"], "config_hash": run["config_hash"],
+            "source_suffix": _source_suffix(config, per_arm_rows),
             "audience": audience, "arms": arms, "arms_stripped_by_gate": stripped,
             "baseline": baseline, "k": k, "stop_reason": run.get("stop_reason"),
             "figures": figures}
+
+
+def _source_suffix(config: dict, per_arm_rows: dict[str, list[dict]]) -> str:
+    """PLAN.md §1 rule 8 / FR-023: the price table a Monarch run billed against and
+    how many of its attempts had no cost. One suffix per run, appended to every
+    source line; empty (line unchanged) when neither applies."""
+    parts = [f"price table {t.get('name', name)}@{t.get('prices_verified')}"
+             for name, t in sorted((config.get("price_tables") or {}).items())]
+    monarch = [r for arm, rows in per_arm_rows.items() if arm.startswith("monarch")
+               for r in rows]
+    if monarch:
+        missing = sum(1 for r in monarch if "cost_missing" in (r.get("flags") or []))
+        parts.append(f"cost missing on {missing}/{len(monarch)} attempts")
+    return "".join(f" · {p}" for p in parts)
 
 
 def _fmt_pm(block: dict, pct: bool = True) -> str:
@@ -163,6 +178,7 @@ def _source_line(src: dict) -> str:
 
 
 def render_md(report: dict[str, Any]) -> str:
+    suffix = report.get("source_suffix", "")
     lines = [f"# WorkflowBench report — {report['run_id']}",
              "",
              f"audience: **{report['audience']}** · suite `{report['suite']}` · "
@@ -197,7 +213,7 @@ def render_md(report: dict[str, Any]) -> str:
         lines.append(row)
     for f in report["figures"]:
         if f["kind"] == "arm_summary":
-            lines.append(f"  \n  `{_source_line(f['source'])}` · contracts: "
+            lines.append(f"  \n  `{_source_line(f['source'])}{suffix}` · contracts: "
                          f"{', '.join(h[:8] for h in f['contract_hashes'])}")
     paired = [f for f in report["figures"] if f["kind"] == "paired"]
     if paired:
@@ -210,7 +226,7 @@ def render_md(report: dict[str, Any]) -> str:
                 f"infra-dropped {f['dropped_infra']}) · McNemar b={m['b']} c={m['c']} "
                 f"p={m['p']}" +
                 (f" · cost ratio {f['cost_ratio_vs_baseline']}x" if "cost_ratio_vs_baseline" in f else ""))
-            lines.append(f"  `{_source_line(f['source'])}`")
+            lines.append(f"  `{_source_line(f['source'])}{suffix}`")
     return "\n".join(lines) + "\n"
 
 
