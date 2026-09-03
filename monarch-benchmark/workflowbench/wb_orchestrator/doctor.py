@@ -15,7 +15,7 @@ from typing import Any
 from wb_arms import providers
 from wb_arms.api_loop import ApiLoopArm
 from wb_orchestrator import config
-from wb_orchestrator.monarch_setup import _Stop, _expand
+from wb_orchestrator.monarch_setup import Stop, expand
 
 # Fixed doctor prompts: byte-identical across the two calls so the second call
 # lands on the first's prefix. No timestamps or ids, same rule as real runs.
@@ -89,6 +89,11 @@ def check_provider(key: str) -> dict[str, Any]:
 
 
 MONARCH_KEYS = ("backend", "backend_health", "fd", "langfuse", "authoring_probe")
+# Plain names for the printed report; the report keys themselves do not change.
+MONARCH_LABELS = {"backend": "monarch backend",
+                  "backend_health": "monarch health (session)",
+                  "fd": "discovery service",
+                  "langfuse": "tracing service"}
 _TIMEOUT_S = 5
 _PROBE_GOAL = "Connectivity check. Do nothing."
 
@@ -110,7 +115,10 @@ def _line(url: str, fn) -> tuple[str, Any]:
     """`fn()` -> (line, value). A line always names the address it tried."""
     try:
         return f"OK {url}", fn()
-    except Exception as e:                      # any transport/HTTP/decode failure
+    except (OSError, ValueError, RuntimeError) as e:
+        # Transport (HTTPError/URLError are OSError), decoding, and the auth
+        # failures raised above. Anything else is a wb bug and must surface as a
+        # traceback rather than hide as a FAIL line.
         return f"FAIL {url}: {type(e).__name__}: {e}", None
 
 
@@ -138,13 +146,13 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
     """
     report: dict[str, Any] = {"provider": "monarch", "ok": False}
 
-    def expand(field: str) -> str:
+    def _url(field: str) -> str:
         # `${VAR}` in the harness file; an unset variable is that line's failure.
-        return _expand(getattr(harness, field), env, field)
+        return expand(getattr(harness, field), env, field)
 
     try:
-        base_url = expand("base_url")
-    except _Stop as stop:
+        base_url = _url("base_url")
+    except Stop as stop:
         base_url = None
         report["backend"] = report["backend_health"] = f"FAIL base_url: {stop.message}"
 
@@ -161,8 +169,8 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
                               ("langfuse_url", "/api/public/health", "langfuse")):
         key = "fd" if field == "fd_url" else "langfuse"
         try:
-            url = expand(field) + path
-        except _Stop as stop:
+            url = _url(field) + path
+        except Stop as stop:
             report[key] = f"FAIL {field}: {stop.message}"
             continue
         headers = {}
@@ -178,11 +186,14 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
                 f"{keys[0]}:{keys[1]}".encode()).decode()
         report[key], _ = _line(url, lambda u=url, h=headers: _call("GET", u, headers=h))
 
-    if probe:
+    if probe and base_url:
         # Costs model money: one authoring run, cancelled immediately.
-        runs = f"{base_url}/api/workflows/recipe/runs" if base_url else ""
+        runs = f"{base_url}/api/workflows/recipe/runs"
 
         def fire():
+            # ponytail: logs in a second time rather than threading the health
+            # check's token down here; one extra cheap call keeps the checks
+            # independent. Thread the token through if doctor ever gets chatty.
             token = _session_token(harness, env, base_url)
             sess = {"x-monarch-session": token}
             body, _ = _call("POST", runs, headers=sess, body={"goal": _PROBE_GOAL})
@@ -190,13 +201,12 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
             _call("POST", f"{runs}/{run_id}/cancel", headers=sess, body={})
             return run_id
 
-        if not base_url:
-            report["authoring_probe"] = report["backend"]
-        else:
-            line, run_id = _line(runs, fire)
-            report["authoring_probe"] = f"{line} runId={run_id}" if run_id else line
+        line, run_id = _line(runs, fire)
+        report["authoring_probe"] = f"{line} runId={run_id}" if run_id else line
 
-    report["ok"] = all(str(report.get(k, "OK")).startswith("OK") for k in MONARCH_KEYS)
+    # Only the keys actually present are judged: a missing key is a check that
+    # never ran, which must never read as OK.
+    report["ok"] = all(str(v).startswith("OK") for k, v in report.items() if k in MONARCH_KEYS)
     return report
 
 
@@ -226,5 +236,5 @@ def format_report(reports: list[dict[str, Any]]) -> str:
                   "cached_tokens_second_call", "cache_probe_attempts", "cache_field",
                   "cache_hit", "cache_min_warning", "cache_warning", *MONARCH_KEYS):
             if k in r:
-                lines.append(f"       {k}: {r[k]}")
+                lines.append(f"       {MONARCH_LABELS.get(k, k)}: {r[k]}")
     return "\n".join(lines)

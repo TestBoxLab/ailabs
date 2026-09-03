@@ -79,6 +79,16 @@ def test_login_is_used_when_no_token_env(tmp_path, stack):
     assert [q["path"] for q in m.requests].count("/api/auth/login") == 1
 
 
+def test_health_check_sends_the_session_token(tmp_path, stack):
+    m, fd, lf = stack
+    doctor.check_monarch(_harness(tmp_path), _env(m.url, fd.url, lf.url))
+    health = [q for q in m.requests if q["path"] == "/api/health"]
+    # urllib title-cases what it sends, so match the name case-insensitively.
+    sent = [{k.lower(): v for k, v in q["headers"].items()}.get("x-monarch-session")
+            for q in health]
+    assert sent == [m.token]
+
+
 def test_preset_token_env_skips_login(tmp_path):
     with FakeMonarch(Scenario(preset_token="t")) as m, FakeFD() as fd, FakeLangfuse() as lf:
         env = {**_env(m.url, fd.url, lf.url), "MONARCH_TOKEN": "t"}
@@ -106,14 +116,26 @@ def test_unset_variable_is_a_fail_naming_the_variable(tmp_path, stack):
     assert r["langfuse"].startswith("FAIL ") and "LANGFUSE_URL" in r["langfuse"]
 
 
+def test_ok_judges_only_the_checks_that_ran(tmp_path, stack):
+    """A check that never ran must not be counted as passing."""
+    m, fd, lf = stack
+    r = doctor.check_monarch(_harness(tmp_path), _env(m.url, fd.url, lf.url))
+    # authoring_probe is absent (not requested) and must not count either way
+    assert r["ok"] is True and "authoring_probe" not in r
+    assert set(doctor.MONARCH_KEYS) - set(r) == {"authoring_probe"}
+
+
 def test_probe_creates_then_cancels_one_authoring_run(tmp_path, stack):
     m, fd, lf = stack
     r = doctor.check_monarch(_harness(tmp_path), _env(m.url, fd.url, lf.url), probe=True)
 
     assert r["authoring_probe"].startswith("OK ") and "rr-1" in r["authoring_probe"]
-    posts = [q["path"] for q in m.requests if q["method"] == "POST"]
-    assert posts.count("/api/workflows/recipe/runs") == 1
-    assert posts.count("/api/workflows/recipe/runs/rr-1/cancel") == 1
+    posts = [q for q in m.requests if q["method"] == "POST"]
+    paths = [q["path"] for q in posts]
+    assert paths.count("/api/workflows/recipe/runs") == 1
+    assert paths.count("/api/workflows/recipe/runs/rr-1/cancel") == 1
+    started = next(q for q in posts if q["path"] == "/api/workflows/recipe/runs")
+    assert started["body"] == {"goal": doctor._PROBE_GOAL}
 
 
 def test_run_doctor_includes_the_block_only_when_the_harness_is_runnable(tmp_path, stack):
@@ -159,5 +181,8 @@ def test_format_report_prints_the_monarch_block(tmp_path, stack):
     text = doctor.format_report(doctor.run_doctor(keys=["monarch"], config_dir=tmp_path,
                                                   env=_env(m.url, fd.url, lf.url)))
     assert "[OK ] monarch" in text
-    for k in ("backend", "backend_health", "fd", "langfuse"):
-        assert f"{k}: OK " in text
+    # the printed lines carry the plain names, not the internal report keys
+    for label in ("monarch backend", "monarch health (session)",
+                  "discovery service", "tracing service"):
+        assert f"{label}: OK " in text
+    assert "fd: OK" not in text and "langfuse: OK" not in text

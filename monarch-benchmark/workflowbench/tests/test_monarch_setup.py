@@ -135,7 +135,7 @@ def test_import_failure_names_the_slug(workspace, monkeypatch):
 
         def flaky(url, payload, step, timeout=None):
             if url.endswith("/bench-slack/import"):
-                raise monarch_setup._Stop(4, step, "boom")
+                raise monarch_setup.Stop(4, step, "boom")
             return real(url, payload, step)
 
         monkeypatch.setattr(monarch_setup, "_post", flaky)
