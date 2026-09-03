@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_config import (  # noqa: F401  (site is a fixture)
-    ENV, HARNESS_MONARCH, PLAN, PRICE_TABLE, edit, runnable_monarch, site, write)
+    ENV, PLAN, PRICE_TABLE, edit, runnable_monarch, site, write)
 from wb_orchestrator import config
 from wb_orchestrator.cli import _banner, main
 from wb_orchestrator.config import ConfigError
@@ -257,29 +257,28 @@ def test_resolve_missing_kb_file_points_at_wb_monarch_setup(site):
     monarch_site(site, kb=None)
     with pytest.raises(ConfigError) as exc:
         resolve_monarch(site)
-    assert exc.value.path == str(site / "config/products/simulated-apps.yaml")
-    assert exc.value.field == "monarch_kb" and "wb monarch setup" in str(exc.value)
+    assert exc.value.path == str(site / "config/products/simulated-apps.monarch-kb.yaml")
+    assert exc.value.field == "kb" and "wb monarch setup" in str(exc.value)
 
 
 def test_resolve_kb_slug_outside_the_product_services(site):
     monarch_site(site, kb=KB + "  bench-notion: ffffffffffff\n")
     with pytest.raises(ConfigError) as exc:
         resolve_monarch(site)
-    assert exc.value.field == "kb" and "bench-notion" in str(exc.value)
+    assert exc.value.path == str(site / "config/products/simulated-apps.monarch-kb.yaml")
+    assert exc.value.field == "kb.bench-notion" and "not a service" in str(exc.value)
 
 
 def test_resolve_kb_missing_a_product_service(site):
     monarch_site(site, kb=KB.replace("  bench-gmail: 9b1f0c4a5e77\n", ""))
     with pytest.raises(ConfigError) as exc:
         resolve_monarch(site)
-    assert exc.value.field == "kb" and "bench-gmail" in str(exc.value)
+    assert exc.value.field == "kb.bench-gmail" and "wb monarch setup" in str(exc.value)
 
 
 def test_resolve_unknown_price_table(site):
     monarch_site(site)
-    write(site / "config/harnesses", edit(
-        edit(HARNESS_MONARCH, "runnable", "true"), "price_table", "nowhere").replace(
-        "modes: [full-flow, create-run, run-only]", "modes: [create-run]"))
+    runnable_monarch(site, modes="[create-run]", price_table="nowhere")
     with pytest.raises(ConfigError) as exc:
         resolve_monarch(site)
     assert exc.value.field == "price_table" and "nowhere" in str(exc.value)

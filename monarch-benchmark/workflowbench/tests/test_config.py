@@ -461,9 +461,11 @@ def test_resolve_relative_tasks_dir(site, monkeypatch):
     assert rc.attempts_per_competitor == 4 and rc.plan.tasks == "tasks" and rc.config_json["tasks_dir"] == "tasks"
 
 
-def runnable_monarch(site, modes="[full-flow, create-run, run-only]"):
+def runnable_monarch(site, modes="[full-flow, create-run, run-only]", price_table=None):
     text = edit(HARNESS_MONARCH, "runnable", "true").replace(
         "modes: [full-flow, create-run, run-only]", f"modes: {modes}")
+    if price_table is not None:
+        text = edit(text, "price_table", price_table)
     write(site / "config/harnesses", text)
     write(site / "config/plans", plan_text(site).replace("  - {harness: oracle}\n", "  - {harness: monarch}\n"))
 
