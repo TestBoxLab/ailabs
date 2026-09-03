@@ -34,22 +34,22 @@ paired comparisons only on identical sets, with error bars; every figure carries
 its source line; cost is complete (cached vs not, versioned price table);
 audience rules are code; config hash per run; API-key billing only.
 
-**Where things stand (2026-09-02):** environment reproducible; 73 tests green;
-first smoke (`smoke-frontier-001`: 10 tasks × 2 repetitions × oracle, Opus,
-GPT) cost US$ 1.93 and proved the cache; 200-task corpus has mechanically
-derived approval rules; OpenAPI document + HTTP front door exist for Monarch.
-The Monarch competitor itself is still a placeholder (`wb_arms/monarch.py`).
-Read `monarch-benchmark/docs/HANDOFF-2026-09-02.md` for the full picture.
+**Where things stand (2026-09-03):** repo at `C:\devilabs` (moved out of
+OneDrive after sync deleted working-tree files; see
+`monarch-benchmark/docs/HANDOFF-2026-09-03.md`). 199 tests green. Feature 001,
+declarative benchmark configuration, is merged: `wb run --product --plan`, inputs
+in `workflowbench/config/`, approval gate and cost ceiling in code. Two smoke runs
+(`smoke-frontier-001`, `-002`) agree: Opus 90%, GPT-5.6 Sol 100%. The Monarch
+competitor is still a placeholder (`wb_arms/monarch.py`); `.env` must be recreated.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
 and Feature Discovery questions), Sam (GTM), Alex (proposed approver for lab
 competitors in reports).
 
-**Next in line:** declarative benchmark configuration (product file + run
-file; `wb run <run-file>`), then `PLAN.md` order: Monarch on the simulated
-product in three modes (frente B), Monarch phase telemetry (C), Langfuse +
-Slack output (D), corpus leftovers (F), second product (E).
+**Next in line** (`PLAN.md` order): Monarch on the simulated product in three
+modes (frente B), Monarch phase telemetry (C), Langfuse + Slack output (D),
+corpus leftovers (F), second product (E).
 
 The user's global `~/.claude/CLAUDE.md` is loaded automatically and applies
 here. This file holds project-specific additions only.
@@ -153,7 +153,8 @@ each stage hands its artifact to the next:
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
 | `specs/001-declarative-benchmark-config/` | Feature 001: benchmark inputs as files; `contracts/` holds the CLI and config-file contracts. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
-| `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Resume-here note: state, rules, next steps. |
+| `monarch-benchmark/docs/HANDOFF-2026-09-03.md` | Resume-here note: repo move, feature 001, next steps. |
+| `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Previous handoff: background and standing rules. |
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
