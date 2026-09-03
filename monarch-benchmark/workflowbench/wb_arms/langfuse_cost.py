@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import base64
 import json
-import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -39,6 +38,8 @@ class Generation:
     output: int
     cache_read: int
     cache_write: int
+    # ponytail: "<none>" sentinel instead of Optional — the field is only read when
+    # phase == "other", and other_spans is a list of names for the report.
     ancestor: str = "<none>"   # nearest ancestor span name; only read when phase == "other"
 
 
@@ -52,12 +53,20 @@ class CostSummary:
 
 
 def cost_for(prices, input: int, output: int, cache_read: int, cache_write: int) -> float:
-    """The four token counts are disjoint (the contract's usage.input excludes cache)."""
+    """Price four disjoint token counts (contract §3: usage.input excludes cache).
+
+    Unlike providers.cost_usd — which takes an inclusive prompt count and subtracts
+    the cached and cache-write subsets out of it, clamping provider overreports —
+    Bedrock reports the four separately here, so nothing is subtracted or clamped.
+    """
     return round((input * prices.input + cache_read * prices.cached
                   + cache_write * prices.cache_write + output * prices.output) / 1e6, 6)
 
 
 def _family(model: str, table) -> str:
+    # ponytail: first match wins on a case-insensitive substring. Ceiling: overlapping
+    # match lists silently resolve by table order; upgrade: validate non-overlap in
+    # load_price_table.
     low = (model or "").lower()
     for entry in table.models:
         if any(m.lower() in low for m in entry.match):
@@ -75,7 +84,7 @@ def _get(base_url: str, path: str, params: dict, auth: str, timeout: float, page
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read() or b"{}")
-        except (urllib.error.URLError, OSError, ValueError) as e:  # HTTPError is a URLError
+        except (OSError, json.JSONDecodeError) as e:  # URLError/HTTPError are OSError
             raise LangfuseUnavailable(f"GET {path}: {e}") from e
         items += body.get("data") or []
         if page >= (body.get("meta") or {}).get("totalPages", 1):
@@ -83,6 +92,25 @@ def _get(base_url: str, path: str, params: dict, auth: str, timeout: float, page
         page += 1
 
 
+def _phase_of(obs: dict, by_id: dict) -> tuple[str, str]:
+    """Walk up parentObservationId to the first span named in the contract table.
+
+    Returns (phase, nearest ancestor name). No listed ancestor -> ("other", nearest
+    ancestor name, or "<none>" when the generation has no parent at all).
+    """
+    ancestor, cur, seen = "<none>", by_id.get(obs.get("parentObservationId")), set()
+    while cur is not None and cur["id"] not in seen:   # cycle-safe on malformed traces
+        seen.add(cur["id"])
+        if ancestor == "<none>":
+            ancestor = cur.get("name") or "<none>"
+        if cur.get("name") in PHASE_SPANS:
+            return PHASE_SPANS[cur["name"]], cur["name"]
+        cur = by_id.get(cur.get("parentObservationId"))
+    return "other", ancestor
+
+
+# ponytail: page_size is a test seam (force multi-page paging); production always uses
+# the contract's 100.
 def read_generations(base_url: str, public_key: str, secret_key: str, episode_id: str,
                      price_table, timeout: float = 10.0, page_size: int = 100) -> list[Generation]:
     auth = "Basic " + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
@@ -96,16 +124,7 @@ def read_generations(base_url: str, public_key: str, secret_key: str, episode_id
         for o in obs:
             if o.get("type") != "GENERATION":
                 continue
-            phase, ancestor, cur = "other", "<none>", by_id.get(o.get("parentObservationId"))
-            seen = set()
-            while cur is not None and cur["id"] not in seen:
-                seen.add(cur["id"])
-                if ancestor == "<none>":
-                    ancestor = cur.get("name") or "<none>"
-                if cur.get("name") in PHASE_SPANS:
-                    phase, ancestor = PHASE_SPANS[cur["name"]], cur["name"]
-                    break
-                cur = by_id.get(cur.get("parentObservationId"))
+            phase, ancestor = _phase_of(o, by_id)
             u = o.get("usage") or {}
             out.append(Generation(
                 trace_id=trace["id"], observation_id=o["id"], model=o.get("model"),
@@ -123,8 +142,6 @@ def summarize(generations: list[Generation], price_table) -> CostSummary:
                     tokens={f: 0 for f in fields} if generations else {})
     others = []
     for g in generations:
-        if g.family not in prices:
-            raise PriceLookupError(f"model {g.model!r} is not in price table {price_table.name}")
         row = s.by_phase.setdefault(g.phase, {}).setdefault(
             g.family, {**{f: 0 for f in fields}, "cost_usd": 0.0})
         for f in fields:

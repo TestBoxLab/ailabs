@@ -41,7 +41,12 @@ def test_only_tagged_traces_with_phase_from_nearest_ancestor(table):
         lf.add_trace(None, generations=[("gy", None, "anthropic.claude-opus-4-8-v1", {"input": 9})])
 
         gens = {g.observation_id: g for g in _read(lf, table)}
+        paths = [r["path"] for r in lf.requests]
 
+    # the contract's query shape, url-encoded brackets included
+    assert any("/api/public/traces?" in p and "metadata%5Bbench_episode_id%5D=ep-1" in p
+               for p in paths)
+    assert any("/api/public/observations?" in p and "traceId=trace-1" in p for p in paths)
     assert set(gens) == {"g1", "g2", "g3", "g4"}
     assert (gens["g1"].phase, gens["g1"].family) == ("authoring", "claude-opus-4-8")
     assert (gens["g2"].phase, gens["g2"].family) == ("execution", "claude-sonnet-5")
@@ -81,7 +86,15 @@ def test_summarize_prices_two_families_in_two_phases(table):
 def test_no_generations_is_missing_and_free(table):
     with FakeLangfuse() as lf:
         summary = summarize(_read(lf, table), table)
-    assert (summary.total_usd, summary.missing, summary.by_phase) == (0, True, {})
+    assert (summary.total_usd, summary.missing, summary.by_phase) == (0.0, True, {})
+
+
+def test_parent_cycle_does_not_hang(table):
+    with FakeLangfuse() as lf:
+        lf.add_trace("ep-1", spans=[("s1", "loop-a", "s2"), ("s2", "loop-b", "s1")],
+                     generations=[("g1", "s1", "anthropic.claude-opus-4-8-v1", {"input": 1})])
+        gens = _read(lf, table)
+    assert [(g.phase, g.ancestor) for g in gens] == [("other", "loop-a")]
 
 
 def test_unmapped_model_raises_naming_model_and_table(table):

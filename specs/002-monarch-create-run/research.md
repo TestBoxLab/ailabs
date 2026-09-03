@@ -124,8 +124,12 @@ public_key, secret_key, episode_id) -> list[Generation]` using
 `GET /api/public/traces?metadata[bench_episode_id]=…` then
 `GET /api/public/observations?traceId=…` (basic auth), paging with
 `page`/`limit`. Phase attribution walks `parentObservationId` up to the
-first ancestor whose `name` is in the contract table. Pricing reuses
-`providers.cost_usd` semantics with a `Provider` built from the price table.
+first ancestor whose `name` is in the contract table. **Pricing**:
+`cost_for(prices, input, output, cache_read, cache_write)` prices the four
+disjoint counts of contract §3 directly from the price-table entry. It
+deliberately does not reuse `providers.cost_usd`, which takes an inclusive
+prompt count and subtracts the cached subset: Bedrock reports the four
+separately, so there is nothing to subtract and no overreport to clamp.
 
 **Rationale**: the public Langfuse API is plain JSON over basic auth; the
 `langfuse` Python SDK would be a new dependency for two GET calls. Constitution:
