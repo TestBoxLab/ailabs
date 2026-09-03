@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 
 from wb_orchestrator import config
 from wb_orchestrator import doctor as doctor_mod
+from wb_orchestrator import monarch_setup
 from wb_orchestrator.config import ConfigError
 from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RunKilled, regrade
 from wb_results.store import Store
@@ -195,6 +197,16 @@ def cmd_legacy(args) -> int:
     return 0
 
 
+def cmd_monarch_setup(args) -> int:
+    try:
+        return monarch_setup.run(config.resolve_name_or_path(args.product, "product"),
+                                 config.resolve_name_or_path(args.harness, "harness"),
+                                 args.out, os.environ, sys.stdout)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()   # keys live in workflowbench/.env (gitignored), never in code
     ap = argparse.ArgumentParser(prog="wb", description="WorkflowBench runner")
@@ -247,6 +259,14 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("--product", default="simulated-apps",
                     help="product whose side-effect list to use (name or path)")
     p.set_defaults(fn=cmd_corpus)
+
+    p = sub.add_parser("monarch", help="prepare Monarch for a product")
+    msub = p.add_subparsers(dest="monarch_cmd", required=True)
+    ms = msub.add_parser("setup", help="generate seeds, import them, write the knowledge-base hashes")
+    ms.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
+    ms.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
+    ms.add_argument("--out", default="out/monarch-seeds", help="where the seed folders are written")
+    ms.set_defaults(fn=cmd_monarch_setup)
 
     p = sub.add_parser("legacy-import")
     p.add_argument("runs_dir", help=r"e.g. C:\...\Monarch_Main\bench-host-state\runs")

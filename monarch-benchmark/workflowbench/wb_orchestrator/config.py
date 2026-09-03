@@ -675,7 +675,7 @@ def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
     p = Path(value)
     if p.is_file():
         return p
-    folder = Path(config_dir) / f"{kind}s"
+    folder = Path(config_dir) / ("harnesses" if kind == "harness" else f"{kind}s")
     if not (folder / f"{value}.yaml").is_file():
         raise ConfigError(folder, f"--{kind}", f"unknown {kind} {value!r}; available: {known(folder)}")
     return folder / f"{value}.yaml"
