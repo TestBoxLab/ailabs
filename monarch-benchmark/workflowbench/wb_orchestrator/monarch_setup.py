@@ -127,6 +127,8 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         say("ok", "import", f"{len(kb)} apps")
 
         # 5. granted
+        # ponytail: static warning, not a check; Monarch names no grant route yet
+        # (open question 2). Upgrade: query the org's products and print the missing slugs.
         say("warn", "granted", "unknown (open question 2): verify the 47 bench-* products "
                                "are granted to the bench user's organisation")
 

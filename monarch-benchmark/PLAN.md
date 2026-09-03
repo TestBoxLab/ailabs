@@ -166,7 +166,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [ ] B6 Run-only mode: convert each task's oracle actions into a saved recipe; run the engine only. → **D9**
 - [ ] B7 Rewrite `wb_arms/monarch.py` against the real endpoints: session login → `POST /api/workflows/recipe/runs {goal}` → SSE until saved → `POST /api/workflows/:id/run {mode: live}` → poll. Drop the `events.jsonl` assumption. → feature 002 (`specs/002-monarch-create-run/`)
 - [ ] B8 Cost: read the authoring token ledger + engine LLM calls per run; price with a versioned table; store per phase. → feature 002 (`specs/002-monarch-create-run/`)
-- [ ] B9 Paired pilot in each mode: 10 tasks × {monarch/stock, bare/api/claude-opus-4-8, oracle} × k=2.
+- [ ] B9 Paired pilot in each mode: 10 tasks × {monarch@<version>, claude-opus-4-8/api, oracle} × 2 repetitions.
 - [ ] B10 Decide hosting for the Monarch stack used by the bench: laptop, a Docker VM, or staging with IP allowlist. Railway cannot host it (Lambda emulation needs the Docker socket).
 
 ### WS-C · Monarch phase telemetry (parallel, in the Monarch repo)
