@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_config import PLAN, edit, site, write  # noqa: F401  (site is a fixture)
+from tests.test_config import (  # noqa: F401  (site is a fixture)
+    ENV, HARNESS_MONARCH, PLAN, PRICE_TABLE, edit, runnable_monarch, site, write)
 from wb_orchestrator import config
 from wb_orchestrator.cli import _banner, main
 from wb_orchestrator.config import ConfigError
@@ -138,7 +139,8 @@ def test_resolve_name_or_path(site):
 def test_run_unknown_plan_name_exits_2(tmp_path, capsys):
     rc = main(["--db", str(tmp_path / "wb.sqlite3"), "run", "--product", "simulated-apps", "--plan", "nope"])
     assert rc == 2
-    assert "available: smoke-frontier" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "unknown plan 'nope'" in err and "smoke-frontier" in err and "pilot-monarch-create-run" in err
 
 
 def test_banner_matches_contract(site):
@@ -197,3 +199,126 @@ def test_build_arm_for_names_harness_and_key_on_bad_placeholder(site, monkeypatc
     model = config.load_model(site / "config/models/claude-opus-4-8.yaml")
     with pytest.raises(ValueError, match="harness 'claude-code': env 'WB_BAD': bad placeholder"):
         build_arm_for(config.Competitor("claude-opus-4-8/claude-code", model, harness))
+
+
+# -- T007: Monarch competitor -> knowledge-base hash file + price table ---------
+
+KB = """\
+product: simulated-apps
+generated_at: 2026-09-04T12:00:00Z
+seeds_format: public-api-seeds@1
+shim_public_url: http://host.docker.internal:9105
+kb:
+  bench-airtable: 6d07bde6f1c2
+  bench-asana: 272673e3a9b0
+  bench-gmail: 9b1f0c4a5e77
+  bench-salesforce: 3c2e8d90aa41
+"""
+
+MONARCH_ENV = {**ENV, "MONARCH_PASSWORD": "monarch-dev"}
+
+
+def monarch_site(site, kb=KB):
+    """The `site` fixture with a runnable Monarch competitor, its price table and its kb file."""
+    runnable_monarch(site, modes="[create-run]")
+    write(site / "config/models", PRICE_TABLE)
+    if kb is not None:
+        (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(kb)
+    return site
+
+
+def resolve_monarch(site, env=MONARCH_ENV):
+    return config.resolve(site / "config/products/simulated-apps.yaml",
+                          site / "config/plans/smoke-frontier.yaml",
+                          env=env, audiences={"internal": ["*"]})
+
+
+def test_resolve_loads_monarch_kb_and_price_table(site):
+    rc = resolve_monarch(monarch_site(site))
+    assert rc.monarch_kb.product == "simulated-apps"
+    assert rc.monarch_kb.seeds_format == "public-api-seeds@1"
+    assert rc.monarch_kb.shim_public_url == "http://host.docker.internal:9105"
+    assert rc.monarch_kb.kb["bench-asana"] == "272673e3a9b0" and len(rc.monarch_kb.kb) == 4
+    table = rc.price_tables["monarch-team-bedrock"]
+    assert table.region == "us-west-2" and len(table.models) == 5
+    assert rc.config_json["monarch_kb"]["kb"]["bench-gmail"] == "9b1f0c4a5e77"
+    assert rc.config_json["price_tables"]["monarch-team-bedrock"]["provider"] == "bedrock"
+
+
+def test_resolve_without_monarch_has_no_kb_or_price_tables(site):
+    rc = config.resolve(*(site / p for p in ("config/products/simulated-apps.yaml",
+                                             "config/plans/smoke-frontier.yaml")),
+                        env=ENV, audiences={"internal": ["*"]})
+    assert rc.monarch_kb is None and rc.price_tables == {}
+    assert "monarch_kb" not in rc.config_json and "price_tables" not in rc.config_json
+
+
+def test_resolve_missing_kb_file_points_at_wb_monarch_setup(site):
+    monarch_site(site, kb=None)
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site)
+    assert exc.value.path == str(site / "config/products/simulated-apps.yaml")
+    assert exc.value.field == "monarch_kb" and "wb monarch setup" in str(exc.value)
+
+
+def test_resolve_kb_slug_outside_the_product_services(site):
+    monarch_site(site, kb=KB + "  bench-notion: ffffffffffff\n")
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site)
+    assert exc.value.field == "kb" and "bench-notion" in str(exc.value)
+
+
+def test_resolve_kb_missing_a_product_service(site):
+    monarch_site(site, kb=KB.replace("  bench-gmail: 9b1f0c4a5e77\n", ""))
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site)
+    assert exc.value.field == "kb" and "bench-gmail" in str(exc.value)
+
+
+def test_resolve_unknown_price_table(site):
+    monarch_site(site)
+    write(site / "config/harnesses", edit(
+        edit(HARNESS_MONARCH, "runnable", "true"), "price_table", "nowhere").replace(
+        "modes: [full-flow, create-run, run-only]", "modes: [create-run]"))
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site)
+    assert exc.value.field == "price_table" and "nowhere" in str(exc.value)
+
+
+def test_hash_changes_with_kb_and_prices(site):
+    h0 = resolve_monarch(monarch_site(site)).hash
+    monarch_site(site, kb=KB.replace("272673e3a9b0", "272673e3a9b1"))
+    h_kb = resolve_monarch(site).hash
+    monarch_site(site)  # kb back
+    assert resolve_monarch(site).hash == h0
+    write(site / "config/models", PRICE_TABLE.replace("cached: 0.20", "cached: 0.25"))
+    h_price = resolve_monarch(site).hash
+    write(site / "config/models", PRICE_TABLE)
+    monarch_site(site, kb=KB.replace("2026-09-04T12:00:00Z", "2027-01-01T00:00:00Z"))
+    assert resolve_monarch(site).hash == h0  # generated_at is not hashed
+    assert len({h0, h_kb, h_price}) == 3
+
+
+def test_shipped_smoke_frontier_hash_is_unchanged(monkeypatch):
+    """The recorded hash of the smoke-frontier plan, from the `runs` row of run-20260903-000243.
+
+    Source: out/wb-smoke-frontier-002.sqlite3, table `runs`, column `config_hash`
+    (out/run-20260903-000243/ holds only the episode snapshots, no config.json).
+    Adding Monarch fields must not re-hash a plan that has no Monarch competitor.
+    """
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(k, "dummy")
+    rc = config.resolve(ROOT / "config/products/simulated-apps.yaml",
+                        ROOT / "config/plans/smoke-frontier.yaml")
+    assert rc.hash == "02bb91bf0f18d1bf"
+
+
+def test_resolve_accepts_login_password_instead_of_a_token(site):
+    monarch_site(site)
+    env = {k: v for k, v in MONARCH_ENV.items() if k != "MONARCH_TOKEN"}
+    assert resolve_monarch(site, env=env).monarch_kb is not None  # password alone is enough
+    env = {k: v for k, v in env.items() if k != "MONARCH_PASSWORD"}
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site, env=env)
+    assert exc.value.field == "credential_env"
+    assert "MONARCH_TOKEN" in str(exc.value) and "MONARCH_PASSWORD" in str(exc.value)

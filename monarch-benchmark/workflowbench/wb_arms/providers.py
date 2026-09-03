@@ -42,9 +42,11 @@ def register(p: Provider) -> Provider:
 
 def load_models(folder: str | Path) -> dict[str, Provider]:
     """One Provider per model file in `folder`, keyed by name (research.md R4)."""
-    from wb_orchestrator.config import load_model  # lazy: config pulls wb_world/automationbench at import
+    from wb_orchestrator.config import is_price_table, load_model  # lazy: config pulls wb_world at import
     out = {}
     for path in sorted(Path(folder).glob("*.yaml")):
+        if is_price_table(path):  # price tables live in models/ but are not competitors
+            continue
         m = load_model(path)
         out[m.name] = Provider(
             key=m.name, model_id=m.model, key_env=m.key_env,
