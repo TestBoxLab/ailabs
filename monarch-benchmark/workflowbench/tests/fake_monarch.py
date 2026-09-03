@@ -19,6 +19,15 @@ from urllib.parse import urlsplit
 
 @dataclass
 class Scenario:
+    """One authoring/run story for the fake to play.
+
+    A frame list with no ``done``/``error`` frame is how a test says "the
+    stream closed without a terminal frame": the stream closes after the last
+    frame either way.
+
+    Assumption: the real backend reports a cancelled job as an ``error`` frame.
+    """
+
     login_ok: bool = True
     frames: list[dict] = field(default_factory=lambda: [
         {"status": "running", "phase": "plan"},
@@ -28,13 +37,15 @@ class Scenario:
     engine_calls: list[tuple] = field(default_factory=list)   # (method, path, json|None)
     shim_url: str | None = None
     delay_s: dict[str, float] = field(default_factory=dict)   # login/authoring/frame/run/poll
-    stream_closes_early: bool = False         # no terminal frame before close
     run_never_finishes: bool = False
     delete_fails_once: bool = False
     server_error: bool = False                # every route answers 500
 
 
 _REFUSAL_STATUS = {"RUN_ALREADY_ACTIVE": 409, "product_not_granted": 403}
+
+# ponytail: a cap so a test that never replies still ends; lower it in a test if needed
+REPLY_GATE_TIMEOUT_S = 30.0
 
 
 class FakeMonarch:
@@ -50,6 +61,7 @@ class FakeMonarch:
         self.token = "sess-1"
         self._reply_events: dict[str, threading.Event] = {}
         self._run_done: dict[str, bool] = {}
+        self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
         self._lock = threading.Lock()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -179,6 +191,12 @@ class FakeMonarch:
                     outer._event(rid).set()
                     self._reply(200, {})
                 elif path.startswith("/api/workflows/recipe/runs/") and path.endswith("/cancel"):
+                    run_id = path[len("/api/workflows/recipe/runs/"):-len("/cancel")]
+                    with outer._lock:
+                        outer._cancelled.add(run_id)
+                        pending = list(outer._reply_events.values())
+                    for ev in pending:          # release the stream from any reply gate
+                        ev.set()
                     self._reply(200, {"status": "cancelled"})
                 elif path.startswith("/api/workflows/") and path.endswith("/run"):
                     self._workflow_run()
@@ -223,6 +241,8 @@ class FakeMonarch:
 
             def _stream(self):
                 sc = outer.scenario
+                run_id = urlsplit(self.path).path[
+                    len("/api/workflows/recipe/runs/"):-len("/stream")]
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
@@ -234,8 +254,12 @@ class FakeMonarch:
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     if frame.get("status") == "awaiting_input":
                         rid = (frame.get("awaiting_reply") or {}).get("requestId", "")
-                        # ponytail: 30s cap so a test that never replies still ends
-                        outer._event(rid).wait(timeout=30)
+                        outer._event(rid).wait(timeout=REPLY_GATE_TIMEOUT_S)
+                        with outer._lock:
+                            cancelled = run_id in outer._cancelled
+                        if cancelled:
+                            self._chunk(b'data: {"status": "error", "error": "cancelled"}\n\n')
+                            break
                     if frame.get("status") in ("done", "error"):
                         break
                 self._chunk(b"")   # terminating chunk closes the stream

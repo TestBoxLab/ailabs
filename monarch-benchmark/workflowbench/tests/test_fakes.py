@@ -176,6 +176,38 @@ def test_fake_monarch_routes_and_engine_calls():
         engine.server_close()
 
 
+def test_fake_monarch_cancel_ends_a_stream_parked_on_the_account_prompt():
+    sc = Scenario(frames=[
+        {"status": "awaiting_input", "awaiting_reply": {"requestId": "req-2", "kind": "account"}},
+        {"status": "done", "workflowId": "wf-1"}])   # never reached: cancel ends the stream
+    with FakeMonarch(sc) as m:
+        sess = {"x-monarch-session": m.token}
+        frames: list[dict] = []
+
+        def read():
+            req = urllib.request.Request(
+                f"{m.url}/api/workflows/recipe/runs/rr-1/stream", headers=sess)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                for raw in resp:
+                    line = raw.decode().strip()
+                    if line.startswith("data: "):
+                        frames.append(json.loads(line[len("data: "):]))
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + 10       # wait for the account prompt, no fixed sleep
+        while not frames and time.monotonic() < deadline:
+            assert reader.is_alive()
+        assert frames[0]["awaiting_reply"]["kind"] == "account"
+
+        assert _http("POST", f"{m.url}/api/workflows/recipe/runs/rr-1/cancel", {},
+                     headers=sess) == (200, {"status": "cancelled"})
+        reader.join(timeout=2)
+        assert not reader.is_alive()           # the stream ended, it did not hit the reply gate
+        assert frames[-1] == {"status": "error", "error": "cancelled"}
+        assert len(frames) == 2                # the frame after the prompt is never sent
+
+
 def test_fake_monarch_refusal_and_server_error():
     with FakeMonarch(Scenario(run_refusal="RUN_HOST_BLOCKED")) as m:
         sess = {"x-monarch-session": "t"}
