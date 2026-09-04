@@ -94,7 +94,18 @@ def load_suite(suite_dir: str | Path) -> list[dict]:
     return [load_task_file(p) for p in paths]
 
 
+# Labels that say which drawn set a copy sits in, not what the work is. They are
+# excluded so a drawn copy keeps its corpus original's hash and stays the same
+# task under the same approval rule (feature 005, data-model.md §8).
+# ponytail: two ignored keys, not a metadata sidecar; every future label goes
+# here deliberately.
+_HASH_IGNORED_INFO_KEYS = ("tier", "domain")
+
+
 def contract_hash(task: dict) -> str:
+    info = task.get("info")
+    if isinstance(info, dict):
+        info = {k: v for k, v in info.items() if k not in _HASH_IGNORED_INFO_KEYS}
     blob = json.dumps({"task": task.get("task"), "prompt": task.get("prompt"),
-                       "info": task.get("info")}, sort_keys=True, default=str)
+                       "info": info}, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
