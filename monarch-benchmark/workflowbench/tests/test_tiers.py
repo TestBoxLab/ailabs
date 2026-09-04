@@ -285,7 +285,8 @@ def test_cli(tmp_path, capsys):
     assert main(argv) == 0
     out = capsys.readouterr().out
     assert "corpus: 3 folders, 12 tasks, 10 usable" in out
-    assert "excluded 2" in out
+    assert ("  excluded 2: 1 with no approval rule (unmapped assertion types), "
+            "1 whose hash does not match its content - see the manifest") in out
     assert "measure: services seeded + expected changes + tools needed" in out
     assert "cuts: simple <= 4 < medium <= 7 < complex" in out
     assert "draw (seed 1, 3 per set):" in out

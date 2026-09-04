@@ -240,7 +240,14 @@ def _corpus_tiers(args) -> int:
 
     print(f"corpus: {len(dirs)} folders, {total} tasks, {r.usable} usable")
     if r.excluded:
-        print(f"  excluded {len(r.excluded)}: see the manifest")
+        no_rule = sum(w.startswith("no approval rule") for w in r.excluded.values())
+        drifted = len(r.excluded) - no_rule
+        parts = []
+        if no_rule:
+            parts.append(f"{no_rule} with no approval rule (unmapped assertion types)")
+        if drifted:
+            parts.append(f"{drifted} whose hash does not match its content")
+        print(f"  excluded {len(r.excluded)}: {', '.join(parts)} - see the manifest")
     print("measure: services seeded + expected changes + tools needed")
     print(f"cuts: simple <= {r.cuts['low']} < medium <= {r.cuts['high']} < complex")
     print(f"draw (seed {args.seed}, {args.per_tier} per set):")
