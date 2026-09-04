@@ -33,6 +33,7 @@ from wb_orchestrator.orchestrator import Orchestrator, build_arm_for
 from wb_report.report import build_report, render_md
 from wb_results.store import Store
 from wb_world.episode import Episode, load_suite, load_task_file
+from wb_world.seeds import product_slug
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_PATH = ROOT / "config/products/simulated-apps.yaml"
@@ -285,7 +286,7 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
         monkeypatch.setenv(k, v)
     tasks = load_suite(TASKS_DIR)
     excluded = "simple.sf_opp_closed_won"
-    kb_hashes = {f"bench-{s}": f"{i:012x}"
+    kb_hashes = {product_slug(s): f"{i:012x}"
                  for i, s in enumerate(config.load_product(PRODUCT_PATH).services)}
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}")
 
