@@ -189,6 +189,7 @@ each stage hands its artifact to the next:
 | `workflowbench/wb_world/openapi.py`, `wb_arms/http_shim.py` | OpenAPI documents + HTTP front door for Monarch. |
 | `workflowbench/wb_report/audiences.yaml` | Which competitors may appear in which report. |
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |
+| `workflowbench/differs.md` | Deferred items of the bench: the sandbox for competitor harnesses (future), `wb doctor --record`, and smaller items carried from features 002 to 006. |
 | `workflowbench/out/` | Run outputs and reports (gitignored where large). |
 | `graphify-out/` | Knowledge graph (read before code questions; refresh after). |
 | `.github/workflows/` | `ci.yml` (PRs to main or manual; free) and `smoke.yml` (manual; ~US$ 2). |
