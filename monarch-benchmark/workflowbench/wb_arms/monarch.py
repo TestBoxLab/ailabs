@@ -300,6 +300,18 @@ class MonarchArm:
                                        for r in families.values())
             metrics.tokens_output = sum(r["output"] for r in families.values())
             metrics.cost_usd = round(sum(r["cost_usd"] for r in families.values()), 6)
+        # The same spend cut by model instead of by phase, so a report can say what
+        # each model cost. `model:<family>` keys sit beside the real phases and must
+        # never be summed with them: they are the same money counted another way.
+        per_model: dict[str, list[dict]] = {}
+        for families in cost.by_phase.values():
+            for family, r in families.items():
+                per_model.setdefault(family, []).append(r)
+        for family, rows in per_model.items():
+            res.phases[f"model:{family}"] = PhaseMetrics(
+                cost_usd=round(sum(r["cost_usd"] for r in rows), 6),
+                tokens_input=sum(r["input"] + r["cache_read"] + r["cache_write"] for r in rows),
+                tokens_output=sum(r["output"] for r in rows))
         res.flags += [f"phase_other:{name}" for name in cost.other_spans]
 
     # -- the attempt, with the front door already up ---------------------------

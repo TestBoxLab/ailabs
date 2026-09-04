@@ -521,6 +521,12 @@ def test_cost_lands_in_row(site, repo):
     breakdown = next(t["cost"] for t in result.turn_log if "cost" in t)
     assert breakdown["authoring"]["claude-opus-4-8"]["cost_usd"] == pytest.approx(opus)
     assert breakdown["execution"]["claude-sonnet-5"]["cost_usd"] == pytest.approx(sonnet)
+    # Per-model phases, beside the real ones, for the report's model breakdown.
+    # They are a second cut of the same spend, never a phase to sum with the others.
+    assert result.phases["model:claude-opus-4-8"].cost_usd == pytest.approx(opus)
+    assert result.phases["model:claude-sonnet-5"].cost_usd == pytest.approx(sonnet)
+    assert result.phases["model:claude-opus-4-8"].tokens_input == 1600
+    assert result.phases["model:claude-opus-4-8"].tokens_output == 200
 
 
 def test_cost_read_is_bounded_by_the_attempt_start(site, repo):
