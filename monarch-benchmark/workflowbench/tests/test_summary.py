@@ -163,7 +163,7 @@ def test_summary_page_shape(three_round_store):
         assert run_id in page
     assert page.count("<caption>") >= 4          # three rounds plus the aggregate
     assert "<caption>Mean over the rounds each competitor ran</caption>" in page
-    assert page.count("<li>src:") >= 3       # one source line per round, listed once
+    assert "Source lines" not in page and 'class="src"' not in page
     # order: the rounds, then the aggregate, then the statement
     assert page.index("run-r1") < page.index("Mean over the rounds")
     from wb_report.html import _esc

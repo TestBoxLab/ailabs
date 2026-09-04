@@ -537,7 +537,7 @@ def test_page_has_the_four_tables(four_arm_store):
             "attempts in total: 16") in page
     # source lines are listed once, in the Provenance section, not under each figure
     prov = page[page.index('id="provenance"'):]
-    assert prov.count("<li>src:") >= 4 and page.count('<p class="src"') == 0
+    assert page.count('<table title="src:') >= 4 and page.count('<p class="src"') == 0
     assert page.startswith("<!doctype html>")
 
 
@@ -925,8 +925,8 @@ def test_comparison_carries_its_own_source(four_arm_store):
     assert "n=" not in page[page.index("<caption>Comparisons against the baseline"):
                             page.index("<caption>Task matrix</caption>")] or True
     # the failures source line counts rows, not an n= denominator
-    prov = page[page.index('id="provenance"'):]
-    src = [x for x in prov.split("<li>") if x.startswith("src:") and "rows" in x][0]
+    # the failures source line (on the table's tooltip) counts rows, not an n= denominator
+    src = [x for x in page.split('<table title="') if x.startswith("src:") and "rows" in x][0]
     assert "7 rows" in src
     assert "n=7" not in src
 
@@ -1171,7 +1171,7 @@ def test_page_has_the_seven_sections(four_arm_store):
     # every section explains itself in one sentence
     assert page.count('class="part-eyebrow"') >= len(SECTIONS)
     assert page.count('class="h2-sub"') >= len(SECTIONS)
-    assert page[page.index('id="provenance"'):].count("<li>src:") >= 4
+    assert page.count('<table title="src:') >= 4 and "Source lines" not in page
 
 
 def test_overview_section_says_the_mode_in_plain_words(phase_store, four_arm_store):
