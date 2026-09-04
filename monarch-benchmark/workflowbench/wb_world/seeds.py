@@ -108,12 +108,107 @@ def _domain(base: str) -> str:
     return urlsplit(base).hostname or base
 
 
+def _singular(noun: str) -> str:
+    """The importer's own singularizeNoun rules (knowledge-base/models/identity.ts)."""
+    if noun.endswith("ies"):
+        return noun[:-3] + "y"
+    if re.search(r"(ses|xes|zes|ches|shes)$", noun):
+        return noun[:-2]
+    if noun.endswith("s") and not noun.endswith("ss"):
+        return noun[:-1]
+    return noun
+
+
+def _is_id(name: str) -> bool:
+    return name == "id" or name.lower().endswith("id") or name.endswith("_id")
+
+
+def _entity_type(path: str, param: str) -> str:
+    """The resource an id addresses: the path segment before its placeholder.
+
+    ponytail: naive -- the segment before `{param}`, singularised. Ceiling: a
+    path whose preceding segment is not the resource noun (none in the 47 specs)
+    reads as the wrong entity. Upgrade: a per-service entity map.
+    """
+    segments = [s for s in path.strip("/").split("/") if s]
+    for i, seg in enumerate(segments):
+        if seg == "{%s}" % param:
+            for prev in reversed(segments[:i]):
+                if not prev.startswith("{"):
+                    return _slugify(_singular(prev)).replace("-", "_")
+            break
+    # no preceding segment: fall back to the id's own name (baseId -> base)
+    stem = re.sub(r"(_id|Id|ID|id)$", "", param) or param
+    return _slugify(_singular(stem)).replace("-", "_")
+
+
+def _helper(description: str, name: str, where: str) -> str:
+    return description.strip() or f"The {name} to use in the request {where}."
+
+
+def _param(name: str, classification: str, location: str, json_path: str,
+           type_: str, required: bool, helper: str, **extra: Any) -> dict[str, Any]:
+    """One CanonicalParam. Key order is irrelevant: the importer sorts by name."""
+    out = {"name": name, "classification": classification, "location": location,
+           "json_path": json_path, "type": type_, "required": required}
+    out.update(extra)
+    out["constraints"] = {"helper_text": helper}
+    return out
+
+
+def _schema_type(schema: dict[str, Any]) -> str:
+    t = schema.get("type")
+    return t if t in {"string", "number", "integer", "boolean", "array", "object"} else "string"
+
+
+def _parameters(path: str, op: dict[str, Any], body: dict[str, str]) -> list[dict[str, Any]]:
+    """One parameter per URL placeholder and per top-level body key.
+
+    This array is what the discovery service binds `{{...}}` to at execution
+    time; without it the importer throws on `parameters.map` (seeds-normalize).
+    """
+    out: list[dict[str, Any]] = []
+    for spec in op.get("parameters", []):
+        where, name = spec.get("in"), spec.get("name")
+        # only required query parameters become placeholders (see _url_template)
+        if where not in ("path", "query") or (where == "query" and not spec.get("required")):
+            continue
+        schema = spec.get("schema") or {}
+        entity = _is_id(name) and where == "path"
+        extra: dict[str, Any] = {"example_value": "{{%s}}" % name}
+        if entity:
+            extra["entity_type"] = _entity_type(path, name)
+        constraints = {}
+        for bound in ("minimum", "maximum"):
+            if bound in schema:
+                constraints[{"minimum": "min", "maximum": "max"}[bound]] = str(schema[bound])
+        p = _param(name, "entity_reference" if entity else "typed", where,
+                   f"$.steps[0].url.{name}", _schema_type(schema),
+                   bool(spec.get("required")),
+                   _helper(spec.get("description") or "", name, where), **extra)
+        p["constraints"].update(constraints)
+        out.append(p)
+
+    schema = ((op.get("requestBody") or {}).get("content", {})
+              .get("application/json", {}).get("schema") or {})
+    props = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    for name in body:                       # body_template's own top-level keys
+        prop = props.get(name) or {}
+        out.append(_param(name, "typed", "body", f"$.{name}", _schema_type(prop),
+                          name in required,
+                          _helper(prop.get("description") or "", name, "body"),
+                          source_form_field=name, example_value=name))
+    return out
+
+
 def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str,
             op: dict[str, Any], action_id: str) -> dict[str, Any]:
     verb, resource = _verb(method, path), _resource(path)
     product_id = f"bench-{service}"
     schema = (op["responses"]["200"]["content"]["application/json"]["schema"]
               if "200" in op.get("responses", {}) else {"type": "object"})
+    body = {} if method == "get" else _body_template(op)
     impl: dict[str, Any] = {
         "id": f"impl_{product_id}_{_slugify(op.get('operationId') or action_id)}_public",
         "source": "public",
@@ -128,15 +223,25 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
                 "method": method.upper(),
                 "url_template": _url_template(base, service, path, op),
                 "headers_template": {"content-type": "application/json"},
-                "body_template": {} if method == "get" else _body_template(op),
+                "body_template": body,
                 "response_template": {"status": 200, "extract": _extract(schema),
                                       "schema": schema},
             }],
         },
+        # Both arrays are required: seeds-normalize maps over them unguarded.
+        "parameters": _parameters(path, op, body),
+        "creates_entities": [],
     }
     if verb == "create":
-        impl["creates_entities"] = [{"entity": resource, "identifier_path": "$.id",
-                                     "identifier_keys": _identifier_keys(doc["paths"], path)}]
+        entity = _slugify(_singular(resource)).replace("-", "_")
+        # `type`, not `entity`: buildKnownEntityTypes reads ce.type, and an
+        # undefined there is what made /v1/seeds answer 500 (4 Sep 2026).
+        impl["creates_entities"] = [{
+            "type": entity,
+            "display_name_from": next(("{{%s}}" % k for k in ("name", "title") if k in body),
+                                      ""),
+            "identifier_path": "$.id",
+            "identifier_keys": _identifier_keys(doc["paths"], path) or ["id"]}]
     return {
         "business_action": {
             "id": action_id,
@@ -237,6 +342,16 @@ def _gaps_in(name: str, doc: Any) -> list[str]:
         ents = impl.get("creates_entities") or []
         if not ents or not ents[0].get("identifier_path"):
             out.append("verb create without creates_entities[0].identifier_path")
+        elif not ents[0].get("type"):
+            out.append("creates_entities[0].type is empty (the importer reads `type`)")
+    # Every {{x}} in the URL and every top-level body key needs exactly one
+    # parameter: that array is what binds them to workflow inputs.
+    want = set(re.findall(r"\{\{(\w+)\}\}", step.get("url_template", "")))
+    want |= set(step.get("body_template") or {})
+    names = [p.get("name") for p in impl.get("parameters") or []]
+    if sorted(names) != sorted(set(names)) or set(names) != want:
+        out.append(f"parameters_incomplete: {sorted(want - set(names))} unbound, "
+                   f"{sorted(set(names) - want)} extra")
     url = step.get("url_template", "")
     if not url.startswith("http"):
         out.append(f"url_template {url!r} is not an absolute URL")
