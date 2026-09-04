@@ -51,6 +51,10 @@ class Scenario:
     server_error: bool = False                # every route answers 500
 
 
+class _ClientGone(Exception):
+    """The reader hung up mid-stream; everything it waited for was already sent."""
+
+
 _REFUSAL_STATUS = {"RUN_ALREADY_ACTIVE": 409, "product_not_granted": 403}
 
 # ponytail: a cap so a test that never replies still ends; lower it in a test if needed
@@ -195,7 +199,10 @@ class FakeMonarch:
                 if path == "/api/health":
                     self._reply(200, {"ok": True})
                 elif path.startswith("/api/workflows/recipe/runs/") and path.endswith("/stream"):
-                    self._stream()
+                    try:
+                        self._stream()
+                    except _ClientGone:
+                        self.close_connection = True
                 elif path.startswith("/api/workflows/runs/"):
                     run_id = path.rsplit("/", 1)[-1]
                     time.sleep(outer.scenario.delay_s.get("poll", 0))
