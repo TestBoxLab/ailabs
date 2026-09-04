@@ -96,7 +96,7 @@ def load_suite(suite_dir: str | Path) -> list[dict]:
 
 # Labels that say which drawn set a copy sits in, not what the work is. They are
 # excluded so a drawn copy keeps its corpus original's hash and stays the same
-# task under the same approval rule (feature 005, data-model.md §8).
+# task under the same approval rule (feature 005, data-model.md section 8).
 # ponytail: two ignored keys, not a metadata sidecar; every future label goes
 # here deliberately.
 _HASH_IGNORED_INFO_KEYS = ("tier", "domain")
