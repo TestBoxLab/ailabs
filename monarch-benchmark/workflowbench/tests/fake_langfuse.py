@@ -33,6 +33,10 @@ class FakeLangfuse:
             f"{public_key}:{secret_key}".encode()).decode()
         self.requests: list[dict] = []
         self.traces: list[dict] = []
+        # Real Langfuse serves a trace with its observations inline. False plays a
+        # trace that omits the key; "empty" plays one that answers `[]`, which is
+        # what the live by-id read hit on 4 Sep 2026.
+        self.inline_observations = True
         self.observations: list[dict] = []
         self._n = 0
         self._lock = threading.Lock()
@@ -139,6 +143,12 @@ class FakeLangfuse:
                     trace = next((t for t in outer.traces if t["id"] == want), None)
                     if trace is None:
                         self._reply(404, {"error": "not_found"})
+                        return
+                    if outer.inline_observations is False:
+                        self._reply(200, {**trace})
+                        return
+                    if outer.inline_observations == "empty":
+                        self._reply(200, {**trace, "observations": []})
                         return
                     self._reply(200, {**trace, "observations": [
                         o for o in outer.observations if o["traceId"] == want]})

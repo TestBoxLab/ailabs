@@ -375,6 +375,7 @@ code make the next handoff wrong.
 | Authoring done, run ended normally | `completed` | workflow id, run id, recipe version, questions asked |
 | Authoring error caused by the model provider (message names the provider, the cloud account, credentials, or "not configured") | `infra:monarch_llm` | the provider message |
 | Authoring error, any other | `agent_error` | `authoring_error: <message>` |
+| Authoring done without a workflow (Monarch declined) | `agent_error` | `no_workflow: <message>` |
 | Run refused for a bench setup fault (host blocked, engine unavailable, run already active) | `infra:monarch_setup` | the refusal code |
 | Run refused for the workflow's own fault (invalid input, product not granted, unacknowledged loop, legacy recipe) | `agent_error` | `run_refused:<code>` |
 | Run finished with an error | `agent_error` | `run_error:<code> node=<id>` |

@@ -169,10 +169,14 @@ def read_generations(base_url: str, public_key: str, secret_key: str, episode_id
             trace = _one_trace(base_url, trace_id, auth, timeout)
             if trace is None:
                 continue
-            obs = trace.get("observations")
-            if obs is None:                   # older Langfuse: observations not inline
-                obs = _get(base_url, "/api/public/observations",
-                           {"traceId": trace_id}, auth, timeout, page_size)
+            # An empty list is not "this trace has no observations": Langfuse
+            # answers `[]` when it serves the trace without expanding them, and
+            # taking that at face value cost the live attempt every parent -- so
+            # every generation landed in `other` with ancestor `<none>`
+            # (4 Sep 2026). Absent and empty are both "ask the other endpoint".
+            obs = trace.get("observations") or _get(
+                base_url, "/api/public/observations",
+                {"traceId": trace_id}, auth, timeout, page_size)
             out += _generations(obs, trace_id, price_table)
         return out
     params = {"metadata[bench_episode_id]": episode_id}

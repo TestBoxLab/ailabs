@@ -313,6 +313,13 @@ TERMINATION_ROWS = [
     # Monarch no longer has (404 on reconnect) is `stream_closed`.
     ("the authoring job is gone", {"frames": [RUNNING], "stream_404_after": 1},
      ("row", "agent_error", "stream_closed")),
+    # Monarch can finish authoring by declining: `done`, no workflow, a message
+    # saying why. Live 4 Sep 2026; it used to read as success with nothing to run.
+    ("Monarch declined to build the workflow",
+     {"frames": [RUNNING, {"status": "done", "workflowId": None, "recipeVersion": None,
+                           "message": "I can't build this workflow as specified, "
+                                      "the opportunity id cannot be verified."}]},
+     ("row", "agent_error", "no_workflow: I can't build this workflow as specified")),
     ("Monarch asked for an account",
      {"frames": [RUNNING, {"status": "awaiting_input",
                            "awaiting_reply": {"requestId": "req-1", "kind": "account"}}]},
@@ -340,7 +347,8 @@ def test_termination_table(site, repo, kwargs, expected):
             assert result.error.startswith(rest[1]), result.error
 
     # Whatever happened, a workflow that was authored is gone and the port is free.
-    authored = any(r["path"] == "/api/workflows/recipe/runs" for r in fake.requests)         and any(f.get("status") == "done" for f in sc.frames)
+    # Only a `done` frame that actually names a workflow leaves one to delete.
+    authored = any(r["path"] == "/api/workflows/recipe/runs" for r in fake.requests)         and any(f.get("status") == "done" and f.get("workflowId") for f in sc.frames)
     assert fake.deleted_workflows == (["wf-1"] if authored else [])
     s = socket.socket()
     s.bind(("0.0.0.0", port))
@@ -768,4 +776,24 @@ def test_cost_is_read_by_the_trace_ids_the_frames_named(site, repo):
     assert trace_id in arm._trace_ids
     # Fetched by id, so the listing endpoint is never asked.
     assert any(f"/api/public/traces/{trace_id}" in r["path"] for r in lf.requests)
+    free(port)
+
+
+def test_a_declined_workflow_still_reports_its_cost(site, repo):
+    """Authoring was paid for even though Monarch built nothing (rule 9)."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, {"status": "done", "workflowId": None,
+                                    "message": "I can't build this workflow as specified."}])
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
+        arm = arm_against(site, fake, port, repo, langfuse=lf,
+                          env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+        both_phases(lf, BENCH_EPISODE)
+        result = arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error.startswith("no_workflow: I can't build this")
+    assert result.cost_usd > 0 and "cost_missing" not in result.flags
+    assert "execution" not in result.phases      # nothing ran, so no run phase
+    assert fake.deleted_workflows == []
     free(port)

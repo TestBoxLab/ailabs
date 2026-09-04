@@ -364,6 +364,14 @@ class MonarchArm:
                                 workflow_id = frame.get("workflowId")
                                 ids["workflowId"] = workflow_id
                                 ids["recipeVersion"] = frame.get("recipeVersion")
+                                if not workflow_id:
+                                    # Monarch finished by declining to build one.
+                                    # There is nothing to run, and reading it as
+                                    # success recorded `completed` for an attempt
+                                    # that did nothing (live, 4 Sep 2026).
+                                    message = frame.get("message") or ""
+                                    res.termination = "agent_error"
+                                    res.error = f"no_workflow: {message[:200]}"
                                 done = True
                                 break
                             if status == "error":

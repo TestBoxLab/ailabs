@@ -166,3 +166,69 @@ def test_bad_credentials_raise_langfuse_unavailable(table):
     with FakeLangfuse() as lf:
         with pytest.raises(LangfuseUnavailable):
             read_generations(lf.url, "pk", "wrong", "ep-1", table)
+
+
+# -- the by-id reader, from attempt 4 on Railway ------------------------------
+
+def test_by_id_walks_the_inline_parent_chain(table):
+    """The trace endpoint answers with observations inline; the walk must use them.
+
+    Verified live 4 Sep 2026 on trace c0ef26c46b0fd280bd3e0a2dba64b8d8: the
+    generation's chain is recipe.plan -> recipe_agent.run -> create ->
+    RecipeRunController.create, so its phase is `authoring`, not `other`.
+    """
+    with FakeLangfuse() as lf:
+        lf.add_trace("ep-1",
+                     spans=[("root", "RecipeRunController.create", None),
+                            ("s3", "create", "root"),
+                            ("s2", "recipe_agent.run", "s3"),
+                            ("s1", "recipe.plan", "s2")],
+                     generations=[("g1", "s1", "anthropic.claude-opus-4-8-v1",
+                                   {"input": 14, "output": 19503,
+                                    "cache_read_input_tokens": 221392,
+                                    "cache_creation_input_tokens": 49206})])
+        gens = _read(lf, table, trace_ids=[lf.traces[-1]["id"]])
+
+    assert len(gens) == 1
+    assert gens[0].phase == "authoring" and gens[0].ancestor == "recipe.plan"
+    assert (gens[0].input, gens[0].output) == (14, 19503)
+    assert (gens[0].cache_read, gens[0].cache_write) == (221392, 49206)
+
+
+def test_by_id_reads_usage_details_from_inline_observations(table):
+    """Inline observations carry usageDetails after other keys; it still wins over usage."""
+    with FakeLangfuse() as lf:
+        lf.add_trace("ep-1", spans=[("s1", "recipe.plan", None)],
+                     generations=[("g1", "s1", "anthropic.claude-opus-4-8-v1", None)])
+        gen = next(o for o in lf.observations if o["id"] == "g1")
+        gen["timeToFirstToken"] = 1.5
+        gen["usage"] = {"input": 1600, "cache_read_input_tokens": 500,
+                        "cache_creation_input_tokens": 100, "output": 200}
+        gen["usageDetails"] = {"input": 1000, "output": 200,
+                               "cache_read_input_tokens": 500,
+                               "cache_creation_input_tokens": 100}
+        gen["promptTokens"] = 1600
+        gen["completionTokens"] = 200
+        gens = _read(lf, table, trace_ids=[lf.traces[-1]["id"]])
+
+    assert (gens[0].input, gens[0].cache_read) == (1000, 500)   # disjoint, not inclusive
+    assert gens[0].phase == "authoring"
+
+
+def test_by_id_falls_back_when_the_trace_omits_its_observations(table):
+    """A trace whose inline `observations` is empty must not lose every parent.
+
+    Live 4 Sep 2026 the by-id read put every Opus generation under `other` with
+    ancestor `<none>` -- one flag for all of them -- which is what an empty
+    `by_id` map looks like: no parent resolves, so no phase does.
+    """
+    with FakeLangfuse() as lf:
+        lf.add_trace("ep-1",
+                     spans=[("s1", "recipe.plan", None)],
+                     generations=[("g1", "s1", "anthropic.claude-opus-4-8-v1", {"input": 7})])
+        trace_id = lf.traces[-1]["id"]
+        lf.inline_observations = "empty"      # `observations: []`, not absent
+        gens = _read(lf, table, trace_ids=[trace_id])
+
+    assert len(gens) == 1
+    assert gens[0].phase == "authoring" and gens[0].ancestor == "recipe.plan"
