@@ -270,7 +270,7 @@ svg.chart { display: block; max-width: 100%; height: auto; margin: 6px 0 4px; }
 svg.chart text { font-family: var(--mono); font-size: 11.5px; fill: var(--ink); }
 svg.chart .cl { fill: var(--muted); }
 svg.chart .cb { fill: var(--accent); }
-svg.chart .ce { stroke: var(--ink); stroke-width: 1.5; }
+svg.chart .ce { fill: var(--accent); opacity: 0.28; }
 figure.diagram figcaption { font-size: 13px; color: var(--muted); padding: 10px 18px 14px; border-top: 1px solid var(--line-soft); }
 
 .callout {
@@ -1035,11 +1035,12 @@ def _bar_chart(series: list[tuple[str, Any, Any]], kind: str = "rate",
                      f'height="{row_h - 9}"/>')
         end = label_w + w
         if error:
-            # the error bar: a thin line from value-error to value+error
             lo = max(0.0, (value - error) / top) * bar_max + label_w
             hi = min(1.0, (value + error) / top) * bar_max + label_w
-            parts.append(f'<line class="ce" x1="{lo:.1f}" x2="{hi:.1f}" '
-                         f'y1="{mid:.0f}" y2="{mid:.0f}"/>')
+            # the uncertainty band: a faint block over the bar's end, from
+            # value-error to value+error (a white whisker read as a stray line)
+            parts.append(f'<rect class="ce" x="{lo:.1f}" y="{y + 3}" '
+                         f'width="{max(0.0, hi - lo):.1f}" height="{row_h - 9}"/>')
             end = max(end, hi)          # the label sits past the error bar, never under it
         parts.append(f'<text class="cv" x="{end + 6:.0f}" '
                      f'y="{mid + 4:.0f}">{_fmt(value, kind)}</text>')

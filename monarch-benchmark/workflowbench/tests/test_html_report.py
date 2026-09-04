@@ -1142,8 +1142,8 @@ def test_bar_chart_labels_are_the_formatted_values():
     assert _fmt(0.5, "rate") in chart   # 50.0%
     assert "n/a" in chart               # the missing value degrades to text
     assert "alpha" in chart and "gamma" in chart
-    # the error bar is drawn only where there is one
-    assert chart.count("<line") >= 1
+    # the uncertainty band is drawn only where there is an error
+    assert chart.count('class="ce"') >= 1
 
 
 def test_bar_chart_handles_all_missing():
@@ -1425,7 +1425,8 @@ def test_value_label_sits_past_the_error_bar():
     import re
     from wb_report.html import _bar_chart
     svg = _bar_chart([("a", 0.5, 0.3)])
-    hi = float(re.search(r'x2="([\d.]+)"', svg).group(1))
+    band = re.search(r'<rect class="ce" x="([\d.]+)" y="\d+" width="([\d.]+)"', svg)
+    hi = float(band.group(1)) + float(band.group(2))
     label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
     assert label_x > hi
 
