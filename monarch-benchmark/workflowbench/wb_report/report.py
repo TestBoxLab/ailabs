@@ -12,14 +12,14 @@ cost ratios (DESIGN descope: no external cost-per-workflow dollars).
 from __future__ import annotations
 
 import fnmatch
-import html as _html
 import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from wb_report.metrics import comparison, competitor_metrics
 from wb_results.store import Store
-from wb_stats.stats import arm_summary, paired_wl, pass_hat_k
+from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
 
 _AUDIENCES_FILE = Path(__file__).parent / "audiences.yaml"
 
@@ -63,6 +63,91 @@ def gate_arms(arms: list[str], audience: str,
     allowlist = audiences[audience]
     kept = [a for a in arms if _allowed(a, allowlist)]
     return kept
+
+
+def _cell(rows: list[dict]) -> dict[str, Any]:
+    """One task-and-competitor cell of the matrix (contracts section 3).
+    Infrastructure attempts are named and excluded from the denominator, so
+    `0/0 (infra 2)` is a legitimate cell, not a bug."""
+    ok = [r for r in rows if not _is_infra(r)]
+    failing = [r for r in sorted(rows, key=lambda r: r["trial"]) if not r["passed"]]
+    category, detail = "passed", None
+    if failing:
+        first = failing[0]
+        if _is_infra(first):
+            category, detail = "infra", first.get("termination")
+        elif first.get("unexpected_changes"):
+            category = "unexpected change"
+            detail = ", ".join(c.get("path", "") for c in first["unexpected_changes"])
+        elif not first.get("assertions_passed"):
+            category = "assertion failed"
+        elif first.get("error"):
+            category, detail = "error", first["error"]
+        else:
+            category, detail = "error", first.get("termination")
+    return {"passed": sum(1 for r in ok if r["passed"]), "attempted": len(ok),
+            "infra": len(rows) - len(ok), "category": category, "detail": detail}
+
+
+def _build_matrix(arms: list[str], per_arm_rows: dict[str, list[dict]],
+                  task_info: dict[str, dict]) -> dict[str, Any]:
+    """One row per task, one cell per competitor. The `domain` and `tier`
+    columns exist only when a task carries them (research R8: none does today).
+    """
+    by_task: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for arm in arms:
+        for row in per_arm_rows[arm]:
+            by_task[row["task_id"]][arm].append(row)
+    info = lambda task, field: (task_info.get(task) or {}).get(field)
+    rows = [{"task_id": task, "domain": info(task, "domain"), "tier": info(task, "tier"),
+             "cells": {arm: _cell(cells[arm]) for arm in arms if cells.get(arm)}}
+            for task, cells in by_task.items()]
+    # by tier where one exists, then by task id (contracts section 3)
+    rows.sort(key=lambda r: (str(r["tier"]) if r["tier"] is not None else "", r["task_id"]))
+    return {"arms": arms,
+            "has_domain": any(r["domain"] is not None for r in rows),
+            "has_tier": any(r["tier"] is not None for r in rows),
+            "rows": rows}
+
+
+def _build_failures(arms: list[str], per_arm_rows: dict[str, list[dict]]) -> list[dict]:
+    """Every failed attempt, infrastructure ones included, ordered by task, then
+    competitor, then repetition (contracts section 4)."""
+    failures = [{"task_id": r["task_id"], "arm": arm, "trial": r["trial"],
+                 "termination": r.get("termination"), "error": r.get("error"),
+                 "unexpected_change_paths": [c.get("path", "")
+                                             for c in (r.get("unexpected_changes") or [])]}
+                for arm in arms for r in per_arm_rows[arm] if not r["passed"]]
+    failures.sort(key=lambda f: (f["task_id"], f["arm"], f["trial"]))
+    return failures
+
+
+def _build_provenance(run: dict, config: dict, audience: str, stripped: list[str],
+                      per_arm_rows: dict[str, list[dict]]) -> dict[str, Any]:
+    """Contracts section 5. A non-internal audience gets the count of withheld
+    competitors, never their names: their existence is internal (FR-023)."""
+    monarch_rows = [r for arm, rows in per_arm_rows.items() if arm.startswith("monarch")
+                    for r in rows]
+    missing_cost = None
+    if monarch_rows:
+        missing_cost = {"missing": sum(1 for r in monarch_rows
+                                       if "cost_missing" in (r.get("flags") or [])),
+                        "total": len(monarch_rows)}
+    return {
+        "config_hash": run["config_hash"],
+        "plan": config.get("plan"), "product": config.get("product"),
+        "mode": config.get("mode"),
+        "price_tables": [f"{t['name']}@{t['prices_verified']}"
+                         for _, t in sorted((config.get("price_tables") or {}).items())],
+        "missing_cost": missing_cost,
+        "suite": run["suite"], "suite_version": run["suite"].split("@")[-1],
+        "task_hashes": sorted({(r.get("contract_sha256") or "")[:8]
+                               for rows in per_arm_rows.values() for r in rows
+                               if r.get("contract_sha256")}),
+        "started": run.get("started"), "finished": run.get("finished"),
+        "stop_reason": run.get("stop_reason"), "audience": audience,
+        "withheld": stripped if audience == "internal" else len(stripped),
+    }
 
 
 def build_report(store: Store, run_id: str, audience: str = "internal",
@@ -136,7 +221,21 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                 fig["cost_ratio_vs_baseline"] = round(arm_cost / base_cost, 3)
             figures.append(fig)
 
+    metrics = [competitor_metrics(per_arm_rows[arm], k) for arm in arms]
+    by_arm = {m["arm"]: m for m in metrics}
+    comparisons = [comparison(by_arm[arm], by_arm[baseline],
+                              per_arm_rows[arm], per_arm_rows[baseline])
+                   for arm in arms if baseline and arm != baseline]
+    tasks = sorted({r["task_id"] for rows in per_arm_rows.values() for r in rows})
+
     return {"run_id": run_id, "suite": run["suite"], "config_hash": run["config_hash"],
+            "size": {"prompts": len(tasks), "repetitions": k,
+                     "per_competitor": len(tasks) * k, "competitors": len(arms),
+                     "total": sum(len(per_arm_rows[a]) for a in arms)},
+            "metrics": metrics, "comparisons": comparisons,
+            "matrix": _build_matrix(arms, per_arm_rows, config.get("task_info") or {}),
+            "failures": _build_failures(arms, per_arm_rows),
+            "provenance": _build_provenance(run, config, audience, stripped, per_arm_rows),
             "source_suffix": _source_suffix(config, per_arm_rows),
             "audience": audience, "arms": arms, "arms_stripped_by_gate": stripped,
             "baseline": baseline, "k": k, "stop_reason": run.get("stop_reason"),
@@ -240,23 +339,22 @@ def render_md(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_html(report: dict[str, Any]) -> str:
-    body = _html.escape(render_md(report)).replace("\n", "<br>\n")
-    theme = ("body{background:#14161d;color:#e6e6e6;font:14px/1.5 monospace;padding:2rem}"
-             if report["audience"] == "internal" else
-             "body{background:#fff;color:#1a1a1a;font:15px/1.6 Georgia,serif;padding:2rem}")
-    return (f"<!doctype html><html><head><meta charset='utf-8'>"
-            f"<title>WorkflowBench {_html.escape(report['run_id'])}</title>"
-            f"<style>{theme}</style></head><body>{body}</body></html>")
+def render_html(report: dict[str, Any], sortable: bool = True) -> str:
+    """The page of contracts/report.md, no longer the escaped markdown blob.
+    The signature is unchanged bar `sortable`, which `wb report --no-sort` sets.
+    """
+    from wb_report.html import render_page
+    return render_page(report, sortable=sortable)
 
 
 def write_report(store: Store, run_id: str, out_dir: str | Path,
-                 audience: str = "internal", **kw) -> dict[str, str]:
+                 audience: str = "internal", sortable: bool = True,
+                 **kw) -> dict[str, str]:
     rep = build_report(store, run_id, audience=audience, **kw)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     md = out / f"report-{run_id}-{audience}.md"
     htm = out / f"report-{run_id}-{audience}.html"
     md.write_text(render_md(rep), encoding="utf-8")
-    htm.write_text(render_html(rep), encoding="utf-8")
+    htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
     return {"md": str(md), "html": str(htm)}

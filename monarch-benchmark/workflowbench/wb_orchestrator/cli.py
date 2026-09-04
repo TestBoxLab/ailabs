@@ -183,7 +183,7 @@ def cmd_report(args) -> int:
     store = _store(args)
     try:
         paths = write_report(store, args.run_id, args.out, audience=args.audience,
-                             baseline_arm=args.baseline)
+                             baseline_arm=args.baseline, sortable=not args.no_sort)
     except (GateError, KeyError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -194,9 +194,23 @@ def cmd_report(args) -> int:
 def cmd_corpus(args) -> int:
     from wb_orchestrator import corpus as corpus_mod
     if args.corpus_cmd == "import-ab":
-        res = corpus_mod.import_ab(args.domains.split(","), args.dest)
-        print(json.dumps(res, indent=1))
-        return 0
+        product = config.load_product(config.resolve_name_or_path(args.product, "product"))
+        try:
+            res = corpus_mod.import_ab(args.domains.split(","), args.dest,
+                                       product_services=product.services)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        width = max(len(d) for d in res["by_domain"]) + 1
+        for domain, n in res["by_domain"].items():
+            print(f"{domain + ':':<{width}} {n['written']:>4} written, "
+                  f"{n['unchanged']} unchanged")
+        print(f"total: {res['written'] + res['unchanged']} tasks "
+              f"in {len(res['by_domain'])} folders")
+        missing = ", ".join(res["missing_services"]) or "none"
+        print(f"services seeded by these domains and NOT listed by product "
+              f"{product.name}: {missing}")
+        return 1 if res["missing_services"] else 0
     if args.corpus_cmd == "validate":
         v = corpus_mod.validate_corpus(args.dir)
         print(corpus_mod.format_validation(v, verbose=args.verbose))
@@ -321,13 +335,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run_id")
     p.add_argument("--audience", default="internal", help="internal | public-rung2")
     p.add_argument("--baseline", default=None, help="baseline arm for paired stats")
+    p.add_argument("--no-sort", action="store_true",
+                   help="omit the column-sorting script; ship the page as pure markup")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("corpus")
     csub = p.add_subparsers(dest="corpus_cmd", required=True)
     ci = csub.add_parser("import-ab")
-    ci.add_argument("--domains", required=True, help="comma list, e.g. simple,sales,hr")
-    ci.add_argument("--dest", required=True, help="output task dir")
+    ci.add_argument("--domains", required=True,
+                    help="comma list, e.g. simple,sales,hr; or 'all' for every known domain")
+    ci.add_argument("--dest", required=True,
+                    help="output task dir; may contain {domain}, replaced per domain")
+    ci.add_argument("--product", default="simulated-apps",
+                    help="product whose service list the seeded services are checked against")
     cv = csub.add_parser("validate")
     cv.add_argument("dir")
     cv.add_argument("--verbose", action="store_true")

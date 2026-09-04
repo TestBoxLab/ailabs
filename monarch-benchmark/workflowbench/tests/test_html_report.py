@@ -63,9 +63,9 @@ def four_arm_store(tmp_path):
         _row("t2", "beta", 1, False, assertions=False),
         # gamma: an agent error and a timeout
         _row("t1", "gamma", 0, True), _row("t1", "gamma", 1, True),
-        _row("t2", "gamma", 0, False, termination="agent_error",
+        _row("t2", "gamma", 0, False, termination="agent_error", assertions=True,
              error="<script>alert(1)</script>"),
-        _row("t2", "gamma", 1, False, termination="timeout"),
+        _row("t2", "gamma", 1, False, termination="timeout", assertions=True),
         # oracle: t1 always, t2 never (the task everyone fails)
         _row("t1", "oracle", 0, True), _row("t1", "oracle", 1, True),
         _row("t2", "oracle", 0, False, assertions=False),
@@ -325,3 +325,309 @@ def test_verdict_wording():
     assert verdict(pairs=10, p=0.012, wins=1, losses=9) == "worse than the baseline (p = 0.012)"
     # p is rendered at three decimals, so mcnemar's six do not leak into the page
     assert verdict(pairs=10, p=0.026857, wins=9, losses=1) == "better than the baseline (p = 0.027)"
+
+
+# -- Phase 3: the per-round page ---------------------------------------------
+
+def test_matrix_block(four_arm_store):
+    """T019 (FR-007, FR-009, research R8): one row per task, one cell per
+    competitor, a category from the five, and no domain or tier column when no
+    task carries them."""
+    from wb_report.report import build_report
+
+    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    m = rep["matrix"]
+    assert m["arms"] == ["alpha", "beta", "gamma", "oracle"]
+    assert m["has_domain"] is False and m["has_tier"] is False
+    assert [r["task_id"] for r in m["rows"]] == ["t1", "t2"]
+
+    t1 = {r["task_id"]: r for r in m["rows"]}["t1"]
+    assert t1["domain"] is None and t1["tier"] is None
+    assert t1["cells"]["alpha"] == {"passed": 2, "attempted": 2, "infra": 0,
+                                    "category": "passed", "detail": None}
+
+    t2 = {r["task_id"]: r for r in m["rows"]}["t2"]
+    # alpha failed t2 once on an unexpected change; the paths are the detail
+    assert t2["cells"]["alpha"]["passed"] == 1
+    assert t2["cells"]["alpha"]["attempted"] == 2
+    assert t2["cells"]["alpha"]["category"] == "unexpected change"
+    assert "crm.contacts[3].email" in t2["cells"]["alpha"]["detail"]
+    # beta's t2 pair is one infra attempt and one assertion failure
+    assert t2["cells"]["beta"] == {"passed": 0, "attempted": 1, "infra": 1,
+                                    "category": "infra", "detail": "infra:rate_limit"}
+    # gamma's t2 pair errored
+    assert t2["cells"]["gamma"]["category"] == "error"
+    assert t2["cells"]["oracle"]["category"] == "assertion failed"
+
+
+def test_matrix_cell_all_infra(tmp_path):
+    """T019: a pair whose attempts were all infrastructure reads 0/0 (infra 2),
+    a legitimate cell - the denominator excludes them (contracts section 3)."""
+    from wb_report.report import build_report
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-i", "cfgi", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["beta"], "k": 2, "n_tasks": 1})
+    for trial in (0, 1):
+        store.record_episode(_row("t1", "beta", trial, False, run="run-i",
+                                  termination="infra:model_unavailable"))
+    store.finish_run("run-i")
+    cell = build_report(store, "run-i", audience="internal")["matrix"]["rows"][0]["cells"]["beta"]
+    assert cell["passed"] == 0 and cell["attempted"] == 0 and cell["infra"] == 2
+    assert cell["category"] == "infra"
+
+
+def test_failures_block(four_arm_store, phase_store):
+    """T020 (FR-010): one entry per failed attempt, ordered by task, then
+    competitor, then repetition; an empty list when nothing failed."""
+    from wb_report.report import build_report
+
+    f = build_report(four_arm_store, "run-h", audience="internal")["failures"]
+    assert [(e["task_id"], e["arm"], e["trial"]) for e in f] == [
+        ("t2", "alpha", 0),
+        ("t2", "beta", 0), ("t2", "beta", 1),
+        ("t2", "gamma", 0), ("t2", "gamma", 1),
+        ("t2", "oracle", 0), ("t2", "oracle", 1),
+    ]
+    alpha = f[0]
+    assert alpha["termination"] == "completed"
+    assert alpha["error"] is None
+    assert alpha["unexpected_change_paths"] == ["crm.contacts[3].email"]
+    beta_infra = f[1]
+    assert beta_infra["termination"] == "infra:rate_limit"   # infra failures included
+    gamma = f[3]
+    assert gamma["error"] == "<script>alert(1)</script>"     # raw here; escaped at render
+
+    # a competitor that failed nothing contributes nothing
+    only_alpha = build_report(phase_store, "run-p", audience="internal")["failures"]
+    assert [e["arm"] for e in only_alpha] == ["monarch"]
+
+
+def test_size_and_provenance_blocks(four_arm_store):
+    """T021 (FR-011, FR-012): the round's size as a product, and the provenance
+    block of contracts section 5."""
+    from wb_report.report import build_report
+
+    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    assert rep["size"] == {"prompts": 2, "repetitions": 2, "per_competitor": 4,
+                           "competitors": 4, "total": 16}
+
+    p = rep["provenance"]
+    assert p["config_hash"] == "cfg006"
+    assert p["plan"] == "smoke-006"
+    assert p["product"] == "simulated-apps"
+    assert p["price_tables"] == ["anthropic@2026-09-01"]
+    assert p["suite"] == "workflowbench-synthetic@0.1"
+    assert p["suite_version"] == "0.1"
+    assert p["task_hashes"] == ["abc123de"]        # first 8 characters, distinct
+    assert p["started"] and p["finished"]
+    assert p["stop_reason"] is None
+    assert p["audience"] == "internal"
+    assert p["withheld"] == []                     # internal names them; none here
+    assert p["mode"] is None
+
+
+@pytest.fixture()
+def m4_store(tmp_path):
+    """The seeded store of tests/test_m4.py, rebuilt here so this file can pin
+    the markdown output without importing that file's fixtures."""
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-x", "cfg123", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["kimi-k3/api", "monarch",
+                                                     "monarch-lab"], "k": 2, "n_tasks": 2,
+                      "timeout_s": 600})
+    for arm, passes in [("kimi-k3/api", [True, False, True, True]),
+                        ("monarch", [True, True, False, True]),
+                        ("monarch-lab", [True, True, True, True])]:
+        i = 0
+        for task in ("t1", "t2"):
+            for trial in (0, 1):
+                store.record_episode(_row(task, arm, trial, passes[i],
+                                          run="run-x", phases={}))
+                i += 1
+    store.finish_run("run-x")
+    return store
+
+
+def test_markdown_is_unchanged(m4_store):
+    """T023 (FR-013, SC-008): the markdown report is what it was before this
+    feature - the new blocks changed nothing. The expected text below was
+    captured from the pre-006 renderer and is asserted verbatim, so any drift in
+    render_md fails here rather than in a reader's inbox."""
+    from wb_report.report import build_report, render_md
+
+    md = render_md(build_report(m4_store, "run-x", audience="internal",
+                                baseline_arm="kimi-k3/api"))
+    assert md == (
+        '# WorkflowBench report — run-x\n'
+        '\n'
+        'audience: **internal** · suite `workflowbench-synthetic@0.1` · config `cfg123` · k=2\n'
+        '\n'
+        '> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**\n'
+        '\n'
+        '## Per-arm results\n'
+        '\n'
+        '| arm | strict pass ± SEM | pass^k | infra rate | cache hit | cost (USD) |\n'
+        '|---|---|---|---|---|---|\n'
+        '| `kimi-k3/api` | 75.0% ± 25.0% | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
+        '| `monarch` | 75.0% ± 25.0% | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
+        '| `monarch-lab` | 100.0% ± 0.0% | 100.0% ± 0.0% | 0.0 | 0.7 | 0.04 |\n'
+        '  \n'
+        '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · kimi-k3/api · run-x · cost missing on 0/8 attempts` · contracts: abc123de\n'
+        '  \n'
+        '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · monarch · run-x · cost missing on 0/8 attempts` · contracts: abc123de\n'
+        '  \n'
+        '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · monarch-lab · run-x · cost missing on 0/8 attempts` · contracts: abc123de\n'
+        '\n'
+        '## Paired comparisons\n'
+        '\n'
+        '- `monarch` vs `kimi-k3/api`: **1W / 1L** (both 2, neither 0, infra-dropped 0) · McNemar b=1 c=1 p=0.4795\n'
+        '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · monarch+kimi-k3/api · run-x · cost missing on 0/8 attempts`\n'
+        '- `monarch-lab` vs `kimi-k3/api`: **1W / 0L** (both 3, neither 0, infra-dropped 0) · McNemar b=1 c=0 p=1.0\n'
+        '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · monarch-lab+kimi-k3/api · run-x · cost missing on 0/8 attempts`\n'
+    )
+
+
+def test_table_helper():
+    """T024 (FR-027, research R4): None is n/a, a rate is 90.0%, money is
+    US$ 1.3986, and a cell carrying a script tag is escaped."""
+    from wb_report.html import _esc, _fmt, _table
+
+    assert _fmt(None) == "n/a"
+    assert _fmt(0.9, "rate") == "90.0%"
+    assert _fmt({"mean": 0.9, "sem": 0.1}, "rate") == "90.0% +/- 10.0%"
+    assert _fmt(1.3986, "money") == "US$ 1.3986"
+    assert _fmt(1.8567, "ratio") == "1.86x"
+    assert _fmt(16.92, "seconds") == "16.9 s"
+    assert _fmt(1234, "count") == "1234"
+    assert _fmt(0.0, "rate") == "0.0%"          # zero is a value, not n/a
+    assert _esc("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    assert _esc('a "quoted" value') == "a &quot;quoted&quot; value"
+
+    html = _table(["task", "note"], [["t1", "<script>alert(1)</script>"]],
+                  source_line="src: x", title="Failures")
+    assert "<table" in html and "</table>" in html
+    assert "Failures" in html
+    assert "src: x" in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_page_has_the_four_tables(four_arm_store):
+    """T025: four tables, the header size line, and a source line under each."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    assert page.count("<table") >= 4
+    for caption in ("Competitors", "Comparisons against the baseline",
+                    "Task matrix", "Failures"):
+        assert f"<caption>{caption}</caption>" in page, caption
+    # the size line: the total never appears without the product beside it
+    assert ("prompts: 2 &middot; attempts per prompt and competitor: 2 &middot; "
+            "per competitor: 4 = 2 x 2 &middot; competitors: 4 &middot; "
+            "attempts in total: 16") in page
+    assert page.count('class="src"') >= 4
+    assert page.startswith("<!doctype html>")
+
+
+def test_matrix_details_table_repeats_the_reasons(four_arm_store):
+    """T027 (FR-008): every reason shown on a matrix cell is repeated in the
+    details table below it, so nothing is available only on hover."""
+    from wb_report.report import build_report, render_html
+
+    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    page = render_html(rep)
+    assert "<caption>Task matrix, the reason behind every cell</caption>" in page
+    for row in rep["matrix"]["rows"]:
+        for arm, cell in row["cells"].items():
+            if cell["category"] == "passed":
+                continue
+            # the task, the competitor, the category and the detail all appear
+            assert cell["category"] in page
+            if cell["detail"]:
+                from wb_report.html import _esc
+                assert _esc(cell["detail"]) in page
+
+
+def test_no_inf_or_nan(zero_pass_store):
+    """T028 (SC-005): a competitor that passed nothing renders n/a in the
+    cost-per-passed cell, and neither inf nor nan appears anywhere."""
+    import re
+
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(zero_pass_store, "run-z", audience="internal"))
+    assert "n/a" in page
+    assert not re.search(r"\binf\b", page, re.IGNORECASE)
+    assert not re.search(r"\bnan\b", page, re.IGNORECASE)
+
+
+def test_sort_script_present_and_optional(four_arm_store):
+    """T030 (research R5): the sorting script by default, absent with
+    sortable=False."""
+    from wb_report.html import render_page
+    from wb_report.report import build_report
+
+    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    assert "<script" in render_page(rep)
+    assert "addEventListener" in render_page(rep)
+    assert "<script" not in render_page(rep, sortable=False)
+
+
+def test_single_competitor_round(phase_store, tmp_path):
+    """T032: one competitor renders no comparison table but says why; and a
+    round where nothing failed says `no attempt failed`."""
+    from wb_report.report import build_report, render_html
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-s", "cfgs", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 2})
+    for task in ("t1", "t2"):
+        store.record_episode(_row(task, "alpha", 0, True, run="run-s"))
+    store.finish_run("run-s")
+
+    page = render_html(build_report(store, "run-s", audience="internal"))
+    assert "<caption>Comparisons against the baseline</caption>" not in page
+    assert "no paired comparison to make" in page
+    assert "no attempt failed" in page
+    assert "<caption>Failures</caption>" not in page
+
+
+def test_report_cli_no_sort(four_arm_store, tmp_path, monkeypatch, capsys):
+    """T031 (contracts/cli.md): `wb report --no-sort` writes a page with no
+    script; without the flag the script is there."""
+    from wb_orchestrator.cli import main
+
+    db = str(four_arm_store.path)
+    out = tmp_path / "reports"
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle", "--no-sort"]) == 0
+    page = (out / "report-run-h-internal.html").read_text(encoding="utf-8")
+    assert "<script" not in page
+    assert "<table" in page                       # still the real page, not the blob
+
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle"]) == 0
+    assert "<script" in (out / "report-run-h-internal.html").read_text(encoding="utf-8")
+
+
+def test_renderer_cannot_query_the_store():
+    """T040 (plan design note 1, research R7): wb_report/html.py imports neither
+    Store nor sqlite3, so no table on the page can re-read the database and
+    re-admit a competitor the audience gate removed."""
+    import ast
+    from pathlib import Path
+
+    import wb_report.html as html_mod
+
+    source = Path(html_mod.__file__).read_text(encoding="utf-8")
+    imported = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+            imported.update(f"{node.module}.{a.name}" for a in node.names)
+    assert not any("sqlite3" in name or "store" in name.lower() for name in imported), imported
+    assert not hasattr(html_mod, "Store")
