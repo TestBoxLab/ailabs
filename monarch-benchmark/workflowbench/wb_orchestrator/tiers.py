@@ -20,7 +20,9 @@ MEASURE = (
     'services seeded (initial_state keys except "meta") + expected changes '
     "(info.expected_changes) + tools needed (info.zapier_tools), computed from "
     "the task file; tiers are the terciles of the whole corpus, ties on a cut "
-    "point falling in the lower tier."
+    "point falling in the lower tier. The random set is drawn from the whole "
+    "usable corpus except the tasks already drawn into the three tiers, so it "
+    "is an independent check of the blended average."
 )
 
 
@@ -185,7 +187,17 @@ def draw(dirs: Iterable[str | Path], seed: int, per_tier: int = 10,
     for tier in TIER_ORDER:
         drawn[f"tier-{tier}"] = draw_tier([e for e in entries if e.tier == tier],
                                           per_tier, rng)
-    drawn["random-10"] = rng.sample(sorted(entries, key=lambda e: e.task_id), per_tier)
+
+    # The random set is an independent check of the blended average, so it draws
+    # from what the three tiers left behind (decision of 4 Sep 2026, Carlos).
+    taken = {e.task_id for picked in drawn.values() for e in picked}
+    rest = sorted((e for e in entries if e.task_id not in taken),
+                  key=lambda e: e.task_id)
+    if len(rest) < per_tier:
+        raise ValueError(f"the random set has {len(rest)} usable tasks left after the "
+                         f"three tiers, fewer than the {per_tier} the draw needs; "
+                         f"nothing written")
+    drawn["random-10"] = rng.sample(rest, per_tier)
 
     out = Path(out)
     written: list[Path] = []

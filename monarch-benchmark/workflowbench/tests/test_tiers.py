@@ -129,9 +129,10 @@ def test_usable_pool():
 
     by_id = {e.task_id: e for e in pool.entries}
     assert set(by_id) == {
-        "alpha.a_two", "alpha.a_three", "alpha.a_four", "alpha.a_five",
-        "beta.b_six", "beta.b_seven", "beta.b_eight_meta",
-        "gamma.g_nine", "gamma.g_eleven", "gamma.g_thirteen",
+        "alpha.a_two", "alpha.a_three", "alpha.a_three_b", "alpha.a_four",
+        "alpha.a_five", "beta.b_six", "beta.b_six_b", "beta.b_seven",
+        "beta.b_eight_meta", "gamma.g_nine", "gamma.g_ten", "gamma.g_eleven",
+        "gamma.g_thirteen",
     }
     assert by_id["gamma.g_nine"].domain == "gamma"
     assert by_id["gamma.g_nine"].score == 9
@@ -146,7 +147,7 @@ def test_usable_pool():
     # the excluded two are not scored and not in the pool
     assert "beta.b_no_rule" not in by_id and "gamma.g_bad_hash" not in by_id
     # counts per folder are recorded for the manifest
-    assert pool.counts == {"alpha": (4, 4), "beta": (4, 3), "gamma": (4, 3)}
+    assert pool.counts == {"alpha": (5, 5), "beta": (5, 4), "gamma": (5, 4)}
 
 
 # --- Phase 4: the draw --------------------------------------------------------
@@ -183,7 +184,7 @@ def test_tier_too_small_refuses(tmp_path):
     from wb_orchestrator import tiers
     with pytest.raises(ValueError) as e:
         tiers.draw(CORPUS_DIRS, seed=1, per_tier=10, out=tmp_path)
-    assert "simple" in str(e.value) and "3" in str(e.value)
+    assert "simple" in str(e.value) and "4 usable tasks" in str(e.value)
     assert not list(tmp_path.iterdir())            # nothing was written
 
 
@@ -207,7 +208,7 @@ def test_drawn_task_is_a_frozen_copy(tmp_path):
             n += 1
         v = corpus_mod.validate_corpus(folder)
         assert v["contract_drift"] == 0, folder
-    assert n == 12
+    assert n == 12          # four sets of three
     assert result.cuts == {"low": 4, "high": 7}
 
 
@@ -244,9 +245,9 @@ def test_manifest(tmp_path):
     assert m["cuts"] == {"low": 4, "high": 7}
     assert m["seed"] == 1 and m["per_tier"] == 3 and m["generated_at"]
     assert m["corpus"] == [
-        {"dir": (FIXTURE / "imported-alpha").as_posix(), "domain": "alpha", "tasks": 4, "usable": 4},
-        {"dir": (FIXTURE / "imported-beta").as_posix(), "domain": "beta", "tasks": 4, "usable": 3},
-        {"dir": (FIXTURE / "imported-gamma").as_posix(), "domain": "gamma", "tasks": 4, "usable": 3},
+        {"dir": (FIXTURE / "imported-alpha").as_posix(), "domain": "alpha", "tasks": 5, "usable": 5},
+        {"dir": (FIXTURE / "imported-beta").as_posix(), "domain": "beta", "tasks": 5, "usable": 4},
+        {"dir": (FIXTURE / "imported-gamma").as_posix(), "domain": "gamma", "tasks": 5, "usable": 4},
     ]
     assert set(m["excluded"]) == {"beta.b_no_rule", "gamma.g_bad_hash"}
 
@@ -284,7 +285,7 @@ def test_cli(tmp_path, capsys):
             "--out", str(tmp_path)] + [f"--corpus={d}" for d in CORPUS_DIRS]
     assert main(argv) == 0
     out = capsys.readouterr().out
-    assert "corpus: 3 folders, 12 tasks, 10 usable" in out
+    assert "corpus: 3 folders, 15 tasks, 13 usable" in out
     assert ("  excluded 2: 1 with no approval rule (unmapped assertion types), "
             "1 whose hash does not match its content - see the manifest") in out
     assert "measure: services seeded + expected changes + tools needed" in out
@@ -307,3 +308,25 @@ def test_cli(tmp_path, capsys):
     # a missing corpus folder is exit 3
     assert main(["corpus", "tiers", "--seed", "1", "--out", str(tmp_path / "x"),
                  f"--corpus={tmp_path / 'nowhere'}"]) == 3
+
+
+def test_random_set_excludes_the_tier_tasks(tmp_path):
+    """The random round is an independent check, so it reuses no tier task.
+
+    Decision of 4 Sep 2026 (Carlos): the random set is drawn from the usable
+    corpus minus the tasks already drawn into the three tiers.
+    """
+    from wb_orchestrator import tiers
+    r = tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=tmp_path)
+
+    drawn = [set(r.sets[n]) for n in tiers.SET_NAMES]
+    for i, a in enumerate(drawn):
+        for b in drawn[i + 1:]:
+            assert not (a & b), f"the four sets share {a & b}"
+    assert len(set().union(*drawn)) == 12   # four disjoint sets of three
+
+    # thirteen usable minus twelve tier tasks leaves one: too few for a set of four
+    with pytest.raises(ValueError) as e:
+        tiers.draw(CORPUS_DIRS, seed=1, per_tier=4, out=tmp_path / "refused")
+    assert "random" in str(e.value)
+    assert not (tmp_path / "refused").exists()

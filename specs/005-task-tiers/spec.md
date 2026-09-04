@@ -322,8 +322,11 @@ owners.
 - **FR-017**: Within a tier, the drawn tasks MUST be spread across the domains
   present in that tier as evenly as the available counts allow, filling any
   shortfall from the rest of the tier.
-- **FR-018**: The fourth set MUST be drawn from the whole corpus with no tier
-  filter and no stratification, as a check on the blended average.
+- **FR-018**: The fourth set MUST be drawn from the whole usable corpus except
+  the thirty tier tasks, with no tier filter and no stratification, as an
+  independent check on the blended average. A task appears in at most one of the
+  four sets. If fewer than the set's size remain after the three tiers are drawn,
+  the command MUST refuse and write nothing. (Decision of 4 Sep 2026, Carlos.)
 - **FR-019**: Each drawn task MUST be a copy of the corpus task with its request
   text, starting data and approval rule unchanged, and its hash MUST equal the
   corpus original's (rule 5).

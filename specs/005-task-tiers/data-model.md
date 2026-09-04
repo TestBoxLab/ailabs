@@ -85,6 +85,11 @@ starting data, the assertions and both change lists are copied verbatim.
 in; the manifest records that task's actual tier and score, so the two readings
 are both available and neither is guessed.
 
+The random set is drawn from the usable corpus **minus the thirty tasks already
+drawn into the three tiers**, so the four sets are disjoint and the random round
+is an independent check of the blended average rather than a partial re-run of
+the other three (decision of 4 Sep 2026, Carlos).
+
 ## 5. Manifest `tasks/tiers-manifest.yaml` (`TiersManifest`)
 
 Written by `wb corpus tiers`; read by people and by tests, not by a run.
@@ -193,7 +198,9 @@ read every corpus folder
       round-robin over the tier's domains (alphabetical), one shuffled candidate
       at a time, until per_tier are held
         fewer usable than per_tier ──► refuse, naming the tier and the count
-→ draw per_tier from the whole usable pool, unstratified, same generator
+→ draw per_tier from the usable pool MINUS the tasks the three tiers took,
+      unstratified, same generator; the four sets are disjoint
+        fewer than per_tier left ──► refuse, naming the shortfall
 → write four folders of byte copies + info.tier + info.domain (hash unchanged)
 → write the manifest
 ```

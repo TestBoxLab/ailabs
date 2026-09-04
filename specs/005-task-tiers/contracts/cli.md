@@ -74,6 +74,8 @@ draw (seed 20260904, 10 per set):
   tier-complex  10 prompts — hr 1, marketing 2, operations 2, sales 2, support 3
   random-10     10 prompts — simple 3, sales 2, support 2, hr 1, marketing 1, operations 1
 [ok] write tasks/tier-simple/ tasks/tier-medium/ tasks/tier-complex/ tasks/random-10/
+random-10 is drawn from the usable corpus minus the thirty tier tasks, so the
+four sets share no task
 [ok] write tasks/tiers-manifest.yaml
 every drawn task keeps its corpus hash; info.tier and info.domain are not hashed
 ```
@@ -81,7 +83,9 @@ every drawn task keeps its corpus hash; info.tier and info.domain are not hashed
 - Every drawn file is a copy of its corpus file with `info.tier` and
   `info.domain` added and `contract_sha256` unchanged.
 - A tier with fewer usable tasks than `--per-tier` makes the command refuse,
-  naming the tier and how many it found; nothing is written.
+  naming the tier and how many it found; nothing is written. The same happens if
+  fewer than `--per-tier` tasks remain for the random set once the three tiers
+  have been drawn.
 - Re-running with the same seed rewrites the same bytes; a different seed is a
   different task set, and the manifest says which seed made it.
 
