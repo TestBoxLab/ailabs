@@ -1022,7 +1022,11 @@ def _bar_chart(series: list[tuple[str, Any, Any]], kind: str = "rate",
     for i, (name, value, error) in enumerate(series):
         y = i * row_h + pad
         mid = y + row_h / 2 - 3
-        parts.append(f'<text class="cl" x="0" y="{mid + 4:.0f}">{_esc(name)}</text>')
+        # ponytail: 150 px of 11.5 px mono holds ~21 characters; longer names
+        # (monarch@<commit>+<branch>) ran under the bars. Full name in the tooltip.
+        short = name if len(name) <= 21 else name[:20] + "…"
+        parts.append(f'<text class="cl" x="0" y="{mid + 4:.0f}"><title>{_esc(name)}</title>'
+                     f'{_esc(short)}</text>')
         if value is None:
             parts.append(f'<text class="cv" x="{label_w}" y="{mid + 4:.0f}">n/a</text>')
             continue

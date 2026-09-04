@@ -1428,3 +1428,10 @@ def test_value_label_sits_past_the_error_bar():
     hi = float(re.search(r'x2="([\d.]+)"', svg).group(1))
     label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
     assert label_x > hi
+
+
+def test_long_chart_labels_are_shortened_with_the_full_name_in_a_tooltip():
+    from wb_report.html import _bar_chart
+    svg = _bar_chart([("monarch@797a8e5d1+feat/railway-dev-deploy", 0.0, None)])
+    assert "<title>monarch@797a8e5d1+feat/railway-dev-deploy</title>" in svg
+    assert "monarch@797a8e5d1+f…</text>" in svg
