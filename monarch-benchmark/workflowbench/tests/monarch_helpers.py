@@ -105,3 +105,39 @@ def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None)
     # names the fakes, so the arm must read that instead.
     arm.env = env
     return arm
+
+
+# -- 004: a run-only site --------------------------------------------------
+
+RECIPES = """\
+product: simulated-apps
+tasks: {tasks}
+generated_at: '2026-09-04T12:00:00Z'
+kb_hash_file_sha: 9f2c1d0ea3b47856c9d2e0f1a4b6c8d90e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b
+monarch: monarch@1a2b3c4
+recipes:
+  simple.email_sf_contact_city_update:
+    workflow_id: wf-1
+    recipe_version: 3
+    authored_at: '2026-09-04T12:03:11Z'
+    attempts_used: 1
+  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+missing: {{}}
+"""
+
+
+def run_only_site(site, recipes=RECIPES, kb=KB, monarch_repo=None):
+    """`monarch_site` with the plan in run-only mode and a recipes file beside the product."""
+    monarch_site(site, kb=kb, monarch_repo=monarch_repo)
+    runnable_monarch(site, modes="[create-run, run-only]", monarch_repo=monarch_repo)
+    plan = (site / "config/plans/smoke-frontier.yaml").read_text()
+    write(site / "config/plans", plan.replace("mode: create-run", "mode: run-only"))
+    if recipes is not None:
+        tasks = config.load_plan(site / "config/plans/smoke-frontier.yaml").tasks
+        (site / "config/products/simulated-apps.monarch-recipes.yaml").write_text(
+            recipes.format(tasks=f'"{tasks}"'))
+    return site

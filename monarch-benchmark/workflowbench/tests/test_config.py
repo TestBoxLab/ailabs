@@ -723,3 +723,102 @@ def test_shim_public_url_is_optional_and_overrides_host_port(tmp_path):
     h = config.load_harness(path)
     env = {"FRONT_DOOR_URL": "https://example.ngrok-free.dev/"}
     assert public_front_door_url(h, env) == "https://example.ngrok-free.dev"
+
+
+# -- 004 T006: the recipes file -----------------------------------------------
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+RECIPES = """\
+product: simulated-apps
+tasks: tasks
+generated_at: '2026-09-04T12:00:00Z'
+kb_hash_file_sha: aa11bb22
+monarch: monarch@1a2b3c4
+recipes:
+  simple.email_sf_contact_city_update:
+    workflow_id: wf-1
+    recipe_version: 3
+    authored_at: '2026-09-04T12:03:11Z'
+    attempts_used: 1
+missing:
+  simple.sf_opp_closed_won:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'invariant failed: is_closed, is_won changed'
+"""
+
+RECIPE_TASKS = ("simple.email_sf_contact_city_update", "simple.sf_opp_closed_won")
+
+
+def recipes_file(tmp_path, text=RECIPES):
+    p = tmp_path / "simulated-apps.monarch-recipes.yaml"
+    p.write_text(text)
+    return p
+
+
+def load_recipes(tmp_path, text=RECIPES, tasks=RECIPE_TASKS, product="simulated-apps"):
+    return config.load_monarch_recipes(recipes_file(tmp_path, text), product, tasks)
+
+
+def test_load_monarch_recipes_returns_the_rows(tmp_path):
+    r = load_recipes(tmp_path)
+    assert r.product == "simulated-apps" and r.tasks == "tasks"
+    assert r.kb_hash_file_sha == "aa11bb22" and r.monarch == "monarch@1a2b3c4"
+    row = r.recipes["simple.email_sf_contact_city_update"]
+    assert row.workflow_id == "wf-1" and row.recipe_version == 3 and row.attempts_used == 1
+    assert row.authored_at == "2026-09-04T12:03:11Z"
+    gone = r.missing["simple.sf_opp_closed_won"]
+    assert gone.reason == "checker_failed" and gone.attempts_used == 3
+    assert "is_closed" in gone.detail
+
+
+def test_load_monarch_recipes_reads_the_shipped_sample():
+    """The fixture the offline run-only tests use: 9 recipes, 1 missing, the 10 pilot tasks."""
+    tasks = sorted(p.stem for p in (Path(__file__).resolve().parents[1] / "tasks").glob("*.json"))
+    r = config.load_monarch_recipes(FIXTURES / "monarch-recipes-sample.yaml",
+                                    "simulated-apps", tasks)
+    assert len(r.recipes) == 9 and len(r.missing) == 1
+    assert set(r.recipes) | set(r.missing) == set(tasks)
+
+
+def test_load_monarch_recipes_task_in_both_maps(tmp_path):
+    text = RECIPES.replace("  simple.sf_opp_closed_won:\n    reason",
+                           "  simple.email_sf_contact_city_update:\n    reason")
+    with pytest.raises(ConfigError) as exc:
+        load_recipes(tmp_path, text)
+    assert "simple.email_sf_contact_city_update" in str(exc.value) and "both" in str(exc.value)
+
+
+@pytest.mark.parametrize("key", ["recipes", "missing"])
+def test_load_monarch_recipes_task_outside_the_task_set(tmp_path, key):
+    text = RECIPES.replace("simple.email_sf_contact_city_update" if key == "recipes"
+                           else "simple.sf_opp_closed_won", "simple.not_a_task")
+    with pytest.raises(ConfigError) as exc:
+        load_recipes(tmp_path, text)
+    assert exc.value.field == f"{key}.simple.not_a_task" and "not a task" in str(exc.value)
+
+
+def test_load_monarch_recipes_product_mismatch(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        load_recipes(tmp_path, product="other-product")
+    assert exc.value.field == "product" and "other-product" in str(exc.value)
+
+
+def test_load_monarch_recipes_task_set_mismatch(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        config.load_monarch_recipes(recipes_file(tmp_path), "simulated-apps", RECIPE_TASKS,
+                                    tasks_name="corpus")
+    assert exc.value.field == "tasks" and "corpus" in str(exc.value)
+
+
+def test_load_monarch_recipes_bad_reason(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        load_recipes(tmp_path, RECIPES.replace("reason: checker_failed", "reason: gave_up"))
+    assert exc.value.field == "missing.simple.sf_opp_closed_won.reason" and "gave_up" in str(exc.value)
+
+
+def test_load_harness_accepts_run_only_among_the_modes(tmp_path):
+    h = config.load_harness(write(tmp_path, edit(HARNESS_MONARCH, "modes",
+                                                 "[create-run, run-only]")))
+    assert h.modes == ["create-run", "run-only"]

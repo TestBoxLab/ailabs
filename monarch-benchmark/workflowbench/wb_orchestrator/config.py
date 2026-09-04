@@ -28,6 +28,7 @@ ADAPTERS = ("openai", "openai_responses", "gemini", "anthropic")
 HARNESS_KINDS = ("api", "cli", "scripted", "monarch")
 LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
+MISSING_REASONS = ("checker_failed", "authoring_error", "run_error", "timeout", "infra")
 SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without approved_by (rule 9)
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 SideEffects = list[tuple[str, str | None, list[dict]]]
@@ -481,6 +482,75 @@ def load_monarch_kb(path, product: Product) -> MonarchKb:
 
 
 @dataclass
+class RecipeRow:
+    """One known-correct workflow Monarch authored and the bench's checker passed."""
+    workflow_id: str
+    recipe_version: int
+    authored_at: str
+    attempts_used: int
+
+
+@dataclass
+class MissingRow:
+    """One task `wb monarch recipes` could not get a passing workflow for."""
+    reason: str
+    attempts_used: int
+    detail: str
+
+
+@dataclass
+class MonarchRecipes:
+    """The frozen recipes `wb monarch recipes` wrote for one product (data-model.md §1)."""
+    product: str
+    tasks: str
+    generated_at: str
+    kb_hash_file_sha: str
+    monarch: str
+    recipes: dict[str, RecipeRow]
+    missing: dict[str, MissingRow]
+
+
+def load_monarch_recipes(path, product: str, tasks, tasks_name: str | None = None) -> MonarchRecipes:
+    """The recipes file for one product; `tasks` is the task ids the plan resolved to."""
+    c = _read(path, "recipes file", name_key=None)
+    c.keys(("product", "tasks", "generated_at", "kb_hash_file_sha", "monarch", "recipes", "missing"))
+    if c.get("product", str) != product:
+        c.fail("product", f"must equal the product under test {product!r}; got {c.data['product']!r}")
+    written_for = c.get("tasks", str)
+    if tasks_name is not None and written_for != tasks_name:
+        c.fail("tasks", f"made for task set {written_for!r}, but the plan runs {tasks_name!r}; "
+                        "run `wb monarch recipes` for this task set")
+    known_tasks = set(tasks)
+    recipes, missing = {}, {}
+    for key, kind in (("recipes", RecipeRow), ("missing", MissingRow)):
+        for task, row in (c.get(key, dict) or {}).items():
+            if task not in known_tasks:
+                c.fail(f"{key}.{task}", f"not a task of {written_for}")
+            if not isinstance(row, dict):
+                c.fail(f"{key}.{task}", f"expected a mapping, got {type(row).__name__}")
+            r = _Checker(path, row, f"{key}.{task}.")
+            if kind is RecipeRow:
+                r.keys(("workflow_id", "recipe_version", "authored_at", "attempts_used"))
+                recipes[task] = RecipeRow(
+                    workflow_id=r.get("workflow_id", str),
+                    recipe_version=r.get("recipe_version", int),
+                    authored_at=str(r.require("authored_at", (str, datetime.datetime))),
+                    attempts_used=r.get("attempts_used", int, minimum=1))
+            else:
+                r.keys(("reason", "attempts_used", "detail"))
+                missing[task] = MissingRow(
+                    reason=r.get("reason", str, enum=MISSING_REASONS),
+                    attempts_used=r.get("attempts_used", int, minimum=0),
+                    detail=r.get("detail", str))
+    for task in sorted(set(recipes) & set(missing)):
+        c.fail("recipes", f"task {task} is in both recipes and missing; it must be in one only")
+    return MonarchRecipes(product=c.data["product"], tasks=written_for,
+                          generated_at=str(c.require("generated_at", (str, datetime.datetime))),
+                          kb_hash_file_sha=c.get("kb_hash_file_sha", str),
+                          monarch=c.get("monarch", str), recipes=recipes, missing=missing)
+
+
+@dataclass
 class Competitor:
     name: str  # "model/harness", or the harness name alone
     model: Model | None
@@ -520,6 +590,8 @@ class RunConfig:
     harnesses: dict[str, Harness]
     tasks_dir: str  # absolute; `plan.tasks` as written stays in the hash
     monarch_kb: MonarchKb | None = None      # only when a Monarch competitor runs
+    monarch_recipes: MonarchRecipes | None = None   # only in run-only, with a Monarch competitor
+    excluded_tasks: dict[str, str] = field(default_factory=dict)  # task id -> why it was dropped
     price_tables: dict[str, PriceTable] = field(default_factory=dict)
     config_dir: str = ""                     # where models/ and harnesses/ were read from
 
@@ -543,6 +615,13 @@ class RunConfig:
             d["monarch_kb"] = {"kb": self.monarch_kb.kb,  # generated_at is not an input
                                "seeds_format": self.monarch_kb.seeds_format,
                                "shim_public_url": self.monarch_kb.shim_public_url}
+        if self.monarch_recipes:  # absent otherwise, so those plans' hashes do not move
+            r = self.monarch_recipes
+            d["monarch_recipes"] = {  # generated_at and a missing row's detail are not inputs
+                "product": r.product, "tasks": r.tasks,
+                "kb_hash_file_sha": r.kb_hash_file_sha,
+                "recipes": {k: asdict(v) for k, v in r.recipes.items()},
+                "missing": sorted(r.missing)}
         if self.price_tables:
             d["price_tables"] = {k: asdict(v) for k, v in self.price_tables.items()}
         return json.loads(json.dumps(d, default=str))  # dates -> ISO strings
@@ -658,7 +737,7 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         if model:
             models[model.name] = model
 
-    monarch_kb, price_tables = None, {}
+    monarch_kb, monarch_recipes, price_tables = None, None, {}
     for h in harnesses.values():
         if h.kind != "monarch":
             continue
@@ -689,6 +768,15 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
                                   f"task {t['task']} touches service {service}, which {product_path} "
                                   f"does not list in services")
 
+    excluded_tasks = {}
+    if monarch_kb is not None and plan.mode == "run-only":
+        rpath = config_dir / "products" / f"{product.name}.monarch-recipes.yaml"
+        if not rpath.exists():
+            raise ConfigError(rpath, "recipes",
+                              "file is missing; run `wb monarch recipes` first")
+        monarch_recipes = load_monarch_recipes(rpath, product.name,
+                                               [t["task"] for t in tasks], plan.tasks)
+
     per_competitor = len(tasks) * plan.repetitions
     if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
         c.fail("approved_by", f"{per_competitor} attempts per competitor exceed smoke scale "
@@ -697,7 +785,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
-                     monarch_kb=monarch_kb, price_tables=price_tables,
+                     monarch_kb=monarch_kb, monarch_recipes=monarch_recipes,
+                     excluded_tasks=excluded_tasks, price_tables=price_tables,
                      config_dir=str(config_dir))
 
 

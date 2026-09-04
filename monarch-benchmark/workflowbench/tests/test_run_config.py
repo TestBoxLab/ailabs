@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.monarch_helpers import (  # noqa: F401  (repo is a fixture)
-    KB, MONARCH_ENV, git, monarch_site, repo, resolve_monarch)
+    KB, MONARCH_ENV, RECIPES, git, monarch_site, repo, resolve_monarch, run_only_site)
 from tests.test_config import (  # noqa: F401  (site is a fixture)
     ENV, PLAN, PRICE_TABLE, edit, runnable_monarch, site, write)
 from wb_orchestrator import config
@@ -366,3 +366,100 @@ def test_monarch_needs_its_addresses_and_langfuse_keys(site):
             resolve_monarch(site, env=env)
         assert exc.value.path == str(site / "config/harnesses/monarch.yaml")
         assert exc.value.field == field and name in str(exc.value)
+
+
+# -- 004 T008: the recipes file in resolve() and in the hash --------------------
+
+CREATE_RUN_HASH = "df58417a1d17288a"
+
+
+def test_resolve_loads_the_recipes_file_in_run_only(site):
+    rc = resolve_monarch(run_only_site(site))
+    assert rc.plan.mode == "run-only"
+    assert set(rc.monarch_recipes.recipes) == {"simple.email_sf_contact_city_update",
+                                               "simple.sf_opp_closed_won"}
+    assert rc.monarch_recipes.recipes["simple.sf_opp_closed_won"].recipe_version == 2
+    assert rc.monarch_recipes.monarch == "monarch@1a2b3c4"
+
+
+def test_resolve_create_run_does_not_load_the_recipes_file(site):
+    """Create + run never reads it, even when one is sitting beside the product."""
+    run_only_site(site)
+    plan = (site / "config/plans/smoke-frontier.yaml").read_text()
+    write(site / "config/plans", plan.replace("mode: run-only", "mode: create-run"))
+    rc = resolve_monarch(site)
+    assert rc.monarch_recipes is None and "monarch_recipes" not in rc.config_json
+
+
+def test_resolve_missing_recipes_file_points_at_wb_monarch_recipes(site):
+    run_only_site(site, recipes=None)
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(site)
+    assert exc.value.path == str(site / "config/products/simulated-apps.monarch-recipes.yaml")
+    assert "wb monarch recipes" in str(exc.value)
+
+
+def _hash_with(site, recipes):
+    return resolve_monarch(run_only_site(site, recipes=recipes)).hash
+
+
+@pytest.mark.parametrize("old,new", [
+    ("workflow_id: wf-1", "workflow_id: wf-9"),
+    ("recipe_version: 3", "recipe_version: 4"),
+    ("kb_hash_file_sha: 9f2c", "kb_hash_file_sha: 8e1b"),
+])
+def test_hash_changes_with_a_recipe_input(site, old, new):
+    base = _hash_with(site, RECIPES)
+    assert _hash_with(site, RECIPES.replace(old, new)) != base
+
+
+def test_hash_changes_when_a_missing_key_appears(site):
+    base = _hash_with(site, RECIPES)
+    moved = RECIPES.replace("""  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+missing: {{}}
+""", """missing:
+  simple.sf_opp_closed_won:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'invariant failed'
+""")
+    assert _hash_with(site, moved) != base
+
+
+@pytest.mark.parametrize("old,new", [
+    ("generated_at: '2026-09-04T12:00:00Z'", "generated_at: '2027-01-01T00:00:00Z'"),
+    ("detail: 'invariant failed'", "detail: 'something else entirely'"),
+])
+def test_hash_ignores_generated_at_and_a_missing_detail(site, old, new):
+    """A resume must not refuse because the file was rewritten or the reason text changed."""
+    with_missing = RECIPES.replace("""  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+missing: {{}}
+""", """missing:
+  simple.sf_opp_closed_won:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'invariant failed'
+""")
+    base = _hash_with(site, with_missing)
+    assert _hash_with(site, with_missing.replace(old, new)) == base
+
+
+def test_shipped_create_run_pilot_hash_is_unchanged(monkeypatch):
+    """Adding the recipes file must not move a create + run plan's hash."""
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FIREWORKS_API_KEY", "MONARCH_TOKEN",
+              "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        monkeypatch.setenv(k, "dummy")
+    for k, v in (("MONARCH_URL", "http://x"), ("MONARCH_FD_URL", "http://x"),
+                 ("LANGFUSE_URL", "http://x")):
+        monkeypatch.setenv(k, v)
+    rc = config.resolve(ROOT / "config/products/simulated-apps.yaml",
+                        ROOT / "config/plans/pilot-monarch-create-run.yaml")
+    assert rc.hash == CREATE_RUN_HASH

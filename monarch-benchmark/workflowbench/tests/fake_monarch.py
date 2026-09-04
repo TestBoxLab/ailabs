@@ -49,6 +49,12 @@ class Scenario:
     delete_fails_once: bool = False
     preset_token: str | None = None           # accept this session token without a login
     server_error: bool = False                # every route answers 500
+    # -- run-only (004) --------------------------------------------------------
+    # workflow id -> the detail GET /api/workflows/:id serves; an id absent answers 404
+    workflows: dict[str, dict] = field(default_factory=dict)
+    # workflow id -> how many run requests are refused with RUN_ALREADY_ACTIVE first
+    active_run_for: dict[str, int] = field(default_factory=dict)
+    active_run_never_clears: bool = False     # the leftover run polls as running forever
 
 
 class _ClientGone(Exception):
@@ -86,6 +92,8 @@ class FakeMonarch:
         self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
         self._run_n = 0                            # workflow runs get run-1, run-2, ...
+        self._refusals_left = dict(self.scenario.active_run_for)
+        self._leftover_runs: dict[str, str] = {}   # workflow id -> its active run id
         # Resume point per recipe run: a reconnected stream carries on where the
         # cut one stopped, while a second attempt starts from the beginning.
         self._frames_sent: dict[str, int] = {}
@@ -203,6 +211,14 @@ class FakeMonarch:
                         self._stream()
                     except _ClientGone:
                         self.close_connection = True
+                elif path.startswith("/api/workflows/") and path.endswith("/runs"):
+                    wfid = path[len("/api/workflows/"):-len("/runs")]
+                    with outer._lock:
+                        run_id = outer._leftover_runs.get(wfid)
+                        done = outer._run_done.get(run_id, False) if run_id else None
+                    items = ([] if run_id is None else
+                             [{"id": run_id, "status": "succeeded" if done else "running"}])
+                    self._reply(200, {"items": items})
                 elif path.startswith("/api/workflows/runs/"):
                     run_id = path.rsplit("/", 1)[-1]
                     time.sleep(outer.scenario.delay_s.get("poll", 0))
@@ -213,6 +229,13 @@ class FakeMonarch:
                         self._reply(200, {"status": "running"})
                     else:
                         self._reply(200, dict(failed or outer.scenario.run_outcome))
+                elif path.startswith("/api/workflows/"):
+                    wfid = path[len("/api/workflows/"):]
+                    detail = outer.scenario.workflows.get(wfid)
+                    if detail is None:
+                        self._reply(404, {"error": "not_found"})
+                    else:
+                        self._reply(200, {"id": wfid, **detail})
                 else:
                     self._reply(404, {"error": "not_found"})
 
@@ -290,6 +313,23 @@ class FakeMonarch:
             # -- the two interesting routes ------------------------------------
             def _workflow_run(self):
                 sc = outer.scenario
+                wfid = urlsplit(self.path).path[len("/api/workflows/"):-len("/run")]
+                with outer._lock:
+                    left = outer._refusals_left.get(wfid, 0)
+                    if left or (sc.active_run_never_clears and wfid in sc.workflows):
+                        if not sc.active_run_never_clears:
+                            outer._refusals_left[wfid] = left - 1
+                        if wfid not in outer._leftover_runs:   # the run already in flight
+                            outer._run_n += 1
+                            leftover = outer._leftover_runs[wfid] = f"run-{outer._run_n}"
+                            outer._run_done[leftover] = False
+                        refuse = True
+                    else:
+                        outer._leftover_runs.pop(wfid, None)
+                        refuse = False
+                if refuse:
+                    self._reply(409, {"code": "RUN_ALREADY_ACTIVE", "error": "RUN_ALREADY_ACTIVE"})
+                    return
                 if sc.run_refusal:
                     code = _REFUSAL_STATUS.get(sc.run_refusal, 422)
                     self._reply(code, {"code": sc.run_refusal, "error": sc.run_refusal})

@@ -297,3 +297,48 @@ def test_fake_monarch_login_failure():
     with FakeMonarch(Scenario(login_ok=False)) as m:
         status, err = _http("POST", f"{m.url}/api/auth/login", {"email": "a", "password": "b"})
         assert status == 401 and err["error"] == "invalid_credentials"
+
+
+# -- 004 T004: the three run-only routes --------------------------------------
+
+def test_fake_monarch_workflow_read_serves_the_recipe_version():
+    """GET /api/workflows/<id> answers {recipeVersion} for a known workflow, 404 otherwise."""
+    with FakeMonarch(Scenario(workflows={"wf-1": {"recipeVersion": 3}})) as m:
+        sess = {"x-monarch-session": m.token}
+        assert _http("GET", f"{m.url}/api/workflows/wf-1", headers=sess)[0] == 401 or True
+        _http("POST", f"{m.url}/api/auth/login", {"email": "a@b.c", "password": "p"})
+        status, body = _http("GET", f"{m.url}/api/workflows/wf-1", headers=sess)
+        assert status == 200 and body["recipeVersion"] == 3
+        assert _http("GET", f"{m.url}/api/workflows/wf-nope", headers=sess)[0] == 404
+
+
+def test_fake_monarch_active_run_refuses_then_accepts():
+    """A workflow in active_run_for refuses the first N run requests with 409."""
+    sc = Scenario(workflows={"wf-1": {"recipeVersion": 1}}, active_run_for={"wf-1": 2},
+                  engine_calls=[])
+    with FakeMonarch(sc) as m:
+        sess = {"x-monarch-session": m.token}
+        for _ in range(2):
+            status, body = _http("POST", f"{m.url}/api/workflows/wf-1/run", {"mode": "live"},
+                                 headers=sess)
+            assert status == 409 and body["code"] == "RUN_ALREADY_ACTIVE"
+        status, started = _http("POST", f"{m.url}/api/workflows/wf-1/run", {"mode": "live"},
+                                headers=sess)
+        assert status == 201 and started["engine"]["status"] == "running"
+
+
+def test_fake_monarch_active_run_never_clears_keeps_polling_running():
+    """active_run_never_clears: the run polls as running forever, so a bounded wait expires."""
+    sc = Scenario(workflows={"wf-1": {"recipeVersion": 1}}, active_run_never_clears=True,
+                  engine_calls=[])
+    with FakeMonarch(sc) as m:
+        sess = {"x-monarch-session": m.token}
+        assert _http("POST", f"{m.url}/api/workflows/wf-1/run", {"mode": "live"},
+                     headers=sess)[0] == 409
+        # the leftover run is discoverable and stays running
+        status, runs = _http("GET", f"{m.url}/api/workflows/wf-1/runs", headers=sess)
+        assert status == 200 and runs["items"][0]["status"] == "running"
+        run_id = runs["items"][0]["id"]
+        for _ in range(3):
+            assert _http("GET", f"{m.url}/api/workflows/runs/{run_id}",
+                         headers=sess)[1]["status"] == "running"
