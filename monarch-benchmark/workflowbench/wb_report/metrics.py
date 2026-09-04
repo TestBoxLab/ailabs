@@ -24,6 +24,11 @@ from typing import Any
 
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
 
+# A phase named `model:<name>` records what one language model cost inside an
+# attempt that used several. The writer (wb_arms/monarch.py) and this reader
+# share the prefix from here so they cannot drift apart.
+SYNTHETIC_PHASE_PREFIX = "model:"
+
 
 def _div(numerator: float, denominator: float) -> float | None:
     return numerator / denominator if denominator else None
@@ -67,8 +72,9 @@ def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
     for row in rows:
         for name, phase in (row.get("phases") or {}).items():
             cost = phase.get("cost_usd") or 0.0
-            if name.startswith("model:"):
-                per_model[name.split(":", 1)[1]] = per_model.get(name.split(":", 1)[1], 0.0) + cost
+            if name.startswith(SYNTHETIC_PHASE_PREFIX):
+                model = name[len(SYNTHETIC_PHASE_PREFIX):]
+                per_model[model] = per_model.get(model, 0.0) + cost
                 continue
             if name == "run":
                 continue

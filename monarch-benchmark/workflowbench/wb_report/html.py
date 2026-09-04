@@ -145,16 +145,44 @@ def _source_line_for(report: dict, which: str) -> str:
     return line
 
 
+def _phase_names(metrics: list[dict]) -> list[str]:
+    """The phases any competitor on this page carries, `authoring` and
+    `execution` first because that is the order they happen in.
+
+    # ponytail: read off the rows, so a phase feature 002 or 004 adds appears
+    # with no change here. Ceiling: a typo in a phase name becomes a column.
+    """
+    names = {name for m in metrics for name in m["phases"]}
+    known = [n for n in ("authoring", "execution") if n in names]
+    return known + sorted(names - set(known))
+
+
 def _metrics_table(report: dict) -> str:
-    """Contracts section 1."""
+    """Contracts section 1, plus the Monarch-only columns of its second table.
+
+    Those columns exist only when a competitor on this page actually has phases
+    or a Monarch counter; a page without them never shows the headers, because
+    an empty column is worse than no column (FR-016).
+    """
     metrics = report["metrics"]
     dollars = report["audience"] == "internal"
+    phases = _phase_names(metrics)
+    show_models = any(m["cost_per_model"] for m in metrics)
+    show_questions = any(m["phases"] or m["questions_asked"] for m in metrics)
     headers = ["competitor", "attempts", "passed", "strict pass", "pass over reps",
                "infra", "infra rate", "agent errors", "timeouts"]
     headers += (["cost total", "cost / attempt", "cost / passed"] if dollars
                 else ["cost vs baseline"])
     headers += ["prompt tok", "cached tok", "cache write", "output tok", "cache hit",
                 "wall-clock mean", "wall-clock median", "turns", "tool calls"]
+    for name in phases:
+        headers.append(f"{name} wall-clock")
+        if dollars:
+            headers.append(f"{name} cost")
+    if show_models and dollars:
+        headers.append("cost / model")
+    if show_questions:
+        headers += ["questions asked", "declined to build"]
     base_cost = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
                      None)
     rows = []
@@ -176,6 +204,19 @@ def _metrics_table(report: dict) -> str:
                 _fmt(m["wall_clock"]["mean"], "seconds"),
                 _fmt(m["wall_clock"]["median"], "seconds"),
                 _fmt(m["turns"]), _fmt(m["tool_calls"])]
+        for name in phases:
+            # A competitor without this phase shows n/a, never 0: a zero would
+            # read as "free", not as "did not happen" (FR-016).
+            phase = m["phases"].get(name)
+            row.append(_fmt(phase["wall_clock_s"] if phase else None, "seconds"))
+            if dollars:
+                row.append(_fmt(phase["cost_usd"] if phase else None, "money"))
+        if show_models and dollars:
+            row.append(" - ".join(f"{name} {_fmt(cost, 'money')}"
+                                  for name, cost in sorted(m["cost_per_model"].items()))
+                       or "n/a")
+        if show_questions:
+            row += [_fmt(m["questions_asked"]), _fmt(m["declined_to_build"])]
         rows.append(row)
     return _table(headers, rows, _source_line_for(report, "metrics"), "Competitors")
 

@@ -631,3 +631,98 @@ def test_renderer_cannot_query_the_store():
             imported.update(f"{node.module}.{a.name}" for a in node.names)
     assert not any("sqlite3" in name or "store" in name.lower() for name in imported), imported
     assert not hasattr(html_mod, "Store")
+
+
+# -- Phase 4: Monarch's phase columns -----------------------------------------
+
+def test_phase_columns_render(phase_store):
+    """T033 (FR-014, FR-015): with phases on the page, the metrics table gains
+    authoring and execution wall-clock and cost, cost per model, questions asked
+    and declined to build."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(phase_store, "run-p", audience="internal",
+                                    baseline_arm="alpha"))
+    for header in ("authoring wall-clock", "authoring cost", "execution wall-clock",
+                   "execution cost", "cost / model", "questions asked",
+                   "declined to build"):
+        assert f"<th>{header}</th>" in page, header
+    assert "opus-4.8 US$ 0.3500" in page      # the summed model:opus-4.8 phase
+    assert "US$ 0.3500" in page               # authoring cost, summed over attempts
+    assert "10.0 s" in page                   # authoring wall-clock mean
+
+
+def test_phase_columns_absent_without_phases(four_arm_store):
+    """T034 (FR-016): a round whose competitors carry only a `run` phase never
+    shows those column headers at all - an empty column is worse than none."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    for header in ("authoring wall-clock", "authoring cost", "execution wall-clock",
+                   "execution cost", "cost / model", "questions asked",
+                   "declined to build"):
+        assert header not in page, header
+
+
+def test_absent_authoring_is_na(tmp_path):
+    """T035 (FR-016, US2 scenario 3): a competitor with an `execution` phase and
+    no `authoring` one - the run-only shape of feature 004 - renders n/a in the
+    authoring cells, never 0. A zero would read as free authoring rather than as
+    authoring that never happened.
+
+    The authoring column exists here because another competitor on the page has
+    the phase; on a page where nobody does, the column itself is absent (T034).
+    """
+    from runner.schema import PhaseMetrics
+
+    from wb_report.report import build_report, render_html
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-ro", "cfgro", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch-run-only", "monarch"],
+                      "k": 1, "n_tasks": 2, "mode": "run-only"})
+    for task in ("t1", "t2"):
+        # run-only: the engine executed a frozen recipe, so nothing was authored
+        store.record_episode(_row(task, "monarch-run-only", 0, True, run="run-ro",
+                                  cost=0.05, phases={"execution": PhaseMetrics(
+                                      turns=1, cost_usd=0.05, wall_clock_s=4.0)}))
+        # the whole-task competitor authored and then executed
+        store.record_episode(_row(task, "monarch", 0, True, run="run-ro", cost=0.30,
+                                  phases={"authoring": PhaseMetrics(
+                                      turns=2, cost_usd=0.25, wall_clock_s=11.0),
+                                          "execution": PhaseMetrics(
+                                      turns=1, cost_usd=0.05, wall_clock_s=4.0)}))
+    store.finish_run("run-ro")
+
+    rep = build_report(store, "run-ro", audience="internal", baseline_arm="monarch")
+    run_only = {m["arm"]: m for m in rep["metrics"]}["monarch-run-only"]
+    assert "authoring" not in run_only["phases"]
+    assert "execution" in run_only["phases"]
+
+    page = render_html(rep)
+    assert "<th>execution wall-clock</th>" in page
+    assert "<th>authoring wall-clock</th>" in page   # another competitor has it
+    row = page[page.index('<td class="lbl">monarch-run-only</td>'):]
+    row = row[:row.index("</tr>")]
+    assert "n/a" in row          # the authoring cells
+    assert "4.0 s" in row        # but execution is real
+
+
+def test_missing_cost_share_on_the_source_line(tmp_path):
+    """T037: a Monarch competitor with attempts flagged `cost_missing` says so
+    under the metrics table, from the existing _source_suffix (PLAN.md rule 8).
+    """
+    from wb_report.report import build_report, render_html
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-mc", "cfgmc", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch"], "k": 1, "n_tasks": 3})
+    for task, flags in (("t1", ["cost_missing"]), ("t2", []), ("t3", [])):
+        store.record_episode(_row(task, "monarch", 0, True, run="run-mc", flags=flags))
+    store.finish_run("run-mc")
+
+    rep = build_report(store, "run-mc", audience="internal")
+    page = render_html(rep)
+    assert "cost missing on 1/3 attempts" in page
+    assert rep["provenance"]["missing_cost"] == {"missing": 1, "total": 3}
