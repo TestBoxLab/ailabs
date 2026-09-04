@@ -486,8 +486,12 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
             "steps": [{
                 "method": method.upper(),
                 "url_template": _url_template(base, service, path, op),
-                "headers_template": {"content-type": "application/json"},
-                "body_template": body,
+                # A GET carries no body and no content-type: an empty body
+                # template made the engine send "{}" on GET, which its HTTP
+                # client refuses ("GET/HEAD method cannot have body", 4 Sep).
+                **({} if method == "get" else
+                   {"headers_template": {"content-type": "application/json"},
+                    "body_template": body}),
                 "response_template": {"status": 200, "extract": extract,
                                       "schema": schema},
             }],

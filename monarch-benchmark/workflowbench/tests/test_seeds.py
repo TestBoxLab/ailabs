@@ -414,3 +414,15 @@ def test_a_resource_with_no_known_fields_is_not_a_gap(generated, tmp_path):
                                  "schema": {"type": "object"}}
     (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
     assert not any("extract_too_thin" in g.gap for g in seeds.validate(tmp_path / "opaque"))
+
+
+def test_get_steps_carry_no_body_and_no_content_type(generated):
+    """4 Sep: an empty body template on GET made Monarch's engine send a body."""
+    out, _ = generated
+    for path, doc in _actions(out):
+        step = doc["implementations"][0]["http_template"]["steps"][0]
+        if step["method"] == "GET":
+            assert "body_template" not in step, path
+            assert "headers_template" not in step, path
+        else:
+            assert "body_template" in step, path
