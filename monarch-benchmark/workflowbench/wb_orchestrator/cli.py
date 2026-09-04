@@ -196,6 +196,40 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_summary(args) -> int:
+    """Two to six rounds on one page (contracts/cli.md)."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from wb_report.report import GateError, resolve_plans, write_summary
+    store = _store(args)
+    if bool(args.runs) == bool(args.plans):
+        print("give exactly one of --runs and --plans", file=sys.stderr)
+        return 1
+    try:
+        if args.plans:
+            picked = resolve_plans(store, [p.strip() for p in args.plans.split(",")])
+            width = max(len(p) for p, _, _ in picked)
+            for plan, run_id, started in picked:
+                # say which round each plan resolved to: a plan that silently
+                # picked yesterday's round is how a wrong number reaches a slide
+                print(f"{plan.ljust(width)} -> {run_id} (started {started})")
+            run_ids = [run_id for _, run_id, _ in picked]
+        else:
+            run_ids = [r.strip() for r in args.runs.split(",")]
+        out = args.summary_out
+        if not out:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            out = Path(args.out) / f"summary-{stamp}-{args.audience}.html"
+        path = write_summary(store, run_ids, out, audience=args.audience,
+                             baseline=args.baseline, sortable=not args.no_sort)
+    except (GateError, KeyError, ValueError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"wrote {path}")
+    return 0
+
+
 def cmd_corpus(args) -> int:
     from wb_orchestrator import corpus as corpus_mod
     if args.corpus_cmd == "import-ab":
@@ -343,6 +377,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-sort", action="store_true",
                    help="omit the column-sorting script; ship the page as pure markup")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("summary", help="two to six rounds on one page")
+    p.add_argument("--runs", default=None, help="comma list of run ids, in page order")
+    p.add_argument("--plans", default=None,
+                   help="comma list of plans; uses the most recent run of each")
+    p.add_argument("--audience", default="internal", help="internal | public-rung2")
+    p.add_argument("--baseline", default=None, help="baseline where a round names none")
+    p.add_argument("--out", dest="summary_out", default=None,
+                   help="output file; default out/summary-<timestamp>-<audience>.html")
+    p.add_argument("--no-sort", action="store_true",
+                   help="omit the column-sorting script")
+    p.set_defaults(fn=cmd_summary)
 
     p = sub.add_parser("corpus")
     csub = p.add_subparsers(dest="corpus_cmd", required=True)

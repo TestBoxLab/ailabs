@@ -20,6 +20,7 @@ from typing import Any
 from wb_report.metrics import comparison, competitor_metrics
 from wb_results.store import Store
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
+from wb_stats.stats import sem as stats_sem
 
 _AUDIENCES_FILE = Path(__file__).parent / "audiences.yaml"
 
@@ -377,3 +378,123 @@ def write_report(store: Store, run_id: str, out_dir: str | Path,
     md.write_text(render_md(rep), encoding="utf-8")
     htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
     return {"md": str(md), "html": str(htm)}
+
+# The one sentence the summary page always carries (contracts section 9). A
+# paired figure is only meaningful on one round's identical task set; pooling
+# them across rounds would compare competitors on tasks they never both ran.
+NEVER_POOLED = ("Paired comparisons are computed per round, on that round's "
+                "identical task set, and are never pooled across rounds.")
+
+
+def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
+                  baseline: str | None = None,
+                  audiences_path: str | Path = _AUDIENCES_FILE) -> dict[str, Any]:
+    """Two to six rounds on one page (data-model.md section 3).
+
+    Each round is built by `build_report`, so the audience gate, the suite check
+    and every metric are exactly what the per-round page shows. The aggregate is
+    a mean of per-round rates, never a recomputation over pooled attempts, and
+    this dictionary has no field for a paired figure spanning rounds.
+    """
+    if not 2 <= len(run_ids) <= 6:
+        raise ValueError(f"a summary covers two to six rounds; got {len(run_ids)}. "
+                         "Use `wb report` for a single round.")
+    rounds = []
+    for run_id in run_ids:
+        rep = build_report(store, run_id, audience=audience, baseline_arm=baseline,
+                           audiences_path=audiences_path)
+        rounds.append({"run_id": run_id, "plan": rep["provenance"]["plan"],
+                       "suite": rep["suite"], "size": rep["size"],
+                       "metrics": rep["metrics"], "source": rep["provenance"],
+                       "source_suffix": rep["source_suffix"],
+                       "baseline": rep["baseline"],
+                       "stop_reason": rep["stop_reason"],
+                       "tier": rep["provenance"].get("tier")})
+
+    arms = sorted({m["arm"] for r in rounds for m in r["metrics"]})
+    aggregate = []
+    for arm in arms:
+        # Only the rounds this competitor actually ran (FR-019): a round it sat
+        # out is not a zero, it is not a data point.
+        rates = [m["strict_pass"]["mean"] for r in rounds for m in r["metrics"]
+                 if m["arm"] == arm and m["strict_pass"]["mean"] is not None]
+        entry = {"arm": arm, "n_rounds": len(rates),
+                 "mean_strict_pass": round(sum(rates) / len(rates), 6) if rates else None,
+                 "sem": round(stats_sem(rates), 6) if len(rates) > 1 else None}
+        per_tier = {r["tier"]: m["strict_pass"]["mean"]
+                    for r in rounds if r["tier"] for m in r["metrics"]
+                    if m["arm"] == arm and m["strict_pass"]["mean"] is not None}
+        if per_tier:
+            entry["per_tier"] = per_tier
+        aggregate.append(entry)
+
+    summary = {"rounds": rounds, "arms": arms, "aggregate": aggregate,
+               "audience": audience, "statement": NEVER_POOLED}
+    stratification = _stratification(rounds, arms)
+    if stratification:
+        summary["stratification"] = stratification
+    return summary
+
+
+def _stratification(rounds: list[dict], arms: list[str]) -> list[dict] | None:
+    """The random draw beside the mean of the tier rounds (FR-020).
+
+    A round counts as the random draw when its plan name contains `random`.
+    Absent one, the block is omitted rather than guessed: comparing a stratified
+    mean against nothing would invite reading it as a random-draw rate.
+    """
+    random_rounds = [r for r in rounds if "random" in str(r["plan"]).lower()]
+    tier_rounds = [r for r in rounds if r not in random_rounds]
+    if not random_rounds or not tier_rounds:
+        return None
+    draw = random_rounds[0]
+    out = []
+    for arm in arms:
+        rate = next((m["strict_pass"]["mean"] for m in draw["metrics"]
+                     if m["arm"] == arm), None)
+        tier_rates = [m["strict_pass"]["mean"] for r in tier_rounds for m in r["metrics"]
+                      if m["arm"] == arm and m["strict_pass"]["mean"] is not None]
+        tier_mean = sum(tier_rates) / len(tier_rates) if tier_rates else None
+        out.append({"arm": arm, "random": rate, "tier_mean": tier_mean,
+                    "diff_pp": (rate - tier_mean) * 100
+                    if rate is not None and tier_mean is not None else None})
+    return out
+
+
+def resolve_plans(store: Store, plans: list[str]) -> list[tuple[str, str, str]]:
+    """The most recent run of each named plan, as (plan, run_id, started).
+
+    `wb summary --plans` prints what it picked: a plan that silently resolved to
+    yesterday's round is how the wrong number reaches a slide.
+    """
+    picked = []
+    for plan in plans:
+        matches = []
+        for run in store.runs():
+            config = json.loads(run["config_json"])
+            name = _name_of(config.get("plan"))
+            if name == plan:
+                matches.append(run)
+        if not matches:
+            raise KeyError(f"no run found for plan {plan!r}")
+        latest = max(matches, key=lambda r: r["started"])
+        picked.append((plan, latest["run_id"], latest["started"]))
+    return picked
+
+
+def render_summary_html(summary: dict[str, Any], sortable: bool = True) -> str:
+    """The summary page. Like render_html, it delegates to the renderer that
+    cannot reach the store."""
+    from wb_report.html import render_summary_page
+    return render_summary_page(summary, sortable=sortable)
+
+
+def write_summary(store: Store, run_ids: list[str], out: str | Path,
+                  audience: str = "internal", baseline: str | None = None,
+                  sortable: bool = True) -> str:
+    from wb_report.html import render_summary_page
+    summary = build_summary(store, run_ids, audience=audience, baseline=baseline)
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_summary_page(summary, sortable=sortable), encoding="utf-8")
+    return str(path)

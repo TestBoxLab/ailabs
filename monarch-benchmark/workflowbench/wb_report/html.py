@@ -176,13 +176,18 @@ def _phase_names(metrics: list[dict]) -> list[str]:
     return known + sorted(names - set(known))
 
 
-def _metrics_table(report: dict) -> str:
+def _metrics_table(report: dict, source_line: str | None = None) -> str:
     """Contracts section 1, plus the Monarch-only columns of its second table.
 
     Those columns exist only when a competitor on this page actually has phases
     or a Monarch counter; a page without them never shows the headers, because
     an empty column is worse than no column (FR-016).
+
+    The summary page renders the same table per round, passing its own source
+    line, so a number cannot differ between the two pages.
     """
+    if source_line is None:
+        source_line = _source_line_for(report, "metrics")
     metrics = report["metrics"]
     dollars = report["audience"] == "internal"
     phases = _phase_names(metrics)
@@ -241,7 +246,7 @@ def _metrics_table(report: dict) -> str:
         if show_questions:
             row += [_fmt(m["questions_asked"]), _fmt(m["declined_to_build"])]
         rows.append(row)
-    return _table(headers, rows, _source_line_for(report, "metrics"), "Competitors")
+    return _table(headers, rows, source_line, "Competitors")
 
 
 def _comparison_table(report: dict) -> str:
@@ -377,4 +382,91 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
         f'<div class="wrap">{_matrix_tables(report)}</div>'
         f'<div class="wrap">{_failures_table(report)}</div>'
         f"{_provenance_block(report)}"
+        f"{script}</body></html>")
+
+
+def _round_source_line(rnd: dict) -> str:
+    """One round's source line on the summary page, with its stop reason where
+    it has one: a round cut short by the cost ceiling is a real partial result,
+    and labelling it beats hiding it (research R9)."""
+    p = rnd["source"]
+    line = (f"src: {p['suite']} - v{p['suite_version']} - n={rnd['size']['total']} - "
+            f"{rnd['run_id']}{rnd['source_suffix']}")
+    if rnd.get("stop_reason"):
+        line += f" - stopped: {rnd['stop_reason']}"
+    return line
+
+
+def _aggregate_table(summary: dict) -> str:
+    """One row per competitor: the mean of the rounds it ran, how many those
+    were, and a column per tier where the rounds carry one.
+
+    The mean is a mean of per-round rates. It is never a recomputation over
+    pooled attempts, because rounds with different task sets have different
+    difficulty and pooling them would weight the biggest round highest.
+    """
+    tiers = sorted({t for e in summary["aggregate"] for t in e.get("per_tier", {})})
+    headers = ["competitor", "mean strict pass", "rounds"] + \
+              [f"tier {t}" for t in tiers]
+    rows = []
+    for e in summary["aggregate"]:
+        row = [e["arm"], _fmt({"mean": e["mean_strict_pass"], "sem": e["sem"]}, "rate"),
+               _fmt(e["n_rounds"])]
+        row += [_fmt(e.get("per_tier", {}).get(t), "rate") for t in tiers]
+        rows.append(row)
+    return _table(headers, rows, "", "Mean over the rounds each competitor ran")
+
+
+def _stratification_table(summary: dict) -> str:
+    """The random draw beside the mean of the tier rounds (FR-020). Present only
+    when a random-draw round is on the page."""
+    if not summary.get("stratification"):
+        return ""
+    rows = [[e["arm"], _fmt(e["random"], "rate"), _fmt(e["tier_mean"], "rate"),
+             f"{e['diff_pp']:+.1f}" if e["diff_pp"] is not None else "n/a"]
+            for e in summary["stratification"]]
+    return _table(["competitor", "random draw", "mean of the tier rounds",
+                   "difference (pp)"], rows,
+                  "", "Stratification check: does the tier mix match a random draw?")
+
+
+def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
+    """Two to six rounds on one page (contracts section 9).
+
+    It reuses the per-round metrics table, so a number here and a number on the
+    round's own page cannot disagree. No paired figure, no McNemar and no ratio
+    spanning rounds is rendered - the dictionary has no field for one.
+    """
+    theme = _THEMES["internal" if summary["audience"] == "internal" else "public"]
+    head = []
+    for rnd in summary["rounds"]:
+        head.append(f"<b>{_esc(rnd['run_id'])}</b> - plan {_esc(rnd['plan'])} - "
+                    f"{_esc(rnd['suite'])}<br>{_size_line(rnd['size'])}")
+    warn = ""
+    if summary["audience"] == "internal" and any(
+            a.startswith("monarch-lab") for a in summary["arms"]):
+        warn = '<p class="warn">INTERNAL - CONTAINS LAB ARMS - DO NOT EXPORT</p>'
+
+    body = []
+    for rnd in summary["rounds"]:
+        # each round's own metrics table, with its own source line
+        one = {"metrics": rnd["metrics"], "audience": summary["audience"],
+               "baseline": rnd["baseline"]}
+        table = _metrics_table(one, source_line="")
+        body.append(f'<h2>{_esc(rnd["run_id"])} - {_esc(rnd["plan"])}</h2>'
+                    f'<div class="wrap">{table}'
+                    f'<p class="src">{_esc(_round_source_line(rnd))}</p></div>')
+
+    script = f"<script>{_SORT_JS}</script>" if sortable else ""
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>WorkflowBench summary</title>"
+        f"<style>:root{{{theme}}}{_BASE_CSS}</style></head><body>"
+        f"<h1>WorkflowBench: {len(summary['rounds'])} rounds</h1>"
+        f'<p class="size">{"<br>".join(head)}</p>'
+        f"{warn}"
+        + "".join(body) +
+        f'<h2>Aggregate</h2><div class="wrap">{_aggregate_table(summary)}</div>'
+        f'<div class="wrap">{_stratification_table(summary)}</div>'
+        f'<p class="note">{_esc(summary["statement"])}</p>'
         f"{script}</body></html>")
