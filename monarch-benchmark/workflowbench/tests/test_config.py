@@ -620,11 +620,11 @@ def test_config_json_has_no_secrets(site):
 
 # ---------------------------------------------------------------- T034/T039: registry from files
 
-def test_load_models_matches_the_seven_shipped_files():
+def test_load_models_matches_the_eight_shipped_files():
     from wb_arms import providers
     got = providers.load_models(config.DEFAULT_CONFIG_DIR / "models")
-    assert sorted(got) == ["claude-opus-4-8", "gemini-3.7-flash", "glm-5.3", "gpt-5.6-sol",
-                           "gpt-5.6-terra", "kimi-k3", "kimi-k3-fireworks"]
+    assert sorted(got) == ["claude-opus-4-8", "claude-opus-5", "gemini-3.7-flash", "glm-5.3",
+                           "gpt-5.6-sol", "gpt-5.6-terra", "kimi-k3", "kimi-k3-fireworks"]
     want = {
         "glm-5.3": dict(model_id="glm-5.3", key_env="ZAI_API_KEY", adapter="openai",
                         base_url="https://api.z.ai/api/paas/v4", price_in=1.40, price_cached=0.26,
