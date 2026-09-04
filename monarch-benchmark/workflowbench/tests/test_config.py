@@ -700,3 +700,26 @@ def test_fixed_reply_not_in_config(tmp_path):
     shipped = [p for p in (Path(__file__).resolve().parents[1] / "config").rglob("*.yaml")
                if FIXED_REPLY in p.read_text(encoding="utf-8")]
     assert shipped == []
+
+
+def test_fd_api_key_env_is_optional(tmp_path):
+    """The Railway deployment gates /v1/*; a local one does not."""
+    h = config.load_harness(write(tmp_path, HARNESS_MONARCH))
+    assert h.fd_api_key_env is None
+    h = config.load_harness(write(tmp_path, HARNESS_MONARCH
+                                  + "fd_api_key_env: FD_API_SHARED_SECRET\n"))
+    assert h.fd_api_key_env == "FD_API_SHARED_SECRET"
+
+
+def test_shim_public_url_is_optional_and_overrides_host_port(tmp_path):
+    from wb_orchestrator.monarch_setup import public_front_door_url
+    text = HARNESS_MONARCH
+    path = tmp_path / "monarch.yaml"
+    path.write_text(text)
+    h = config.load_harness(path)
+    assert h.shim_public_url is None
+    assert public_front_door_url(h, {}) == "http://host.docker.internal:9105"
+    path.write_text(text + "shim_public_url: ${FRONT_DOOR_URL}\n")
+    h = config.load_harness(path)
+    env = {"FRONT_DOOR_URL": "https://example.ngrok-free.dev/"}
+    assert public_front_door_url(h, env) == "https://example.ngrok-free.dev"

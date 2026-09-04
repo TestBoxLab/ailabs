@@ -33,8 +33,10 @@ def _hash(ids: list[str]) -> str:
 
 
 class FakeFD:
-    def __init__(self, fixtures_dir: Path | None = None):
+    def __init__(self, fixtures_dir: Path | None = None, api_key: str | None = None):
         self.fixtures_dir = Path(fixtures_dir) if fixtures_dir else None
+        # the Railway deployment gates every /v1/* route on x-fd-api-key
+        self.api_key = api_key
         self.requests: list[dict] = []
         self.products: dict[str, dict] = {}
         self.imported: dict[str, str] = {}          # slug -> kb_hash last imported
@@ -91,9 +93,19 @@ class FakeFD:
                 self.end_headers()
                 self.wfile.write(payload)
 
+            def _gated(self, path: str) -> bool:
+                """True (and a 401 already sent) when /v1/* came without the key."""
+                if (outer.api_key and path.startswith("/v1/")
+                        and self.headers.get("x-fd-api-key") != outer.api_key):
+                    self._reply(401, {"error": "unauthorized"})
+                    return True
+                return False
+
             def do_GET(self):
                 self._record(None)
                 path = urlsplit(self.path).path
+                if self._gated(path):
+                    return
                 if path == "/health":
                     self._reply(200, {"status": "ok"})
                 elif path == "/v1/seeds":
@@ -105,6 +117,8 @@ class FakeFD:
                 body = self._json_body()
                 self._record(body)
                 path = urlsplit(self.path).path
+                if self._gated(path):
+                    return
                 if path == "/v1/products":
                     slug = (body or {}).get("slug", "")
                     with outer._lock:
@@ -152,9 +166,9 @@ class FakeFD:
         self.stop()
 
 
-def fd_serving(kb: dict[str, str]) -> FakeFD:
+def fd_serving(kb: dict[str, str], api_key: str | None = None) -> FakeFD:
     """A discovery service whose /v1/seeds answers exactly `kb`, with no fixtures on disk."""
-    fd = FakeFD()
+    fd = FakeFD(api_key=api_key)
     fd._seeds = lambda: [{"slug": slug, "kb_hash": h, "action_count": 1, "in_sync": True}
                          for slug, h in sorted(kb.items())]
     return fd

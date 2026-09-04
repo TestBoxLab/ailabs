@@ -257,6 +257,20 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
 
 # -- T033/T034: the FR-010 termination table ----------------------------------
 
+@pytest.mark.parametrize("message, is_infra", [
+    ("Bedrock AccessDeniedException", True),
+    # this deployment authors through the Anthropic API, not Bedrock (4 Sep 2026)
+    ("Anthropic API error: invalid x-api-key", True),
+    ("rate limit exceeded, retry after 30s", True),
+    ("Error code 529: overloaded_error", True),
+    ("planner gave up", False),
+    ("the workflow has no matching action", False),
+])
+def test_provider_messages_are_infrastructure_the_planner_s_are_not(message, is_infra):
+    from wb_arms.monarch import _classify_authoring_error
+    assert (_classify_authoring_error(message) is not None) is is_infra
+
+
 DONE = {"status": "done", "workflowId": "wf-1", "recipeVersion": 1}
 RUNNING = {"status": "running", "phase": "plan"}
 
@@ -494,6 +508,25 @@ def test_cost_lands_in_row(site, repo):
     assert breakdown["execution"]["claude-sonnet-5"]["cost_usd"] == pytest.approx(sonnet)
 
 
+def test_cost_read_is_bounded_by_the_attempt_start(site, repo):
+    """Cloud returns every trace, so the read asks only for this attempt's window."""
+    from datetime import datetime, timezone
+
+    def old_and_new(lf, episode_id):
+        lf.add_trace(episode_id, spans=[("s0", "recipe.plan", None)],
+                     timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                     generations=[("g0", "s0", OPUS, USAGE)])
+        both_phases(lf, episode_id)
+
+    with FakeLangfuse() as lf:
+        result = costed_attempt(site, repo, lf, trace=old_and_new)
+        paths = [r["path"] for r in lf.requests]
+
+    assert any("fromTimestamp=" in p for p in paths)
+    # the 2020 trace is outside the window: two generations priced, not three
+    assert result.tokens_output == 400
+
+
 def test_no_traces_is_cost_missing(site, repo):
     with FakeLangfuse() as lf:
         result = costed_attempt(site, repo, lf)
@@ -564,6 +597,23 @@ def test_a_timed_out_row_keeps_its_spend(site, repo, tmp_path, monkeypatch):
     row = store.episodes(run="run-t")["rows"][0]
     assert row["termination"] == "timeout"
     assert row["cost_usd"] > 0
+    free(port)
+
+
+def test_prepare_sends_the_fd_api_key_when_the_harness_names_one(site, repo):
+    """The Railway discovery service gates /v1/seeds (verified 4 Sep 2026)."""
+    port = free_port()
+    kb_hashes = yaml.safe_load(KB)["kb"]
+    with FakeMonarch(Scenario()) as fake, fd_serving(kb_hashes, api_key="s3cret") as fd:
+        env = {**MONARCH_ENV, "FD_API_SHARED_SECRET": "s3cret"}
+        arm = arm_against(site, fake, port, repo, fd=fd, env=env)
+        # unkeyed the gate refuses, and the check must not pass silently
+        with pytest.raises(InfraError):
+            arm.prepare()
+        arm.harness.fd_api_key_env = "FD_API_SHARED_SECRET"
+        arm.prepare()
+        keyed = [r for r in fd.requests if r["path"].startswith("/v1/")][-1]
+    assert keyed["headers"].get("X-Fd-Api-Key") == "s3cret"
     free(port)
 
 

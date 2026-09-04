@@ -41,12 +41,22 @@ x-bench-episode-id: <attempt id>
 Queries the benchmark issues (public Langfuse API):
 
 ```
-GET /api/public/traces?metadata[bench_episode_id]=<attempt id>&limit=100&page=N
+GET /api/public/traces?metadata[bench_episode_id]=<attempt id>&fromTimestamp=<iso>&limit=100&page=N
 GET /api/public/observations?traceId=<trace id>&limit=100&page=N
 ```
 
 The benchmark authenticates with `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`
 (basic auth), the same keys `just dev-otel` sets.
+
+**Verified 4 Sep 2026 against Langfuse Cloud v4.28**: the
+`metadata[bench_episode_id]` parameter is IGNORED -- the endpoint returns every
+trace in the project, whatever the filter says. The trace list items do carry
+`metadata`, with `bench_episode_id` at its top level, so the benchmark filters
+client-side on that field and keeps sending the parameter (harmless, and it
+starts working the day Cloud honours it). `fromTimestamp` IS honoured, and the
+benchmark passes the attempt's own start time (minus a minute of margin) so the
+listing stays small as the project's trace count grows. Nothing here asks
+anything more of Monarch: the requirement is still the metadata on every trace.
 
 ## 2. Phase spans
 
@@ -86,8 +96,8 @@ Every model call Monarch makes while serving a tagged request MUST be a Langfuse
 | `model` | the model identifier as Bedrock reports it (for example `anthropic.claude-opus-4-8-…` or the inference-profile id). The benchmark maps it to a price-table entry by the model family (`claude-opus-4-8`, `claude-opus-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`). An unmapped model stops the run. |
 | `usage.input` | input tokens not served from cache |
 | `usage.output` | output tokens |
-| `usage.cache_read_input_tokens` | tokens read from the prompt cache, when Bedrock reports them; else absent |
-| `usage.cache_creation_input_tokens` | tokens written to the prompt cache, when Bedrock reports them; else absent |
+| `usage.cache_read_input_tokens` | tokens read from the prompt cache, when the provider reports them; else absent |
+| `usage.cache_creation_input_tokens` | tokens written to the prompt cache, when the provider reports them; else absent |
 | parent | inside one of the phase spans of §2 (directly or through intermediate spans) |
 | trace | a trace carrying `metadata.bench_episode_id` |
 
@@ -100,6 +110,29 @@ Rules:
   ignored by the benchmark; it prices tokens with its own versioned table
   (`config/models/monarch-team-bedrock.yaml`).
 - Streaming calls report usage once, at completion.
+
+**Verified 4 Sep 2026 against Langfuse Cloud v4.28**: a generation carries two
+usage shapes, and they do not agree on what `input` means.
+
+```
+usage        {"unit":"TOKENS","input":31583,"output":1014,"total":32597}
+usageDetails {"input":2,"output":1014,"cache_read_input_tokens":29697,
+              "cache_creation_input_tokens":1884,"total":32597}
+```
+
+`usageDetails` is disjoint -- its `input` is the non-cached part, and the four
+add up to `total`. `usage.input` is INCLUSIVE of the cache reads and writes, so
+pricing it as written would bill 31,583 tokens at the full input rate instead of
+2. The benchmark therefore prefers `usageDetails`; when it is absent it falls
+back to `usage` and subtracts the cache counts out of `usage.input`. The four
+disjoint counts named in the table above are what the benchmark prices, whichever
+shape they came from.
+
+On this deployment Monarch authors through the Anthropic API directly rather than
+Bedrock, so `model` is a native id (`claude-opus-4-8`, `claude-sonnet-5`,
+`claude-haiku-4-5-20251001`); the price table's substring `match` covers both
+spellings. Generation names seen: `agent.turn` and `chat <purpose>`. Trace names:
+`recipe_agent.run` (authoring) and `workflow.run` (execution).
 
 ## 4. What the benchmark reads and computes
 

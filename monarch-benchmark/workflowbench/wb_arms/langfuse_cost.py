@@ -109,15 +109,49 @@ def _phase_of(obs: dict, by_id: dict) -> tuple[str, str]:
     return "other", ancestor
 
 
+def _tokens(o: dict) -> tuple[int, int, int, int]:
+    """The four disjoint counts of one generation: (input, output, cache_read, cache_write).
+
+    Verified on Langfuse Cloud v4.28, 4 Sep 2026: a generation carries both
+    `usageDetails` -- disjoint, `input` is the NON-cached part -- and `usage`,
+    whose `input` is INCLUSIVE of the cache reads and writes. usageDetails is
+    preferred; the fallback subtracts the cache out of the inclusive count.
+    """
+    d = o.get("usageDetails") or {}
+    if d:
+        return (int(d.get("input") or 0), int(d.get("output") or 0),
+                int(d.get("cache_read_input_tokens") or 0),
+                int(d.get("cache_creation_input_tokens") or 0))
+    u = o.get("usage") or {}
+    read = int(u.get("cache_read_input_tokens") or 0)
+    write = int(u.get("cache_creation_input_tokens") or 0)
+    return (max(0, int(u.get("input") or 0) - read - write),
+            int(u.get("output") or 0), read, write)
+
+
 # ponytail: page_size is a test seam (force multi-page paging); production always uses
 # the contract's 100.
 def read_generations(base_url: str, public_key: str, secret_key: str, episode_id: str,
-                     price_table, timeout: float = 10.0, page_size: int = 100) -> list[Generation]:
+                     price_table, timeout: float = 10.0, page_size: int = 100,
+                     from_timestamp=None) -> list[Generation]:
+    """The episode's generations. `from_timestamp` (aware datetime) narrows the list.
+
+    Verified on Langfuse Cloud v4.28, 4 Sep 2026: GET /api/public/traces IGNORES
+    the `metadata[bench_episode_id]` filter and returns every trace in the
+    project, so the episode's traces are picked out client-side on
+    trace.metadata.bench_episode_id. The parameter is still sent -- harmless, and
+    it starts working the day Cloud honours it. `fromTimestamp` IS honoured, and
+    is what keeps the listing from growing without bound.
+    """
     auth = "Basic " + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
-    traces = _get(base_url, "/api/public/traces",
-                  {"metadata[bench_episode_id]": episode_id}, auth, timeout, page_size)
+    params = {"metadata[bench_episode_id]": episode_id}
+    if from_timestamp is not None:
+        params["fromTimestamp"] = from_timestamp.isoformat()
+    traces = _get(base_url, "/api/public/traces", params, auth, timeout, page_size)
     out = []
     for trace in traces:
+        if (trace.get("metadata") or {}).get("bench_episode_id") != episode_id:
+            continue
         obs = _get(base_url, "/api/public/observations",
                    {"traceId": trace["id"]}, auth, timeout, page_size)
         by_id = {o["id"]: o for o in obs}
@@ -125,13 +159,11 @@ def read_generations(base_url: str, public_key: str, secret_key: str, episode_id
             if o.get("type") != "GENERATION":
                 continue
             phase, ancestor = _phase_of(o, by_id)
-            u = o.get("usage") or {}
+            i, out_t, read, write = _tokens(o)
             out.append(Generation(
                 trace_id=trace["id"], observation_id=o["id"], model=o.get("model"),
                 family=_family(o.get("model"), price_table), phase=phase, ancestor=ancestor,
-                input=int(u.get("input") or 0), output=int(u.get("output") or 0),
-                cache_read=int(u.get("cache_read_input_tokens") or 0),
-                cache_write=int(u.get("cache_creation_input_tokens") or 0)))
+                input=i, output=out_t, cache_read=read, cache_write=write))
     return out
 
 

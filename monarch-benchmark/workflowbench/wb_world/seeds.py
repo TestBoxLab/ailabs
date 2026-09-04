@@ -19,11 +19,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from wb_world.openapi import build_all
 
 STAMP = "2026-09-03T00:00:00.000Z"   # arbitrary fixed sentinel: the folder's bytes must not move between runs
-DOMAIN = "host.docker.internal"
+# The seeds name the host of the front door Monarch actually reaches: the Docker
+# host name locally, the tunnel host when Monarch runs elsewhere (verified 4 Sep 2026).
 _PATH_VAR = re.compile(r"\{(\w+)\}")
 _VERB_BY_METHOD = {"post": "create", "put": "update", "patch": "update", "delete": "delete"}
 
@@ -102,6 +104,10 @@ def _identifier_keys(paths: dict[str, Any], path: str) -> list[str]:
     return sorted(keys)
 
 
+def _domain(base: str) -> str:
+    return urlsplit(base).hostname or base
+
+
 def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str,
             op: dict[str, Any], action_id: str) -> dict[str, Any]:
     verb, resource = _verb(method, path), _resource(path)
@@ -136,7 +142,7 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
             "id": action_id,
             "label": op.get("summary") or f"{verb.capitalize()} {resource}",
             "product_id": product_id,
-            "product_domain": DOMAIN,
+            "product_domain": _domain(base),
             "area": resource,
             "state": "active",
             "verb": verb,
@@ -170,9 +176,10 @@ def _dump(obj: Any) -> str:
     return json.dumps(obj, indent=2, sort_keys=True) + "\n"
 
 
-def _meta(service: str) -> dict[str, Any]:
+def _meta(service: str, base: str) -> dict[str, Any]:
+    domain = _domain(base)
     return {"display_name": f"{service.replace('_', ' ').title()} (benchmark)",
-            "domain": DOMAIN, "host_pattern": DOMAIN,
+            "domain": domain, "host_pattern": domain,
             "login_url": None, "requires_login": False}
 
 
@@ -194,7 +201,7 @@ def generate(out_dir, shim_public_url: str) -> Summary:
     for folder, actions in sorted(folders.items()):
         d = out / folder
         d.mkdir(parents=True, exist_ok=True)
-        (d / "_meta.json").write_text(_dump(_meta(folder.removeprefix("bench-"))), encoding="utf-8")
+        (d / "_meta.json").write_text(_dump(_meta(folder.removeprefix("bench-"), base)), encoding="utf-8")
         for name, doc in sorted(actions.items()):
             (d / name).write_text(_dump(doc), encoding="utf-8")
             written += 1

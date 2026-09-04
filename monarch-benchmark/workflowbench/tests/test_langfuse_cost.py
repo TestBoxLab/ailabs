@@ -1,7 +1,9 @@
 """Cost from Monarch's Langfuse traces (feature 002, T041)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -43,10 +45,11 @@ def test_only_tagged_traces_with_phase_from_nearest_ancestor(table):
         gens = {g.observation_id: g for g in _read(lf, table)}
         paths = [r["path"] for r in lf.requests]
 
-    # the contract's query shape, url-encoded brackets included
-    assert any("/api/public/traces?" in p and "metadata%5Bbench_episode_id%5D=ep-1" in p
-               for p in paths)
+    # Langfuse Cloud ignores the metadata filter (verified 4 Sep 2026), so the
+    # episode's traces are picked out client-side: the other two are not read.
+    assert any("/api/public/traces?" in p for p in paths)
     assert any("/api/public/observations?" in p and "traceId=trace-1" in p for p in paths)
+    assert not any("traceId=trace-2" in p or "traceId=trace-3" in p for p in paths)
     assert set(gens) == {"g1", "g2", "g3", "g4"}
     assert (gens["g1"].phase, gens["g1"].family) == ("authoring", "claude-opus-4-8")
     assert (gens["g2"].phase, gens["g2"].family) == ("execution", "claude-sonnet-5")
@@ -124,6 +127,39 @@ def test_pagination_across_two_pages(table):
         gens = _read(lf, table, page_size=2)
     assert sorted(g.observation_id for g in gens) == ["g0", "g1", "g2"]
     assert summarize(gens, table).total_usd == 15.0
+
+
+def test_from_timestamp_narrows_the_trace_list(table):
+    """Only traces at or after the attempt's start are read (Cloud has thousands)."""
+    old = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    with FakeLangfuse() as lf:
+        lf.add_trace("ep-1", spans=[("s0", "recipe.plan", None)], timestamp=old,
+                     generations=[("g_old", "s0", "anthropic.claude-opus-4-8-v1",
+                                   {"input": 1_000_000})])
+        lf.add_trace("ep-1", spans=[("s1", "recipe.plan", None)],
+                     timestamp=datetime(2026, 9, 4, 12, tzinfo=timezone.utc),
+                     generations=[("g_new", "s1", "anthropic.claude-opus-4-8-v1",
+                                   {"input": 1_000_000})])
+        gens = _read(lf, table, from_timestamp=cutoff)
+        paths = [r["path"] for r in lf.requests]
+    assert [g.observation_id for g in gens] == ["g_new"]
+    assert any("fromTimestamp=" + quote(cutoff.isoformat(), safe="") in p for p in paths)
+
+
+def test_usage_details_is_preferred_and_usage_is_the_inclusive_fallback(table):
+    """usageDetails.input is disjoint; usage.input includes cache (verified 4 Sep 2026)."""
+    disjoint = {"input": 1_000_000, "output": 1_000_000,
+                "cache_read_input_tokens": 1_000_000,
+                "cache_creation_input_tokens": 1_000_000}
+    for details in (True, False):
+        with FakeLangfuse() as lf:
+            lf.add_trace("ep-1", spans=[("s1", "recipe.plan", None)],
+                         generations=[("g1", "s1", "anthropic.claude-opus-4-8-v1", disjoint)],
+                         usage_details=details)
+            g = _read(lf, table)[0]
+        assert (g.input, g.output, g.cache_read, g.cache_write) == (
+            1_000_000, 1_000_000, 1_000_000, 1_000_000), f"usage_details={details}"
 
 
 def test_bad_credentials_raise_langfuse_unavailable(table):

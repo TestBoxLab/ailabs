@@ -1,16 +1,30 @@
 """Fake Langfuse public API for offline tests (stdlib only).
 
-Serves /api/public/health, /api/public/traces (filtered by
-metadata[bench_episode_id]) and /api/public/observations (filtered by traceId)
-from an in-memory list the test fills with add_trace(). Basic auth required.
+Mirrors Langfuse Cloud v4.28 as verified on 4 Sep 2026:
+
+  * /api/public/traces IGNORES metadata[bench_episode_id] and returns every
+    trace, so the reader must filter client-side on trace.metadata; only
+    fromTimestamp narrows the list.
+  * a generation carries both `usageDetails` (disjoint: input excludes cache)
+    and `usage` (input INCLUSIVE of cache). add_trace computes both from the
+    same disjoint numbers.
+
+Serves /api/public/health, /api/public/traces and /api/public/observations
+(filtered by traceId) from an in-memory list the test fills with add_trace().
+Basic auth required.
 """
 from __future__ import annotations
 
 import base64
 import json
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 class FakeLangfuse:
@@ -28,14 +42,21 @@ class FakeLangfuse:
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     def add_trace(self, episode_id: str | None,
-                  spans: list[tuple] = (), generations: list[tuple] = ()) -> str:
+                  spans: list[tuple] = (), generations: list[tuple] = (),
+                  timestamp: datetime | None = None,
+                  usage_details: bool = True) -> str:
         """spans: (span_id, name, parent_span_id|None).
-        generations: (gen_id, parent_span_id, model, usage_dict|None)."""
+        generations: (gen_id, parent_span_id, model, disjoint_usage_dict|None).
+
+        `usage_details=False` omits usageDetails so only the inclusive `usage`
+        shape is served (the reader's fallback path).
+        """
         with self._lock:
             self._n += 1
             trace_id = f"trace-{self._n}"
         metadata = {"bench_episode_id": episode_id} if episode_id else {}
-        self.traces.append({"id": trace_id, "metadata": metadata})
+        self.traces.append({"id": trace_id, "metadata": metadata,
+                            "timestamp": _iso(timestamp or datetime.now(timezone.utc))})
         for span_id, name, parent in spans:
             self.observations.append({"id": span_id, "traceId": trace_id, "type": "SPAN",
                                       "name": name, "parentObservationId": parent})
@@ -43,9 +64,27 @@ class FakeLangfuse:
             obs = {"id": gen_id, "traceId": trace_id, "type": "GENERATION",
                    "name": gen_id, "parentObservationId": parent, "model": model}
             if usage is not None:
-                obs["usage"] = usage
+                obs.update(self._usage_shapes(usage, usage_details))
             self.observations.append(obs)
         return trace_id
+
+    @staticmethod
+    def _usage_shapes(disjoint: dict, with_details: bool) -> dict:
+        """From the four disjoint counts, build what Langfuse actually serves."""
+        i = int(disjoint.get("input") or 0)
+        o = int(disjoint.get("output") or 0)
+        cr = int(disjoint.get("cache_read_input_tokens") or 0)
+        cw = int(disjoint.get("cache_creation_input_tokens") or 0)
+        out = {"usage": {"unit": "TOKENS", "input": i + cr + cw, "output": o,
+                         "total": i + cr + cw + o,
+                         "cache_read_input_tokens": cr,
+                         "cache_creation_input_tokens": cw}}
+        if with_details:
+            out["usageDetails"] = {"input": i, "output": o,
+                                   "cache_read_input_tokens": cr,
+                                   "cache_creation_input_tokens": cw,
+                                   "total": i + cr + cw + o}
+        return out
 
     @staticmethod
     def _page(items: list[dict], q: dict) -> dict:
@@ -84,9 +123,14 @@ class FakeLangfuse:
                 if sp.path == "/api/public/health":
                     self._reply(200, {"status": "OK"})
                 elif sp.path == "/api/public/traces":
-                    want = q.get("metadata[bench_episode_id]", [None])[0]
+                    # the metadata filter is deliberately ignored, as on Cloud
+                    since = q.get("fromTimestamp", [None])[0]
+                    cutoff = None if since is None else datetime.fromisoformat(
+                        since.replace("Z", "+00:00"))
                     items = [t for t in outer.traces
-                             if want is None or t["metadata"].get("bench_episode_id") == want]
+                             if cutoff is None
+                             or datetime.fromisoformat(
+                                 t["timestamp"].replace("Z", "+00:00")) >= cutoff]
                     self._reply(200, outer._page(items, q))
                 elif sp.path == "/api/public/observations":
                     want = q.get("traceId", [None])[0]

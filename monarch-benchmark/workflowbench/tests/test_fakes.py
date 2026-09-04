@@ -76,11 +76,14 @@ def test_fake_langfuse_routes():
                            generations=[("g1", "s2", "claude-opus", {"input": 10, "output": 2})])
         lf.add_trace(None)                                                # unrelated trace
 
+        # Cloud ignores the metadata filter and returns every trace, so the fake
+        # does too; the episode's own traces are told apart by their metadata.
         status, traces = _http(
             "GET", f"{lf.url}/api/public/traces?metadata%5Bbench_episode_id%5D=ep-1",
             headers=auth)
-        assert status == 200 and [t["id"] for t in traces["data"]] == [tid]
-        assert traces["meta"]["totalItems"] == 1
+        assert status == 200 and traces["meta"]["totalItems"] == 2
+        assert [t["id"] for t in traces["data"]] == [tid, "trace-2"]
+        assert [t["metadata"].get("bench_episode_id") for t in traces["data"]] == ["ep-1", None]
 
         status, obs = _http("GET", f"{lf.url}/api/public/observations?traceId={tid}&page=1&limit=2",
                             headers=auth)
@@ -89,6 +92,7 @@ def test_fake_langfuse_routes():
                          headers=auth)
         gen = page2["data"][0]
         assert gen["type"] == "GENERATION" and gen["usage"]["input"] == 10
+        assert gen["usageDetails"]["input"] == 10      # both shapes, as Cloud serves them
         assert len(lf.requests) == 5
 
 

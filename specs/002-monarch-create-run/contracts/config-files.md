@@ -15,8 +15,10 @@ credential_env: MONARCH_TOKEN            # set -> login skipped
 login_email: dev-root@testbox.com
 login_password_env: MONARCH_PASSWORD     # seeded default: monarch-dev
 fd_url: ${MONARCH_FD_URL}                # http://localhost:3001
+fd_api_key_env: FD_API_SHARED_SECRET     # optional; the Railway deployment has the gate on
 shim_port: 9105                          # front door on the host, fixed
-shim_public_host: host.docker.internal
+shim_public_host: host.docker.internal   # Monarch in Docker on this machine
+shim_public_url: ${FRONT_DOOR_URL}       # optional: the front door's full public URL (a tunnel) when Monarch runs elsewhere
 langfuse_url: ${LANGFUSE_URL}            # http://localhost:3000
 langfuse_public_key_env: LANGFUSE_PUBLIC_KEY
 langfuse_secret_key_env: LANGFUSE_SECRET_KEY
@@ -29,6 +31,14 @@ description: The product under comparison, driven through its own API. Version r
 Rules: `release` is gone and rejected if present. One of `credential_env` or
 `login_password_env` must be set in the environment at run time. The fixed
 reply to questions is not a field.
+
+`fd_api_key_env` and `shim_public_url` are optional. When `fd_api_key_env` names
+a variable that is set, every `/v1/*` call to the discovery service carries
+`x-fd-api-key: <value>`; the Railway deployment has that gate on for every
+`/v1/*` route (`/health` is open), a local deployment has no gate (verified
+4 Sep 2026). `shim_public_url` overrides `shim_public_host:shim_port` when the
+front door is reached through a tunnel, and its host is what the generated
+seeds name as their domain.
 
 ## models/monarch-team-bedrock.yaml (new, kind price-table)
 

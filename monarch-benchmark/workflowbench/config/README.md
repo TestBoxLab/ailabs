@@ -10,6 +10,14 @@ simulated apps), the tracing-service (Langfuse) address and keys, and the
 price-table name. Field-by-field table and a full example:
 `specs/002-monarch-create-run/contracts/config-files.md`.
 
+Two fields are optional and only matter when Monarch runs somewhere other than
+this machine. `fd_api_key_env` names the variable holding the discovery
+service's key: when it is set, every `/v1/*` call sends `x-fd-api-key`, which
+the Railway deployment requires and a local one ignores. `shim_public_url`
+gives the front door's full public address (a tunnel) instead of
+`shim_public_host:shim_port`; its host is also the domain the generated seeds
+name, so a change there means rerunning `wb monarch setup`.
+
 ## models/*.yaml, kind: price-table
 
 A model file can carry `kind: price-table` instead of describing a single

@@ -51,6 +51,18 @@ def test_meta_file_per_folder(generated):
         assert meta["display_name"].endswith("(benchmark)")
 
 
+def test_domain_follows_the_public_front_door_host(tmp_path):
+    """Behind a tunnel the seeds must name the tunnel's host, not the Docker one."""
+    out = tmp_path / "tunnelled"
+    summary = seeds.generate(out, "https://example.ngrok-free.dev/")
+    folder = out / summary.folders[0]
+    meta = json.loads((folder / "_meta.json").read_text(encoding="utf-8"))
+    assert meta["domain"] == meta["host_pattern"] == "example.ngrok-free.dev"
+    doc = next(json.loads(f.read_text(encoding="utf-8"))
+               for f in sorted(folder.glob("*.json")) if f.name != "_meta.json")
+    assert doc["business_action"]["product_domain"] == "example.ngrok-free.dev"
+
+
 def test_every_action_has_the_shape_the_importer_needs(generated):
     out, _ = generated
     for path, doc in _actions(out):

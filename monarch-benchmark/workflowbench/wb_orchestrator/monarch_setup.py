@@ -53,20 +53,43 @@ def expand(value: str | None, env: dict, field: str) -> str:
 
     return _VAR.sub(sub, value).rstrip("/")
 
+def public_front_door_url(harness, env) -> str:
+    """The address Monarch's containers use to reach the front door: the harness's
+    `shim_public_url` (a tunnel such as ngrok; `${VAR}` expanded) when set, else
+    `http://<shim_public_host>:<shim_port>` for Monarch in Docker on this machine."""
+    if harness.shim_public_url:
+        return expand(harness.shim_public_url, env, "shim_public_url").rstrip("/")
+    return f"http://{harness.shim_public_host}:{harness.shim_port}"
 
-def _get(url: str, step: str, timeout: float = TIMEOUT_S):
+
+
+def fd_headers(harness, env: dict) -> dict:
+    """The discovery service's gate header, when the harness names the variable.
+
+    The Railway deployment has `x-fd-api-key` on for every /v1/* route (verified
+    4 Sep 2026); a local one has no gate, so the field and the variable are both
+    optional and an unset variable simply sends nothing.
+    """
+    key = env.get(getattr(harness, "fd_api_key_env", None) or "")
+    return {"x-fd-api-key": key} if key else {}
+
+
+def _get(url: str, step: str, timeout: float = TIMEOUT_S, headers: dict | None = None):
     """GET JSON; any transport or decoding failure stops the command naming `step`."""
+    req = urllib.request.Request(url, headers=headers or {})
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
         raise Stop(4, step, f"discovery service unreachable at {url}: {e}") from e
 
 
-def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S):
+def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S,
+          headers: dict | None = None):
     """POST JSON; any transport or decoding failure stops the command naming `step`."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers={"Content-Type": "application/json",
+                                          **(headers or {})}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
@@ -87,7 +110,8 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         product = config.load_product(product_path)
         harness = config.load_harness(harness_path)
         fd_url = expand(harness.fd_url, env, "fd_url")
-        shim_public_url = f"http://{harness.shim_public_host}:{harness.shim_port}"
+        shim_public_url = public_front_door_url(harness, env)
+        fd_head = fd_headers(harness, env)
 
         # 1. generate
         try:
@@ -101,7 +125,7 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
 
         # 2. mounted
         want = sorted(f"bench-{s}" for s in product.services)
-        listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds", "mounted").get("items", [])}
+        listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds", "mounted", headers=fd_head).get("items", [])}
         missing = [s for s in want if s not in listed]
         if missing:
             say("stop", "mounted", f"{len(missing)} of {len(want)} seed folders are not visible "
@@ -114,13 +138,14 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         for slug in want:
             _post(f"{fd_url}/v1/products",
                   {"slug": slug, "display_name": _display_name(slug.removeprefix("bench-"))},
-                  f"register {slug}")
+                  f"register {slug}", headers=fd_head)
         say("ok", "register", f"{len(want)} products")
 
         # 4. import
         kb: dict[str, str] = {}
         for slug in want:
-            res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}")
+            res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}",
+                        headers=fd_head)
             kb[slug] = str((res.get("after") or {}).get("kb_hash") or "")
             print(f"      {slug}: actions_imported={res.get('actions_imported')} "
                   f"kb_hash={kb[slug][:12]}", file=stdout)

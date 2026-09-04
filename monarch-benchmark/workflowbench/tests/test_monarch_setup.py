@@ -27,9 +27,14 @@ def workspace(tmp_path):
     return product, tmp_path / "seeds"
 
 
+# The shipped harness reaches the front door through a tunnel; these tests are
+# offline, so they pin the address the seeds were always generated for.
+FRONT_DOOR = "http://host.docker.internal:9105"
+
+
 def _run(product, out, fd_url, **kw) -> tuple[int, str]:
     buf = io.StringIO()
-    env = {"MONARCH_FD_URL": fd_url, **kw.pop("env", {})}
+    env = {"MONARCH_FD_URL": fd_url, "FRONT_DOOR_URL": FRONT_DOOR, **kw.pop("env", {})}
     code = monarch_setup.run(product, HARNESS, out, env, buf, **kw)
     return code, buf.getvalue()
 
@@ -121,6 +126,23 @@ def test_generation_gap_stops_before_anything_is_written(workspace, monkeypatch)
     assert not product.with_name("simulated-apps.monarch-kb.yaml").exists()
 
 
+def test_setup_sends_the_fd_api_key_when_the_harness_names_one(workspace, tmp_path):
+    """The Railway discovery service gates every /v1/* route (verified 4 Sep 2026)."""
+    product, out = workspace
+    harness = tmp_path / "monarch.yaml"
+    harness.write_text(HARNESS.read_text(encoding="utf-8")
+                       + "fd_api_key_env: FD_API_SHARED_SECRET\n", encoding="utf-8")
+    with FakeFD(fixtures_dir=out, api_key="s3cret") as fd:
+        buf = io.StringIO()
+        code = monarch_setup.run(product, harness, out,
+                                 {"MONARCH_FD_URL": fd.url, "FRONT_DOOR_URL": FRONT_DOOR,
+                                  "FD_API_SHARED_SECRET": "s3cret"},
+                                 buf)
+        keyed = [r for r in fd.requests if r["path"].startswith("/v1/")]
+    assert code == 0, buf.getvalue()
+    assert keyed and all(r["headers"].get("X-Fd-Api-Key") == "s3cret" for r in keyed)
+
+
 def test_grant_check_reports_the_open_question(workspace):
     product, out = workspace
     with FakeFD(fixtures_dir=out) as fd:
@@ -133,10 +155,10 @@ def test_import_failure_names_the_slug(workspace, monkeypatch):
     with FakeFD(fixtures_dir=out) as fd:
         real = monarch_setup._post
 
-        def flaky(url, payload, step, timeout=None):
+        def flaky(url, payload, step, timeout=None, headers=None):
             if url.endswith("/bench-slack/import"):
                 raise monarch_setup.Stop(4, step, "boom")
-            return real(url, payload, step)
+            return real(url, payload, step, headers=headers)
 
         monkeypatch.setattr(monarch_setup, "_post", flaky)
         code, text = _run(product, out, fd.url)
@@ -148,6 +170,7 @@ def test_cli_wires_the_subcommand(workspace, monkeypatch, capsys):
     product, out = workspace
     with FakeFD(fixtures_dir=out) as fd:
         monkeypatch.setenv("MONARCH_FD_URL", fd.url)
+        monkeypatch.setenv("FRONT_DOOR_URL", FRONT_DOOR)
         code = cli.main(["monarch", "setup", "--product", str(product),
                          "--harness", "monarch", "--out", str(out)])
     assert code == 0
@@ -158,4 +181,5 @@ def test_cli_returns_the_step_exit_code(workspace, monkeypatch):
     product, out = workspace
     with FakeFD() as fd:
         monkeypatch.setenv("MONARCH_FD_URL", fd.url)
+        monkeypatch.setenv("FRONT_DOOR_URL", FRONT_DOOR)
         assert cli.main(["monarch", "setup", "--product", str(product), "--out", str(out)]) == 3

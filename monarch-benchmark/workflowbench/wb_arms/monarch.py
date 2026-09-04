@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from runner.schema import PhaseMetrics
@@ -21,7 +22,7 @@ from wb_arms.http_shim import EpisodeHTTPShim
 from wb_arms.langfuse_cost import (
     LangfuseUnavailable, PriceLookupError, read_generations, summarize)
 from wb_arms.monarch_client import MonarchClient, MonarchRefused
-from wb_orchestrator.monarch_setup import expand
+from wb_orchestrator.monarch_setup import expand, fd_headers, public_front_door_url
 from wb_world.episode import Episode
 
 # ponytail: one Monarch at a time, because the front door owns a fixed port and
@@ -38,7 +39,11 @@ SETUP_REFUSALS = {"RUN_HOST_BLOCKED", "ENGINE_UNAVAILABLE", "RUN_ALREADY_ACTIVE"
 # ponytail: keyword match on the message, because the backend sends prose, not a
 # code, for an authoring failure. Ceiling: a provider message that says none of
 # these reads as the planner's own fault. Upgrade: a real error code from Monarch.
-LLM_ERROR_KEYWORDS = ("bedrock", "aws", "credential", "not configured", "accessdenied")
+# The Anthropic words are there because this deployment authors through the
+# Anthropic API directly, not Bedrock (verified 4 Sep 2026).
+LLM_ERROR_KEYWORDS = ("bedrock", "aws", "credential", "not configured", "accessdenied",
+                      "anthropic", "api key", "api_key", "rate limit", "rate_limit",
+                      "overloaded", "529")
 
 # The same sentence for every question, so no attempt is helped more than another
 # (rule 1: same request text for every competitor). It is code, never config.
@@ -96,6 +101,7 @@ class MonarchArm:
         # episode id -> generations already priced, because the orchestrator
         # retries an episode under its own id and sums every attempt's spend
         self._billed: dict[str, set[str]] = {}
+        self._started_at: datetime | None = None   # set by run(); bounds the cost read
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -104,8 +110,9 @@ class MonarchArm:
         checked once, before the first attempt, and is never worth retrying.
         """
         url = expand(self.harness.fd_url, self.env, "fd_url") + "/v1/seeds"
+        req = urllib.request.Request(url, headers=fd_headers(self.harness, self.env))
         try:
-            with urllib.request.urlopen(url, timeout=10.0) as r:
+            with urllib.request.urlopen(req, timeout=10.0) as r:
                 items = json.loads(r.read() or b"{}").get("items") or []
         except (OSError, json.JSONDecodeError) as e:
             raise InfraError("infra:harness_crash",
@@ -130,13 +137,16 @@ class MonarchArm:
         """
         h = self.harness
         failed = None
+        # The window `_add_cost` asks Langfuse for. A minute of margin covers the
+        # clock skew between this machine and the trace timestamps.
+        self._started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
         with _LOCK:
             self._infra = None          # reset and read in this function only
             attempt_deadline = time.monotonic() + self.timeout_s
             port = h.shim_port
             try:
                 shim = EpisodeHTTPShim(ep, port=port, host="0.0.0.0",
-                                       public_url=f"http://{h.shim_public_host}:{port}").start()
+                                       public_url=public_front_door_url(h, self.env)).start()
             except OSError as e:
                 raise InfraError("infra:harness_crash",
                                  f"front door port {port} busy: {e}", retryable=True) from e
@@ -174,7 +184,7 @@ class MonarchArm:
                 expand(h.langfuse_url, self.env, "langfuse_url"),
                 self.env.get(h.langfuse_public_key_env or "") or "",
                 self.env.get(h.langfuse_secret_key_env or "") or "",
-                episode_id, self.price_table)
+                episode_id, self.price_table, from_timestamp=self._started_at)
         except LangfuseUnavailable:
             # The attempt's verdict stands; the report shows the cost as missing.
             # An unset address or key never reaches here: resolve() refuses the

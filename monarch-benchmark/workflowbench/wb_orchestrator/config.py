@@ -118,8 +118,10 @@ class Harness:
     login_email: str | None = None
     login_password_env: str | None = None
     fd_url: str | None = None
+    fd_api_key_env: str | None = None   # set when the discovery service gates /v1/*
     shim_port: int | None = None
     shim_public_host: str = "host.docker.internal"
+    shim_public_url: str | None = None   # full URL when the front door is behind a tunnel (overrides host:port)
     langfuse_url: str | None = None
     langfuse_public_key_env: str | None = None
     langfuse_secret_key_env: str | None = None
@@ -325,7 +327,8 @@ _HARNESS_KEYS = {
     "scripted": (("script",), ()),
     "monarch": (("base_url", "credential_env", "login_email", "login_password_env", "fd_url",
                  "shim_port", "langfuse_url", "langfuse_public_key_env", "langfuse_secret_key_env",
-                 "price_table", "monarch_repo", "modes"), ("shim_public_host",)),
+                 "price_table", "monarch_repo", "modes"),
+                ("shim_public_host", "shim_public_url", "fd_api_key_env")),
 }
 
 
@@ -400,8 +403,10 @@ def load_harness(path) -> Harness:
         login_email=c.get("login_email", str),
         login_password_env=c.get("login_password_env", str),
         fd_url=c.get("fd_url", str),
+        fd_api_key_env=c.get("fd_api_key_env", str),
         shim_port=port,
         shim_public_host=c.get("shim_public_host", str, default=Harness.shim_public_host),
+        shim_public_url=c.get("shim_public_url", str),
         langfuse_url=c.get("langfuse_url", str),
         langfuse_public_key_env=c.get("langfuse_public_key_env", str),
         langfuse_secret_key_env=c.get("langfuse_secret_key_env", str),
