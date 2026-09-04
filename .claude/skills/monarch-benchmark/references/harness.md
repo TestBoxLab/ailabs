@@ -153,7 +153,7 @@ wb_commit: 4d969c0
 Show each file before writing it. **`wb doctor` has no `--record` flag today**,
 so the skill writes these files by reading the doctor's printed lines; a
 `--record` flag that writes them from inside the code is listed as deferred in
-`differs.md`.
+`monarch-benchmark/workflowbench/deferred.md`.
 
 ## `harness list`
 
