@@ -60,7 +60,7 @@ class FakeFD:
         for d in sorted(p for p in self.fixtures_dir.iterdir() if p.is_dir()):
             ids = _action_ids(d)
             h = _hash(ids)
-            out.append({"slug": d.name, "kb_hash": h, "action_count": len(ids),
+            out.append({"slug": d.name, "seed_hash": h, "kb": {"action_count": len(ids), "kb_hash": h}, "action_count": len(ids),
                         "in_sync": self.imported.get(d.name) == h})
         return out
 
@@ -169,6 +169,6 @@ class FakeFD:
 def fd_serving(kb: dict[str, str], api_key: str | None = None) -> FakeFD:
     """A discovery service whose /v1/seeds answers exactly `kb`, with no fixtures on disk."""
     fd = FakeFD(api_key=api_key)
-    fd._seeds = lambda: [{"slug": slug, "kb_hash": h, "action_count": 1, "in_sync": True}
+    fd._seeds = lambda: [{"slug": slug, "seed_hash": h, "kb": {"action_count": 1, "kb_hash": h}, "action_count": 1, "in_sync": True}
                          for slug, h in sorted(kb.items())]
     return fd

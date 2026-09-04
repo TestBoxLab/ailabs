@@ -117,7 +117,8 @@ class MonarchArm:
         except (OSError, json.JSONDecodeError) as e:
             raise InfraError("infra:harness_crash",
                              f"knowledge base check failed: {url}: {e}", retryable=False) from e
-        live = {i.get("slug"): i.get("kb_hash") for i in items}
+        # verified 4 Sep against the Railway discovery service: the hash is nested under `kb`
+        live = {i.get("slug"): (i.get("kb") or {}).get("kb_hash") for i in items}
         for slug, want in self.kb.kb.items():
             got = live.get(slug)
             if got != want:

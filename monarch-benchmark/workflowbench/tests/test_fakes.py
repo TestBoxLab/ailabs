@@ -52,7 +52,7 @@ def test_fake_fd_routes(tmp_path):
 
         status, out = _http("POST", f"{fd.url}/v1/seeds/acme/import", {})
         assert status == 200 and out["actions_imported"] == 2
-        assert out["before"]["kb_hash"] is None and out["after"]["kb_hash"] == item["kb_hash"]
+        assert out["before"]["kb_hash"] is None and out["after"]["kb_hash"] == item["kb"]["kb_hash"]
 
         _, seeds = _http("GET", f"{fd.url}/v1/seeds")
         assert seeds["items"][0]["in_sync"] is True
