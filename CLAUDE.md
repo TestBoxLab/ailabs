@@ -155,6 +155,7 @@ each stage hands its artifact to the next:
 | Path | Purpose |
 |---|---|
 | `CLAUDE.md` | This file — project-specific instructions. |
+| `.claude/skills/monarch-benchmark/` | Skill to prepare, confirm and run a round (`/monarch-benchmark`). |
 | `.specify/memory/constitution.md` | Governing rules for all features. |
 | `.specify/templates/` | Spec Kit spec/plan/tasks/checklist templates. |
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
