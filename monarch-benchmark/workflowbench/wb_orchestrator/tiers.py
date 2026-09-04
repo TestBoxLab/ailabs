@@ -113,3 +113,129 @@ def load_corpus(dirs: Iterable[str | Path]) -> Pool:
         pool.counts[domain] = (len(paths), usable)
         pool.dirs.append(d)
     return pool
+
+
+# --- the draw -----------------------------------------------------------------
+
+@dataclass
+class DrawResult:
+    cuts: dict[str, int]
+    scored: int
+    usable: int
+    excluded: dict[str, str]
+    sets: dict[str, list[str]]
+    by_domain: dict[str, dict[str, int]]
+    written: list[Path]
+
+
+def draw_tier(candidates: list[Entry], per_tier: int, rng: random.Random) -> list[Entry]:
+    """Round-robin over the tier's domains, alphabetical, one candidate each pass.
+
+    # ponytail: round-robin, not proportional allocation; with ten slots
+    # proportional is mostly rounding rules.
+    """
+    by_domain: dict[str, list[Entry]] = {}
+    for e in sorted(candidates, key=lambda e: e.task_id):
+        by_domain.setdefault(e.domain, []).append(e)
+    for lst in by_domain.values():
+        rng.shuffle(lst)                      # sorted first, so input order cannot matter
+
+    picked: list[Entry] = []
+    while len(picked) < per_tier:
+        took = False
+        for domain in sorted(by_domain):
+            if len(picked) == per_tier:
+                break
+            if by_domain[domain]:
+                picked.append(by_domain[domain].pop())
+                took = True
+        if not took:
+            break                             # every domain is empty; the caller refuses
+    return picked
+
+
+def _write_task(entry: Entry, tier_label: str, folder: Path) -> Path:
+    """A byte copy of the corpus file plus info.tier and info.domain (§4)."""
+    task = load_task_file(entry.path)
+    task["info"]["tier"] = tier_label
+    task["info"]["domain"] = entry.domain
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / entry.path.name
+    path.write_text(json.dumps(task, indent=1, sort_keys=True) + "\n", newline="\n")
+    return path
+
+
+def draw(dirs: Iterable[str | Path], seed: int, per_tier: int = 10,
+         out: str | Path = "tasks") -> DrawResult:
+    """Four frozen task sets and a manifest, byte-reproducible from the seed (§9)."""
+    pool = load_corpus(dirs)
+    cuts = tier_cuts(e.score for e in pool.entries)
+    entries = [Entry(e.task_id, e.domain, e.score, e.contract_sha256, e.path,
+                     tier_of(e.score, cuts)) for e in pool.entries]
+
+    # refuse before anything is written
+    for tier in TIER_ORDER:
+        n = sum(e.tier == tier for e in entries)
+        if n < per_tier:
+            raise ValueError(f"tier {tier} has {n} usable tasks, fewer than the "
+                             f"{per_tier} the draw needs; nothing written")
+
+    rng = random.Random(seed)                 # one generator, fixed consumption order
+    drawn: dict[str, list[Entry]] = {}
+    for tier in TIER_ORDER:
+        drawn[f"tier-{tier}"] = draw_tier([e for e in entries if e.tier == tier],
+                                          per_tier, rng)
+    drawn["random-10"] = rng.sample(sorted(entries, key=lambda e: e.task_id), per_tier)
+
+    out = Path(out)
+    written: list[Path] = []
+    by_domain: dict[str, dict[str, int]] = {}
+    for set_name, picked in drawn.items():
+        label = "random" if set_name == "random-10" else set_name.split("-", 1)[1]
+        counts: dict[str, int] = {}
+        for e in sorted(picked, key=lambda e: e.task_id):
+            written.append(_write_task(e, label, out / set_name))
+            counts[e.domain] = counts.get(e.domain, 0) + 1
+        by_domain[set_name] = dict(sorted(counts.items()))
+
+    written.append(_write_manifest(out, pool, cuts, seed, per_tier, drawn, by_domain))
+    return DrawResult(cuts=cuts, scored=len(entries), usable=len(entries),
+                      excluded=pool.excluded,
+                      sets={k: [e.task_id for e in sorted(v, key=lambda e: e.task_id)]
+                            for k, v in drawn.items()},
+                      by_domain=by_domain, written=written)
+
+
+def _write_manifest(out: Path, pool: Pool, cuts: dict[str, int], seed: int,
+                    per_tier: int, drawn: dict[str, list[Entry]],
+                    by_domain: dict[str, dict[str, int]]) -> Path:
+    import datetime
+
+    import yaml
+    manifest = {
+        "measure": MEASURE,
+        "generated_at": datetime.datetime.now(datetime.UTC)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "seed": seed,
+        "per_tier": per_tier,
+        "cuts": cuts,
+        "corpus": [{"dir": d.as_posix(),
+                    "domain": d.name.split("imported-", 1)[-1],
+                    "tasks": pool.counts[d.name.split("imported-", 1)[-1]][0],
+                    "usable": pool.counts[d.name.split("imported-", 1)[-1]][1]}
+                   for d in pool.dirs],
+        "excluded": dict(sorted(pool.excluded.items())),
+        "sets": {name: {
+            "by_domain": by_domain[name],
+            # the row's tier is always the tier the score falls in, even in
+            # random-10 whose files carry the literal label "random".
+            "tasks": [{"task": e.task_id, "domain": e.domain, "score": e.score,
+                       "tier": e.tier, "contract_sha256": e.contract_sha256}
+                      for e in sorted(drawn[name], key=lambda e: e.task_id)],
+        } for name in SET_NAMES},
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "tiers-manifest.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True,
+                                   default_flow_style=False), newline="\n")
+    return path

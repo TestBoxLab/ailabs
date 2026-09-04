@@ -12,6 +12,7 @@ Ten usable tasks with scores 2 3 4 5 6 7 8 9 11 13 -> terciles at 4 and 8.
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -139,11 +140,169 @@ def test_usable_pool():
 
     assert set(pool.excluded) == {"beta.b_no_rule", "gamma.g_bad_hash"}
     assert pool.excluded["beta.b_no_rule"] == (
-        "no approval rule (unmapped assertion types: "
-        "['mini_also_unmappable', 'mini_unmappable'])")
+        "no approval rule (unmapped assertion types: ['mini_unmappable'])")
     assert pool.excluded["gamma.g_bad_hash"] == "contract hash does not match content"
 
     # the excluded two are not scored and not in the pool
     assert "beta.b_no_rule" not in by_id and "gamma.g_bad_hash" not in by_id
     # counts per folder are recorded for the manifest
     assert pool.counts == {"alpha": (4, 4), "beta": (4, 3), "gamma": (4, 3)}
+
+
+# --- Phase 4: the draw --------------------------------------------------------
+
+def _entries(spec):
+    """spec: {domain: [task ids]} -> a flat list of Entry, score and hash unused."""
+    from wb_orchestrator import tiers
+    return [tiers.Entry(t, d, 1, "0" * 16, Path(t))
+            for d in sorted(spec) for t in spec[d]]
+
+
+def test_stratified_draw():
+    from wb_orchestrator import tiers
+    pool = _entries({"delta": ["d1"], "alpha": ["a1", "a2", "a3", "a4"],
+                     "charlie": ["c1", "c2"], "bravo": ["b1", "b2", "b3"]})
+
+    got = tiers.draw_tier(pool, 4, random.Random(1))
+    assert len({e.domain for e in got}) == 4      # as many domains as the counts allow
+    assert [e.domain for e in got] == ["alpha", "bravo", "charlie", "delta"]
+
+    # the shortfall is filled from the domains that still have candidates
+    got = tiers.draw_tier(pool, 8, random.Random(1))
+    assert len(got) == 8 and len({e.task_id for e in got}) == 8
+    by_domain = {}
+    for e in got:
+        by_domain[e.domain] = by_domain.get(e.domain, 0) + 1
+    # passes of 4, then 3, then 1 (alpha alone still has candidates): 4 + 3 + 1 = 8
+    assert by_domain == {"alpha": 3, "bravo": 2, "charlie": 2, "delta": 1}
+    # first pass walks the domains alphabetically
+    assert [e.domain for e in got[:4]] == ["alpha", "bravo", "charlie", "delta"]
+
+
+def test_tier_too_small_refuses(tmp_path):
+    from wb_orchestrator import tiers
+    with pytest.raises(ValueError) as e:
+        tiers.draw(CORPUS_DIRS, seed=1, per_tier=10, out=tmp_path)
+    assert "simple" in str(e.value) and "3" in str(e.value)
+    assert not list(tmp_path.iterdir())            # nothing was written
+
+
+def test_drawn_task_is_a_frozen_copy(tmp_path):
+    from wb_orchestrator import corpus as corpus_mod
+    from wb_orchestrator import tiers
+    result = tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=tmp_path)
+
+    originals = {load_task_file(p)["task"]: load_task_file(p)
+                 for d in CORPUS_DIRS for p in d.glob("*.json")}
+    n = 0
+    for set_name in tiers.SET_NAMES:
+        folder = tmp_path / set_name
+        for p in sorted(folder.glob("*.json")):
+            drawn = load_task_file(p)
+            original = originals[drawn["task"]]
+            assert drawn["info"].pop("tier") in ("simple", "medium", "complex", "random")
+            assert drawn["info"].pop("domain") in ("alpha", "beta", "gamma")
+            assert drawn == original                       # nothing else differs
+            assert drawn["contract_sha256"] == original["contract_sha256"]
+            n += 1
+        v = corpus_mod.validate_corpus(folder)
+        assert v["contract_drift"] == 0, folder
+    assert n == 12
+    assert result.cuts == {"low": 4, "high": 7}
+
+
+def test_draw_is_deterministic(tmp_path):
+    from wb_orchestrator import tiers
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=a)
+    tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=b)
+    tiers.draw(CORPUS_DIRS, seed=2, per_tier=3, out=c)
+
+    def tree(root):
+        return {p.relative_to(root).as_posix(): p.read_bytes()
+                for p in sorted(root.rglob("*")) if p.is_file()
+                and p.name != "tiers-manifest.yaml"}
+
+    assert tree(a) == tree(b)
+    def manifest(root):
+        import yaml
+        return yaml.safe_load((root / "tiers-manifest.yaml").read_text())
+    ma, mb, mc = manifest(a), manifest(b), manifest(c)
+    for m in (ma, mb, mc):
+        m.pop("generated_at")
+    assert ma == mb
+    assert mc["sets"] != ma["sets"]                 # a different seed is a different set
+
+
+def test_manifest(tmp_path):
+    import yaml
+    from wb_orchestrator import tiers
+    tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=tmp_path)
+    m = yaml.safe_load((tmp_path / "tiers-manifest.yaml").read_text())
+
+    assert "services seeded" in m["measure"] and "terciles" in m["measure"]
+    assert m["cuts"] == {"low": 4, "high": 7}
+    assert m["seed"] == 1 and m["per_tier"] == 3 and m["generated_at"]
+    assert m["corpus"] == [
+        {"dir": (FIXTURE / "imported-alpha").as_posix(), "domain": "alpha", "tasks": 4, "usable": 4},
+        {"dir": (FIXTURE / "imported-beta").as_posix(), "domain": "beta", "tasks": 4, "usable": 3},
+        {"dir": (FIXTURE / "imported-gamma").as_posix(), "domain": "gamma", "tasks": 4, "usable": 3},
+    ]
+    assert set(m["excluded"]) == {"beta.b_no_rule", "gamma.g_bad_hash"}
+
+    assert list(m["sets"]) == list(tiers.SET_NAMES)
+    for name, s in m["sets"].items():
+        assert len(s["tasks"]) == 3
+        assert sum(s["by_domain"].values()) == 3
+        for row in s["tasks"]:
+            assert set(row) == {"task", "domain", "score", "tier", "contract_sha256"}
+            assert row["tier"] in ("simple", "medium", "complex")   # never "random"
+
+    # a drawn file's own info.tier is the set's name for the three tiers…
+    for tier in ("simple", "medium", "complex"):
+        for row in m["sets"][f"tier-{tier}"]["tasks"]:
+            assert row["tier"] == tier
+    # …and the literal "random" in random-10, whose rows carry the real tier
+    for p in (tmp_path / "random-10").glob("*.json"):
+        assert load_task_file(p)["info"]["tier"] == "random"
+
+
+def test_corpus_is_not_written(tmp_path):
+    from wb_orchestrator import tiers
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+              for d in CORPUS_DIRS for p in d.glob("*.json")}
+    tiers.draw(CORPUS_DIRS, seed=1, per_tier=3, out=tmp_path)
+    after = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+             for d in CORPUS_DIRS for p in d.glob("*.json")}
+    assert before == after
+
+
+def test_cli(tmp_path, capsys):
+    from wb_orchestrator.cli import main
+
+    argv = ["corpus", "tiers", "--seed", "1", "--per-tier", "3",
+            "--out", str(tmp_path)] + [f"--corpus={d}" for d in CORPUS_DIRS]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+    assert "corpus: 3 folders, 12 tasks, 10 usable" in out
+    assert "excluded 2" in out
+    assert "measure: services seeded + expected changes + tools needed" in out
+    assert "cuts: simple <= 4 < medium <= 7 < complex" in out
+    assert "draw (seed 1, 3 per set):" in out
+    assert "tier-simple" in out and "random-10" in out
+    assert "[ok] write" in out and "tiers-manifest.yaml" in out
+    assert ("every drawn task keeps its corpus hash; info.tier and info.domain "
+            "are not hashed") in out
+    assert (tmp_path / "tiers-manifest.yaml").exists()
+
+    # a tier with fewer usable tasks than --per-tier refuses, exit 1, writes nothing
+    empty = tmp_path / "refused"
+    argv = ["corpus", "tiers", "--seed", "1", "--per-tier", "10",
+            "--out", str(empty)] + [f"--corpus={d}" for d in CORPUS_DIRS]
+    assert main(argv) == 1
+    assert "simple" in capsys.readouterr().err
+    assert not empty.exists()
+
+    # a missing corpus folder is exit 3
+    assert main(["corpus", "tiers", "--seed", "1", "--out", str(tmp_path / "x"),
+                 f"--corpus={tmp_path / 'nowhere'}"]) == 3
