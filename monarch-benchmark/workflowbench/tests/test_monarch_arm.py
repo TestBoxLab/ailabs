@@ -805,3 +805,17 @@ def test_a_declined_workflow_still_reports_its_cost(site, repo):
     assert "execution" not in result.phases      # nothing ran, so no run phase
     assert fake.deleted_workflows == []
     free(port)
+
+
+def test_run_status_success_is_completed(site, repo):
+    """The live engine reports a finished run as "success" (verified 4 Sep 2026);
+    both spellings end the poll as a normal finish."""
+    from wb_arms.monarch import SUCCESS_RUN_STATES, TERMINAL_RUN_STATES
+    assert {"success", "succeeded"} <= SUCCESS_RUN_STATES <= TERMINAL_RUN_STATES
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_outcome={"status": "success"})
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        ep = Episode(task(), episode_id="run-x/simple.email_sf_contact_city_update/monarch/t0")
+        result = arm.run(ep, deadline=time.monotonic() + 60)
+    assert result.termination == "completed" and result.error is None

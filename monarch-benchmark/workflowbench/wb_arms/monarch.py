@@ -32,7 +32,9 @@ from wb_world.episode import Episode
 # set per slot are the upgrade if throughput ever matters.
 _LOCK = threading.Lock()
 
-TERMINAL_RUN_STATES = {"succeeded", "failed", "cancelled", "stopped"}
+# verified 4 Sep 2026 on Railway: the engine reports a finished run as "success"
+SUCCESS_RUN_STATES = {"succeeded", "success"}
+TERMINAL_RUN_STATES = SUCCESS_RUN_STATES | {"failed", "failure", "error", "cancelled", "canceled", "stopped"}
 
 # How long one read of `prepare()`'s recipe check may take: the login, and then
 # each workflow read.
@@ -602,7 +604,7 @@ class MonarchArm:
                 res.turn_log.append({"poll": out})
                 status = out.get("status")
                 if status in TERMINAL_RUN_STATES:
-                    if status != "succeeded":
+                    if status not in SUCCESS_RUN_STATES:
                         res.termination = "agent_error"
                         res.error = (f"run_error:{out.get('errorCode')} "
                                      f"node={out.get('errorNodeId')}")
