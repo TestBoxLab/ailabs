@@ -1,9 +1,11 @@
 # Round: Monarch pilot, create + run mode
 
 Plan `pilot-monarch-create-run` · product `simulated-apps` · prepared 4 Sep 2026 ·
-configuration hash `b3de0ef1b8af73b4` (changes if any input file changes).
-Status: **configured, not run.** It runs only after Carlos confirms it with the
-cost band below. Every number here is read from the configuration files, not
+configuration hash `ecd81ef54644f4bb` (changes if any input file changes).
+Status: **configured, awaiting the team's approval.** Live gates passed on 4 Sep:
+doctor 4 OK, 47 products imported (seeds v3), one single Monarch attempt on
+`simple.sf_opp_amount_update` completed and passed (US$ 0.44, authoring 76 s,
+execution 8.6 s, no questions). Every number here is read from the configuration files, not
 typed by hand.
 
 ## What is being compared
@@ -36,7 +38,7 @@ bench's HTTP front door, exposed to Monarch's servers through a tunnel. The
 | `claude-opus-5/api` (baseline) | API tool loop | Anthropic, `claude-opus-5` | 5.00 / 0.50 / 25.00 | xhigh |
 | `gpt-5.6-terra/api` | API tool loop | OpenAI Responses, `gpt-5.6-terra` | 2.00 / 0.20 / 12.00 | xhigh |
 | `gpt-5.6-sol/api` | API tool loop | OpenAI Responses, `gpt-5.6-sol` | 4.00 / 0.40 / 20.00 | xhigh |
-| `monarch@e21dc0044+feat/railway-dev-deploy` | Monarch | Monarch on Railway, commit `e21dc0044` of branch `feat/railway-dev-deploy`; its model team through the Anthropic API (Opus 4.8 for planning, Sonnet 5 and Haiku 4.5 for helpers), priced by the table `monarch-team-bedrock` (2026-09-03) | Opus 4.8: 5.00 / 0.50 / 25.00; Sonnet 5: 2.00 / 0.20 / 10.00; Haiku 4.5: 1.00 / 0.10 / 5.00 | |
+| `monarch@797a8e5d1+feat/railway-dev-deploy` | Monarch | Monarch on Railway, commit `797a8e5d1` of branch `feat/railway-dev-deploy`; its model team through the Anthropic API (Opus 4.8 for planning, Sonnet 5 and Haiku 4.5 for helpers), priced by the table `monarch-team-bedrock` (2026-09-03) | Opus 4.8: 5.00 / 0.50 / 25.00; Sonnet 5: 2.00 / 0.20 / 10.00; Haiku 4.5: 1.00 / 0.10 / 5.00 | |
 
 The API tool loop gives each model three tools: search the API catalogue, call
 an API, base64. No file or machine access. Kimi K3 and GLM 5.3 are served by
@@ -114,14 +116,12 @@ missing cost). Audience: internal.
   `is_won` and `probability`, which the models set as real Salesforce would.
   All three models failed it on 4 Sep for that reason. Fixing the rule needs
   Lucas's sign-off and changes the task hash.
-- The simulated apps' OpenAPI documents carry no request or response schemas,
-  so Monarch's knowledge base declares update actions without body fields. In
-  the first live attempt Monarch declined to build the workflow for that
-  reason. The seeds are being regenerated with an open body declaration; the
-  round waits for that.
-- 29 of 686 actions in seven apps were not imported by Monarch (id collisions
-  after normalisation); Salesforce and Gmail, the two apps the tasks use, are
-  complete.
+- The simulated apps' OpenAPI documents carry no request or response schemas;
+  the knowledge base (seeds v3) takes the body fields of each resource from the
+  AutomationBench data model and the corpus instead (3,437 body parameters).
+- Execution-phase cost of Monarch may show as missing on some rows: the engine's
+  trace is not yet tagged with the attempt id on this deployment; authoring cost
+  (nearly all of it) is complete.
 - GLM 5.3 prices are Z.ai's list rates until the Fireworks rate is confirmed.
 
 ## How to run it

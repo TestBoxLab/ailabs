@@ -1,9 +1,11 @@
 # Rodada: piloto do Monarch, modo criar + executar
 
 Plano `pilot-monarch-create-run` · produto `simulated-apps` · preparada em 4 set 2026 ·
-hash de configuração `b3de0ef1b8af73b4` (muda se qualquer arquivo de entrada mudar).
-Situação: **configurada, não executada.** Só roda depois que o Carlos confirmar
-com a faixa de custo abaixo. Todos os números aqui vêm dos arquivos de
+hash de configuração `ecd81ef54644f4bb` (muda se qualquer arquivo de entrada mudar).
+Situação: **configurada, aguardando aprovação da equipe.** Gates ao vivo passaram
+em 4 set: doctor 4 OK, 47 produtos importados (seeds v3), uma tentativa única do
+Monarch em `simple.sf_opp_amount_update` concluída e aprovada (US$ 0,44, authoring
+76 s, execução 8,6 s, nenhuma pergunta). Todos os números aqui vêm dos arquivos de
 configuração, não foram digitados à mão.
 
 ## O que está sendo comparado
@@ -37,7 +39,7 @@ tarefas do piloto tocam só Salesforce e Gmail.
 | `claude-opus-5/api` (baseline) | loop de ferramentas via API | Anthropic, `claude-opus-5` | 5,00 / 0,50 / 25,00 | xhigh |
 | `gpt-5.6-terra/api` | loop de ferramentas via API | OpenAI Responses, `gpt-5.6-terra` | 2,00 / 0,20 / 12,00 | xhigh |
 | `gpt-5.6-sol/api` | loop de ferramentas via API | OpenAI Responses, `gpt-5.6-sol` | 4,00 / 0,40 / 20,00 | xhigh |
-| `monarch@e21dc0044+feat/railway-dev-deploy` | Monarch | Monarch no Railway, commit `e21dc0044` do branch `feat/railway-dev-deploy`; sua equipe de modelos pela API da Anthropic (Opus 4.8 no planejamento, Sonnet 5 e Haiku 4.5 nos auxiliares), precificada pela tabela `monarch-team-bedrock` (2026-09-03) | Opus 4.8: 5,00 / 0,50 / 25,00; Sonnet 5: 2,00 / 0,20 / 10,00; Haiku 4.5: 1,00 / 0,10 / 5,00 | |
+| `monarch@797a8e5d1+feat/railway-dev-deploy` | Monarch | Monarch no Railway, commit `797a8e5d1` do branch `feat/railway-dev-deploy`; sua equipe de modelos pela API da Anthropic (Opus 4.8 no planejamento, Sonnet 5 e Haiku 4.5 nos auxiliares), precificada pela tabela `monarch-team-bedrock` (2026-09-03) | Opus 4.8: 5,00 / 0,50 / 25,00; Sonnet 5: 2,00 / 0,20 / 10,00; Haiku 4.5: 1,00 / 0,10 / 5,00 | |
 
 O loop de ferramentas via API dá a cada modelo três ferramentas: buscar no
 catálogo de APIs, chamar uma API, base64. Sem acesso a arquivos nem à máquina.
@@ -118,13 +120,12 @@ sem custo). Público: interno.
   Os três modelos reprovaram nela em 4 set por esse motivo. Corrigir a regra
   exige aprovação do Lucas e muda o hash da tarefa.
 - Os documentos OpenAPI das apps simuladas não trazem schemas de request nem de
-  response, então a base de conhecimento do Monarch declara ações de update sem
-  campos de body. Na primeira tentativa ao vivo o Monarch desistiu de construir
-  o workflow por isso. Os seeds estão sendo regenerados com declaração de body
-  aberto; a rodada espera por isso.
-- 29 das 686 ações, em sete apps, não foram importadas pelo Monarch (colisão de
-  ids após normalização); Salesforce e Gmail, as duas apps das tarefas, estão
-  completas.
+  response; a base de conhecimento (seeds v3) tira os campos de body de cada
+  recurso do modelo de dados do AutomationBench e do corpus (3.437 parâmetros de
+  body).
+- O custo da fase de execução do Monarch pode aparecer como ausente em algumas
+  linhas: o trace do motor ainda não é marcado com o id da tentativa neste
+  deploy; o custo do authoring (quase todo o custo) está completo.
 - Os preços do GLM 5.3 são a tabela da Z.ai até confirmar a da Fireworks.
 
 ## Como rodar
