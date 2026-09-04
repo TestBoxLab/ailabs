@@ -211,7 +211,48 @@ def cmd_corpus(args) -> int:
         for t, types in r["unmapped"].items():
             print(f"  ! {t}: {types}")
         return 0 if not r["unmapped"] else 1
+    if args.corpus_cmd == "tiers":
+        return _corpus_tiers(args)
     return 2
+
+
+def _corpus_tiers(args) -> int:
+    """Draw the four frozen task sets. Offline: no key, no network, no money."""
+    from pathlib import Path
+
+    from wb_orchestrator import tiers
+    dirs = [Path(d) for d in (args.corpus or sorted(Path("corpus").glob("imported-*")))]
+    missing = [str(d) for d in dirs if not d.is_dir()]
+    if missing or not dirs:
+        print(f"corpus folder missing or empty: {missing or 'corpus/imported-*'}",
+              file=sys.stderr)
+        return 3
+    pool = tiers.load_corpus(dirs)
+    total = sum(t for t, _ in pool.counts.values())
+    try:
+        r = tiers.draw(dirs, seed=args.seed, per_tier=args.per_tier, out=args.out)
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        return 3
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(f"corpus: {len(dirs)} folders, {total} tasks, {r.usable} usable")
+    if r.excluded:
+        print(f"  excluded {len(r.excluded)}: see the manifest")
+    print("measure: services seeded + expected changes + tools needed")
+    print(f"cuts: simple <= {r.cuts['low']} < medium <= {r.cuts['high']} < complex")
+    print(f"draw (seed {args.seed}, {args.per_tier} per set):")
+    for name in tiers.SET_NAMES:
+        breakdown = ", ".join(f"{d} {n}" for d, n in r.by_domain[name].items())
+        print(f"  {name:<13} {args.per_tier} prompts - {breakdown}")
+    folders = " ".join(f"{Path(args.out) / n}/" for n in tiers.SET_NAMES)
+    print(f"[ok] write {folders}")
+    print(f"[ok] write {Path(args.out) / 'tiers-manifest.yaml'}")
+    print("every drawn task keeps its corpus hash; info.tier and info.domain "
+          "are not hashed")
+    return 0
 
 
 def cmd_legacy(args) -> int:
@@ -289,6 +330,13 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("--overwrite", action="store_true", help="rewrite tasks in place (contract hashes change)")
     cd.add_argument("--product", default="simulated-apps",
                     help="product whose side-effect list to use (name or path)")
+    ct = csub.add_parser("tiers", help="draw four frozen task sets by difficulty")
+    ct.add_argument("--seed", type=int, required=True,
+                    help="recorded in the manifest; the same seed redraws the same bytes")
+    ct.add_argument("--per-tier", type=int, default=10, help="prompts per drawn set")
+    ct.add_argument("--corpus", action="append", default=None,
+                    help="repeatable; default: every corpus/imported-* folder")
+    ct.add_argument("--out", default="tasks", help="where the four folders and the manifest go")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("monarch", help="prepare Monarch for a product")
