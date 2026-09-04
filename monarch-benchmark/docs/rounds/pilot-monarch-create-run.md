@@ -87,9 +87,10 @@ and to stay within about 50 tool turns).
 
 | Item | Value |
 |---|---|
-| Repetitions per task and competitor | 2 |
-| Attempts per competitor | 20 (smoke scale) |
-| Attempts in total | 140, of which 120 paid |
+| Prompts (tasks) | 10 |
+| Attempts per prompt, for each competitor | 2 (the same prompt is tried twice, on a fresh copy of the data each time) |
+| Attempts per competitor | 20 = 10 prompts × 2 attempts (smoke scale) |
+| Attempts in total | 140 = 7 competitors × 20, of which 120 paid |
 | Timeout per attempt | 900 s |
 | Concurrency | 4 (Monarch serialised to 1) |
 | Cost ceiling in the plan | US$ 40 (the run stops if reached) |

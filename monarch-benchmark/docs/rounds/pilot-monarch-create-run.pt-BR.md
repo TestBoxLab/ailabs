@@ -89,9 +89,10 @@ ferramentas, não fazer perguntas e ficar em cerca de 50 turnos).
 
 | Item | Valor |
 |---|---|
-| Repetições por tarefa e competidor | 2 |
-| Tentativas por competidor | 20 (escala de smoke) |
-| Tentativas no total | 140, das quais 120 pagas |
+| Prompts (tarefas) | 10 |
+| Tentativas por prompt, para cada competidor | 2 (o mesmo prompt é tentado duas vezes, cada vez numa cópia fresca dos dados) |
+| Tentativas por competidor | 20 = 10 prompts × 2 tentativas (escala de smoke) |
+| Tentativas no total | 140 = 7 competidores × 20, das quais 120 pagas |
 | Timeout por tentativa | 900 s |
 | Concorrência | 4 (Monarch serializado em 1) |
 | Teto de custo no plano | US$ 40 (a rodada para se atingir) |

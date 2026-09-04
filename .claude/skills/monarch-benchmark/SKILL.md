@@ -79,7 +79,7 @@ has no rows, say **"sem dados anteriores"** for it — never guess.
 
 ```
 Rodada: <plan> · produto sob teste: <product> (<kind>, <N> apps) · modo: <mode>
-Repetições: <k> · tentativas por competidor: <n> · total: <total>
+Prompts: <n_tasks> · tentativas por prompt e competidor: <k> · por competidor: <n> (= prompts × tentativas) · total: <total>
 Teto de custo: US$ <ceiling> · approved_by: <valor ou "não definido">
 Escala: <smoke (<=20 por competidor) | acima de smoke — exige approved_by>
 Hash da configuração: <hash>
