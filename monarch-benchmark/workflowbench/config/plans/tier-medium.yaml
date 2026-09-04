@@ -1,0 +1,24 @@
+name: tier-medium
+description: >
+  Round on the middle third of the corpus. Ten prompts drawn by `wb corpus tiers --seed 20260904` and frozen; the same
+  competitors and baseline as pilot-monarch-create-run, so the four difficulty
+  rounds and the pilot can be read side by side.
+  Prompts: 10; attempts per prompt and competitor: 2; attempts per competitor:
+  20 = 10 × 2; competitors: 7; attempts in the round: 140. Internal.
+tasks: tier-medium
+mode: create-run
+repetitions: 2                 # attempts per prompt and competitor
+timeout_s: 900
+concurrency: 4
+competitors:
+  - {harness: oracle}
+  - {model: kimi-k3-fireworks, harness: api}
+  - {model: glm-5.3-fireworks, harness: api}
+  - {model: claude-opus-5, harness: api}
+  - {model: gpt-5.6-terra, harness: api}
+  - {model: gpt-5.6-sol, harness: api}
+  - {harness: monarch}
+cost_ceiling_usd: 40
+baseline: claude-opus-5/api
+audience: internal
+approved_by: null              # Carlos approves each round before it starts
