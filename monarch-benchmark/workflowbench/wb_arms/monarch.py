@@ -8,7 +8,6 @@ produced it. See specs/002 for the attempt flow.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
@@ -178,8 +177,9 @@ class MonarchArm:
         still exist at the recorded recipe version (FR-026). Neither is retryable:
         a drifted recipe is a different run, not a flaky one.
         """
+        from wb_orchestrator.monarch_recipes import kb_file_sha
         recipes, path = self.recipes, str(self.recipes_path or "the recipes file")
-        sha = hashlib.sha256(Path(self.kb_path).read_bytes()).hexdigest()
+        sha = kb_file_sha(self.kb_path)   # the one definition, shared with the command
         if sha != recipes.kb_hash_file_sha:
             raise InfraError(
                 "infra:harness_crash",

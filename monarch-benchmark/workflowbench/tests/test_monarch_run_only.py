@@ -371,7 +371,8 @@ def test_active_run_never_clears(site, repo, monkeypatch):
             arm.run(episode(), deadline=time.monotonic() + 60)
 
     assert exc.value.kind == "infra:monarch_setup" and exc.value.retryable
-    assert "0.3" in str(exc.value) or "waited" in str(exc.value)
+    assert "0.3" in str(exc.value)          # it says how long it waited
+    assert "cancel" in str(exc.value)
     assert fake.deleted_workflows == []
     # The front door let go of its fixed port even though the attempt failed.
     free(port)

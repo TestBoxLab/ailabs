@@ -5,7 +5,6 @@ so neither test module has to import the other.
 """
 from __future__ import annotations
 
-import hashlib
 import socket
 import subprocess
 
@@ -152,6 +151,6 @@ KB_SHA_MARKER = "<the kb file sha>"
 
 
 def kb_file_sha(site) -> str:
-    """The fingerprint `wb monarch recipes` records: sha256 of the kb file's bytes."""
-    return hashlib.sha256(
-        (site / "config/products/simulated-apps.monarch-kb.yaml").read_bytes()).hexdigest()
+    """The fingerprint `wb monarch recipes` records, for this site's kb file."""
+    from wb_orchestrator.monarch_recipes import kb_file_sha as sha_of
+    return sha_of(site / "config/products/simulated-apps.monarch-kb.yaml")

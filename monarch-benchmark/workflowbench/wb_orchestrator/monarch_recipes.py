@@ -74,6 +74,12 @@ def run(product_path, harness_path, tasks_dir=None, plan_path=None, attempts=DEF
 
     product = config.load_product(product_path)
     plan = config.load_plan(plan_path) if plan_path else None
+    # The file records the task set by the NAME a plan writes, because that is
+    # what `load_monarch_recipes` compares a run's plan against -- an absolute
+    # path here makes the file the loader refuses.
+    # A plan writes this field with forward slashes whatever the platform, and the
+    # loader compares the two strings, so `--tasks` is normalised the same way.
+    tasks_name = plan.tasks if plan else Path(tasks_dir).as_posix().rstrip("/")
     tasks_dir = Path(tasks_dir) if tasks_dir else config.from_workflowbench(
         plan.tasks, product_path.parent.parent)
     tasks = load_suite(tasks_dir)
@@ -104,7 +110,7 @@ def run(product_path, harness_path, tasks_dir=None, plan_path=None, attempts=DEF
                     "--plan whose approved_by is set")
         return 5
 
-    return _make(product_path, harness_path, tasks, tasks_dir, kb_path, kb_sha, out_path,
+    return _make(product_path, harness_path, tasks, tasks_name, kb_path, kb_sha, out_path,
                  old, attempts, env, stdout, say, product, timeout_s)
 
 
@@ -122,13 +128,13 @@ def _read_existing(out_path: Path, product_name: str, kb_sha: str) -> dict:
     return doc
 
 
-def _make(product_path, harness_path, tasks, tasks_dir, kb_path, kb_sha, out_path,
+def _make(product_path, harness_path, tasks, tasks_name, kb_path, kb_sha, out_path,
           old, attempts, env, stdout, say, product, timeout_s) -> int:
     arm = _arm(product_path, harness_path, env, timeout_s)
     outcomes = []
     for task in tasks:
         outcomes.append(_one_task(arm, task, old, attempts, stdout, say))
-    path, changed = _write(out_path, product.name, tasks_dir, kb_sha, arm.name, old, outcomes)
+    path, changed = _write(out_path, product.name, tasks_name, kb_sha, arm.name, old, outcomes)
 
     kept = [o for o in outcomes if o.passed]
     missing = [o for o in outcomes if not o.passed]
@@ -266,7 +272,7 @@ def _why(g: dict) -> str:
     return f"assertion failed: {', '.join(failed) or 'unknown'}"
 
 
-def _write(out_path: Path, product_name: str, tasks_dir, kb_sha: str, monarch: str,
+def _write(out_path: Path, product_name: str, tasks_name: str, kb_sha: str, monarch: str,
            old: dict, outcomes: list[RecipeOutcome]) -> tuple[Path, bool]:
     """Write the file, keeping the rows an earlier run already earned."""
     recipes = dict(old.get("recipes") or {})
@@ -284,7 +290,7 @@ def _write(out_path: Path, product_name: str, tasks_dir, kb_sha: str, monarch: s
             missing[o.task_id] = {"reason": o.reason or "infra",
                                   "attempts_used": o.attempts_used,
                                   "detail": o.detail}
-    doc = {"product": product_name, "tasks": str(tasks_dir), "generated_at": "",
+    doc = {"product": product_name, "tasks": tasks_name, "generated_at": "",
            "kb_hash_file_sha": kb_sha, "monarch": monarch,
            "recipes": dict(sorted(recipes.items())), "missing": dict(sorted(missing.items()))}
     was = yaml.safe_load(out_path.read_text(encoding="utf-8")) if out_path.is_file() else None

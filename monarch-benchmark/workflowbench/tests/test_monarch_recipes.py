@@ -248,6 +248,9 @@ def test_the_written_file_matches_the_contract(site, repo):
     path = site / "config/products/simulated-apps.monarch-recipes.yaml"
 
     assert doc["product"] == "simulated-apps"
+    # The task-set NAME a plan writes, not a path: that is what the loader
+    # compares a run's plan against.
+    assert doc["tasks"] == (site / "tasks").as_posix()
     assert doc["kb_hash_file_sha"] == kb_file_sha(site)
     assert doc["monarch"].startswith("monarch@")
     assert set(doc) == {"product", "tasks", "generated_at", "kb_hash_file_sha", "monarch",
@@ -339,3 +342,26 @@ def test_the_bench_side_name_is_printed_with_the_note(site, repo):
     assert "no route to rename" in out
     # No patch call was made: an ignored rename would be a lie in the log.
     assert not [r for r in monarch.requests if r["method"] == "PATCH"]
+
+
+# -- the two commands agree on the file ---------------------------------------
+
+def test_a_file_the_command_wrote_loads_on_a_run_only_plan(site, repo):
+    """The end of US1 is the start of US2: what `recipes` writes, `wb run` reads.
+
+    The task-set field is the seam -- the command records a name, the loader
+    compares it with the plan's -- so a path here would refuse every run.
+    """
+    from tests.monarch_helpers import resolve_monarch, run_only_site
+    drive(site, repo, {TASK_A: [right_calls(TASK_A)]}, tasks=(TASK_A,))
+    written = (site / "config/products/simulated-apps.monarch-recipes.yaml").read_text()
+
+    # The same site as a run-only plan, keeping the file the command just wrote.
+    run_only_site(site, recipes=None, monarch_repo=str(repo))
+    (site / "config/products/simulated-apps.monarch-recipes.yaml").write_text(written)
+    rc = resolve_monarch(site)
+
+    assert set(rc.monarch_recipes.recipes) == {TASK_A}
+    assert rc.monarch_recipes.recipes[TASK_A].workflow_id == "wf-1"
+    assert [t["task"] for t in rc.tasks] == [TASK_A]
+    assert rc.excluded_tasks == {}
