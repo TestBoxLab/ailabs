@@ -131,6 +131,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 | D11 | Langfuse + Slack output | One Langfuse trace per test; Slack post rendered from the report. |
 | D12 | Second target platform design | Which real platform, tenant, reset, scoped checker, legal check. |
 | D13 | Rounds by difficulty tier | The six scored AutomationBench domains imported and declared (800-task corpus); four task sets frozen by `wb corpus tiers` — tier-simple, tier-medium, tier-complex and random-10, ten prompts each, drawn from a recorded seed with the measure and cut points in `tasks/tiers-manifest.yaml`; four rounds run separately against the same competitors as `pilot-monarch-create-run` (prompts: 10; attempts per prompt and competitor: 2; attempts per competitor: 20 = 10 × 2; competitors: 7; attempts in the round: 140), each with its own approval and its own internal report (feature 005, `specs/005-task-tiers/`). |
+| D14 | Results report as HTML tables | `wb report` writes the official page of a round: metrics per competitor, comparison against the baseline, task matrix, failures, provenance, each table with its source line; `wb summary` puts two to six rounds on one page with a mean per competitor and the random draw beside the mean of the tiers. Every number from the results store, standard library only (feature 006, `specs/006-html-report/`). |
 
 ---
 
@@ -159,6 +160,14 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [ ] F9 Import the six scored AutomationBench domains (finance, hr, marketing, operations, sales, support; 100 tasks each) into `corpus/imported-<domain>`, derive their approval rules with `wb corpus declare` and the reviewed side-effect list, and validate. Free and offline. All 42 services they seed are already among the product's 47 (measured 4 Sep). → feature 005 (`specs/005-task-tiers/`)
 - [ ] F10 `wb corpus tiers --seed N`: score every corpus task (services seeded + expected changes + tools needed), cut at the terciles (9 and 12 today), draw ten per tier stratified by domain plus ten from the whole corpus, and write four frozen task sets plus `tasks/tiers-manifest.yaml`. Drawn tasks are byte copies whose contract hash does not move; `info.tier` and `info.domain` are excluded from the hash. Free and offline. → **D13** → feature 005
 - [ ] F11 Run the four rounds one at a time in the order simple, medium, complex, random, each with Carlos's approval of that specific run stated as "prompts: 10; attempts per prompt and competitor: 2; attempts per competitor: 20 = 10 × 2; competitors: 7; attempts in the round: 140" and a cost band. → **D13**
+
+### WS-G · Reports (added 4 Sep, after the create + run pilot)
+
+- [ ] G1 One module for every figure of the page (`wb_report/metrics.py`), calling `wb_stats` rather than reimplementing it, so the page and the markdown report can never disagree. → feature 006 (`specs/006-html-report/`)
+- [ ] G2 The per-round page: metrics, comparison against the baseline with a plain-words verdict, task matrix, failures, provenance; real tables, standard library, no chart. → **D14**
+- [ ] G3 The audience gate proved across all four tables: the renderer receives a dictionary and cannot query the results store. → feature 006
+- [ ] G4 `wb summary --runs | --plans`: two to six rounds on one page, a mean per competitor across rounds, the random draw beside the mean of the three tiers. Paired figures stay per round on identical sets, never pooled. → **D14**
+- [ ] G5 Slack post rendered from the page. → WS-D, D11 (not feature 006)
 
 ### WS-B · Monarch on the simulated target, three modes
 
@@ -222,6 +231,9 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 4 Sep 2026 | The difficulty measure is objective and computed from the task file alone: services seeded + expected changes + tools needed; tiers are the terciles of the whole corpus (9 and 12 today), ties falling in the lower tier. Recorded alternative: domain as the proxy. **To be confirmed with Lucas before the drawn sets are frozen and committed.** | Carlos |
 | 4 Sep 2026 | A drawn task is a byte copy of its corpus original with `info.tier` and `info.domain` added; those two keys are excluded from the contract hash, so a label cannot make a copy a different task. No prompt, starting data or approval rule is ever edited by the draw. | Carlos |
 | 4 Sep 2026 | Repetitions stay at 2 per prompt and competitor. Every document states "prompts: N; attempts per prompt and competitor: 2; attempts per competitor: N × 2", never only the per-competitor total. | Carlos |
+| 4 Sep 2026 | The official record of a round is the HTML page written by `wb report`: real tables, every number from the results store, every table carrying its source line. Langfuse stays where the raw traces live. | Carlos |
+| 4 Sep 2026 | Report pages are built with the standard library, no templating engine, CSS framework or chart library, and open from disk with no network. | Carlos |
+| 4 Sep 2026 | Across rounds, the aggregate is a mean of per-round rates; paired comparisons are never pooled across different task sets. | Carlos |
 
 ## 5. Open questions
 
@@ -272,3 +284,10 @@ today allows only the exact name `monarch`. A public report with the real Monarc
 - **Confirm the difficulty measure** (services seeded + expected changes + tools needed, terciles at 9 and 12) before the drawn sets are frozen. Measured 4 Sep: the lower tercile is nearly all `simple`-domain tasks and the upper nearly all scored-domain tasks, so tier and domain overlap; if a clean difficulty variable is wanted, the simple tier must also draw from the scored domains' easy end (a different cut rule). Alternative on the table: domain as the proxy. Owner: Carlos + Lucas.
 - **Lucas's AutomationBench patches** (`1.0.6+evalrepair.10`) may change scored-domain tasks; applied after a draw they change hashes and force a redraw. Owner: Lucas.
 - **Unmapped assertion types in the six scored domains**: how many, and whether `declare.py`'s map needs extending before the draw; an unmapped task is excluded from the pool either way. Owner: Carlos to measure, Lucas to sign off.
+
+**Feature 006 open questions** (`specs/006-html-report/spec.md`; none blocks the work):
+
+- Should the median wall-clock exclude attempts with no phase timing, or show `n/a` for the whole column? Proposed: exclude, stating how many attempts contributed. Also: the phase sum omits queueing and snapshot time; a separate column from `started_at`/`finished_at` would show real elapsed time. (Carlos)
+- Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>-<audience>.html`. (Carlos)
+- Are sortable columns worth their twelve lines of inline JavaScript, or should the page be pure markup? Proposed: keep them, with `--no-sort` to drop them. (Carlos)
+- Monarch's cost per model comes from the per-family breakdown the competitor writes to `turns.jsonl` (`{"cost": ...}`), not from phase keys; the report reads it from there. (Carlos)
