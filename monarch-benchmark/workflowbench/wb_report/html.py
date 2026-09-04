@@ -74,10 +74,12 @@ def _table(headers: list[str], rows: list[list[str]], source_line: str = "",
 
     body = "".join("<tr>" + "".join(cell(i, c) for i, c in enumerate(row)) + "</tr>"
                    for row in rows)
+    # The source line rides on the caption as a tooltip; the visible list of
+    # sources lives in the Provenance section (rule 8 of the methodology).
+    src_attr = f' title="{_esc(source_line)}"' if source_line else ""
     caption = f"<caption>{_esc(title)}</caption>" if title else ""
-    src = f'<p class="src">{_esc(source_line)}</p>' if source_line else ""
-    return (f'<div class="tablewrap"><table>{caption}<tr>{head}</tr>'
-            f"{body}</table></div>{src}")
+    return (f'<div class="tablewrap"><table{src_attr}>{caption}<tr>{head}</tr>'
+            f"{body}</table></div>")
 
 
 # Monarch's design system, copied from local-docs/monarch-arquitetura.html:
@@ -537,7 +539,12 @@ def _provenance_body(report: dict) -> str:
                       ", ".join(withheld) if isinstance(withheld, list)
                       else f"{withheld} withheld"))
     body = "<br>".join(f"{_esc(k)}: <b>{_esc(v)}</b>" for k, v in items if v is not None)
-    return f'<p class="prov">{body}</p>'
+    kinds = ["metrics", "comparisons", "matrix", "failures"]
+    if report.get("monarch_attempts"):
+        kinds.append("monarch")
+    sources = "".join(f"<li>{_esc(_source_line_for(report, k))}</li>" for k in kinds)
+    return (f'<p class="prov">{body}</p><h4>Source lines</h4>'
+            f'<ul class="src">{sources}</ul>')
 
 
 _TECH_TOC = [("overview", "Overview"), ("success", "Success"), ("cost", "Cost"),
@@ -566,22 +573,12 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
                                                 for a in report["arms"]):
         warn = ('<div class="callout crit"><span class="label">Internal only</span>'
                 "Contains lab competitors - do not export.</div>")
-    spend = (f'<span class="chip hot">spend <strong>'
-             f'{_fmt(report["totals"]["spend_usd"], "money")}</strong></span>'
-             if report["audience"] == "internal" else "")
     hero = (f'<header class="hero"><div class="eyebrow">WorkflowBench &middot; '
             f'{_esc(p.get("plan") or "round")} &middot; '
             f'{_esc((p.get("started") or "")[:10])}</div>'
             f'<h1><span class="crown">{CROWN}</span> {_esc(report["run_id"])}</h1>'
             f'<p class="lede">{_esc(mode or "Every competitor received the same request.")} '
-            f"The checker ran afterwards, from the stored snapshots.</p>"
-            f'<div class="chips">'
-            f'<span class="chip"><strong>{report["size"]["prompts"]}</strong> prompts</span>'
-            f'<span class="chip"><strong>{report["size"]["repetitions"]}</strong> repetitions</span>'
-            f'<span class="chip"><strong>{report["size"]["competitors"]}</strong> competitors</span>'
-            f'<span class="chip"><strong>{report["size"]["total"]}</strong> attempts</span>'
-            f'{spend}<span class="chip">audience <strong>{_esc(report["audience"])}</strong>'
-            f"</span></div></header>")
+            f"The checker ran afterwards, from the stored snapshots.</p></header>")
 
     n = 5
     parts = [warn,
@@ -683,6 +680,7 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
             f'<div class="chips">{chips}</div></header>')
 
     parts = [warn]
+    sources: list[str] = []
     for i, rnd in enumerate(rounds, 1):
         one = {"metrics": rnd["metrics"], "audience": summary["audience"],
                "baseline": rnd["baseline"], "provenance": rnd["source"],
@@ -690,7 +688,8 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
                "run_id": rnd["run_id"], "source_suffix": rnd["source_suffix"],
                "comparisons": []}
         body = (_success_table(one) + _cost_section_table(one)
-                + _time_section_table(one) + _src(_round_source_line(rnd)))
+                + _time_section_table(one))
+        sources.append(_round_source_line(rnd))
         parts.append(_part(f"round-{i}", f"Round {i:02d}", rnd["run_id"],
                            f"Plan {rnd['plan']} on {rnd['suite']}.", body))
     parts.append(_part("aggregate", f"Part {len(rounds) + 1:02d} - Across rounds",
@@ -699,7 +698,8 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
                        "competitor ran. Paired figures are never pooled.",
                        _aggregate_table(summary) + _stratification_table(summary)
                        + f'<div class="callout"><span class="label">Method</span>'
-                       f'{_esc(summary["statement"])}</div>'))
+                       f'{_esc(summary["statement"])}</div><h4>Source lines</h4>'
+                       f'<ul class="src">{"".join(f"<li>{_esc(x)}</li>" for x in sources)}</ul>'))
     return _shell("WorkflowBench summary", toc, hero, "".join(parts))
 
 
@@ -768,7 +768,7 @@ def _mtable(headers, rows, numeric_from=1, titles=None) -> str:
 
 
 def _src(text: str) -> str:
-    return f'<p class="src">{_esc(text)}</p>'
+    return ""      # source lines are listed once, in the Provenance section
 
 
 def _bars(series, kind, highlight=None) -> str:
