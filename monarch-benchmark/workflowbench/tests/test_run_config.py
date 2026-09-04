@@ -378,7 +378,7 @@ def test_monarch_needs_its_addresses_and_langfuse_keys(site):
 # because the discovery service slugifies and was creating two products per app.
 # A deliberate input change: rows from before this date are not regradable against
 # runs after it. Pre-registration (PLAN.md rule 5) -- needs Lucas's sign-off.
-CREATE_RUN_HASH = "b3de0ef1b8af73b4"
+CREATE_RUN_HASH = "ecd81ef54644f4bb"   # 4 Sep: knowledge-base hashes of seeds v3 (hyphen slugs); no stored run used the plan before
 
 # The fixture's second task moved from `recipes` to `missing`: the same file with
 # one fewer known-correct recipe, used by the hash tests and the exclusion tests.
