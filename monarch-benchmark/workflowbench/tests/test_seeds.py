@@ -306,3 +306,111 @@ def test_validate_names_a_malformed_url_template(generated, tmp_path):
     (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
     gaps = seeds.validate(tmp_path / "bad-url")
     assert len(gaps) == 1 and "malformed placeholder" in gaps[0].gap
+
+
+# ---------------------------------------------------------------- v4: responses
+# The live gap (4 Sep 2026, run-20260904-192933): every read/list carried
+# `schema: {"type": "object"}` and `extract: {"id": "$.id"}`, so Monarch's
+# planner could not chain "read the message" -> "its subject/body/sender" and
+# fell back to an AI mailbox step that failed. The response must describe the
+# record the front door actually returns.
+
+def test_gmail_read_message_exposes_the_fields_the_mock_returns(generated):
+    """The exact chain the live round could not plan: message -> subject/body/sender."""
+    out, _ = generated
+    doc = json.loads((out / "bench-gmail" / "bench-gmail_read_messages.json")
+                     .read_text(encoding="utf-8"))
+    step = doc["implementations"][0]["http_template"]["steps"][0]
+    rt = step["response_template"]
+    props = rt["schema"]["properties"]
+    for field in ("id", "subject", "from", "to", "body_plain", "date"):
+        assert field in props, (field, sorted(props))
+        assert rt["extract"][field] == f"$.{field}", field
+    assert rt["schema"]["type"] == "object"
+
+
+def test_gmail_list_messages_extracts_from_the_wrapper_key(generated):
+    """The front door answers {"messages": [...]}, not a bare array (verified 4 Sep).
+
+    And Gmail's list handler projects a stub: format="minimal" returns
+    {id, threadId} only. Promising `subject` here would tell the planner it can
+    skip the read -- the step this whole change exists to make plannable.
+    """
+    out, _ = generated
+    doc = json.loads((out / "bench-gmail" / "bench-gmail_list_messages.json")
+                     .read_text(encoding="utf-8"))
+    rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+    assert rt["schema"]["type"] == "object"
+    coll = rt["schema"]["properties"]["messages"]
+    assert coll["type"] == "array"
+    assert sorted(coll["items"]["properties"]) == ["id", "threadId"]
+    assert rt["extract"] == {"id": "$.messages[*].id",
+                             "threadId": "$.messages[*].threadId"}
+
+
+def test_salesforce_read_contact_carries_the_record_fields(generated):
+    out, _ = generated
+    doc = json.loads((out / "bench-salesforce" / "bench-salesforce_read_sobjects.json")
+                     .read_text(encoding="utf-8"))
+    rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+    assert len(rt["extract"]) > 1
+    assert rt["extract"]["Id"] == "$.Id"
+
+
+def test_reads_and_lists_extract_more_than_an_id(generated):
+    """`extract_too_thin`: the v3 state of the world must not come back."""
+    out, _ = generated
+    thin = [path.name for path, doc in _actions(out)
+            if doc["business_action"]["verb"] in ("read", "list")
+            and list(doc["implementations"][0]["http_template"]["steps"][0]
+                     ["response_template"]["extract"]) == ["id"]]
+    # What remains is a resource neither the world schema nor the corpus
+    # describes -- 16 of them in services that declare no schemas at all.
+    assert len(thin) <= 62, sorted(thin)[:10]
+    # A polymorphic query endpoint answers whatever the caller asked for, so it
+    # has no fixed record to name; every addressable resource must have one.
+    POLYMORPHIC = ("_list_query.json", "_list_search.json", "_list_v2-search.json",
+                   "_list_conversations-list.json", "_list_conversations-info.json")
+    for path, doc in _actions(out):
+        if path.parent.name not in ("bench-gmail", "bench-salesforce", "bench-slack"):
+            continue
+        if doc["business_action"]["verb"] in ("read", "list")                 and not path.name.endswith(POLYMORPHIC):
+            rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+            assert len(rt["extract"]) > 1, path
+
+
+def test_creates_and_updates_return_the_resource(generated):
+    """A create's response is the record, so its fields are extractable too."""
+    out, _ = generated
+    doc = json.loads((out / "bench-salesforce" / "bench-salesforce_update_opportunity.json")
+                     .read_text(encoding="utf-8"))
+    rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+    assert "StageName" in rt["schema"]["properties"]
+    assert rt["extract"]["StageName"] == "$.StageName"
+
+
+def test_validate_names_extract_too_thin(generated, tmp_path):
+    out, _ = generated
+    folder = tmp_path / "thin" / "bench-gmail"
+    folder.mkdir(parents=True)
+    victim = out / "bench-gmail" / "bench-gmail_read_messages.json"
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    doc["implementations"][0]["http_template"]["steps"][0][
+        "response_template"]["extract"] = {"id": "$.id"}
+    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
+    gaps = seeds.validate(tmp_path / "thin")
+    assert any("extract_too_thin" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_a_resource_with_no_known_fields_is_not_a_gap(generated, tmp_path):
+    """Only a *known* resource makes a thin extract a gap; an opaque one is fine."""
+    out, _ = generated
+    folder = tmp_path / "opaque" / "bench-gmail"
+    folder.mkdir(parents=True)
+    victim = out / "bench-gmail" / "bench-gmail_read_messages.json"
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    step = doc["implementations"][0]["http_template"]["steps"][0]
+    step["response_template"] = {"status": 200, "extract": {"id": "$.id"},
+                                 "schema": {"type": "object"}}
+    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
+    assert not any("extract_too_thin" in g.gap for g in seeds.validate(tmp_path / "opaque"))

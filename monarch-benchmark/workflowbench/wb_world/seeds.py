@@ -81,19 +81,16 @@ def _body_template(op: dict[str, Any]) -> dict[str, str]:
     return {name: "{{%s}}" % name for name in sorted(schema.get("properties") or {})}
 
 
-def _extract(schema: dict[str, Any]) -> dict[str, str]:
+def _extract(schema: dict[str, Any], prefix: str = "$.") -> dict[str, str]:
+    """Name every field of the response, so a later step can chain onto any of them.
+
+    v3 named only `$.id`, which is what left Monarch's planner unable to go from
+    "read the message" to "its subject/body/sender" (round run-20260904-192933).
+    """
     props = schema.get("properties") or {}
-    ids = {n: f"$.{n}" for n in sorted(props)
-           if n == "id" or n.endswith("_id") or n.endswith("Id")}
-    if ids:
-        return ids
     if props:
-        first = sorted(props)[0]
-        return {first: f"$.{first}"}
-    # ponytail: today every simulated response schema is a bare {"type": "object"}, so this
-    # is the only branch that ever runs and every action extracts $.id. The id-detection
-    # above is for when openapi.py starts describing response bodies.
-    return {"id": "$.id"}
+        return {n: f"{prefix}{n}" for n in sorted(props)}
+    return {"id": f"{prefix}id"}
 
 
 def _url_template(base: str, service: str, path: str, op: dict[str, Any]) -> str:
@@ -258,6 +255,81 @@ def _resource_fields(service: str, path: str) -> tuple[str, dict[str, dict[str, 
     return (segments[-1] if segments else "root"), {}
 
 
+# Lists whose handler projects a stub instead of the record. Gmail's
+# `messages.list` hardcodes format="minimal" and returns {id, threadId} only
+# (impl/gmail.py, verified against a live front door 4 Sep 2026); advertising
+# the full record there would tell the planner it can skip the read -- the very
+# step this file exists to make plannable. Slack's lists return whole records.
+# ponytail: one observed exception, not a per-handler projection model.
+# Upgrade: probe each list once and record what it actually returned.
+_STUB_LIST_FIELDS = {("gmail", "messages"): ("id", "threadId")}
+
+
+# The noun an RPC verb answers with. Anything unlisted (`info`, `list`, `get`)
+# answers about the segment before the dot, which is already the resource.
+_RPC_NOUN = {"history": "message", "replies": "message", "messages": "message",
+             "members": "user", "lookupbyemail": "user"}
+
+
+def _record_schema(service: str, path: str) -> dict[str, Any]:
+    """The record the front door actually returns for the resource `path` addresses.
+
+    Two sources, because neither alone is the wire truth (verified against a live
+    `EpisodeHTTPShim`, 4 Sep 2026):
+
+      * the world schema names what Salesforce serves (`Id`, `StageName`);
+      * the corpus names what Gmail serves (`subject`, `body_plain`, `from`) --
+        the jsonc `Message` schema describes the real Google API (`snippet`,
+        `payload`), which the mock never emits.
+
+    So both are merged. A corpus key wins on collision, since it is a value the
+    mock demonstrably stored, and `from_` is de-mangled to the served `from`.
+    """
+    schemas = _world_fields().get(service) or {}
+    segments = [s for s in path.strip("/").split("/") if s and not s.startswith("{")]
+    # An RPC-shaped segment names its resource before the dot: Slack's
+    # `conversations.history` answers messages, `users.info` a user.
+    if segments and "." in segments[-1]:
+        head, _, tail = segments[-1].partition(".")
+        noun = _RPC_NOUN.get(tail.lower(), "") or head
+        segments = segments[:-1] + [noun]
+    props: dict[str, Any] = {}
+    for segment in reversed(segments):
+        for candidate in (segment, _singular(segment)):
+            declared = schemas.get(candidate.lower())
+            if declared:
+                props = {name: {"type": _schema_field_type(spec)}
+                         for name, spec in declared.items()}
+                break
+        if props:
+            break
+    for segment in reversed(segments):
+        observed = _corpus_fields(service, segment)
+        if observed:
+            for name, value in observed.items():
+                # pydantic's alias for the reserved word: the wire carries `from`.
+                props.setdefault(name.rstrip("_") if name == "from_" else name,
+                                 {"type": _json_type(value)})
+            break
+    if not props and _PATH_VAR.search(path):
+        # A generic path picks its record type at runtime
+        # (`/sobjects/{sObjectType}/{id}` is Salesforce's only read). No single
+        # record fits, so name the union of the service's declared types: a
+        # superset the planner can chain on beats the bare id that broke it.
+        # ponytail: a union, so it also offers fields the chosen type lacks.
+        # Upgrade: branch the seed per sObjectType if that misleads the planner.
+        for declared in (schemas or {}).values():
+            for name, spec in declared.items():
+                props.setdefault(name, {"type": _schema_field_type(spec)})
+    return {"type": "object", "properties": props} if props else {"type": "object"}
+
+
+def _collection_key(service: str, path: str) -> str:
+    """The wrapper key a list answers under: {"messages": [...]}, never a bare array."""
+    segments = [s for s in path.strip("/").split("/") if s and not s.startswith("{")]
+    return segments[-1] if segments else "items"
+
+
 def _corpus_fields(service: str, resource: str) -> dict[str, Any]:
     """Raw (unnormalised) corpus fields for a resource, or {} when it has none."""
     for (svc, collection), values in _corpus_examples().items():
@@ -372,8 +444,30 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
     # in body_template never reaches the wire (there is no open bag).
     noun, fields = _resource_fields(service, path)
     observed = _observed(service, noun)
-    schema = (op["responses"]["200"]["content"]["application/json"]["schema"]
-              if "200" in op.get("responses", {}) else {"type": "object"})
+    # (a) the spec's own response schema when it describes something; the 47
+    # simulated documents carry a bare {"type": "object"}, so in practice (b)+(c)
+    # -- the world schema and the corpus -- are what fill this in.
+    declared = (op["responses"]["200"]["content"]["application/json"]["schema"]
+                if "200" in op.get("responses", {}) else {})
+    if declared.get("properties") or declared.get("items"):
+        schema, extract = declared, _extract(declared)
+    elif verb == "list":
+        # The front door wraps a collection under its plural key -- {"messages":
+        # [...]}, never a bare array -- so `$[*]` would miss it entirely.
+        record, key = _record_schema(service, path), _collection_key(service, path)
+        stub = _STUB_LIST_FIELDS.get((service, key))
+        if stub:
+            props = record.get("properties") or {}
+            record = {"type": "object",
+                      "properties": {f: props.get(f, {"type": "string"}) for f in stub}}
+        schema = {"type": "object",
+                  "properties": {key: {"type": "array", "items": record}}}
+        extract = _extract(record, f"$.{key}[*].")
+    elif verb == "delete":
+        schema, extract = {"type": "object"}, {"id": "$.id"}
+    else:                       # read, create, update: the response is the record
+        schema = _record_schema(service, path)
+        extract = _extract(schema)
     # A field that already addresses the record in the path is not a body field.
     in_path = set(_PATH_VAR.findall(path))
     body = {} if method == "get" else (_body_template(op)
@@ -394,7 +488,7 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
                 "url_template": _url_template(base, service, path, op),
                 "headers_template": {"content-type": "application/json"},
                 "body_template": body,
-                "response_template": {"status": 200, "extract": _extract(schema),
+                "response_template": {"status": 200, "extract": extract,
                                       "schema": schema},
             }],
         },
@@ -523,6 +617,20 @@ def _gaps_in(name: str, doc: Any) -> list[str]:
         out.append("response_template.extract is empty")
     elif not all(isinstance(v, str) and v.startswith("$.") for v in extract.values()):
         out.append("response_template.extract values must be $. paths")
+    elif ba.get("verb") in ("read", "list") and list(extract) == ["id"]:
+        # v3's whole read surface looked like this, and the planner could not
+        # chain past the id. A gap only when the schema shows there *are* fields
+        # to name: a genuinely opaque resource has nothing better to offer.
+        props = (rt.get("schema") or {}).get("properties") or {}
+        # For a list the fields live on the wrapped record, not on the wrapper:
+        # counting the wrapper key itself would call every opaque list a gap.
+        collection = next((v for v in props.values()
+                           if isinstance(v, dict) and v.get("type") == "array"), None)
+        known = ((collection.get("items") or {}).get("properties") or {}
+                 if collection is not None else props)
+        if known:
+            out.append(f"extract_too_thin: only 'id' for a resource with "
+                       f"{len(known)} known field(s): {sorted(known)[:6]}")
     if ba.get("verb") == "create":
         ents = impl.get("creates_entities") or []
         if not ents or not ents[0].get("identifier_path"):
