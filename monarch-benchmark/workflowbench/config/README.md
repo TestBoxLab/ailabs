@@ -1,4 +1,4 @@
-Benchmark inputs as YAML, one file per entry, in four kinds: `products/`, `models/`, `harnesses/`, `plans/`. Field tables and examples: `specs/001-declarative-benchmark-config/contracts/config-files.md` (repo root), extended by `specs/002-monarch-create-run/contracts/config-files.md` for the Monarch harness, the price-table kind, the knowledge-base hash file and the create + run pilot plan, and by `specs/004-monarch-run-only/contracts/config-files.md` for run-only mode, the recipes file and the run-only pilot plan.
+Benchmark inputs as YAML, one file per entry, in four kinds: `products/`, `models/`, `harnesses/`, `plans/`. Field tables and examples: `specs/001-declarative-benchmark-config/contracts/config-files.md` (repo root), extended by `specs/002-monarch-create-run/contracts/config-files.md` for the Monarch harness, the price-table kind, the knowledge-base hash file and the create + run pilot plan, by `specs/004-monarch-run-only/contracts/config-files.md` for run-only mode, the recipes file and the run-only pilot plan, and by `specs/005-task-tiers/contracts/config-files.md` for the four tier plans, the drawn task sets and the manifest.
 Values like `${MONARCH_URL}` are placeholders expanded by the harness at launch, not by the loader.
 
 ## harnesses/monarch.yaml
@@ -64,6 +64,48 @@ repetitions and competitor set as `pilot-monarch-create-run` so the two modes
 read side by side, internal audience, a cost ceiling, `approved_by` left empty
 until Carlos approves the specific run. Full example:
 `specs/004-monarch-run-only/contracts/config-files.md`.
+
+## plans/tier-simple.yaml, tier-medium.yaml, tier-complex.yaml, random-10.yaml
+
+Four pilot plans for feature 005: `create-run` mode, the same seven
+competitors and baseline as `pilot-monarch-create-run`, 2 repetitions,
+internal audience, `approved_by` left empty until Carlos approves each round
+separately. Each `tasks:` points at one of the drawn task sets below. Every
+description states the size the same way: "prompts: 10; attempts per prompt
+and competitor: 2; attempts per competitor: 20 = 10 × 2". Field table and full
+examples: `specs/005-task-tiers/contracts/config-files.md`.
+
+## tasks/tier-simple/, tier-medium/, tier-complex/, random-10/
+
+Four frozen task sets, ten tasks each, drawn from the corpus by
+`wb corpus tiers` from a recorded seed. Each file is a byte copy of its corpus
+original with `info.tier` and `info.domain` added; `contract_sha256` does not
+move, so a label never turns into a task change. Field table:
+`specs/005-task-tiers/contracts/config-files.md`.
+
+## tasks/tiers-manifest.yaml
+
+Written by `wb corpus tiers`: the difficulty measure in words, the two cut
+points, the seed, `per_tier`, one row per corpus folder, the `excluded`
+mapping with reasons, and per drawn set the per-domain counts and one row per
+task with its score, tier and hash. `seed` plus the corpus folders reproduce
+every drawn folder byte for byte. Full example:
+`specs/005-task-tiers/contracts/config-files.md`.
+
+## `wb corpus import-ab --domains all --dest 'corpus/imported-{domain}'`
+
+Free, offline. `--domains` now also accepts the six scored AutomationBench
+domains by name or the word `all` (those six plus the baseline `simple`);
+`--dest` with `{domain}` writes one folder per domain. Full flags, exit codes
+and output: `specs/005-task-tiers/contracts/cli.md`.
+
+## `wb corpus tiers --seed N`
+
+Free, offline. Scores every usable corpus task, cuts it into terciles, draws
+four ten-task sets (three by tier plus one unstratified random set, disjoint
+from the tiers) and writes them plus the manifest above. Same seed over the
+same corpus reproduces the same bytes. Full flags, exit codes and output:
+`specs/005-task-tiers/contracts/cli.md`.
 
 ## `wb monarch recipes`
 

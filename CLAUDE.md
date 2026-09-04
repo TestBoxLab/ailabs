@@ -50,7 +50,11 @@ front door), `bedrock:InvokeModel` for Carlos's AWS roles, and the Monarch-side
 telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`. Feature 004
 (Monarch in run-only mode: `wb monarch recipes`, one known-correct recipe per
 task, the engine measured alone) is specified and planned on 4 Sep —
-`specs/004-monarch-run-only/`, documents only, no code yet.
+`specs/004-monarch-run-only/`, documents only, no code yet. Feature 005 (task
+sets by difficulty tier: the six scored AutomationBench domains imported into
+the corpus, an objective difficulty score, four frozen ten-task sets — simple,
+medium, complex, random — drawn by `wb corpus tiers`) has spec, plan and tasks
+on 4 Sep — `specs/005-task-tiers/`, documents only, no code yet.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
@@ -175,7 +179,7 @@ each stage hands its artifact to the next:
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
-| `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus). |
+| `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus — including `corpus import-ab --domains all` and `corpus tiers --seed N`, feature 005). |
 | `workflowbench/config/` | Benchmark inputs as YAML; a run is one product × one plan (`wb run --product X --plan Y`). See `config/README.md`. |
 | `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`); plus what Monarch was taught (`*.monarch-kb.yaml`) and, for run-only, the known-correct recipe per task (`*.monarch-recipes.yaml`). |
 | `workflowbench/config/models/` | One language model per file: provider, prices, API key name. |
