@@ -247,9 +247,9 @@ def _corpus_tiers(args) -> int:
     for name in tiers.SET_NAMES:
         breakdown = ", ".join(f"{d} {n}" for d, n in r.by_domain[name].items())
         print(f"  {name:<13} {args.per_tier} prompts - {breakdown}")
-    folders = " ".join(f"{Path(args.out) / n}/" for n in tiers.SET_NAMES)
-    print(f"[ok] write {folders}")
-    print(f"[ok] write {Path(args.out) / 'tiers-manifest.yaml'}")
+    out = Path(args.out)
+    print("[ok] write " + " ".join(f"{(out / n).as_posix()}/" for n in tiers.SET_NAMES))
+    print(f"[ok] write {(out / 'tiers-manifest.yaml').as_posix()}")
     print("every drawn task keeps its corpus hash; info.tier and info.domain "
           "are not hashed")
     return 0
