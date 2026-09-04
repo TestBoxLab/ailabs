@@ -43,7 +43,7 @@ file with the Read tool and follow it; do not guess the fields.
 | `check --product <p> --plan <n>` | `references/check.md` |
 
 Paths are relative to `monarch-benchmark/workflowbench/`.
-Deferred items: `differs.md`.
+Deferred items: `deferred.md`.
 
 ### Rules for every subcommand
 

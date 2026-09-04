@@ -158,7 +158,7 @@ each stage hands its artifact to the next:
 | Path | Purpose |
 |---|---|
 | `CLAUDE.md` | This file — project-specific instructions. |
-| `.claude/skills/monarch-benchmark/` | Skill to prepare, confirm and run a round, and to create, edit and check every config file a round needs (`/monarch-benchmark [model\|harness\|product\|plan\|tasks\|check] ...`); `references/` holds one file per subcommand, `differs.md` the deferred items. |
+| `.claude/skills/monarch-benchmark/` | Skill to prepare, confirm and run a round, and to create, edit and check every config file a round needs (`/monarch-benchmark [model\|harness\|product\|plan\|tasks\|check] ...`); `references/` holds one file per subcommand, `deferred.md` the deferred items. |
 | `.specify/memory/constitution.md` | Governing rules for all features. |
 | `.specify/templates/` | Spec Kit spec/plan/tasks/checklist templates. |
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
@@ -189,7 +189,7 @@ each stage hands its artifact to the next:
 | `workflowbench/wb_world/openapi.py`, `wb_arms/http_shim.py` | OpenAPI documents + HTTP front door for Monarch. |
 | `workflowbench/wb_report/audiences.yaml` | Which competitors may appear in which report. |
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |
-| `workflowbench/differs.md` | Deferred items of the bench: the sandbox for competitor harnesses (future), `wb doctor --record`, and smaller items carried from features 002 to 006. |
+| `workflowbench/deferred.md` | Deferred items of the bench: the sandbox for competitor harnesses (future), `wb doctor --record`, and smaller items carried from features 002 to 006. |
 | `workflowbench/out/` | Run outputs and reports (gitignored where large). |
 | `graphify-out/` | Knowledge graph (read before code questions; refresh after). |
 | `.github/workflows/` | `ci.yml` (PRs to main or manual; free) and `smoke.yml` (manual; ~US$ 2). |
