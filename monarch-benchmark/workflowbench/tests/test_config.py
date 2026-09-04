@@ -822,3 +822,60 @@ def test_load_harness_accepts_run_only_among_the_modes(tmp_path):
     h = config.load_harness(write(tmp_path, edit(HARNESS_MONARCH, "modes",
                                                  "[create-run, run-only]")))
     assert h.modes == ["create-run", "run-only"]
+
+
+def test_tier_plans():
+    """Feature 005: the four difficulty plans differ only in the task set."""
+    site = Path(__file__).resolve().parents[1]
+    plans = {n: config.load_plan(site / "config/plans" / f"{n}.yaml")
+             for n in ("tier-simple", "tier-medium", "tier-complex", "random-10")}
+
+    for name, pl in plans.items():
+        assert pl.name == name and pl.tasks == name        # each names its own task set
+        assert pl.mode == "create-run"
+        assert pl.repetitions == 2
+        assert pl.baseline == "claude-opus-5/api"
+        assert pl.audience == "internal"
+        assert pl.approved_by is None                      # Carlos approves each round
+        assert pl.timeout_s == 900 and pl.concurrency == 4
+        assert pl.cost_ceiling_usd == 40
+        # the size in the agreed words, never a bare per-competitor total
+        assert ("prompts: 10; attempts per prompt and competitor: 2; attempts per "
+                "competitor: 20 = 10 x 2; competitors: 7; attempts in the round: "
+                "140") in pl.description.lower()
+
+    # all four carry the same seven competitors, in the same order
+    shapes = {n: [(c.model, c.harness) for c in pl.competitors] for n, pl in plans.items()}
+    assert len(set(map(tuple, shapes.values()))) == 1
+    assert len(next(iter(shapes.values()))) == 7
+
+    # and they are the pilot's seven, so the four rounds and the pilot can be
+    # read side by side (contracts/config-files.md)
+    pilot = config.load_plan(site / "config/plans/pilot-monarch-create-run.yaml")
+    assert [(c.model, c.harness) for c in pilot.competitors] == next(iter(shapes.values()))
+    assert pilot.mode == "create-run" and pilot.baseline == "claude-opus-5/api"
+
+
+def test_monarch_kb_keys_are_hyphenated_product_slugs(tmp_path):
+    """The discovery service slugifies `[^a-z0-9]+`; underscores made two products."""
+    import yaml
+    from wb_world.seeds import product_slug
+    product = config.load_product(config.DEFAULT_CONFIG_DIR / "products" / "simulated-apps.yaml")
+    kb = {product_slug(s): f"{i:064x}" for i, s in enumerate(product.services)}
+    path = tmp_path / "simulated-apps.monarch-kb.yaml"
+
+    def write(mapping):
+        path.write_text(yaml.safe_dump(
+            {"product": "simulated-apps", "generated_at": "2026-09-04T00:00:00Z",
+             "seeds_format": "public-api-seeds@1",
+             "shim_public_url": "http://host.docker.internal:9105",
+             "kb": mapping}), encoding="utf-8")
+        return path
+
+    assert config.load_monarch_kb(write(kb), product).kb == kb
+    assert "bench-google-ads" in kb and not any("_" in k for k in kb)
+    # the old underscored spelling is refused rather than silently accepted
+    underscored = {("bench-" + s): h for s, h in zip(product.services, kb.values())}
+    with pytest.raises(ConfigError) as exc:
+        config.load_monarch_kb(write(underscored), product)
+    assert "no entry" in str(exc.value) and "-" in exc.value.field

@@ -156,7 +156,10 @@ def test_banner_matches_contract(site):
     assert _banner(rc).splitlines() == [
         "product   simulated-apps (simulated, mutable data)",
         "plan      smoke-frontier  mode=create-run  audience=internal",
-        f"tasks     2 in {(site / 'tasks').as_posix()}/   repetitions 2   competitors 1   attempts 4",
+        f"tasks     2 in {(site / 'tasks').as_posix()}/",
+        "prompts: 2; attempts per prompt and competitor: 2; "
+        "attempts per competitor: 4 = 2 x 2",
+        "competitors: 1; attempts in the round: 4",
         "ceiling   US$ 5.00   approved_by: —"]
 
 
@@ -640,3 +643,29 @@ def test_banner_of_a_create_run_plan_says_nothing_about_recipes(site, tmp_path):
     monarch_site(site, monarch_repo=str(git_repo))
     line = _banner(resolve_monarch(site)).splitlines()[-1]
     assert "run-only" not in line and "recipe" not in line and "excluded" not in line
+
+
+def test_banner_states_the_arithmetic(site):
+    """T031: the round's size in the agreed words, for every plan.
+
+    A bare per-competitor total is never printed on its own: the banner shows
+    where the number comes from, so nobody has to recompute it before spending.
+    """
+    plan = edit(PLAN, "competitors")
+    plan = edit(plan, "baseline", "oracle")
+    plan = edit(plan, "tasks", f'"{(site / "tasks").as_posix()}"')
+    plan += "competitors:\n  - {harness: oracle}\n"
+    write(site / "config/plans", plan)
+    rc = config.resolve(site / "config/products/simulated-apps.yaml",
+                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+    out = _banner(rc)
+
+    # 2 prompts x 2 repetitions = 4 per competitor, 1 competitor, 4 in the round
+    assert ("prompts: 2; attempts per prompt and competitor: 2; "
+            "attempts per competitor: 4 = 2 x 2") in out
+    assert "competitors: 1; attempts in the round: 4" in out
+
+    # the arithmetic is always spelled out, never a bare per-competitor total
+    for line in out.splitlines():
+        if "attempts per competitor" in line:
+            assert "=" in line and " x " in line

@@ -85,8 +85,13 @@ def _banner(rc) -> str:
     return "\n".join([
         f"product   {p.name} ({p.kind}, {data})",
         f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
-        f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/   repetitions {plan.repetitions}   "
-        f"competitors {len(rc.competitors)}   attempts {rc.attempts_total}",
+        f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/",
+        # The size in the agreed words, so nobody recomputes it before spending;
+        # a bare per-competitor total is never printed on its own (feature 005).
+        f"prompts: {len(rc.tasks)}; attempts per prompt and competitor: "
+        f"{plan.repetitions}; attempts per competitor: {rc.attempts_per_competitor}"
+        f" = {len(rc.tasks)} x {plan.repetitions}",
+        f"competitors: {len(rc.competitors)}; attempts in the round: {rc.attempts_total}",
         f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}",
         *monarch])
 
