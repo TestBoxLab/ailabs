@@ -329,6 +329,15 @@ class MonarchArm:
         # bench_episode_id is recorded so a human can find the attempt's traces.
         ids: dict = {"bench_episode_id": self._bench_id}
         res.turn_log.append({"monarch": ids})
+        if self.mode == "run-only":
+            # The recipe is the bench's frozen artefact, reused by every attempt of
+            # this run: nothing is authored, and nothing is deleted on any outcome
+            # (FR-012, FR-016), so there is no cleanup `finally` here at all.
+            row = self.recipes.recipes[ep.task["task"]]
+            ids["workflowId"] = row.workflow_id
+            ids["recipeVersion"] = row.recipe_version
+            self._execute(client, ep, row.workflow_id, deadline, res, ids)
+            return res
         workflow_id = None
         try:
             workflow_id = self._author(client, ep, goal, deadline, res, ids)
