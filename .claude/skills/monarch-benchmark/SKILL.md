@@ -1,7 +1,7 @@
 ---
 name: monarch-benchmark
-description: Use when preparing, confirming or running a benchmark round of Monarch against language models — the user types /monarch-benchmark, asks to run a round, a plan, a task set or wb run, or asks what a round would cost before spending.
-argument-hint: "[--product NAME] [--plan NAME]"
+description: Use when preparing, confirming or running a benchmark round of Monarch against language models, or when creating or editing the files a round needs — the user types /monarch-benchmark, asks to run a round, a plan, a task set or wb run, asks what a round would cost before spending, or asks to add a model, a harness, a product under test or a plan.
+argument-hint: "[--product NAME] [--plan NAME] | model|harness|product|plan|tasks|check ..."
 ---
 
 # Run a benchmark round
@@ -25,6 +25,44 @@ names, task ids and command lines exactly as they are — do not translate them.
   needs Lucas's sign-off and that it makes old rows non-regradable.
 - Same request text for every competitor. Audience rules live in
   `wb_report/audiences.yaml`; do not hand-pick who appears in a report.
+
+## Subcommands
+
+`/monarch-benchmark` with no subcommand (or with `--product` / `--plan`) prepares,
+confirms and runs a round — sections 1 to 6 below. Anything else **writes or
+inspects config files and never runs a round**. Read that subcommand's reference
+file with the Read tool and follow it; do not guess the fields.
+
+| Subcommand | Read this file |
+|---|---|
+| `model add\|edit <name>`, `model list` | `references/model.md` |
+| `harness add\|edit <name>`, `harness list`, `harness test <name>` | `references/harness.md` |
+| `product add\|edit <name>` | `references/product.md` |
+| `plan new\|edit <name>` | `references/plan.md` |
+| `tasks list`, `tasks show <folder>` | `references/tasks.md` |
+| `check --product <p> --plan <n>` | `references/check.md` |
+
+Paths are relative to `monarch-benchmark/workflowbench/`.
+Deferred items: `differs.md`.
+
+### Rules for every subcommand
+
+- **Show before saving.** Print the whole file you are about to write, in a
+  fenced block, and get a "sim" before the Write tool touches the disk.
+- **Validate after saving**, with the loader named in the reference file. A
+  `ConfigError` is shown **verbatim**, then explained in Portuguese, offering to
+  fix that one field. Never paraphrase the error away.
+- **Nothing runs without an explicit yes.** `wb doctor` costs cents and is
+  offered, never assumed. `wb run` is never started from a subcommand.
+- **Task files are never edited.** `tasks` only lists and shows. Changing a
+  task's prompt, starting data or approval rule needs Lucas's sign-off, and it
+  makes old rows non-regradable.
+- **`git commit` is offered, not done.** Suggest the paths; wait for a yes.
+- **Names are file stems**: every loader requires `name:` to equal the file name
+  without `.yaml`.
+- **`edit` reads the file first**, shows each field's current value, and changes
+  only what was asked. Any edit moves the config hash, so a run in flight can no
+  longer be resumed — say so before writing.
 
 ## 1. Resolve the inputs
 
