@@ -637,7 +637,6 @@ class RunConfig:
         return {**self._hashed(), "product_path": self.product_path, "plan_path": self.plan_path,
                 "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
                 "excluded_tasks": self.excluded_tasks,  # not hashed; the report's source line
-
                 "attempts_total": self.attempts_total,
                 "cost_ceiling_usd": self.plan.cost_ceiling_usd,  # not hashed; wb status reads it
                 "suite_dir": self.tasks_dir,  # ponytail: old readers (wb grade) key on suite_dir

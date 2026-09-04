@@ -318,6 +318,12 @@ class FakeMonarch:
             def _workflow_run(self):
                 sc = outer.scenario
                 wfid = urlsplit(self.path).path[len("/api/workflows/"):-len("/run")]
+                # A workflow the backend no longer holds cannot be run. Only a
+                # scenario that declares `workflows` is checked, so the create + run
+                # tests -- which run an id the fake invented -- are unaffected.
+                if sc.workflows and wfid not in sc.workflows:
+                    self._reply(404, {"error": "not_found"})
+                    return
                 with outer._lock:
                     left = outer._refusals_left.get(wfid, 0)
                     if left or (sc.active_run_never_clears and wfid in sc.workflows):

@@ -18,7 +18,7 @@ from tests.fake_fd import fd_serving
 from tests.fake_langfuse import FakeLangfuse
 from tests.fake_monarch import FakeMonarch, Scenario
 from tests.monarch_helpers import (  # noqa: F401  (repo is a fixture)
-    KB, KB_SHA_MARKER, MONARCH_ENV, RECIPES, TASKS_MARKER, arm_against, free_port, git,
+    KB, KB_SHA_MARKER, MONARCH_ENV, RECIPES, TASKS_MARKER, arm_against, free, free_port, git,
     kb_file_sha, monarch_site, repo, resolve_monarch, run_only_site)
 from tests.test_config import (  # noqa: F401  (site is a fixture)
     HARNESS_MONARCH, HARNESS_SCRIPTED, PLAN, PRICE_TABLE, edit, site, write)
@@ -265,11 +265,10 @@ def run_only_pilot_site(tmp_path, monarch_url, fd_url, port, repo, kb_hashes) ->
 def write_pilot_recipes(site, tasks, excluded: str) -> dict:
     """One recipe per pilot task but `excluded`; returns workflow id -> its detail."""
     ids = {t["task"]: f"wf-{i}" for i, t in enumerate(tasks) if t["task"] != excluded}
-    kb = site / "config/products/simulated-apps.monarch-kb.yaml"
     (site / "config/products/simulated-apps.monarch-recipes.yaml").write_text(yaml.safe_dump({
         "product": "simulated-apps", "tasks": TASKS_DIR.as_posix(),
         "generated_at": "2026-09-04T12:00:00Z",
-        "kb_hash_file_sha": __import__("hashlib").sha256(kb.read_bytes()).hexdigest(),
+        "kb_hash_file_sha": kb_file_sha(site),
         "monarch": "monarch@1a2b3c4",
         "recipes": {t: {"workflow_id": w, "recipe_version": 1,
                         "authored_at": "2026-09-04T12:00:00Z", "attempts_used": 1}
@@ -334,3 +333,64 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     cfg = json.loads(store.run(run_id)["config_json"])
     assert cfg["mode"] == "run-only" and cfg["excluded_tasks"] == {excluded: "checker_failed"}
     assert len(cfg["monarch_recipes"]["recipes"]) == 9
+
+
+# -- T024/T025: a run already in flight on the recipe --------------------------
+
+def test_active_run_is_waited_out(site, repo):
+    """A leftover run from a timed-out attempt is polled to terminal, then the run starts."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF,
+                  active_run_for={"wf-1": 2},
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = run_only_arm(site, fake, port, repo)
+        ep = episode()
+        result = arm.run(ep, deadline=time.monotonic() + 60)
+        snapshot = ep.finish()
+
+    assert result.termination == "completed" and result.error is None
+    assert city_of(snapshot) == "Denver"
+    # It kept asking until the refusals ran out, and never deleted the recipe.
+    runs = [r for r in fake.requests if r["method"] == "POST" and r["path"].endswith("/run")]
+    assert len(runs) == 3 and all(r["path"] == "/api/workflows/wf-1/run" for r in runs)
+    assert fake.deleted_workflows == []
+    assert [r["path"] for r in fake.requests].count("/api/workflows/wf-1/runs") >= 1
+
+
+def test_active_run_never_clears(site, repo, monkeypatch):
+    """Nothing can cancel a run, so a wait that expires is infrastructure, retried."""
+    monkeypatch.setattr("wb_arms.monarch.ACTIVE_RUN_WAIT_S", 0.3)
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF,
+                  active_run_never_clears=True)
+    with FakeMonarch(sc) as fake:
+        arm = run_only_arm(site, fake, port, repo)
+        with pytest.raises(InfraError) as exc:
+            arm.run(episode(), deadline=time.monotonic() + 60)
+
+    assert exc.value.kind == "infra:monarch_setup" and exc.value.retryable
+    assert "0.3" in str(exc.value) or "waited" in str(exc.value)
+    assert fake.deleted_workflows == []
+    # The front door let go of its fixed port even though the attempt failed.
+    free(port)
+
+
+# -- T026: the recorded workflow is gone --------------------------------------
+
+def test_workflow_gone_is_infra(site, repo):
+    """The run request 404s: the recipe named in the file no longer exists."""
+    port = free_port()
+    # `workflows` is empty, so prepare() would refuse first; this is the race where
+    # the workflow disappears between the check and the attempt.
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF)
+    with FakeMonarch(sc) as fake:
+        arm = run_only_arm(site, fake, port, repo)
+        # wf-1 is deleted behind the bench's back; the backend still holds others.
+        sc.workflows = {"wf-other": {"recipeVersion": 1}}
+        with pytest.raises(InfraError) as exc:
+            arm.run(episode(), deadline=time.monotonic() + 60)
+
+    assert exc.value.kind == "infra:harness_crash" and not exc.value.retryable
+    assert TASK_ID in str(exc.value) and "monarch-recipes.yaml" in str(exc.value)
+    assert fake.deleted_workflows == []

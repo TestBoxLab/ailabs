@@ -34,6 +34,17 @@ _LOCK = threading.Lock()
 
 TERMINAL_RUN_STATES = {"succeeded", "failed", "cancelled", "stopped"}
 
+# How long one read of `prepare()`'s recipe check may take: the login, and then
+# each workflow read.
+RECIPE_CHECK_BUDGET_S = 60.0
+
+# ponytail: a fixed 60 s bound on waiting out a run already in flight, not a
+# configurable one; the upgrade is a harness field if a real workflow ever
+# legitimately runs longer than a bench attempt's deadline (research R4).
+# Monarch has no run-cancel route, and run-only must not delete, so waiting is
+# the only cure for the leftover of a timed-out attempt.
+ACTIVE_RUN_WAIT_S = 60.0
+
 # A refusal the bench's own setup caused, not the workflow's: retried, and out of
 # the pass-rate denominator (FR-010, FR-011). Anything else is the workflow's fault.
 SETUP_REFUSALS = {"RUN_HOST_BLOCKED", "ENGINE_UNAVAILABLE", "RUN_ALREADY_ACTIVE"}
@@ -173,13 +184,19 @@ class MonarchArm:
                 retryable=False)
         # No lock and no front door: these are reads, and no attempt has started.
         client = MonarchClient(expand(self.harness.base_url, self.env, "base_url"),
-                               token=self.env.get(self.harness.credential_env or ""))
-        deadline = time.monotonic() + 60
+                               token=self._token or self.env.get(self.harness.credential_env or ""))
         if not client.token:
-            client.login(self.harness.login_email,
-                         self.env.get(self.harness.login_password_env or ""), deadline=deadline)
+            # prepare() runs before any attempt, so no lock: nothing else touches
+            # _token yet, and caching it here saves the first attempt a login.
+            self._token = client.login(
+                self.harness.login_email, self.env.get(self.harness.login_password_env or ""),
+                deadline=time.monotonic() + RECIPE_CHECK_BUDGET_S)
         for task_id, row in sorted(recipes.recipes.items()):
-            live = client.get_workflow(row.workflow_id, deadline=deadline)
+            # ponytail: a budget per read, not one for the whole check; the ceiling
+            # is a set so large the checks alone become slow, which a corpus-sized
+            # task set would reach long before Monarch does.
+            live = client.get_workflow(row.workflow_id,
+                                       deadline=time.monotonic() + RECIPE_CHECK_BUDGET_S)
             if live is None:
                 raise InfraError(
                     "infra:harness_crash",
@@ -488,6 +505,51 @@ class MonarchArm:
             res.flags.append(f"questions_asked={questions}")
         return workflow_id
 
+    def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
+        """Start the workflow, waiting out a run already in flight on it (FR-018).
+
+        Create + run authors a fresh workflow every attempt, so it can never meet
+        an active run; only run-only can, as the leftover of an attempt that hit
+        its deadline with no way to cancel (research R4). None means the wait
+        expired: `_infra` carries the retryable failure.
+        """
+        started_waiting = None
+        while True:
+            try:
+                return client.run_workflow(workflow_id, self._bench_id, deadline=deadline)
+            except MonarchRefused as e:
+                if e.code != "RUN_ALREADY_ACTIVE" or self.mode != "run-only":
+                    raise
+            except InfraError as e:
+                if "404" not in str(e):
+                    raise
+                # The recipe was deleted behind the bench's back, between
+                # prepare()'s check and this attempt (FR-020).
+                raise InfraError(
+                    "infra:harness_crash",
+                    f"the recipe for task {ep.task['task']} is gone: Monarch does not hold "
+                    f"workflow {workflow_id}, which {self.recipes_path} records; "
+                    "rerun `wb monarch recipes`", retryable=False) from e
+            now = time.monotonic()
+            if started_waiting is None:
+                started_waiting = now
+                res.turn_log.append({"waiting_for_active_run": workflow_id})
+            waited = now - started_waiting
+            if waited >= ACTIVE_RUN_WAIT_S or now + self.POLL_INTERVAL_S >= deadline:
+                self._infra = InfraError(
+                    "infra:monarch_setup",
+                    f"a run is still active on workflow {workflow_id} after waiting "
+                    f"{waited:.1f}s of {ACTIVE_RUN_WAIT_S:.1f}s; Monarch has no route to "
+                    "cancel it, so this attempt is retried later", retryable=True)
+                res.termination = "agent_error"
+                res.error = "run_still_active"
+                return None
+            # Read the leftover so the log says what is holding the workflow; the
+            # run route stays the gate, because only it knows when the lock is free.
+            res.turn_log.append({"active_run": client.workflow_runs(workflow_id,
+                                                                   deadline=deadline)})
+            time.sleep(self.POLL_INTERVAL_S)
+
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
         try:
@@ -497,11 +559,13 @@ class MonarchArm:
                 raise EpisodeTimeout(
                     "deadline passed in the execution phase, before the run started")
             try:
-                started = client.run_workflow(workflow_id, self._bench_id, deadline=deadline)
+                started = self._start_run(client, ep, workflow_id, deadline, res)
             except MonarchRefused as e:
                 self._infra = _classify_refusal(e.code)
                 res.termination = "agent_error"
                 res.error = f"run_refused:{e.code}"
+                return
+            if started is None:     # the wait expired; `res` and `_infra` are set
                 return
             run_id = started.get("id") or (started.get("engine") or {}).get("runId")
             ids["runId"] = run_id

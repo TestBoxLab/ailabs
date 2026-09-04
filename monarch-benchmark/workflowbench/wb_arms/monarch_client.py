@@ -169,6 +169,11 @@ class MonarchClient:
                          ok_status=(404,))
         return None if out.get("error") == "not_found" else out
 
+    def workflow_runs(self, workflow_id: str, deadline: float | None = None) -> list[dict]:
+        """The workflow's runs, newest first; `[]` when it has never run."""
+        out = self._call("GET", f"/api/workflows/{workflow_id}/runs", deadline=deadline)
+        return out.get("items") or []
+
     def get_run(self, run_id: str, deadline: float | None = None) -> dict:
         return self._call("GET", f"/api/workflows/runs/{run_id}", deadline=deadline)
 
