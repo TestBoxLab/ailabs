@@ -21,12 +21,51 @@ from wb_orchestrator.orchestrator import contract_hash
 from wb_world.episode import Episode, load_task_file
 
 
-def import_ab(domains: list[str], out_dir: str | Path) -> dict[str, Any]:
+BASELINE_DOMAIN = "simple"
+
+
+def known_domains() -> list[str]:
+    """The baseline domain plus the vendor's own public list, in a fixed order.
+
+    # ponytail: the vendor's PUBLIC_DOMAINS is the list; a second copy here would
+    # rot the moment they add a domain.
+    """
+    from automationbench.domains import PUBLIC_DOMAINS
+    return [BASELINE_DOMAIN] + sorted(PUBLIC_DOMAINS)
+
+
+def resolve_domains(domains: list[str]) -> list[str]:
+    """`all` means every known domain; an unknown name is refused by name."""
+    known = known_domains()
+    if domains == ["all"]:
+        return known
+    unknown = [d for d in domains if d not in known]
+    if unknown:
+        raise ValueError(f"unknown domain(s) {unknown}; known: {known}")
+    return domains
+
+
+def import_ab(domains: list[str], out_dir: str | Path,
+              product_services: list[str] | None = None) -> dict[str, Any]:
+    """Convert AB rows into task files, one folder per domain when asked.
+
+    `out_dir` may contain `{domain}`, which is replaced per domain. Several
+    domains without it is refused rather than mixing them in one folder.
+    """
     from automationbench.domains import get_domain_dataset
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    domains = resolve_domains(domains)
+    template = str(out_dir)
+    if len(domains) > 1 and "{domain}" not in template:
+        raise ValueError(f"several domains ({domains}) need '{{domain}}' in --dest, "
+                         f"or they would be mixed in one folder: {template}")
+
+    by_domain: dict[str, dict[str, int]] = {}
+    seeded: set[str] = set()
     written, skipped = [], []
     for domain in domains:
+        out = Path(template.replace("{domain}", domain))
+        out.mkdir(parents=True, exist_ok=True)
+        n_written, n_skipped = len(written), len(skipped)
         ds = get_domain_dataset(domain)
         for row in ds:
             info = row["info"] if isinstance(row["info"], dict) else json.loads(row["info"])
@@ -52,7 +91,12 @@ def import_ab(domains: list[str], out_dir: str | Path) -> dict[str, Any]:
                 continue
             path.write_text(json.dumps(task, indent=1, default=str))
             written.append(task_name)
+            seeded |= {k for k in task["info"]["initial_state"] if k != "meta"}
+        by_domain[domain] = {"written": len(written) - n_written,
+                             "unchanged": len(skipped) - n_skipped}
+    missing = sorted(seeded - set(product_services)) if product_services is not None else []
     return {"written": len(written), "unchanged": len(skipped),
+            "by_domain": by_domain, "missing_services": missing,
             "tasks": written[:20] + (["..."] if len(written) > 20 else [])}
 
 
