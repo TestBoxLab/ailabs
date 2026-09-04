@@ -130,6 +130,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 | D10 | Monarch phase telemetry | Merged into D7 — feature 002 reads phase spans and token usage from Langfuse instead of a separate deliverable. |
 | D11 | Langfuse + Slack output | One Langfuse trace per test; Slack post rendered from the report. |
 | D12 | Second target platform design | Which real platform, tenant, reset, scoped checker, legal check. |
+| D13 | Rounds by difficulty tier | The six scored AutomationBench domains imported and declared (800-task corpus); four task sets frozen by `wb corpus tiers` — tier-simple, tier-medium, tier-complex and random-10, ten prompts each, drawn from a recorded seed with the measure and cut points in `tasks/tiers-manifest.yaml`; four rounds run separately against the same competitors as `pilot-monarch-create-run` (prompts: 10; attempts per prompt and competitor: 2; attempts per competitor: 20 = 10 × 2; competitors: 7; attempts in the round: 140), each with its own approval and its own internal report (feature 005, `specs/005-task-tiers/`). |
 
 ---
 
@@ -152,9 +153,12 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [x] F3 `.github/workflows/smoke.yml`: manual paid smoke (10 tasks, k ≤ 2 enforced), report as artifact. Weekly schedule present but commented out. Needs repo secrets.
 - [x] F4 `wb corpus declare`: derives `expected_changes` from assertion types and `allowed_changes` from a short per-service side-effect list (`wb_orchestrator/declare.py`). Reproduces all 10 manual pilot contracts exactly; offline regrade of smoke-frontier-001 flips only the two `closed_won` Opus verdicts to pass.
 - [x] F5 Corpus `imported-simple` declared in place (200/200, 0 unmapped types); no-op and validation green.
-- [ ] F6 Pilot `tasks/` still carry Lucas's manual contracts (missing the Salesforce close pair). Replace with the derived ones after Lucas agrees; contract hashes change.
+- [ ] F6 Pilot `tasks/` still carry Lucas's manual contracts (missing the Salesforce close pair). Replace with the derived ones after Lucas agrees; contract hashes change. Until then a tier round (derived rules) and the pilot round (manual rules) are not rule-identical.
 - [ ] F7 Scripted oracle covers only Salesforce field updates: 184 of 200 corpus tasks have no oracle check in CI. Extend the oracle per assertion type, or accept no-op + smoke as the guard.
 - [ ] F8 Slack post from the smoke workflow (needs a webhook secret).
+- [ ] F9 Import the six scored AutomationBench domains (finance, hr, marketing, operations, sales, support; 100 tasks each) into `corpus/imported-<domain>`, derive their approval rules with `wb corpus declare` and the reviewed side-effect list, and validate. Free and offline. All 42 services they seed are already among the product's 47 (measured 4 Sep). → feature 005 (`specs/005-task-tiers/`)
+- [ ] F10 `wb corpus tiers --seed N`: score every corpus task (services seeded + expected changes + tools needed), cut at the terciles (9 and 12 today), draw ten per tier stratified by domain plus ten from the whole corpus, and write four frozen task sets plus `tasks/tiers-manifest.yaml`. Drawn tasks are byte copies whose contract hash does not move; `info.tier` and `info.domain` are excluded from the hash. Free and offline. → **D13** → feature 005
+- [ ] F11 Run the four rounds one at a time in the order simple, medium, complex, random, each with Carlos's approval of that specific run stated as "prompts: 10; attempts per prompt and competitor: 2; attempts per competitor: 20 = 10 × 2; competitors: 7; attempts in the round: 140" and a cost band. → **D13**
 
 ### WS-B · Monarch on the simulated target, three modes
 
@@ -214,6 +218,10 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 3 Sep 2026 | A question during authoring gets one fixed reply, hardcoded; questions counted per attempt. | Carlos |
 | 4 Sep 2026 | In run-only, "known-correct" means a workflow Monarch itself authored, off the clock, whose run passed the bench's checker. Nothing else counts as correct — not a recipe a person wrote, not one converted from the answer key. | Carlos |
 | 4 Sep 2026 | Run-only reuses one kept recipe per task (never deleted, verified by recipe version before each run); a task with no passing recipe leaves the task set of **every** competitor, and the report says how many were excluded and why. | Carlos |
+| 4 Sep 2026 | Difficulty is measured in three tiers of ten prompts each, run as **separate rounds** against the same competitors, plus a ten-prompt random draw as a check on the blended average. AutomationBench's own hard-set method (the ten hardest per domain, on a private set we do not have) is not copied. | Carlos |
+| 4 Sep 2026 | The difficulty measure is objective and computed from the task file alone: services seeded + expected changes + tools needed; tiers are the terciles of the whole corpus (9 and 12 today), ties falling in the lower tier. Recorded alternative: domain as the proxy. **To be confirmed with Lucas before the drawn sets are frozen and committed.** | Carlos |
+| 4 Sep 2026 | A drawn task is a byte copy of its corpus original with `info.tier` and `info.domain` added; those two keys are excluded from the contract hash, so a label cannot make a copy a different task. No prompt, starting data or approval rule is ever edited by the draw. | Carlos |
+| 4 Sep 2026 | Repetitions stay at 2 per prompt and competitor. Every document states "prompts: N; attempts per prompt and competitor: 2; attempts per competitor: N × 2", never only the per-competitor total. | Carlos |
 
 ## 5. Open questions
 
@@ -258,3 +266,9 @@ or the offline implementation; all three are Monarch-side improvements, not bloc
 Note: Monarch attempts are named `monarch@<version>`; `wb_report/audiences.yaml`'s `public-rung2`
 today allows only the exact name `monarch`. A public report with the real Monarch competitor needs a
 `monarch@*` pattern (or equivalent) added there before publication.
+
+**Feature 005 open questions** (`specs/005-task-tiers/spec.md`; only the first blocks committing the drawn task sets; none blocks the code or its tests):
+
+- **Confirm the difficulty measure** (services seeded + expected changes + tools needed, terciles at 9 and 12) before the drawn sets are frozen. Measured 4 Sep: the lower tercile is nearly all `simple`-domain tasks and the upper nearly all scored-domain tasks, so tier and domain overlap; if a clean difficulty variable is wanted, the simple tier must also draw from the scored domains' easy end (a different cut rule). Alternative on the table: domain as the proxy. Owner: Carlos + Lucas.
+- **Lucas's AutomationBench patches** (`1.0.6+evalrepair.10`) may change scored-domain tasks; applied after a draw they change hashes and force a redraw. Owner: Lucas.
+- **Unmapped assertion types in the six scored domains**: how many, and whether `declare.py`'s map needs extending before the draw; an unmapped task is excluded from the pool either way. Owner: Carlos to measure, Lucas to sign off.
