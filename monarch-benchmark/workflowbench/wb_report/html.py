@@ -864,6 +864,10 @@ def _task_rows(report: dict, tasks_dir: str | Path = "tasks") -> str:
         cell = row["cells"].get(mon) if mon else None
         if cell is None:
             verdict = '<span class="badge">not run</span>'
+        elif cell.get("on_retry") and cell["passed"]:
+            # the first attempt failed and a later one passed: a different
+            # result from passing outright, and worth saying so
+            verdict = '<span class="badge warn">pass on retry</span>'
         elif cell["attempted"] and cell["passed"] == cell["attempted"]:
             verdict = '<span class="badge good">pass</span>'
         else:
@@ -893,11 +897,29 @@ def _verdict_class(mon_value, best_value, lower_is_better: bool) -> str:
 _EXEC_TOC = [("headline", "Headline"), ("charts", "Every competitor"),
              ("tasks", "What each task asked"), ("verdict", "In one sentence")]
 
+_RETRY_LABEL = "After one retry"
+
 _HEADLINE = [
-    ("Success rate", lambda m: m["strict_pass"]["mean"], "rate", False, "higher is better"),
-    ("Cost per passed attempt", lambda m: m["cost_per_passed"], "money", True, "lower is better"),
-    ("Median time per attempt", lambda m: m["wall_clock"]["median"], "seconds", True, "lower is better"),
+    ("Success, first try", lambda m: m["first_try_pass"]["mean"], "rate", False,
+     "higher is better"),
+    ("Success after one retry", lambda m: m["pass_after_retry"]["mean"], "rate",
+     False, "higher is better"),
+    ("Cost per passed attempt", lambda m: m["cost_per_passed"], "money", True,
+     "lower is better"),
+    ("Median time per attempt", lambda m: m["wall_clock"]["median"], "seconds",
+     True, "lower is better"),
 ]
+
+
+def _has_retries(report: dict) -> bool:
+    """Whether this round retried anything: a row carrying the flag, or a plan
+    that asked for retries. Without one, "after retry" is "any repetition" and
+    the second chart would only repeat the first on a single-attempt round."""
+    if any(m["retries"]["count"] for m in report["metrics"]):
+        return True
+    if report["provenance"].get("retry_on_fail"):
+        return True
+    return report["size"]["repetitions"] > 1
 
 
 def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
@@ -1058,9 +1080,12 @@ def _overview_section(report: dict) -> str:
 
 def _success_table(report: dict) -> str:
     headers = ["competitor", "attempts", "passed", "strict pass", "of",
-               "pass over reps", "infra", "infra rate", "agent errors", "timeouts"]
+               "first try", "after retry", "retries", "pass over reps", "infra",
+               "infra rate", "agent errors", "timeouts"]
     rows = [[m["arm"], _fmt(m["attempts"]), _fmt(m["passed"]),
              _fmt(m["strict_pass"], "rate"), _fmt(m["strict_pass_denominator"]),
+             _fmt(m["first_try_pass"], "rate"), _fmt(m["pass_after_retry"], "rate"),
+             _fmt(m["retries"]["count"]),
              _fmt(m["pass_over_repetitions"], "rate"), _fmt(m["infra"]),
              _fmt(m["infra_rate"], "rate"), _fmt(m["agent_errors"]),
              _fmt(m["timeouts"])]
@@ -1073,7 +1098,14 @@ def _success_section(report: dict) -> str:
     """Section 2: did it work. The chart, the table, the matrix, the comparison."""
     series = [(m["arm"], m["strict_pass"]["mean"], m["strict_pass"]["sem"])
               for m in report["metrics"]]
-    chart = _bar_chart(series, kind="rate")
+    chart = "<h3>Strict pass rate</h3>" + _bar_chart(series, kind="rate")
+    chart += "<h3>First try</h3>" + _bar_chart(
+        [(m["arm"], m["first_try_pass"]["mean"], m["first_try_pass"]["sem"])
+         for m in report["metrics"]], kind="rate")
+    if _has_retries(report):
+        chart += f"<h3>{_RETRY_LABEL}</h3>" + _bar_chart(
+            [(m["arm"], m["pass_after_retry"]["mean"], m["pass_after_retry"]["sem"])
+             for m in report["metrics"]], kind="rate")
     table = _success_table(report)
     body = chart + table + _matrix_tables(report) + _comparison_table(report)
     return body

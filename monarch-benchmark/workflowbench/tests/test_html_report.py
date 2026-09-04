@@ -350,7 +350,7 @@ def test_matrix_block(four_arm_store):
     assert t1["domain"] is None and t1["tier"] is None
     assert t1["cells"]["alpha"] == {"passed": 2, "attempted": 2, "infra": 0,
                                     "category": "passed", "detail": None,
-                                    "trial": None}
+                                    "trial": None, "on_retry": False}
 
     t2 = {r["task_id"]: r for r in m["rows"]}["t2"]
     # alpha failed t2 once on an unexpected change; the paths are the detail
@@ -361,7 +361,7 @@ def test_matrix_block(four_arm_store):
     # beta's t2 pair is one infra attempt and one assertion failure
     assert t2["cells"]["beta"] == {"passed": 0, "attempted": 1, "infra": 1,
                                     "category": "infra", "detail": "infra:rate_limit",
-                                    "trial": 0}
+                                    "trial": 0, "on_retry": False}
     # gamma's t2 pair errored
     assert t2["cells"]["gamma"]["category"] == "error"
     assert t2["cells"]["oracle"]["category"] == "assertion failed"
@@ -456,11 +456,14 @@ def m4_store(tmp_path):
     return store
 
 
-def test_markdown_is_unchanged(m4_store):
-    """T023 (FR-013, SC-008): the markdown report is what it was before this
-    feature - the new blocks changed nothing. The expected text below was
-    captured from the pre-006 renderer and is asserted verbatim, so any drift in
-    render_md fails here rather than in a reader's inbox."""
+def test_markdown_table_is_pinned(m4_store):
+    """The markdown report, asserted verbatim so any unintended drift fails here
+    rather than in a reader's inbox.
+
+    It gained three columns - first try, after retry, retries - when the retry
+    metrics landed; everything else is byte-for-byte what the pre-006 renderer
+    produced. The text below was captured from the renderer, never hand-typed.
+    """
     from wb_report.report import build_report, render_md
 
     md = render_md(build_report(m4_store, "run-x", audience="internal",
@@ -474,11 +477,11 @@ def test_markdown_is_unchanged(m4_store):
         '\n'
         '## Per-arm results\n'
         '\n'
-        '| arm | strict pass ± SEM | pass^k | infra rate | cache hit | cost (USD) |\n'
-        '|---|---|---|---|---|---|\n'
-        '| `kimi-k3/api` | 75.0% ± 25.0% | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
-        '| `monarch` | 75.0% ± 25.0% | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
-        '| `monarch-lab` | 100.0% ± 0.0% | 100.0% ± 0.0% | 0.0 | 0.7 | 0.04 |\n'
+        '| arm | strict pass ± SEM | first try | after retry | retries | pass^k | infra rate | cache hit | cost (USD) |\n'
+        '|---|---|---|---|---|---|---|---|---|\n'
+        '| `kimi-k3/api` | 75.0% ± 25.0% | 100.0% ± 0.0% | 100.0% ± 0.0% | 0 | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
+        '| `monarch` | 75.0% ± 25.0% | 50.0% ± 50.0% | 100.0% ± 0.0% | 0 | 50.0% ± 50.0% | 0.0 | 0.7 | 0.04 |\n'
+        '| `monarch-lab` | 100.0% ± 0.0% | 100.0% ± 0.0% | 100.0% ± 0.0% | 0 | 100.0% ± 0.0% | 0.0 | 0.7 | 0.04 |\n'
         '  \n'
         '  `src: workflowbench-synthetic@0.1 · v0.1 · n=4 · kimi-k3/api · run-x · cost missing on 0/8 attempts` · contracts: abc123de\n'
         '  \n'
@@ -1322,8 +1325,10 @@ def test_executive_page_shape(phase_store, tmp_path):
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 3          # the three headline cards
-    assert page.count('class="bars"') == 3           # one chart per metric
+    assert page.count('class="mcard"') == 4          # the four headline cards
+    assert page.count('class="bars"') == 4           # one chart per metric
+    assert "Success, first try" in page
+    assert "Success after one retry" in page
     assert "Monarch benchmark" in page
     # the design system, not our own styling
     assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
@@ -1441,3 +1446,241 @@ def test_long_chart_labels_are_shortened_with_the_full_name_in_a_tooltip():
     svg = _bar_chart([("monarch@797a8e5d1+feat/railway-dev-deploy", 0.0, None)])
     assert "<title>monarch@797a8e5d1+feat/railway-dev-deploy</title>" in svg
     assert "monarch@797a8e5d1+fe…</text>" in svg
+
+
+# -- first try, after retry, retries -----------------------------------------
+
+def _attempt(task, trial, passed, termination="completed", retry=False):
+    """A row built by hand: the fields these three metrics actually read."""
+    flags = ["retry=1"] if retry else []
+    return _row(task, "a", trial, passed, termination=termination, flags=flags,
+                assertions=passed).model_dump()
+
+
+def test_first_try_and_after_retry_on_a_retry_round():
+    """The shape `retry_on_fail` produces: one attempt per prompt, plus a retry
+    (trial 1, flagged) only where the first failed."""
+    from wb_report.metrics import competitor_metrics
+
+    rows = [
+        _attempt("t1", 0, True),                        # passed first time
+        _attempt("t2", 0, False),                       # failed, retried, passed
+        _attempt("t2", 1, True, retry=True),
+        _attempt("t3", 0, False),                       # failed, retried, failed
+        _attempt("t3", 1, False, retry=True),
+    ]
+    m = competitor_metrics(rows, k=1)
+    assert m["first_try_pass"]["mean"] == pytest.approx(1 / 3)   # only t1
+    assert m["first_try_pass"]["n"] == 3                         # n is prompts
+    assert m["pass_after_retry"]["mean"] == pytest.approx(2 / 3)  # t1 and t2
+    assert m["retries"] == {"count": 2, "prompts_retried": 2,
+                            "share": pytest.approx(2 / 3)}
+    # strict pass still averages every attempt, unchanged by this feature
+    assert m["strict_pass"]["mean"] == pytest.approx((1.0 + 0.5 + 0.0) / 3)
+
+
+def test_after_retry_is_any_repetition_without_retries():
+    """A round with plain repetitions and no retry flag: `pass_after_retry` is
+    "any repetition passed", which answers the same question."""
+    from wb_report.metrics import competitor_metrics
+
+    rows = [_attempt("t1", 0, False), _attempt("t1", 1, True),   # 2 repetitions
+            _attempt("t2", 0, True), _attempt("t2", 1, True),
+            _attempt("t3", 0, False), _attempt("t3", 1, False)]
+    m = competitor_metrics(rows, k=2)
+    assert m["first_try_pass"]["mean"] == pytest.approx(1 / 3)   # trial 0 only
+    assert m["pass_after_retry"]["mean"] == pytest.approx(2 / 3)
+    assert m["retries"]["count"] == 0                            # nothing flagged
+    assert m["retries"]["share"] == pytest.approx(0.0)
+
+
+def test_infrastructure_never_consumes_a_retry():
+    """An infrastructure failure is the harness's problem: it is dropped before
+    the first attempt is chosen, so the real first attempt is what counts."""
+    from wb_report.metrics import competitor_metrics
+
+    rows = [_attempt("t1", 0, False, termination="infra:rate_limit"),
+            _attempt("t1", 1, True)]
+    m = competitor_metrics(rows, k=1)
+    assert m["first_try_pass"]["mean"] == pytest.approx(1.0)
+    assert m["pass_after_retry"]["mean"] == pytest.approx(1.0)
+
+    only_infra = [_attempt("t1", 0, False, termination="infra:rate_limit")]
+    assert competitor_metrics(only_infra, k=1)["first_try_pass"]["mean"] is None
+    assert competitor_metrics(only_infra, k=1)["retries"]["share"] is None
+
+
+def test_first_try_equals_strict_pass_with_one_attempt_each():
+    """One attempt per prompt and no retries: all three pass figures agree."""
+    from wb_report.metrics import competitor_metrics
+
+    rows = [_attempt("t1", 0, True), _attempt("t2", 0, False)]
+    m = competitor_metrics(rows, k=1)
+    assert m["first_try_pass"]["mean"] == pytest.approx(0.5)
+    assert m["pass_after_retry"]["mean"] == pytest.approx(0.5)
+    assert m["strict_pass"]["mean"] == pytest.approx(0.5)
+
+
+# -- the executive page -------------------------------------------------------
+
+def test_executive_page_shape(phase_store, tmp_path):
+    """Monarch first everywhere, five sections, and the design system's markup."""
+    from wb_report.report import build_report, render_executive
+
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"),
+                            tasks_dir=tmp_path)
+    for ident in ("headline", "charts", "tasks", "verdict"):
+        assert f'<section class="part" id="{ident}">' in page, ident
+    assert page.count('class="mcard"') == 4          # the four headline cards
+    assert page.count('class="bars"') == 4           # one chart per metric
+    assert "Success, first try" in page
+    assert "Success after one retry" in page
+    assert "Monarch benchmark" in page
+    # the design system, not our own styling
+    assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
+    assert 'class="part-eyebrow"' in page
+    # the stakeholder page carries no chips, no source lines and no provenance
+    assert 'class="chip"' not in page and 'class="src"' not in page
+    assert 'id="provenance"' not in page
+    # Monarch leads every bar chart
+    for chart in page.split('<div class="bars">')[1:]:
+        first = chart[:chart.index("</div>", chart.index('class="nm"'))]
+        assert "monarch" in first, first[:80]
+
+
+def test_executive_task_rows_are_monarch_only(phase_store, tmp_path):
+    """One full-width row per task with a single Monarch verdict; the other
+    competitors are deliberately absent from this section."""
+    import re
+
+    from wb_report.report import build_report, render_executive
+
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"),
+                            tasks_dir=tmp_path)
+    assert "taskgrid" not in page                    # no grid: stacked rows
+    rows = re.findall(r'<div class="taskrow">(.*?)</div></div>', page, re.S)
+    assert len(rows) == 2                            # one per task
+    for row in rows:
+        assert "alpha" not in row                    # no other competitor
+        assert row.count('class="badge') == 1        # exactly one verdict
+
+
+def test_executive_verdict_colours(four_arm_store, phase_store, tmp_path):
+    """Monarch at or above the best model is good, below it is crit, and an
+    undefined figure is crit with its reason."""
+    from wb_report.html import _verdict_class
+
+    # success: higher is better
+    assert _verdict_class(0.9, 0.8, lower_is_better=False) == "good"
+    assert _verdict_class(0.7, 0.8, lower_is_better=False) == "crit"
+    assert _verdict_class(0.8, 0.8, lower_is_better=False) == "good"   # "at or above"
+    # cost and time: lower is better
+    assert _verdict_class(0.5, 1.0, lower_is_better=True) == "good"
+    assert _verdict_class(2.0, 1.0, lower_is_better=True) == "crit"
+    # a figure we cannot compute is not a pass
+    assert _verdict_class(None, 1.0, lower_is_better=True) == "crit"
+
+    from wb_report.report import build_report, render_executive
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"), tasks_dir=tmp_path)
+    assert 'class="big crit"' in page or 'class="big good"' in page
+
+
+def test_report_cli_format_executive(four_arm_store, tmp_path):
+    """`wb report --format executive` writes the stakeholder page beside the
+    markdown; the default still writes the technical one."""
+    from wb_orchestrator.cli import main
+
+    db, out = str(four_arm_store.path), tmp_path / "r"
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle", "--format", "executive"]) == 0
+    exe = out / "report-run-h-internal-executive.html"
+    assert exe.exists()
+    assert 'id="headline"' in exe.read_text(encoding="utf-8")
+
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle"]) == 0
+    tech = out / "report-run-h-internal.html"
+    assert 'id="overview"' in tech.read_text(encoding="utf-8")
+
+    # an unknown format is refused by argparse before anything is written
+    with pytest.raises(SystemExit):
+        main(["--db", db, "--out", str(out), "report", "run-h", "--format", "nope"])
+
+
+def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
+    """Technical and executive are siblings: same tokens, same fonts, same
+    themes, and no external resource other than the font stylesheet."""
+    import re
+
+    from wb_report.report import build_report, render_executive, render_html
+
+    rep = build_report(four_arm_store, "run-h", audience="internal",
+                       baseline_arm="oracle")
+    for page in (render_html(rep), render_executive(rep, tasks_dir=tmp_path)):
+        assert "--paper: #FAF9F5" in page and "--accent: #A66A1E" in page
+        assert '<link rel="stylesheet" href="https://fonts.googleapis.com' in page
+        assert ':root[data-theme="dark"]' in page
+        assert "Bricolage Grotesque" in page and "JetBrains Mono" in page
+        # the font stylesheet is the only external reference on either page
+        others = [u for u in re.findall(r'https?://[^"\')\s]+', page)
+                  if "fonts.googleapis.com" not in u and "fonts.gstatic.com" not in u]
+        assert others == [], others
+
+
+def test_chart_text_and_bars_use_theme_tokens(tmp_path):
+    """4 Sep: unstyled SVG text rendered black on the dark theme; unreadable."""
+    from wb_report.html import _bar_chart, CSS
+    assert "svg.chart text" in CSS and "fill: var(--ink)" in CSS
+    assert 'class="cv"' in _bar_chart([("a", 0.5, 0.1)])
+
+
+def test_value_label_sits_past_the_error_bar():
+    """4 Sep: the label was drawn under the error line and looked struck through."""
+    import re
+    from wb_report.html import _bar_chart
+    svg = _bar_chart([("a", 0.5, 0.3)])
+    band = re.search(r'<rect class="ce" x="([\d.]+)" y="\d+" width="([\d.]+)"', svg)
+    hi = float(band.group(1)) + float(band.group(2))
+    label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
+    assert label_x > hi
+
+
+def test_long_chart_labels_are_shortened_with_the_full_name_in_a_tooltip():
+    from wb_report.html import _bar_chart
+    svg = _bar_chart([("monarch@797a8e5d1+feat/railway-dev-deploy", 0.0, None)])
+    assert "<title>monarch@797a8e5d1+feat/railway-dev-deploy</title>" in svg
+    assert "monarch@797a8e5d1+fe…</text>" in svg
+
+
+# -- pass within N attempts ---------------------------------------------------
+
+
+def test_task_row_says_pass_on_retry(tmp_path):
+    """A prompt whose first attempt failed and whose retry passed reads
+    `pass on retry`, not a plain pass: the retry is the story."""
+    from wb_report.report import build_report, render_executive
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-r", "cfgr", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch"], "k": 1,
+                      "n_tasks": 2, "retry_on_fail": True})
+    # t1 passes outright; t2 fails then its retry passes
+    store.record_episode(_row("t1", "monarch", 0, True, run="run-r"))
+    store.record_episode(_row("t2", "monarch", 0, False, run="run-r", assertions=False))
+    store.record_episode(_row("t2", "monarch", 1, True, run="run-r", flags=["retry=1"]))
+    store.finish_run("run-r")
+
+    rep = build_report(store, "run-r", audience="internal")
+    cells = {r["task_id"]: r["cells"]["monarch"] for r in rep["matrix"]["rows"]}
+    assert cells["t1"]["on_retry"] is False
+    assert cells["t2"]["on_retry"] is True
+
+    page = render_executive(rep, tasks_dir=tmp_path)
+    assert "pass on retry" in page
+    m = rep["metrics"][0]
+    assert m["first_try_pass"]["mean"] == pytest.approx(0.5)   # only t1
+    assert m["pass_after_retry"]["mean"] == pytest.approx(1.0)  # both, with retry
+    assert m["retries"]["count"] == 1

@@ -119,6 +119,9 @@ an engine that timed out running a workflow that was written correctly.
 | competitor | `arm` | |
 | attempts | `len(rows)` | every attempt, infrastructure included |
 | passed | `sum(1 for r in ok if r["passed"])` | |
+| first try | `mean_sem` over prompts of 1 if the **first** non-infrastructure attempt passed, else 0 | what the competitor did with no second chance; n = prompts |
+| after retry | `mean_sem` over prompts of 1 if the first attempt **or its retry** passed, else 0 | on a `retry_on_fail` round that is trial 0 or the retry row; on a round with plain repetitions it is "any repetition passed", which answers the same question, so the figure stays meaningful either way |
+| retries | rows carrying the flag `retry=1`, with the share of prompts retried | a plan sets `retry_on_fail`; the orchestrator writes the retry as trial 1 with that flag |
 | strict pass rate +/- error | `arm_summary(rows)["strict_pass"]` - mean and SEM over per-task rates, infrastructure attempts excluded | `wb_stats.arm_summary`, unchanged |
 | pass rate over repetitions | `pass_hat_k(rows, k)["mean"] +/- ["sem"]` | `wb_stats.pass_hat_k`, unchanged |
 | strict pass denominator | `len(ok)` | the attempts the rate divides by; shown so the exclusion is visible beside the rate |
@@ -163,6 +166,31 @@ shows `n/a` in each.
 `# ponytail: phase names are read off the row, not matched against a table of
 known phases, so a phase feature 002 or 004 adds shows up with no code change
 here. Ceiling: a typo in a phase name becomes a column.`
+
+### The retry metrics
+
+A plan may ask for **one retry per failed prompt** (`retry_on_fail`): one attempt
+per prompt, plus a second one only where the first failed. The orchestrator
+writes the retry as **trial 1 carrying the flag `retry=1`**, so the report can
+tell a retry apart from a second repetition.
+
+- **Infrastructure failures never consume a retry.** They are dropped before the
+  first attempt is chosen, exactly as they are dropped from every other
+  denominator, so the first *real* attempt is what `first try` measures.
+- `strict_pass` is unchanged: it averages every attempt of a prompt. A prompt
+  that failed once and passed once scores 0.5 there, 0 in `first try` and 1 in
+  `after retry`. The three answer different questions and the page shows all
+  three.
+- On a round with one attempt per prompt and no retries the three agree.
+
+**Where they appear**: the technical page's Success section renders a `First
+try` bar chart, an `After one retry` chart (only when a row carries the retry
+flag, the plan asked for retries, or the round has more than one repetition) and
+the three columns in the success table. The executive page's four headline cards
+are success first try, success after one retry, cost per passed attempt and
+median time, with a chart each. A task row whose first attempt failed and whose
+retry passed reads `pass on retry`. The markdown metrics table carries `first
+try`, `after retry` and `retries`.
 
 ## 2. Comparison table - one row per non-baseline competitor
 

@@ -100,9 +100,14 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
             category, detail = "error", first["error"]
         else:
             category, detail = "error", first.get("termination")
+    ordered = sorted(ok, key=lambda r: r["trial"])
+    # "pass on retry": the first attempt failed and a later one passed. That is
+    # a different result from passing outright, and the page says so.
+    on_retry = bool(ordered) and not ordered[0]["passed"] and any(
+        r["passed"] for r in ordered[1:])
     return {"passed": sum(1 for r in ok if r["passed"]), "attempted": len(ok),
             "infra": len(rows) - len(ok), "category": category, "detail": detail,
-            "trial": trial}
+            "trial": trial, "on_retry": on_retry}
 
 
 def _build_matrix(arms: list[str], per_arm_rows: dict[str, list[dict]],
@@ -329,8 +334,11 @@ def render_md(report: dict[str, Any]) -> str:
             # Public renders never name gated arms — even their existence is internal.
             lines.append(f"\n{len(report['arms_stripped_by_gate'])} arm(s) withheld by audience gate")
     lines.append("\n## Per-arm results\n")
-    hdr = "| arm | strict pass ± SEM | pass^k | infra rate | cache hit |"
-    div = "|---|---|---|---|---|"
+    hdr = ("| arm | strict pass ± SEM | first try | after retry | retries "
+           "| pass^k | infra rate | cache hit |")
+    div = "|---|---|---|---|---|---|---|---|"
+    # the three retry figures come from the metrics block, matched by arm
+    by_arm = {m["arm"]: m for m in report.get("metrics", [])}
     dollars = any("cost_usd" in f for f in report["figures"] if f["kind"] == "arm_summary")
     if dollars:
         hdr += " cost (USD) |"; div += "---|"
@@ -340,7 +348,12 @@ def render_md(report: dict[str, Any]) -> str:
             continue
         phk = f["pass_hat_k"]
         phk_s = _fmt_pm({"mean": phk["mean"], "sem": phk["sem"]}) if phk["mean"] is not None else "n/a"
-        row = (f"| `{f['arm']}` | {_fmt_pm(f['strict_pass'])} | {phk_s} "
+        m = by_arm.get(f["arm"], {})
+        first = _fmt_pm(m.get("first_try_pass")) if m else "n/a"
+        after = _fmt_pm(m.get("pass_after_retry")) if m else "n/a"
+        retries = m.get("retries", {}).get("count", "n/a") if m else "n/a"
+        row = (f"| `{f['arm']}` | {_fmt_pm(f['strict_pass'])} | {first} | {after} "
+               f"| {retries} | {phk_s} "
                f"| {f['infra_rate'] if f['infra_rate'] is not None else 'n/a'} "
                f"| {f['cache_hit_rate'] if f['cache_hit_rate'] is not None else 'n/a'} |")
         if dollars:

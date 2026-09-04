@@ -25,7 +25,8 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
+from wb_stats.stats import (_is_infra, arm_summary, mean_sem, paired_wl,
+                            pass_hat_k)
 
 # A phase named `model:<name>` records what one language model cost inside an
 # attempt that used several. The writer (wb_arms/monarch.py) and this reader
@@ -103,6 +104,60 @@ def _questions_from_log(row: dict) -> int | None:
     return sum(seen.values()) or None
 
 
+# The retry a plan asks for with `retry_on_fail`: one extra attempt at a prompt
+# whose first attempt failed. The orchestrator writes it as trial 1 carrying
+# this flag, so the report can tell a retry apart from a second repetition.
+RETRY_FLAG = "retry=1"
+
+
+def _is_retry(row: dict) -> bool:
+    return RETRY_FLAG in (row.get("flags") or [])
+
+
+def _by_task(rows: list[dict]) -> dict[str, list[dict]]:
+    """Non-infrastructure attempts grouped by prompt, in trial order.
+
+    Infrastructure failures never consume a retry, so they are dropped here
+    exactly as they are dropped from every other denominator.
+    """
+    out: dict[str, list[dict]] = {}
+    for row in sorted(rows, key=lambda r: r["trial"]):
+        if not _is_infra(row):
+            out.setdefault(row["task_id"], []).append(row)
+    return out
+
+
+def _first_try_pass(rows: list[dict]) -> dict[str, Any]:
+    """Strict pass rate over the first attempt at each prompt only.
+
+    This is what the competitor did with no second chance. Mean and SEM over
+    prompts, the same shape as `strict_pass`, so the error bars read alike.
+    """
+    firsts = [attempts[0] for attempts in _by_task(rows).values() if attempts]
+    return mean_sem([1.0 if bool(r["passed"]) else 0.0 for r in firsts])
+
+
+def _pass_after_retry(rows: list[dict]) -> dict[str, Any]:
+    """The share of prompts whose first attempt or its retry passed strictly.
+
+    On a round with `retry_on_fail` that is trial 0 or the retry row. On a round
+    with plain repetitions and no retries it is "any repetition passed", which
+    answers the same question - would one more go have delivered it - so the
+    figure stays meaningful either way.
+    """
+    return mean_sem([1.0 if any(bool(r["passed"]) for r in attempts) else 0.0
+                     for attempts in _by_task(rows).values()])
+
+
+def _retries(rows: list[dict]) -> dict[str, Any]:
+    """How many retries were spent, and on what share of the prompts."""
+    retried = {r["task_id"] for r in rows if _is_retry(r)}
+    prompts = len(_by_task(rows))
+    return {"count": sum(1 for r in rows if _is_retry(r)),
+            "prompts_retried": len(retried),
+            "share": _div(len(retried), prompts)}
+
+
 def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
     """Per-phase wall-clock mean and cost total, and the cost per model.
 
@@ -158,6 +213,10 @@ def competitor_metrics(rows: list[dict], k: int) -> dict[str, Any]:
         # The two rates are wb_stats' verbatim; both exclude infrastructure
         # attempts from their denominator inside those functions.
         "strict_pass": arm_summary(rows)["strict_pass"],
+        # what one attempt achieved, and what one retry would have added
+        "first_try_pass": _first_try_pass(rows),
+        "pass_after_retry": _pass_after_retry(rows),
+        "retries": _retries(rows),
         "pass_over_repetitions": {"k": phk["k"], "mean": phk["mean"], "sem": phk["sem"]},
         "strict_pass_denominator": len(ok),
         "cost_total": cost_total,
