@@ -41,6 +41,19 @@ rows with snapshots and cost, and a report with both names.
 
 ## Live (Carlos's machine, in this order; paste outputs into `tasks.md`)
 
+Monarch runs on Railway (project `monarch-dev`), kept up only while a benchmark
+runs. Before and after any live step, from any shell:
+
+```bash
+bash C:/Users/cgmat/Desktop/TestBox/monarch/local-docs/setup/scripts/railway-ops.sh unlock   # before: rebuilds and waits for /api (8-12 min)
+bash C:/Users/cgmat/Desktop/TestBox/monarch/local-docs/setup/scripts/railway-ops.sh status   # what is up
+bash C:/Users/cgmat/Desktop/TestBox/monarch/local-docs/setup/scripts/railway-ops.sh lock     # after: instant, backend and web go away, cost stops
+```
+
+The front door is reached through the ngrok tunnel in `FRONT_DOOR_URL`
+(`shim_public_url` in the harness); the tunnel must be up on this machine.
+Details in the Monarch repo, `local-docs/setup/railway-deploy.md`.
+
 1. Monarch up with tracing: `cd <monarch>/monarch-enterprise && just dev-otel`.
    Environment: `MONARCH_URL`, `MONARCH_FD_URL`, `LANGFUSE_URL`,
    `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `MONARCH_PASSWORD` in
