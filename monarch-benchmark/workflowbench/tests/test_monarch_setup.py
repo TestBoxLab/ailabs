@@ -10,11 +10,13 @@ from tests.fake_fd import FakeFD
 from tests.fake_langfuse import FakeLangfuse
 from tests.fake_monarch import FakeMonarch
 from wb_orchestrator import cli, config, monarch_setup
+from wb_world import seeds
 
 CONFIG = config.DEFAULT_CONFIG_DIR
 PRODUCT = CONFIG / "products" / "simulated-apps.yaml"
 HARNESS = CONFIG / "harnesses" / "monarch.yaml"
 SERVICES = config.load_product(PRODUCT).services
+SLUGS = [seeds.product_slug(s) for s in SERVICES]
 
 
 @pytest.fixture()
@@ -60,12 +62,14 @@ def test_seeds_not_mounted_registers_nothing(workspace):
         assert fd.imported == {}
 
 
-def test_mounted_run_registers_imports_and_writes_the_hash_file(workspace):
+def test_mounted_run_imports_and_writes_the_hash_file(workspace):
     product, out = workspace
     with FakeFD(fixtures_dir=out) as fd, FakeMonarch() as monarch, FakeLangfuse() as langfuse:
         code, text = _run(product, out, fd.url)
         assert code == 0, text
-        assert sorted(fd.products) == sorted(f"bench-{s}" for s in SERVICES)
+        # the import creates the product; a separate POST /v1/products made a
+        # second, slugified product per app (verified 4 Sep 2026)
+        assert not any(r["path"] == "/v1/products" for r in fd.requests)
         assert len(fd.imported) == 47
         assert monarch.requests == [] and langfuse.requests == []
 
@@ -74,7 +78,7 @@ def test_mounted_run_registers_imports_and_writes_the_hash_file(workspace):
     assert doc["product"] == "simulated-apps"
     assert doc["seeds_format"] == "public-api-seeds@1"
     assert doc["shim_public_url"] == "http://host.docker.internal:9105"
-    assert list(doc["kb"]) == sorted(doc["kb"]) == sorted(f"bench-{s}" for s in SERVICES)
+    assert list(doc["kb"]) == sorted(doc["kb"]) == sorted(SLUGS)
     assert doc["kb"] == fd.imported
     assert "actions_imported" in text and "kb_hash" in text
     # loadable by the config layer that `wb run` uses

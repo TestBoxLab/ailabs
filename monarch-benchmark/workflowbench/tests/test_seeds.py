@@ -126,19 +126,104 @@ def test_parameter_shape_per_location(generated):
     assert by_name["baseId"] == {
         "name": "baseId", "classification": "entity_reference", "location": "path",
         "json_path": "$.steps[0].url.baseId", "type": "string", "required": True,
-        "entity_type": "base", "example_value": "{{baseId}}",
+        "entity_type": "base", "example_value": "001401",
         "constraints": {"helper_text": "Identifier for the Airtable base."}}
 
     body = {p["name"]: p for p in json.loads(
-        (out / "bench-slack" / "bench-slack_create_conversations.create.json")
+        (out / "bench-slack" / "bench-slack_create_conversations-create.json")
         .read_text(encoding="utf-8"))["implementations"][0]["parameters"]}
     assert body["name"] == {
         "name": "name", "classification": "typed", "location": "body",
-        "json_path": "$.name", "type": "string", "required": True,
-        "source_form_field": "name", "example_value": "name",
+        "json_path": "$.steps[0].body.name", "type": "string", "required": True,
+        "source_form_field": "name", "example_value": "Acme renewal",
         "constraints": {"helper_text": "Desired name for the new channel."}}
     assert body["is_private"]["type"] == "boolean"
     assert body["is_private"]["required"] is False
+
+
+ID_RE = re.compile(r"^bench-[a-z0-9-]+:(create|read|list|update|delete):[a-z0-9-]+$")
+
+
+def test_product_slugs_are_hyphenated_lowercase(generated):
+    """The discovery service slugifies `[^a-z0-9]+`; an underscore made two products."""
+    out, summary = generated
+    for name in summary.folders:
+        assert re.fullmatch(r"bench-[a-z0-9-]+", name), name
+        assert "_" not in name
+    assert "bench-google-ads" in summary.folders
+    for path, doc in _actions(out):
+        assert doc["business_action"]["product_id"] == path.parent.name, path
+
+
+def test_action_ids_are_three_well_formed_facets(generated):
+    """A malformed id is re-minted by the importer and collides (29 actions lost)."""
+    out, _ = generated
+    seen = {}
+    for path, doc in _actions(out):
+        aid = doc["business_action"]["id"]
+        assert ID_RE.fullmatch(aid), (path, aid)
+        product, verb, obj = aid.split(":")
+        assert product == path.parent.name, path
+        assert verb == doc["business_action"]["verb"], path
+        assert seen.setdefault(aid, path) == path, f"duplicate id {aid}"
+        assert path.name == aid.replace(":", "_") + ".json", path
+
+
+def test_salesforce_opportunity_update_matches_the_engine_reference(generated):
+    """The shape the Monarch executor reads: PATCH with real, typed body fields."""
+    out, _ = generated
+    doc = json.loads((out / "bench-salesforce" /
+                      "bench-salesforce_update_opportunity.json").read_text(encoding="utf-8"))
+    impl = doc["implementations"][0]
+    step = impl["http_template"]["steps"][0]
+    assert step["method"] == "PATCH"
+    body = {p["name"]: p for p in impl["parameters"] if p["location"] == "body"}
+    for field in ("Amount", "StageName", "CloseDate"):
+        assert field in body, sorted(body)
+        assert step["body_template"][field] == "{{%s}}" % field
+        assert body[field]["json_path"] == f"$.steps[0].body.{field}"
+        assert body[field]["classification"] == "typed"
+        # an update prunes a missing field; required would make the engine invent one
+        assert body[field]["required"] is False
+    assert body["Amount"]["type"] == "number"
+    assert body["Amount"]["example_value"] != "Amount"
+    assert "Id" not in body                       # read-only identifier
+    ident = next(p for p in impl["parameters"] if p["location"] == "path")
+    assert ident["classification"] == "entity_reference"
+    assert ident["json_path"] == f"$.steps[0].url.{ident['name']}"
+    assert "{{" not in str(ident["example_value"])
+
+
+def test_body_parameters_are_typed_and_exampled(generated):
+    out, _ = generated
+    for path, doc in _actions(out):
+        impl = doc["implementations"][0]
+        for p in impl["parameters"]:
+            if p["location"] != "body":
+                continue
+            assert p["type"] in {"number", "string", "boolean", "object"}, (path, p["name"])
+            assert p["example_value"] != p["name"], (path, p["name"])
+            if "enum_options" in p["constraints"]:
+                assert all("value" in o for o in p["constraints"]["enum_options"])
+
+
+def test_write_actions_carry_body_fields(generated):
+    """No open bag: a field with no token in the template never reaches the wire."""
+    out, _ = generated
+    empty = [path.name for path, doc in _actions(out)
+             if doc["business_action"]["verb"] in ("create", "update")
+             and not (doc["implementations"][0]["http_template"]["steps"][0]
+                      .get("body_template") or {})]
+    # What remains is RPC-shaped (`:mutate`, `search`, `convertLead`, `exports`)
+    # or a service whose world schema declares no record for the resource.
+    assert len(empty) <= 109, sorted(empty)[:10]
+    # every CRUD path of the pilot services carries its fields
+    for path, doc in _actions(out):
+        if path.parent.name not in ("bench-gmail", "bench-slack", "bench-zendesk",
+                                    "bench-google-calendar"):
+            continue
+        if doc["business_action"]["verb"] in ("create", "update"):
+            assert doc["implementations"][0]["http_template"]["steps"][0]["body_template"], path
 
 
 def test_a_missing_parameter_is_a_gap(generated, tmp_path):
@@ -153,6 +238,27 @@ def test_a_missing_parameter_is_a_gap(generated, tmp_path):
     gaps = seeds.validate(tmp_path)
     assert [g.file for g in gaps] == [victim.name]
     assert "parameters_incomplete" in gaps[0].gap
+
+
+@pytest.mark.parametrize("break_it, gap", [
+    (lambda d: d["business_action"].__setitem__("id", "bench_x:create:y"), "id_malformed"),
+    (lambda d: d["business_action"].__setitem__("id", "nope"), "id_malformed"),
+    (lambda d: d["implementations"][0]["http_template"]["steps"][0]["body_template"]
+     .__setitem__("Ghost", "{{Ghost}}"), "body_field_without_parameter"),
+    (lambda d: d["implementations"][0]["parameters"].append(
+        {"name": "Ghost", "classification": "typed", "location": "body",
+         "json_path": "$.steps[0].body.Ghost", "type": "string", "required": False}),
+     "parameter_without_token"),
+])
+def test_validate_names_the_new_gaps(generated, tmp_path, break_it, gap):
+    out, _ = generated
+    folder = tmp_path / gap
+    folder.mkdir()
+    victim = out / "bench-salesforce" / "bench-salesforce_update_opportunity.json"
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    break_it(doc)
+    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
+    assert any(gap in g.gap for g in seeds.validate(folder))
 
 
 def test_action_ids_unique_within_a_folder(generated):

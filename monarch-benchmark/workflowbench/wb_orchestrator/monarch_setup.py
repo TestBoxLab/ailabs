@@ -1,11 +1,11 @@
 """`wb monarch setup`: prepare one product's knowledge base inside Monarch, once.
 
-Six steps, printed one line each (contracts/cli.md):
+Five steps, printed one line each (contracts/cli.md):
 
   generate  write the seed folders from the product's OpenAPI documents
   mounted   the discovery service must already see them on disk
-  register  one product per simulated app
-  import    one knowledge-base import per app, hashes recorded
+  import    one knowledge-base import per app, hashes recorded; it also
+            creates the product, so the bench never registers one itself
   granted   an open question; warned about, never fails
   write     config/products/<product>.monarch-kb.yaml, the file `wb run` checks
 
@@ -97,10 +97,6 @@ def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S,
         raise Stop(4, step, f"{url} failed: {e}") from e
 
 
-def _display_name(service: str) -> str:
-    return f"{service.replace('_', ' ').title()} (benchmark)"
-
-
 def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
     def say(mark: str, step: str, detail: str = "") -> None:
         print(f"[{mark}] {step}{': ' + detail if detail else ''}", file=stdout)
@@ -124,7 +120,7 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
                               f"files_written={summary.files_written} folders={len(summary.folders)}")
 
         # 2. mounted
-        want = sorted(f"bench-{s}" for s in product.services)
+        want = sorted(seeds.product_slug(s) for s in product.services)
         listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds", "mounted", headers=fd_head).get("items", [])}
         missing = [s for s in want if s not in listed]
         if missing:
@@ -134,14 +130,8 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
             return 3
         say("ok", "mounted", f"{len(want)} seed folders visible")
 
-        # 3. register
-        for slug in want:
-            _post(f"{fd_url}/v1/products",
-                  {"slug": slug, "display_name": _display_name(slug.removeprefix("bench-"))},
-                  f"register {slug}", headers=fd_head)
-        say("ok", "register", f"{len(want)} products")
-
-        # 4. import
+        # 3. import (also creates the product: a separate POST /v1/products
+        # registered a second, slugified product per app -- verified 4 Sep 2026)
         kb: dict[str, str] = {}
         for slug in want:
             res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}",

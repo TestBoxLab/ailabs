@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -64,6 +65,16 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "action"
 
 
+def product_slug(service: str) -> str:
+    """The folder name, the product id, and the first facet of every action id.
+
+    The discovery service slugifies the slug it is given but imports a seed
+    folder under its directory name verbatim, so an underscore here produced two
+    products for the same app (verified 4 Sep 2026).
+    """
+    return "bench-" + _slugify(service)
+
+
 def _body_template(op: dict[str, Any]) -> dict[str, str]:
     schema = ((op.get("requestBody") or {}).get("content", {})
               .get("application/json", {}).get("schema") or {})
@@ -108,6 +119,59 @@ def _domain(base: str) -> str:
     return urlsplit(base).hostname or base
 
 
+# Identifiers and stamps the server owns: never writable in a request body.
+READ_ONLY = {"id", "created_at", "createdtime", "created_time", "createdat",
+             "updated_at", "updatedat", "modified_at", "etag", "self", "url",
+             "object", "resource_type", "created", "updated"}
+
+# ponytail: one example per JSON type, overridden by a real corpus value when the
+# resource is one the corpus covers. Ceiling: a field the corpus never shows gets
+# a generic literal. Upgrade: per-field examples in the jsonc schemas.
+_EXAMPLE_BY_TYPE = {"number": 1, "boolean": True, "object": {}, "string": "example"}
+
+
+def _example(name: str, type_: str, observed: dict[str, Any]) -> Any:
+    """A realistic value: the corpus's own, else a type-shaped literal."""
+    type_ = {"integer": "number", "array": "string"}.get(type_, type_)
+    value = observed.get(name.replace("_", "").lower())
+    if value not in (None, "", [], {}):
+        if isinstance(value, list):
+            return value[0] if value and not isinstance(value[0], (dict, list)) else "example"
+        if isinstance(value, dict):
+            return {}
+        return value
+    low = name.lower()
+    if type_ == "string":
+        if "date" in low or low.endswith("_at"):
+            return "2026-05-01"
+        if "email" in low:
+            return "person@example.com"
+        if low.endswith("id") or low.endswith("_id"):
+            return "001401"
+        if "name" in low or "subject" in low or "title" in low:
+            return "Acme renewal"
+    return _EXAMPLE_BY_TYPE.get(type_, "example")
+
+
+def _json_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    return "string"
+
+
+def _schema_field_type(spec: dict[str, Any]) -> str:
+    t = spec.get("type")
+    if t in ("integer", "number"):
+        return "number"
+    if t in ("boolean", "object"):
+        return t
+    return "string"
+
+
 def _singular(noun: str) -> str:
     """The importer's own singularizeNoun rules (knowledge-base/models/identity.ts)."""
     if noun.endswith("ies"):
@@ -117,6 +181,89 @@ def _singular(noun: str) -> str:
     if noun.endswith("s") and not noun.endswith("ss"):
         return noun[:-1]
     return noun
+
+
+@lru_cache(maxsize=1)
+def _world_fields() -> dict[str, dict[str, dict[str, Any]]]:
+    """service -> lowercased resource name -> {field: schema}, from the jsonc schemas.
+
+    The jsonc `schemas` map is the wire truth: `runner/arms.py` translates the
+    mock's snake_case storage to exactly these names before calling the API.
+    """
+    from wb_world.openapi import load_schemas
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for service, doc in load_schemas().items():
+        out[service] = {name.lower(): (spec.get("properties") or {})
+                        for name, spec in (doc.get("schemas") or {}).items()}
+    return out
+
+
+@lru_cache(maxsize=1)
+def _corpus_examples() -> dict[tuple[str, str], dict[str, Any]]:
+    """(service, collection) -> first non-empty value seen per field, for examples."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    root = Path(__file__).resolve().parents[1] / "corpus" / "imported-simple"
+    for f in sorted(root.glob("*.json")) if root.is_dir() else ():
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for service, collections in ((doc.get("info") or {}).get("initial_state") or {}).items():
+            if not isinstance(collections, dict):
+                continue
+            for collection, records in collections.items():
+                if not isinstance(records, list):
+                    continue
+                seen = out.setdefault((service, collection), {})
+                for record in records:
+                    if isinstance(record, dict):
+                        for key, value in record.items():
+                            if key not in seen and value not in (None, "", [], {}):
+                                seen[key] = value
+    return out
+
+
+def _observed(service: str, resource: str) -> dict[str, Any]:
+    """Corpus examples for a resource, keyed by the wire field name.
+
+    The corpus stores snake_case (`stage_name`); the wire uses `StageName`, so a
+    field matches when its lowercase-without-underscores form does.
+    """
+    examples = _corpus_examples()
+    for (svc, collection), values in examples.items():
+        if svc != service:
+            continue
+        if _singular(collection.lower()) == _singular(resource.lower()):
+            return {k.replace("_", "").lower(): v for k, v in values.items()}
+    return {}
+
+
+def _resource_fields(service: str, path: str) -> tuple[str, dict[str, dict[str, Any]]]:
+    """(resource name, writable fields) for the resource a write path addresses."""
+    schemas = _world_fields().get(service) or {}
+    segments = [s for s in path.strip("/").split("/") if s and not s.startswith("{")]
+    for segment in reversed(segments):
+        for candidate in (segment, _singular(segment)):
+            props = schemas.get(candidate.lower())
+            if props:
+                return candidate, {name: spec for name, spec in props.items()
+                                   if name.lower() not in READ_ONLY}
+    # (c) no schema for this resource: fall back to the fields the corpus has
+    # actually seen on it, typed from the observed values.
+    for segment in reversed(segments):
+        values = _corpus_fields(service, segment)
+        if values:
+            return segment, {name: {"type": _json_type(v)} for name, v in values.items()
+                             if name.lower() not in READ_ONLY}
+    return (segments[-1] if segments else "root"), {}
+
+
+def _corpus_fields(service: str, resource: str) -> dict[str, Any]:
+    """Raw (unnormalised) corpus fields for a resource, or {} when it has none."""
+    for (svc, collection), values in _corpus_examples().items():
+        if svc == service and collection.lower().rstrip("s") == resource.lower().rstrip("s"):
+            return values
+    return {}
 
 
 def _is_id(name: str) -> bool:
@@ -161,7 +308,9 @@ def _schema_type(schema: dict[str, Any]) -> str:
     return t if t in {"string", "number", "integer", "boolean", "array", "object"} else "string"
 
 
-def _parameters(path: str, op: dict[str, Any], body: dict[str, str]) -> list[dict[str, Any]]:
+def _parameters(service: str, path: str, verb: str, op: dict[str, Any],
+                body: dict[str, str], fields: dict[str, dict[str, Any]],
+                observed: dict[str, Any]) -> list[dict[str, Any]]:
     """One parameter per URL placeholder and per top-level body key.
 
     This array is what the discovery service binds `{{...}}` to at execution
@@ -175,7 +324,13 @@ def _parameters(path: str, op: dict[str, Any], body: dict[str, str]) -> list[dic
             continue
         schema = spec.get("schema") or {}
         entity = _is_id(name) and where == "path"
-        extra: dict[str, Any] = {"example_value": "{{%s}}" % name}
+        # A real id, never "{{name}}": the executor uses it as the sample value.
+        # An id addressing this resource takes the resource's own observed id.
+        sample = observed if where == "path" else {}
+        if entity and name.lower() in ("id", "recordid") and "id" in observed:
+            sample = {name.replace("_", "").lower(): observed["id"]}
+        extra: dict[str, Any] = {
+            "example_value": _example(name, _schema_type(schema), sample)}
         if entity:
             extra["entity_type"] = _entity_type(path, name)
         constraints = {}
@@ -194,21 +349,36 @@ def _parameters(path: str, op: dict[str, Any], body: dict[str, str]) -> list[dic
     props = schema.get("properties") or {}
     required = set(schema.get("required") or [])
     for name in body:                       # body_template's own top-level keys
-        prop = props.get(name) or {}
-        out.append(_param(name, "typed", "body", f"$.{name}", _schema_type(prop),
-                          name in required,
-                          _helper(prop.get("description") or "", name, "body"),
-                          source_form_field=name, example_value=name))
+        prop = props.get(name) or fields.get(name) or {}
+        # A create may declare its required fields; an update must not -- a
+        # missing field is pruned, while `required` makes the engine invent one.
+        is_required = verb == "create" and name in required
+        type_ = _schema_field_type(prop)
+        p = _param(name, "typed", "body", f"$.steps[0].body.{name}", type_, is_required,
+                   _helper(prop.get("description") or "", name, "body"),
+                   source_form_field=name,
+                   example_value=_example(name, type_, observed))
+        if prop.get("enum"):
+            p["constraints"]["enum_options"] = [{"value": v} for v in prop["enum"]]
+        out.append(p)
     return out
 
 
 def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str,
             op: dict[str, Any], action_id: str) -> dict[str, Any]:
     verb, resource = _verb(method, path), _resource(path)
-    product_id = f"bench-{service}"
+    product_id = product_slug(service)
+    # Every writable field of the resource must be a token: a field with no token
+    # in body_template never reaches the wire (there is no open bag).
+    noun, fields = _resource_fields(service, path)
+    observed = _observed(service, noun)
     schema = (op["responses"]["200"]["content"]["application/json"]["schema"]
               if "200" in op.get("responses", {}) else {"type": "object"})
-    body = {} if method == "get" else _body_template(op)
+    # A field that already addresses the record in the path is not a body field.
+    in_path = set(_PATH_VAR.findall(path))
+    body = {} if method == "get" else (_body_template(op)
+                                       or {f: "{{%s}}" % f for f in sorted(fields)
+                                           if f not in in_path})
     impl: dict[str, Any] = {
         "id": f"impl_{product_id}_{_slugify(op.get('operationId') or action_id)}_public",
         "source": "public",
@@ -229,7 +399,7 @@ def _action(base: str, service: str, doc: dict[str, Any], path: str, method: str
             }],
         },
         # Both arrays are required: seeds-normalize maps over them unguarded.
-        "parameters": _parameters(path, op, body),
+        "parameters": _parameters(service, path, verb, op, body, fields, observed),
         "creates_entities": [],
     }
     if verb == "create":
@@ -264,13 +434,27 @@ def _service_actions(base: str, service: str, doc: dict[str, Any]) -> dict[str, 
     """file name -> action document, ids unique within the folder."""
     out: dict[str, dict[str, Any]] = {}
     used: set[str] = set()
+    slug = product_slug(service)
     for path in sorted(doc["paths"]):
         for method in sorted(doc["paths"][path]):
             op = doc["paths"][path][method]
-            base_id = f"bench-{service}:{_verb(method, path)}:{_resource(path)}"
-            action_id = base_id
-            if action_id in used:  # same verb+resource on a different path
-                action_id = f"{base_id}-{_slugify(path)}"
+            # Three facets, all [a-z0-9-]: the importer keeps a well-formed id
+            # verbatim and re-mints anything else, which collides (4 Sep 2026).
+            verb = _verb(method, path)
+            action_id = f"{slug}:{verb}:{_slugify(_resource(path))}"
+            if action_id in used:
+                # Same verb+resource on another path: discriminate with the
+                # segments that differ, shortest suffix that is still unique.
+                segments = [_slugify(s) for s in path.strip("/").split("/")
+                            if s and not s.startswith("{")]
+                candidates = [f"{slug}:{verb}:{'-'.join(segments[-size:])}"
+                              for size in range(2, len(segments) + 1)]
+                # A one-segment path (POST /tags vs POST /x/{id}/tags) cannot be
+                # widened, so the whole path -- always distinct -- is the last resort.
+                candidates.append(f"{slug}:{verb}:{_slugify(path)}")
+                # method included last: two verbs can slugify a path the same way
+                candidates.append(f"{slug}:{verb}:{_slugify(path + '-' + method)}")
+                action_id = next(c for c in candidates if c not in used)
             used.add(action_id)
             out[action_id.replace(":", "_") + ".json"] = _action(
                 base, service, doc, path, method, op, action_id)
@@ -293,7 +477,7 @@ def generate(out_dir, shim_public_url: str) -> Summary:
     base = shim_public_url.rstrip("/")
     docs = build_all(base)
     operations = sum(len(m) for d in docs.values() for m in d["paths"].values())
-    folders = {f"bench-{svc}": _service_actions(base, svc, doc) for svc, doc in docs.items()}
+    folders = {product_slug(svc): _service_actions(base, svc, doc) for svc, doc in docs.items()}
     files = {name: doc for actions in folders.values() for name, doc in actions.items()}
     gaps = [g for actions in folders.values() for g in _validate_actions(actions)]
     if gaps:
@@ -317,6 +501,7 @@ def generate(out_dir, shim_public_url: str) -> Summary:
 # ---------------------------------------------------------------- validation
 
 _AUTH = {"none", "bearer", "basic", "api_key"}
+_ACTION_ID = re.compile(r"[a-z0-9-]+:(create|read|list|update|delete):[a-z0-9-]+")
 
 
 def _gaps_in(name: str, doc: Any) -> list[str]:
@@ -346,12 +531,24 @@ def _gaps_in(name: str, doc: Any) -> list[str]:
             out.append("creates_entities[0].type is empty (the importer reads `type`)")
     # Every {{x}} in the URL and every top-level body key needs exactly one
     # parameter: that array is what binds them to workflow inputs.
+    if not _ACTION_ID.fullmatch(str(ba.get("id") or "")):
+        out.append(f"id_malformed: {ba.get('id')!r} is not "
+                   "<product-slug>:<verb>:<object> in [a-z0-9-]")
     want = set(re.findall(r"\{\{(\w+)\}\}", step.get("url_template", "")))
     want |= set(step.get("body_template") or {})
     names = [p.get("name") for p in impl.get("parameters") or []]
     if sorted(names) != sorted(set(names)) or set(names) != want:
         out.append(f"parameters_incomplete: {sorted(want - set(names))} unbound, "
                    f"{sorted(set(names) - want)} extra")
+    # The same mismatch, named per side: a body key nothing binds never reaches
+    # the wire, and a parameter with no token is dead weight the engine may fill.
+    body_keys = set(step.get("body_template") or {})
+    body_params = {p.get("name") for p in impl.get("parameters") or []
+                   if p.get("location") == "body"}
+    if body_keys - body_params:
+        out.append(f"body_field_without_parameter: {sorted(body_keys - body_params)}")
+    if body_params - body_keys:
+        out.append(f"parameter_without_token: {sorted(body_params - body_keys)}")
     url = step.get("url_template", "")
     if not url.startswith("http"):
         out.append(f"url_template {url!r} is not an absolute URL")
