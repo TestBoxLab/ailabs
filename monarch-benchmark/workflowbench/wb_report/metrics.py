@@ -148,8 +148,8 @@ def verdict(pairs: int, p: float, wins: int, losses: int) -> str:
     return f"{direction} than the baseline (p = {p:.3f})"
 
 
-def comparison(a: dict, b: dict, rows_arm: list[dict],
-               rows_base: list[dict]) -> dict[str, Any]:
+def comparison(a: dict, b: dict, rows_arm: list[dict], rows_base: list[dict],
+               source: dict | None = None) -> dict[str, Any]:
     """One row of the comparison table, per contracts section 2.
 
     `a` and `b` are the two competitors' already-computed `competitor_metrics`
@@ -173,4 +173,8 @@ def comparison(a: dict, b: dict, rows_arm: list[dict],
         "pairs": wl["pairs"], "dropped_infra": wl["dropped_infra"],
         "mcnemar": wl["mcnemar"],
         "verdict": verdict(wl["pairs"], wl["mcnemar"]["p"], wl["wins"], wl["losses"]),
+        # Its own source: this row's denominator is its pairs, not a total over
+        # every comparison on the page (data-model.md section 2.3).
+        "source": dict(source or {}, denominator=wl["pairs"],
+                       arm=[a["arm"], b["arm"]]),
     }

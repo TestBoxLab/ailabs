@@ -47,18 +47,27 @@ def _table(headers: list[str], rows: list[list[str]], source_line: str = "",
            title: str = "", numeric_from: int = 1) -> str:
     """One table with its caption and its source line.
 
-    Every cell is escaped here, so a value from a row - an error string, a
-    change path - cannot reach the page as markup no matter which caller built
-    it. `_fmt` therefore returns plain text and never entities.
+    A cell is a string, or a `(text, title)` pair when the visible text is an
+    abbreviation of something longer. Every cell and every title is escaped
+    here, so a value from a row - an error string, a change path - cannot reach
+    the page as markup no matter which caller built it. `_fmt` therefore returns
+    plain text and never entities.
 
     `numeric_from` is the first column index rendered right-aligned; the leading
     columns are labels.
     """
     head = "".join(f"<th>{_esc(h)}</th>" for h in headers)
+
+    def cell(i: int, value: Any) -> str:
+        """A cell is either a string or `(text, title)`; the title carries the
+        full text where the visible one is abbreviated. Both are escaped."""
+        text, title = value if isinstance(value, tuple) else (value, None)
+        attr = f' title="{_esc(title)}"' if title else ""
+        klass = "num" if i >= numeric_from else "lbl"
+        return f'<td class="{klass}"{attr}>{_esc(text)}</td>'
+
     body = "".join(
-        "<tr>" + "".join(
-            f'<td class="{"num" if i >= numeric_from else "lbl"}">{_esc(c)}</td>'
-            for i, c in enumerate(row)) + "</tr>"
+        "<tr>" + "".join(cell(i, c) for i, c in enumerate(row)) + "</tr>"
         for row in rows)
     caption = f"<caption>{_esc(title)}</caption>" if title else ""
     src = f'<p class="src">{_esc(source_line)}</p>' if source_line else ""
@@ -131,10 +140,20 @@ def _source_line_for(report: dict, which: str) -> str:
     wall-clock share where some attempts carry none."""
     p = report["provenance"]
     arms = "+".join(report["arms"])
+    if which == "comparisons":
+        # Each comparison has its own denominator; adding them would invent a
+        # sample size no figure was computed on (data-model section 2.3).
+        pairs = ", ".join(f"{c['arm']} n={c['pairs']}" for c in report["comparisons"])
+        return (f"src: {p['suite']} - v{p['suite_version']} - pairs per competitor: "
+                f"{pairs} - vs {report['baseline']} - {report['run_id']}"
+                f"{report['source_suffix']}")
+    if which == "failures":
+        # A listing, not a statistic: it has a length, not a denominator.
+        return (f"src: {p['suite']} - v{p['suite_version']} - "
+                f"{len(report['failures'])} rows - {arms} - {report['run_id']}"
+                f"{report['source_suffix']}")
     n = {"metrics": report["size"]["total"],
-         "comparisons": sum(c["pairs"] for c in report["comparisons"]),
-         "matrix": report["size"]["total"],
-         "failures": len(report["failures"])}[which]
+         "matrix": report["size"]["total"]}[which]
     line = (f"src: {p['suite']} - v{p['suite_version']} - n={n} - {arms} - "
             f"{report['run_id']}{report['source_suffix']}")
     if which == "metrics":
@@ -169,8 +188,8 @@ def _metrics_table(report: dict) -> str:
     phases = _phase_names(metrics)
     show_models = any(m["cost_per_model"] for m in metrics)
     show_questions = any(m["phases"] or m["questions_asked"] for m in metrics)
-    headers = ["competitor", "attempts", "passed", "strict pass", "pass over reps",
-               "infra", "infra rate", "agent errors", "timeouts"]
+    headers = ["competitor", "attempts", "passed", "strict pass", "of",
+               "pass over reps", "infra", "infra rate", "agent errors", "timeouts"]
     headers += (["cost total", "cost / attempt", "cost / passed"] if dollars
                 else ["cost vs baseline"])
     headers += ["prompt tok", "cached tok", "cache write", "output tok", "cache hit",
@@ -188,7 +207,11 @@ def _metrics_table(report: dict) -> str:
     rows = []
     for m in metrics:
         row = [m["arm"], _fmt(m["attempts"]), _fmt(m["passed"]),
-               _fmt(m["strict_pass"], "rate"), _fmt(m["pass_over_repetitions"], "rate"),
+               _fmt(m["strict_pass"], "rate"),
+               # the denominator beside the rate: the attempts it divides by,
+               # infrastructure ones excluded (contracts section 1)
+               _fmt(m["strict_pass_denominator"]),
+               _fmt(m["pass_over_repetitions"], "rate"),
                _fmt(m["infra"]), _fmt(m["infra_rate"], "rate"),
                _fmt(m["agent_errors"]), _fmt(m["timeouts"])]
         if dollars:
@@ -271,15 +294,21 @@ def _matrix_tables(report: dict) -> str:
             text = f"{cell['passed']}/{cell['attempted']}"
             if cell["infra"]:
                 text += f" (infra {cell['infra']})"
-            row.append(text)
+            # The reason rides on the cell as its title AND is repeated below,
+            # so nothing is available only on hover (FR-008).
+            reason = cell["category"]
+            if cell["detail"]:
+                reason += f": {cell['detail']}"
+            row.append((text, reason) if cell["category"] != "passed" else text)
             if cell["category"] != "passed":
-                details.append([r["task_id"], arm, cell["category"],
-                                cell["detail"] or ""])
+                details.append([r["task_id"], arm, _fmt(cell["trial"]),
+                                cell["category"], cell["detail"] or ""])
         rows.append(row)
     matrix = _table(headers, rows, _source_line_for(report, "matrix"), "Task matrix",
                     numeric_from=len(lead))
-    detail_tbl = (_table(["task", "competitor", "reason", "detail"], details, "",
-                         "Task matrix, the reason behind every cell", numeric_from=4)
+    detail_tbl = (_table(["task", "competitor", "repetition", "reason", "detail"],
+                         details, "", "Task matrix, the reason behind every cell",
+                         numeric_from=2)
                   if details else
                   '<p class="note">Every competitor passed every task.</p>')
     return matrix + detail_tbl
@@ -290,9 +319,14 @@ def _failures_table(report: dict) -> str:
     failures = report["failures"]
     if not failures:
         return '<p class="note">no attempt failed</p>'
-    rows = [[f["task_id"], f["arm"], _fmt(f["trial"]), f["termination"] or "",
-             (f["error"] or "")[:200], ", ".join(f["unexpected_change_paths"])]
-            for f in failures]
+    rows = []
+    for f in failures:
+        error = f["error"] or ""
+        # The cell shows the first 200 characters; the whole thing stays in the
+        # title, so a long stack trace is abbreviated rather than lost.
+        cell = (error[:200] + "...", error) if len(error) > 200 else error
+        rows.append([f["task_id"], f["arm"], _fmt(f["trial"]), f["termination"] or "",
+                     cell, ", ".join(f["unexpected_change_paths"])])
     return _table(["task", "competitor", "repetition", "termination", "error",
                    "unexpected changes"], rows, _source_line_for(report, "failures"),
                   "Failures", numeric_from=2)

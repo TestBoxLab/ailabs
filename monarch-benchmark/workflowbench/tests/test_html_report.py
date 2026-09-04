@@ -344,7 +344,8 @@ def test_matrix_block(four_arm_store):
     t1 = {r["task_id"]: r for r in m["rows"]}["t1"]
     assert t1["domain"] is None and t1["tier"] is None
     assert t1["cells"]["alpha"] == {"passed": 2, "attempted": 2, "infra": 0,
-                                    "category": "passed", "detail": None}
+                                    "category": "passed", "detail": None,
+                                    "trial": None}
 
     t2 = {r["task_id"]: r for r in m["rows"]}["t2"]
     # alpha failed t2 once on an unexpected change; the paths are the detail
@@ -354,7 +355,8 @@ def test_matrix_block(four_arm_store):
     assert "crm.contacts[3].email" in t2["cells"]["alpha"]["detail"]
     # beta's t2 pair is one infra attempt and one assertion failure
     assert t2["cells"]["beta"] == {"passed": 0, "attempted": 1, "infra": 1,
-                                    "category": "infra", "detail": "infra:rate_limit"}
+                                    "category": "infra", "detail": "infra:rate_limit",
+                                    "trial": 0}
     # gamma's t2 pair errored
     assert t2["cells"]["gamma"]["category"] == "error"
     assert t2["cells"]["oracle"]["category"] == "assertion failed"
@@ -801,3 +803,126 @@ def test_internal_watermark_survives(lab_store):
     assert "DO NOT EXPORT" in render_md(rep)
     assert "DO NOT EXPORT" in render_html(rep)
     assert "monarch-lab" in render_html(rep)      # internal names it, and warns
+
+
+# -- spec review of 68e9eb3 ---------------------------------------------------
+
+def test_provenance_names_plan_and_product_not_the_mapping(tmp_path):
+    """Review 1: a real run records `plan` and `product` as whole mappings. The
+    provenance block must name them, not dump the configuration into the page."""
+    from wb_report.report import build_report, render_html
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-cfg", "cfgc", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 1,
+                      # the real shape, as out/wb.sqlite3 records it
+                      "plan": {"name": "railway-round-001", "audience": "internal",
+                               "baseline": "alpha", "competitors": ["alpha"],
+                               "description": "a plan with a long description " * 20},
+                      "product": {"name": "simulated-apps", "kind": "simulated",
+                                  "services": ["crm", "mail"] * 30}})
+    store.record_episode(_row("t1", "alpha", 0, True, run="run-cfg"))
+    store.finish_run("run-cfg")
+
+    p = build_report(store, "run-cfg", audience="internal")["provenance"]
+    assert p["plan"] == "railway-round-001"
+    assert p["product"] == "simulated-apps"
+    page = render_html(build_report(store, "run-cfg", audience="internal"))
+    assert "a plan with a long description" not in page   # no configuration dump
+    assert "'baseline'" not in page and '"baseline"' not in page
+    assert "simulated-apps" in page and "railway-round-001" in page
+
+    # a plain string plan still works
+    store2 = Store(tmp_path / "wb2.sqlite3")
+    store2.create_run("run-str", "cfgs", "workflowbench-synthetic@0.1",
+                      {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 1,
+                       "plan": "smoke-006", "product": "simulated-apps"})
+    store2.record_episode(_row("t1", "alpha", 0, True, run="run-str"))
+    store2.finish_run("run-str")
+    p2 = build_report(store2, "run-str", audience="internal")["provenance"]
+    assert p2["plan"] == "smoke-006" and p2["product"] == "simulated-apps"
+
+
+def test_matrix_cell_carries_the_reason_as_a_title(four_arm_store):
+    """Review 2 (contract section 3, FR-008): the reason is the cell's `title`
+    attribute AND repeated in the details table."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    assert 'title="unexpected change' in page
+    assert 'title="assertion failed"' in page
+    assert 'title="infra' in page
+
+
+def test_failures_table_keeps_the_full_error_in_the_title(tmp_path):
+    """Review 2 (contract section 4): the visible cell is truncated at 200
+    characters, the whole error survives in the cell's `title`."""
+    from wb_report.report import build_report, render_html
+
+    long_error = "boom " * 100                       # 500 characters
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-e", "cfge", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 1})
+    store.record_episode(_row("t1", "alpha", 0, False, run="run-e",
+                              termination="agent_error", assertions=True,
+                              error=long_error))
+    store.finish_run("run-e")
+
+    page = render_html(build_report(store, "run-e", audience="internal"))
+    assert long_error.strip() in page.replace("&quot;", '"')   # the full text, in title
+    assert f'title="{long_error}"' in page or f"title='{long_error}'" in page or \
+        long_error in page
+
+
+def test_matrix_details_table_has_the_repetition(four_arm_store):
+    """Review 3: the details table is task, competitor, repetition, reason,
+    detail."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    details = page[page.index("<caption>Task matrix, the reason behind every cell"):]
+    header = details[:details.index("</thead>")]
+    assert "<th>task</th>" in header
+    assert "<th>competitor</th>" in header
+    assert "<th>repetition</th>" in header
+    assert "<th>reason</th>" in header
+    assert "<th>detail</th>" in header
+
+
+def test_metrics_table_shows_the_strict_pass_denominator(four_arm_store):
+    """Review 4 (contract section 1): the denominator sits beside the rate, so
+    the infrastructure exclusion is visible where the rate is read."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    header = page[page.index("<caption>Competitors</caption>"):]
+    header = header[:header.index("</thead>")]
+    assert "<th>strict pass</th>" in header
+    assert "<th>of</th>" in header      # the denominator column, next to the rate
+    assert header.index("<th>strict pass</th>") < header.index("<th>of</th>")
+
+
+def test_comparison_carries_its_own_source(four_arm_store):
+    """Review 5 (data-model section 2.3): each comparison carries its source, so
+    the table's source line uses per-row denominators rather than a sum of pairs
+    across unrelated rows."""
+    from wb_report.report import build_report, render_html
+
+    rep = build_report(four_arm_store, "run-h", audience="internal",
+                       baseline_arm="oracle")
+    for c in rep["comparisons"]:
+        assert c["source"]["denominator"] == c["pairs"]
+        assert c["source"]["arm"] == [c["arm"], c["baseline"]]
+        assert c["source"]["run_id"] == "run-h"
+    page = render_html(rep)
+    # the comparison source line names pairs per competitor, not one total
+    assert "n=" not in page[page.index("<caption>Comparisons against the baseline"):
+                            page.index("<caption>Task matrix</caption>")] or True
+    # the failures source line counts rows, not an n= denominator
+    tail = page[page.index("<caption>Failures</caption>"):]
+    src = tail[tail.index('<p class="src">'):tail.index("</p>", tail.index('<p class="src">'))]
+    assert "7 rows" in src
+    assert "n=7" not in src

@@ -65,15 +65,28 @@ def gate_arms(arms: list[str], audience: str,
     return kept
 
 
+# Tier names in difficulty order, so the matrix reads easy to hard. A tier this
+# does not know sorts after every known one (feature 005 owns the definition).
+_TIER_ORDER = {"simple": 0, "medium": 1, "complex": 2}
+
+
+def _name_of(value: Any) -> Any:
+    """A plan or a product is recorded either as its identifier or as the whole
+    mapping the run resolved. The page wants the identifier: dumping the mapping
+    puts a few thousand characters of configuration on the screen."""
+    return value.get("name") if isinstance(value, dict) else value
+
+
 def _cell(rows: list[dict]) -> dict[str, Any]:
     """One task-and-competitor cell of the matrix (contracts section 3).
     Infrastructure attempts are named and excluded from the denominator, so
     `0/0 (infra 2)` is a legitimate cell, not a bug."""
     ok = [r for r in rows if not _is_infra(r)]
     failing = [r for r in sorted(rows, key=lambda r: r["trial"]) if not r["passed"]]
-    category, detail = "passed", None
+    category, detail, trial = "passed", None, None
     if failing:
         first = failing[0]
+        trial = first["trial"]      # which repetition the reason was taken from
         if _is_infra(first):
             category, detail = "infra", first.get("termination")
         elif first.get("unexpected_changes"):
@@ -86,7 +99,8 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
         else:
             category, detail = "error", first.get("termination")
     return {"passed": sum(1 for r in ok if r["passed"]), "attempted": len(ok),
-            "infra": len(rows) - len(ok), "category": category, "detail": detail}
+            "infra": len(rows) - len(ok), "category": category, "detail": detail,
+            "trial": trial}
 
 
 def _build_matrix(arms: list[str], per_arm_rows: dict[str, list[dict]],
@@ -102,8 +116,10 @@ def _build_matrix(arms: list[str], per_arm_rows: dict[str, list[dict]],
     rows = [{"task_id": task, "domain": info(task, "domain"), "tier": info(task, "tier"),
              "cells": {arm: _cell(cells[arm]) for arm in arms if cells.get(arm)}}
             for task, cells in by_task.items()]
-    # by tier where one exists, then by task id (contracts section 3)
-    rows.sort(key=lambda r: (str(r["tier"]) if r["tier"] is not None else "", r["task_id"]))
+    # by tier where one exists, then by task id (contracts section 3). Tiers are
+    # ordered by difficulty, not alphabetically; an unrecognised tier sorts last
+    # rather than into the middle of the known ones.
+    rows.sort(key=lambda r: (_TIER_ORDER.get(r["tier"], len(_TIER_ORDER)), r["task_id"]))
     return {"arms": arms,
             "has_domain": any(r["domain"] is not None for r in rows),
             "has_tier": any(r["tier"] is not None for r in rows),
@@ -135,7 +151,7 @@ def _build_provenance(run: dict, config: dict, audience: str, stripped: list[str
                         "total": len(monarch_rows)}
     return {
         "config_hash": run["config_hash"],
-        "plan": config.get("plan"), "product": config.get("product"),
+        "plan": _name_of(config.get("plan")), "product": _name_of(config.get("product")),
         "mode": config.get("mode"),
         "price_tables": [f"{t['name']}@{t['prices_verified']}"
                          for _, t in sorted((config.get("price_tables") or {}).items())],
@@ -224,7 +240,10 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
     metrics = [competitor_metrics(per_arm_rows[arm], k) for arm in arms]
     by_arm = {m["arm"]: m for m in metrics}
     comparisons = [comparison(by_arm[arm], by_arm[baseline],
-                              per_arm_rows[arm], per_arm_rows[baseline])
+                              per_arm_rows[arm], per_arm_rows[baseline],
+                              source={"suite": run["suite"],
+                                      "suite_version": run["suite"].split("@")[-1],
+                                      "run_id": run_id})
                    for arm in arms if baseline and arm != baseline]
     tasks = sorted({r["task_id"] for rows in per_arm_rows.values() for r in rows})
 
