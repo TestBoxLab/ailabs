@@ -134,3 +134,20 @@ def test_cli_import_ab(stub_vendor, tmp_path, capsys, monkeypatch):
     # several domains without {domain} in --dest is a usage error
     assert main(["corpus", "import-ab", "--domains", "finance,hr",
                  "--dest", str(tmp_path / "flat"), "--product", "simulated-apps"]) == 2
+
+
+def test_service_check_survives_a_re_import(stub_vendor, tmp_path):
+    """The check reads what the domains seed, not what this call happened to write.
+
+    A second import skips every task it already wrote; if the seeded services were
+    only collected on the write path, the re-import would report nothing missing
+    and exit 0 with the corpus unchanged.
+    """
+    stub_vendor["finance"] = [_row("finance", 1, services=("airtable", "not_a_product_app"))]
+
+    first = corpus_mod.import_ab(["finance"], tmp_path, product_services=["airtable"])
+    assert first["written"] == 1 and first["missing_services"] == ["not_a_product_app"]
+
+    second = corpus_mod.import_ab(["finance"], tmp_path, product_services=["airtable"])
+    assert second["written"] == 0 and second["unchanged"] == 1
+    assert second["missing_services"] == ["not_a_product_app"]

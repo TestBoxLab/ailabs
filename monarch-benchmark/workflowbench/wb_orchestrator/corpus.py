@@ -85,13 +85,16 @@ def import_ab(domains: list[str], out_dir: str | Path,
                 },
             }
             task["contract_sha256"] = contract_hash(task)
+            # What the domain seeds, counted before the skip below: the service
+            # check must answer for the whole domain, not only for the tasks this
+            # call happened to write, or a re-import would report nothing missing.
+            seeded |= {k for k in task["info"]["initial_state"] if k != "meta"}
             path = out / f"{task_name}.json"
             if path.exists() and json.loads(path.read_text()).get("contract_sha256") == task["contract_sha256"]:
                 skipped.append(task_name)
                 continue
             path.write_text(json.dumps(task, indent=1, default=str))
             written.append(task_name)
-            seeded |= {k for k in task["info"]["initial_state"] if k != "meta"}
         by_domain[domain] = {"written": len(written) - n_written,
                              "unchanged": len(skipped) - n_skipped}
     missing = sorted(seeded - set(product_services)) if product_services is not None else []

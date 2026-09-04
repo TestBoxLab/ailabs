@@ -310,6 +310,8 @@ def _corpus_tiers(args) -> int:
     out = Path(args.out)
     print("[ok] write " + " ".join(f"{(out / n).as_posix()}/" for n in tiers.SET_NAMES))
     print(f"[ok] write {(out / 'tiers-manifest.yaml').as_posix()}")
+    print("random-10 is drawn from the usable corpus minus the thirty tier tasks, "
+          "so the four sets share no task")
     print("every drawn task keeps its corpus hash; info.tier and info.domain "
           "are not hashed")
     return 0

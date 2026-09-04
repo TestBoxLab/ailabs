@@ -293,6 +293,8 @@ def test_cli(tmp_path, capsys):
     assert "draw (seed 1, 3 per set):" in out
     assert "tier-simple" in out and "random-10" in out
     assert "[ok] write" in out and "tiers-manifest.yaml" in out
+    assert ("random-10 is drawn from the usable corpus minus the thirty tier "
+            "tasks, so the four sets share no task") in out
     assert ("every drawn task keeps its corpus hash; info.tier and info.domain "
             "are not hashed") in out
     assert (tmp_path / "tiers-manifest.yaml").exists()
