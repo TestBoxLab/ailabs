@@ -280,8 +280,6 @@ def _corpus_tiers(args) -> int:
         print(f"corpus folder missing or empty: {missing or 'corpus/imported-*'}",
               file=sys.stderr)
         return 3
-    pool = tiers.load_corpus(dirs)
-    total = sum(t for t, _ in pool.counts.values())
     try:
         r = tiers.draw(dirs, seed=args.seed, per_tier=args.per_tier, out=args.out)
     except FileNotFoundError as e:
@@ -291,9 +289,9 @@ def _corpus_tiers(args) -> int:
         print(str(e), file=sys.stderr)
         return 1
 
-    print(f"corpus: {len(dirs)} folders, {total} tasks, {r.usable} usable")
+    print(f"corpus: {len(dirs)} folders, {r.total} tasks, {r.usable} usable")
     if r.excluded:
-        no_rule = sum(w.startswith("no approval rule") for w in r.excluded.values())
+        no_rule = sum(code == tiers.NO_RULE for code, _ in r.excluded.values())
         drifted = len(r.excluded) - no_rule
         parts = []
         if no_rule:
@@ -310,8 +308,9 @@ def _corpus_tiers(args) -> int:
     out = Path(args.out)
     print("[ok] write " + " ".join(f"{(out / n).as_posix()}/" for n in tiers.SET_NAMES))
     print(f"[ok] write {(out / 'tiers-manifest.yaml').as_posix()}")
-    print("random-10 is drawn from the usable corpus minus the thirty tier tasks, "
-          "so the four sets share no task")
+    print(f"random-10 is drawn from the usable corpus minus the "
+          f"{len(tiers.TIER_ORDER) * args.per_tier} tier tasks, so the four sets "
+          f"share no task")
     print("every drawn task keeps its corpus hash; info.tier and info.domain "
           "are not hashed")
     return 0

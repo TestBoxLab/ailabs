@@ -140,14 +140,16 @@ def test_usable_pool():
         FIXTURE / "imported-gamma" / "gamma.g_nine.json")["contract_sha256"]
 
     assert set(pool.excluded) == {"beta.b_no_rule", "gamma.g_bad_hash"}
-    assert pool.excluded["beta.b_no_rule"] == (
+    assert tiers.excluded_reason(*pool.excluded["beta.b_no_rule"]) == (
         "no approval rule (unmapped assertion types: ['mini_unmappable'])")
-    assert pool.excluded["gamma.g_bad_hash"] == "contract hash does not match content"
+    assert tiers.excluded_reason(*pool.excluded["gamma.g_bad_hash"]) == (
+        "contract hash does not match content")
 
     # the excluded two are not scored and not in the pool
     assert "beta.b_no_rule" not in by_id and "gamma.g_bad_hash" not in by_id
     # counts per folder are recorded for the manifest
-    assert pool.counts == {"alpha": (5, 5), "beta": (5, 4), "gamma": (5, 4)}
+    assert [(f.domain, f.tasks, f.usable) for f in pool.folders] == [
+        ("alpha", 5, 5), ("beta", 5, 4), ("gamma", 5, 4)]
 
 
 # --- Phase 4: the draw --------------------------------------------------------
@@ -293,8 +295,9 @@ def test_cli(tmp_path, capsys):
     assert "draw (seed 1, 3 per set):" in out
     assert "tier-simple" in out and "random-10" in out
     assert "[ok] write" in out and "tiers-manifest.yaml" in out
-    assert ("random-10 is drawn from the usable corpus minus the thirty tier "
-            "tasks, so the four sets share no task") in out
+    # the count is derived from --per-tier, not the literal "thirty"
+    assert ("random-10 is drawn from the usable corpus minus the 9 tier tasks, "
+            "so the four sets share no task") in out
     assert ("every drawn task keeps its corpus hash; info.tier and info.domain "
             "are not hashed") in out
     assert (tmp_path / "tiers-manifest.yaml").exists()
@@ -332,3 +335,63 @@ def test_random_set_excludes_the_tier_tasks(tmp_path):
         tiers.draw(CORPUS_DIRS, seed=1, per_tier=4, out=tmp_path / "refused")
     assert "random" in str(e.value)
     assert not (tmp_path / "refused").exists()
+
+
+# --- quality review: refusals and the shape of the pool ------------------------
+
+def test_degenerate_cuts_refuse():
+    """A corpus too concentrated to split into three has no tiers to draw from.
+
+    Silently returning low == high would put every task in one or two tiers and
+    the draw would then refuse for a reason that hides the real one.
+    """
+    from wb_orchestrator import tiers
+    with pytest.raises(ValueError) as e:
+        tiers.tier_cuts([7] * 12)
+    assert str(e.value) == ("scores are too concentrated to split into three "
+                            "tiers (both cuts land on 7)")
+
+    # one outlier is still not enough to separate the two cut points
+    with pytest.raises(ValueError) as e:
+        tiers.tier_cuts([7] * 11 + [99])
+    assert "both cuts land on 7" in str(e.value)
+
+    # and the draw refuses before writing anything
+    from wb_orchestrator import tiers as t
+    assert t.tier_cuts([1, 1, 1, 2, 2, 2, 3, 3, 3]) == {"low": 1, "high": 2}
+
+
+def test_two_folders_with_the_same_domain_refuse(tmp_path):
+    """Two folders reducing to the same domain would overwrite each other's counts."""
+    from wb_orchestrator import tiers
+    a, b = tmp_path / "a" / "imported-alpha", tmp_path / "b" / "imported-alpha"
+    for d in (a, b):
+        d.mkdir(parents=True)
+        src = FIXTURE / "imported-alpha" / "alpha.a_two.json"
+        (d / src.name).write_bytes(src.read_bytes())
+    with pytest.raises(ValueError) as e:
+        tiers.load_corpus([a, b])
+    assert "alpha" in str(e.value)
+
+
+def test_exclusion_reasons_are_codes():
+    """The reason is a code plus a detail, so the CLI counts without parsing prose."""
+    from wb_orchestrator import tiers
+    pool = tiers.load_corpus(CORPUS_DIRS)
+    assert pool.excluded["beta.b_no_rule"] == (
+        "no_rule", "unmapped assertion types: ['mini_unmappable']")
+    assert pool.excluded["gamma.g_bad_hash"] == ("drift", "")
+    # the rendered strings a reader sees are unchanged
+    assert tiers.excluded_reason(*pool.excluded["beta.b_no_rule"]) == (
+        "no approval rule (unmapped assertion types: ['mini_unmappable'])")
+    assert tiers.excluded_reason(*pool.excluded["gamma.g_bad_hash"]) == (
+        "contract hash does not match content")
+
+
+def test_folder_records():
+    """One list of folder records, built by the single corpus scan."""
+    from wb_orchestrator import tiers
+    pool = tiers.load_corpus(CORPUS_DIRS)
+    assert [(f.domain, f.tasks, f.usable) for f in pool.folders] == [
+        ("alpha", 5, 5), ("beta", 5, 4), ("gamma", 5, 4)]
+    assert pool.total == 15

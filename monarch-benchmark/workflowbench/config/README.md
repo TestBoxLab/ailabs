@@ -72,14 +72,17 @@ competitors and baseline as `pilot-monarch-create-run`, 2 repetitions,
 internal audience, `approved_by` left empty until Carlos approves each round
 separately. Each `tasks:` points at one of the drawn task sets below. Every
 description states the size the same way: "prompts: 10; attempts per prompt
-and competitor: 2; attempts per competitor: 20 = 10 × 2". Field table and full
-examples: `specs/005-task-tiers/contracts/config-files.md`.
+and competitor: 2; attempts per competitor: 20 = 10 × 2". The four move as a
+set: change a competitor, the ceiling or the baseline in one and change it in
+all four, or a difference between the rounds stops being a difference in the
+tasks. Field table and full examples:
+`specs/005-task-tiers/contracts/config-files.md`.
 
 ## tasks/tier-simple/, tier-medium/, tier-complex/, random-10/
 
 Four frozen task sets, ten tasks each, drawn from the corpus by
-`wb corpus tiers` from a recorded seed. Each file is a byte copy of its corpus
-original with `info.tier` and `info.domain` added; `contract_sha256` does not
+`wb corpus tiers` from a recorded seed. Each file is an exact copy of its corpus
+original plus the two labels `info.tier` and `info.domain`; `contract_sha256` does not
 move, so a label never turns into a task change. Field table:
 `specs/005-task-tiers/contracts/config-files.md`.
 

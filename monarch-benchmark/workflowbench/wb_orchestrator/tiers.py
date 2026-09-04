@@ -6,12 +6,16 @@ See specs/005-task-tiers/data-model.md for the rules this file implements.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
+from wb_orchestrator import declare
 from wb_world.episode import contract_hash, load_task_file
 
 SET_NAMES = ("tier-simple", "tier-medium", "tier-complex", "random-10")
@@ -45,7 +49,13 @@ def tier_cuts(scores: Iterable[int]) -> dict[str, int]:
     # the last value of the first third and of the second third; a tie on a cut
     # point falls in the lower tier by tier_of's comparison, never a coin flip.
     n = len(s)
-    return {"low": s[max(n // 3 - 1, 0)], "high": s[max(2 * n // 3 - 1, 0)]}
+    low, high = s[max(n // 3 - 1, 0)], s[max(2 * n // 3 - 1, 0)]
+    if low == high:
+        # Every task would land in one or two tiers and the draw would then refuse
+        # for a reason that hides this one. Say what is actually wrong.
+        raise ValueError(f"scores are too concentrated to split into three tiers "
+                         f"(both cuts land on {low})")
+    return {"low": low, "high": high}
 
 
 def tier_of(score: int, cuts: dict[str, int]) -> str:
@@ -69,19 +79,42 @@ class Entry:
     tier: str = ""
 
 
+@dataclass(frozen=True)
+class Folder:
+    """One corpus folder, counted by the single scan `load_corpus` performs."""
+    path: Path
+    domain: str
+    tasks: int
+    usable: int
+
+
 @dataclass
 class Pool:
     entries: list[Entry] = field(default_factory=list)
-    excluded: dict[str, str] = field(default_factory=dict)
-    counts: dict[str, tuple[int, int]] = field(default_factory=dict)
-    dirs: list[Path] = field(default_factory=list)
+    # task id -> (reason code, detail); codes are NO_RULE and DRIFT, so a caller
+    # counts by reason without parsing the sentence a reader sees.
+    excluded: dict[str, tuple[str, str]] = field(default_factory=dict)
+    folders: list[Folder] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return sum(f.tasks for f in self.folders)
+
+
+NO_RULE, DRIFT = "no_rule", "drift"
+
+
+def excluded_reason(code: str, detail: str) -> str:
+    """The sentence a reader sees for an exclusion code."""
+    if code == NO_RULE:
+        return f"no approval rule ({detail})"
+    return "contract hash does not match content"
 
 
 def _unmapped_types(task: dict[str, Any]) -> list[str]:
-    from wb_orchestrator import declare
     try:
         return declare.derive(task, declare.default_side_effects())["unmapped"]
-    except Exception:                      # a shape the derivation cannot read at all
+    except KeyError:                       # an assertion without the "type" key
         return sorted({a.get("type", "?") for a in task["info"].get("assertions", [])})
 
 
@@ -95,6 +128,10 @@ def load_corpus(dirs: Iterable[str | Path]) -> Pool:
     pool = Pool()
     for d in [Path(x) for x in dirs]:
         domain = d.name.split("imported-", 1)[-1]
+        if any(f.domain == domain for f in pool.folders):
+            raise ValueError(f"two corpus folders reduce to the domain {domain!r}: "
+                             f"{[str(f.path) for f in pool.folders if f.domain == domain]} "
+                             f"and {d}; one of them would be lost")
         paths = sorted(d.glob("*.json"))
         if not paths:
             raise FileNotFoundError(f"no task files in {d}")
@@ -104,16 +141,15 @@ def load_corpus(dirs: Iterable[str | Path]) -> Pool:
             task_id = task.get("task", p.stem)
             if not task["info"].get("expected_changes"):
                 pool.excluded[task_id] = (
-                    f"no approval rule (unmapped assertion types: {_unmapped_types(task)})")
+                    NO_RULE, f"unmapped assertion types: {_unmapped_types(task)}")
                 continue
             if task.get("contract_sha256") != contract_hash(task):
-                pool.excluded[task_id] = "contract hash does not match content"
+                pool.excluded[task_id] = (DRIFT, "")
                 continue
             pool.entries.append(Entry(task_id, domain, score_task(task),
                                       task["contract_sha256"], p))
             usable += 1
-        pool.counts[domain] = (len(paths), usable)
-        pool.dirs.append(d)
+        pool.folders.append(Folder(d, domain, len(paths), usable))
     return pool
 
 
@@ -122,9 +158,10 @@ def load_corpus(dirs: Iterable[str | Path]) -> Pool:
 @dataclass
 class DrawResult:
     cuts: dict[str, int]
-    scored: int
+    total: int                 # every task read, exclusions included
     usable: int
     excluded: dict[str, str]
+    folders: list[Folder]
     sets: dict[str, list[str]]
     by_domain: dict[str, dict[str, int]]
     written: list[Path]
@@ -157,7 +194,13 @@ def draw_tier(candidates: list[Entry], per_tier: int, rng: random.Random) -> lis
 
 
 def _write_task(entry: Entry, tier_label: str, folder: Path) -> Path:
-    """A byte copy of the corpus file plus info.tier and info.domain (§4)."""
+    """An exact copy of the task plus the two labels (§4).
+
+    Re-serialised with sorted keys and a trailing newline rather than copied byte
+    for byte, so the same seed writes the same bytes whatever the original's
+    formatting was. Every value is carried over untouched, and the hash ignores
+    the two labels, so the copy keeps its original's contract_sha256.
+    """
     task = load_task_file(entry.path)
     task["info"]["tier"] = tier_label
     task["info"]["domain"] = entry.domain
@@ -211,8 +254,8 @@ def draw(dirs: Iterable[str | Path], seed: int, per_tier: int = 10,
         by_domain[set_name] = dict(sorted(counts.items()))
 
     written.append(_write_manifest(out, pool, cuts, seed, per_tier, drawn, by_domain))
-    return DrawResult(cuts=cuts, scored=len(entries), usable=len(entries),
-                      excluded=pool.excluded,
+    return DrawResult(cuts=cuts, total=pool.total, usable=len(entries),
+                      excluded=pool.excluded, folders=pool.folders,
                       sets={k: [e.task_id for e in sorted(v, key=lambda e: e.task_id)]
                             for k, v in drawn.items()},
                       by_domain=by_domain, written=written)
@@ -221,9 +264,6 @@ def draw(dirs: Iterable[str | Path], seed: int, per_tier: int = 10,
 def _write_manifest(out: Path, pool: Pool, cuts: dict[str, int], seed: int,
                     per_tier: int, drawn: dict[str, list[Entry]],
                     by_domain: dict[str, dict[str, int]]) -> Path:
-    import datetime
-
-    import yaml
     manifest = {
         "measure": MEASURE,
         "generated_at": datetime.datetime.now(datetime.UTC)
@@ -231,12 +271,9 @@ def _write_manifest(out: Path, pool: Pool, cuts: dict[str, int], seed: int,
         "seed": seed,
         "per_tier": per_tier,
         "cuts": cuts,
-        "corpus": [{"dir": d.as_posix(),
-                    "domain": d.name.split("imported-", 1)[-1],
-                    "tasks": pool.counts[d.name.split("imported-", 1)[-1]][0],
-                    "usable": pool.counts[d.name.split("imported-", 1)[-1]][1]}
-                   for d in pool.dirs],
-        "excluded": dict(sorted(pool.excluded.items())),
+        "corpus": [{"dir": f.path.as_posix(), "domain": f.domain,
+                    "tasks": f.tasks, "usable": f.usable} for f in pool.folders],
+        "excluded": {t: excluded_reason(*r) for t, r in sorted(pool.excluded.items())},
         "sets": {name: {
             "by_domain": by_domain[name],
             # the row's tier is always the tier the score falls in, even in
