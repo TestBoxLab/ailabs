@@ -126,7 +126,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 | D6 | OpenAPI document for the simulated apps | Generated from the 47 `.jsonc` files, served by the HTTP front door, validated against the FD `api_spec` handler. |
 | D7 | Monarch, create + run mode | `monarch@<version>` completes the 10-task pilot paired against D4; phases split (authoring, execution) with wall-clock and cost per phase and per model, read from Langfuse and priced by a versioned Bedrock table; questions asked recorded. Absorbs D10 (feature 002, `specs/002-monarch-create-run/`). |
 | D8 | Monarch, full-flow mode | Same pilot with discovery inside the run; discovery phase cost and time recorded. |
-| D9 | Monarch, run-only mode | Oracle workflows converted to recipes; engine-only results. |
+| D9 | Monarch, run-only mode | One known-correct recipe per task, made by `wb monarch recipes` (Monarch authors it off the clock; the bench's checker decides it is correct) and kept inside Monarch; the 10-task pilot run with the engine alone — an execution phase with wall-clock and cost, and no authoring phase at all; tasks with no recipe excluded from every competitor's task set and stated on the report's source line, which also says that Monarch executed a fixed workflow while the other competitors did the whole task (feature 004, `specs/004-monarch-run-only/`). |
 | D10 | Monarch phase telemetry | Merged into D7 — feature 002 reads phase spans and token usage from Langfuse instead of a separate deliverable. |
 | D11 | Langfuse + Slack output | One Langfuse trace per test; Slack post rendered from the report. |
 | D12 | Second target platform design | Which real platform, tenant, reset, scoped checker, legal check. |
@@ -163,7 +163,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [x] B3 Finish `wb_arms/http_shim.py` (REST routes per service + `/openapi/*.json`; AB error envelopes become HTTP status; validated with FD's `api_spec` handler still pending, see B5): `POST`/`GET` routes per endpoint over one `Episode`, one instance per test, plus `/openapi.json`.
 - [ ] B4 Create + run mode: seed generator from the OpenAPI document (follow `public-api-seeds-runbook.md`), load once, run authoring + execution. → **D7** → feature 002 (`specs/002-monarch-create-run/`)
 - [ ] B5 Full-flow mode: register an `api_spec` discovery configuration (credential `none`, target = the front door's `/openapi.json`); run discovery inside the test; record it as a phase. → **D8**
-- [ ] B6 Run-only mode: convert each task's oracle actions into a saved recipe; run the engine only. → **D9**
+- [ ] B6 Run-only mode: one known-correct recipe per task, authored by Monarch off the clock and kept; run the engine only. (Not the answer key's actions converted into a recipe: there is no route that creates a workflow from recipe data, and a recipe a person wrote is not the product's own work.) → **D9** → feature 004 (`specs/004-monarch-run-only/`)
 - [ ] B7 Rewrite `wb_arms/monarch.py` against the real endpoints: session login → `POST /api/workflows/recipe/runs {goal}` → SSE until saved → `POST /api/workflows/:id/run {mode: live}` → poll. Drop the `events.jsonl` assumption. → feature 002 (`specs/002-monarch-create-run/`)
 - [ ] B8 Cost: read the authoring token ledger + engine LLM calls per run; price with a versioned table; store per phase. → feature 002 (`specs/002-monarch-create-run/`)
 - [ ] B9 Paired pilot in each mode: 10 tasks × {monarch@<version>, claude-opus-4-8/api, oracle} × 2 repetitions.
@@ -212,6 +212,8 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 2 Sep 2026 | Benchmark inputs are files: products, models, harnesses, plans; run = product × plan. | Carlos |
 | 3 Sep 2026 | Monarch cost and phases come from Langfuse priced by a versioned Bedrock table, not from Monarch's Postgres. | Carlos |
 | 3 Sep 2026 | A question during authoring gets one fixed reply, hardcoded; questions counted per attempt. | Carlos |
+| 4 Sep 2026 | In run-only, "known-correct" means a workflow Monarch itself authored, off the clock, whose run passed the bench's checker. Nothing else counts as correct — not a recipe a person wrote, not one converted from the answer key. | Carlos |
+| 4 Sep 2026 | Run-only reuses one kept recipe per task (never deleted, verified by recipe version before each run); a task with no passing recipe leaves the task set of **every** competitor, and the report says how many were excluded and why. | Carlos |
 
 ## 5. Open questions
 
@@ -236,6 +238,22 @@ or the offline implementation; all three block the live pilot):
 - **Credential binding for credential-free actions.** Whether products whose actions need no credential
   still require a credential binding, or a declaration in Monarch's discovery catalogue, for the engine
   to execute them. Owner: Carlos, verified live against the runbook before the first attempt.
+
+**Feature 004 open questions** (`specs/004-monarch-run-only/spec.md`; none blocks the spec, the plan
+or the offline implementation; all three are Monarch-side improvements, not blockers):
+
+- **Naming a workflow inside Monarch.** No rename route exists: `PATCH /api/workflows/:id` accepts
+  status, trigger kind, schedule, overlap policy and approval only (read in `workflows.controller.ts`,
+  4 Sep). The benchmark's `bench:<task_id>` name therefore lives in the recipes file. Would a `name`
+  field on that route be acceptable, so a person opening Monarch can tell the benchmark's workflows
+  apart? Owner: Deyton.
+- **Pinning a recipe version.** Feature 004 deliberately does not use `POST /api/workflows/:id/versions`
+  (unverified, refuses v1 recipes, 409s on a stale base version) and verifies the recorded
+  `recipeVersion` instead. Confirmation that a recipe cannot change under an org without an explicit
+  save would close the drift question for good. Owner: Deyton.
+- **Cancelling a run in flight.** There is no run-cancel route today, so a timed-out run-only attempt
+  leaves the engine working and the next attempt waits it out (bounded, 60 s). A cancel route would
+  replace the wait. Owner: Deyton.
 
 Note: Monarch attempts are named `monarch@<version>`; `wb_report/audiences.yaml`'s `public-rung2`
 today allows only the exact name `monarch`. A public report with the real Monarch competitor needs a

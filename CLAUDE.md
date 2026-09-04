@@ -47,7 +47,10 @@ real Monarch competitor in `wb_arms/monarch.py`, doctor checks, report source
 line. Live gates T053–T057 in `specs/002-monarch-create-run/tasks.md` are
 pending: Monarch running (locally, or on Railway with a public host for the
 front door), `bedrock:InvokeModel` for Carlos's AWS roles, and the Monarch-side
-telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`.
+telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`. Feature 004
+(Monarch in run-only mode: `wb monarch recipes`, one known-correct recipe per
+task, the engine measured alone) is specified and planned on 4 Sep —
+`specs/004-monarch-run-only/`, documents only, no code yet.
 
 **Team:** Carlos (program owner, this workspace), Lucas (co-lead, design of
 record, AutomationBench patches), Deyton (Monarch engine; authoring endpoint
@@ -161,6 +164,7 @@ each stage hands its artifact to the next:
 | `specs/<id>/` | Per-feature `spec.md` + `plan.md` + `tasks.md` (Spec Kit). |
 | `specs/001-declarative-benchmark-config/` | Feature 001: benchmark inputs as files; `contracts/` holds the CLI and config-file contracts. |
 | `specs/002-monarch-create-run/` | Feature 002: Monarch as a competitor, create + run mode; spec, plan, tasks, `contracts/` (config-files, cli, monarch-telemetry). In progress on branch `002-monarch-create-run`. |
+| `specs/004-monarch-run-only/` | Feature 004: Monarch in run-only mode — one known-correct recipe per task, the engine measured alone; spec, plan, tasks, `contracts/` (cli, config-files). Documents only so far; design of record `docs/superpowers/specs/2026-09-04-monarch-run-only-design.md`. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
 | `monarch-benchmark/docs/HANDOFF-2026-09-03.md` | Resume-here note: repo move, feature 001, next steps. |
 | `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Previous handoff: background and standing rules. |
@@ -169,7 +173,7 @@ each stage hands its artifact to the next:
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
 | `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus). |
 | `workflowbench/config/` | Benchmark inputs as YAML; a run is one product × one plan (`wb run --product X --plan Y`). See `config/README.md`. |
-| `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`). |
+| `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`); plus what Monarch was taught (`*.monarch-kb.yaml`) and, for run-only, the known-correct recipe per task (`*.monarch-recipes.yaml`). |
 | `workflowbench/config/models/` | One language model per file: provider, prices, API key name. |
 | `workflowbench/config/harnesses/` | How a competitor is driven: API loop, CLI agent, scripted check, Monarch. |
 | `workflowbench/config/plans/` | Task set, test mode, repetitions, competitors, baseline, audience, cost ceiling, `approved_by`. |
