@@ -1411,3 +1411,10 @@ def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
         others = [u for u in re.findall(r'https?://[^"\')\s]+', page)
                   if "fonts.googleapis.com" not in u and "fonts.gstatic.com" not in u]
         assert others == [], others
+
+
+def test_chart_text_and_bars_use_theme_tokens(tmp_path):
+    """4 Sep: unstyled SVG text rendered black on the dark theme; unreadable."""
+    from wb_report.html import _bar_chart, CSS
+    assert "svg.chart text" in CSS and "fill: var(--ink)" in CSS
+    assert 'class="cv"' in _bar_chart([("a", 0.5, 0.1)])

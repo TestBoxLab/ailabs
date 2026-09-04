@@ -266,6 +266,11 @@ figure.diagram .dg-head .kind {
 }
 figure.diagram .dg-head .t { font-family: var(--display); font-weight: 600; font-size: 14.5px; }
 figure.diagram .dg-body { padding: 14px; overflow-x: auto; }
+svg.chart { display: block; max-width: 100%; height: auto; margin: 6px 0 4px; }
+svg.chart text { font-family: var(--mono); font-size: 11.5px; fill: var(--ink); }
+svg.chart .cl { fill: var(--muted); }
+svg.chart .cb { fill: var(--accent); }
+svg.chart .ce { stroke: var(--ink); stroke-width: 1.5; }
 figure.diagram figcaption { font-size: 13px; color: var(--muted); padding: 10px 18px 14px; border-top: 1px solid var(--line-soft); }
 
 .callout {
