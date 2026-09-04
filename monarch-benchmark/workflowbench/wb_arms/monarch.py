@@ -457,6 +457,7 @@ class MonarchArm:
         recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline)
         ids["recipeRunId"] = recipe_run
         workflow_id, questions = None, 0
+        answered: set[str] = set()     # a reconnected stream replays the prompt
         try:
             try:
                 # The stream can end without a terminal frame while the job runs
@@ -495,7 +496,12 @@ class MonarchArm:
                                 done = True
                                 break
                             if status == "awaiting_input":
+                                rid = (frame.get("awaiting_reply") or {}).get("requestId")
+                                if rid and rid in answered:
+                                    continue
                                 asked = self._reply(client, recipe_run, frame, deadline)
+                                if rid:
+                                    answered.add(rid)
                                 if asked is None:   # an account prompt, or nothing to answer
                                     res.termination = "agent_error"
                                     res.error = "account_requested"

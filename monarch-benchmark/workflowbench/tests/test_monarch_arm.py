@@ -450,6 +450,24 @@ def test_questions_get_fixed_reply(site, repo):
     assert "questions_asked=3" in result.flags
 
 
+def test_a_replayed_prompt_is_answered_and_counted_once(site, repo):
+    """Monarch re-sends the awaiting_input frame after a reconnect (4 Sep: 327 copies)."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, asking("req-1", "q1", "q2"), asking("req-1", "q1", "q2"), DONE],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert [r["requestId"] for r in fake.replies_received] == ["req-1"]
+    assert result.phases["authoring"].turns == 2
+    assert "questions_asked=2" in result.flags
+    free(port)
+
+
 def test_an_attempt_with_no_questions_records_none(site, repo):
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
