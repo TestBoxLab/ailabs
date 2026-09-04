@@ -1029,13 +1029,15 @@ def _bar_chart(series: list[tuple[str, Any, Any]], kind: str = "rate",
         w = max(1.0, (value / top) * bar_max)
         parts.append(f'<rect class="cb" x="{label_w}" y="{y + 3}" width="{w:.1f}" '
                      f'height="{row_h - 9}"/>')
+        end = label_w + w
         if error:
             # the error bar: a thin line from value-error to value+error
             lo = max(0.0, (value - error) / top) * bar_max + label_w
             hi = min(1.0, (value + error) / top) * bar_max + label_w
             parts.append(f'<line class="ce" x1="{lo:.1f}" x2="{hi:.1f}" '
                          f'y1="{mid:.0f}" y2="{mid:.0f}"/>')
-        parts.append(f'<text class="cv" x="{label_w + w + 6:.0f}" '
+            end = max(end, hi)          # the label sits past the error bar, never under it
+        parts.append(f'<text class="cv" x="{end + 6:.0f}" '
                      f'y="{mid + 4:.0f}">{_fmt(value, kind)}</text>')
     parts.append("</svg>")
     return "".join(parts)

@@ -1418,3 +1418,13 @@ def test_chart_text_and_bars_use_theme_tokens(tmp_path):
     from wb_report.html import _bar_chart, CSS
     assert "svg.chart text" in CSS and "fill: var(--ink)" in CSS
     assert 'class="cv"' in _bar_chart([("a", 0.5, 0.1)])
+
+
+def test_value_label_sits_past_the_error_bar():
+    """4 Sep: the label was drawn under the error line and looked struck through."""
+    import re
+    from wb_report.html import _bar_chart
+    svg = _bar_chart([("a", 0.5, 0.3)])
+    hi = float(re.search(r'x2="([\d.]+)"', svg).group(1))
+    label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
+    assert label_x > hi
