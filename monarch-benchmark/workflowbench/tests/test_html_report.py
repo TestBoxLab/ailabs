@@ -1318,14 +1318,17 @@ def test_executive_page_shape(phase_store, tmp_path):
     page = render_executive(build_report(phase_store, "run-p", audience="internal",
                                          baseline_arm="alpha"),
                             tasks_dir=tmp_path)
-    for ident in ("headline", "charts", "tasks", "verdict", "provenance"):
+    for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
     assert page.count('class="mcard"') == 3          # the three headline cards
     assert page.count('class="bars"') == 3           # one chart per metric
     assert "Monarch benchmark" in page
     # the design system, not our own styling
     assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
-    assert 'class="part-eyebrow"' in page and 'class="chip"' in page
+    assert 'class="part-eyebrow"' in page
+    # the stakeholder page carries no chips, no source lines and no provenance
+    assert 'class="chip"' not in page and 'class="src"' not in page
+    assert 'id="provenance"' not in page
     # Monarch leads every bar chart
     for chart in page.split('<div class="bars">')[1:]:
         first = chart[:chart.index("</div>", chart.index('class="nm"'))]

@@ -568,7 +568,7 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
                 "Contains lab competitors - do not export.</div>")
     spend = (f'<span class="chip hot">spend <strong>'
              f'{_fmt(report["totals"]["spend_usd"], "money")}</strong></span>'
-             if dollars else "")
+             if report["audience"] == "internal" else "")
     hero = (f'<header class="hero"><div class="eyebrow">WorkflowBench &middot; '
             f'{_esc(p.get("plan") or "round")} &middot; '
             f'{_esc((p.get("started") or "")[:10])}</div>'
@@ -897,8 +897,7 @@ def _verdict_class(mon_value, best_value, lower_is_better: bool) -> str:
 
 
 _EXEC_TOC = [("headline", "Headline"), ("charts", "Every competitor"),
-             ("tasks", "What each task asked"), ("verdict", "In one sentence"),
-             ("provenance", "Provenance")]
+             ("tasks", "What each task asked"), ("verdict", "In one sentence")]
 
 _HEADLINE = [
     ("Success rate", lambda m: m["strict_pass"]["mean"], "rate", False, "higher is better"),
@@ -918,8 +917,6 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
     models = [m for m in metrics if not is_monarch(m["arm"]) and m["arm"] != "oracle"]
     p = report["provenance"]
     mon_name = _short(monarch["arm"]) if monarch else "monarch"
-    dollars = report["audience"] == "internal"
-
     cards, charts = [], []
     for label, get, kind, lower, hint in _HEADLINE:
         vals = [(m["arm"], get(m)) for m in models if get(m) is not None]
@@ -940,20 +937,12 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
             [(m["arm"], get(m)) for m in metrics], kind,
             {m["arm"]: (cls if is_monarch(m["arm"]) else "") for m in metrics}))
 
-    spend = (f'<span class="chip hot">spend <strong>'
-             f'{_fmt(report["totals"]["spend_usd"], "money")}</strong></span>'
-             if dollars else "")
     hero = (f'<header class="hero"><div class="eyebrow">Monarch benchmark</div>'
             f'<h1><span class="crown">{CROWN}</span> '
             f'{_esc(p.get("plan") or report["run_id"])}</h1>'
             f'<p class="lede">Monarch builds the workflow and runs it; the language '
             f"models get the same request and three tools and do the whole task "
-            f'themselves.</p><div class="chips">'
-            f'<span class="chip"><strong>{_esc((p.get("started") or "")[:10])}</strong></span>'
-            f'<span class="chip">mode <strong>{_esc(p.get("mode") or "n/a")}</strong></span>'
-            f'<span class="chip"><strong>{report["size"]["prompts"]}</strong> prompts</span>'
-            f'<span class="chip"><strong>{report["size"]["per_competitor"]}</strong> '
-            f"attempts per competitor</span>{spend}</div></header>")
+            f"themselves.</p></header>")
 
     passing = [m for m in models if (m["strict_pass"]["mean"] or 0) == 1.0]
     cheapest = min(((m["arm"], m["cost_per_passed"]) for m in models
@@ -962,15 +951,23 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
     without = (f"{len(passing)} of {len(models)} models finished every task on their "
                f"own; the rest missed at least one. The cheapest passed attempt cost "
                f"{_fmt(cheapest[1], 'money')} ({_short(cheapest[0])}).")
-    attempts = list((report.get("monarch_attempts") or {}).values())
-    if monarch and attempts and attempts[0]:
-        a = attempts[0][0]
+    rows = [a for group in (report.get("monarch_attempts") or {}).values() for a in group]
+    if monarch and rows:
+        built = sum(1 for a in rows if a["builder_outcome"] == "done")
+        passed = sum(1 for a in rows if a["checker"] == "pass")
+        ran = sum(1 for a in rows if a["dispatch_outcome"] == "success")
+        failed = [a for a in rows if a["checker"] != "pass"]
+        reason = ""
+        if failed:
+            f0 = failed[0]
+            stage = ("the builder" if f0["builder_outcome"] != "done"
+                     else f"dispatch ({f0['dispatch_outcome']})" if f0["dispatch_outcome"] != "success"
+                     else "the checker")
+            reason = f" The first failure was at {stage}: {f0['reason'] or 'no detail'}."
         with_text = (
-            f"{monarch['attempts']} attempt recorded before the round was interrupted. "
-            f"The builder produced a workflow in {_fmt(a['builder_seconds'], 'seconds')} "
-            f"for {_fmt(a['builder_cost'], 'money')} after {a['questions_asked']} "
-            f"questions; dispatch was still polling when the deadline passed "
-            f"({_fmt(a['dispatch_seconds'], 'seconds')}), so the task did not complete.")
+            f"{len(rows)} attempt{'s' if len(rows) != 1 else ''}, {passed} passed. The builder "
+            f"produced a workflow in {built} of {len(rows)}; dispatch finished in {ran} of "
+            f"{len(rows)}.{reason}")
     else:
         with_text = "No Monarch attempt was recorded in this round."
 
@@ -981,7 +978,7 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
               "the same metric.", f'<div class="cards">{"".join(cards)}</div>'),
         _part("charts", "Part 02 - Every competitor", "The whole field",
               "The same three metrics, every competitor, Monarch first.",
-              "".join(charts) + _src(_source_line_for(report, "metrics"))),
+              "".join(charts)),
         _part("tasks", "Part 03 - The work", "What each task asked",
               "The request, what the checker required, and whether Monarch "
               "delivered it.", _task_rows(report, tasks_dir)),
@@ -991,8 +988,6 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
               f'<div class="lab">Without Monarch</div><p>{_esc(without)}</p></div>'
               f'<div class="half"><div class="lab">With Monarch</div>'
               f"<p>{_esc(with_text)}</p></div></div>"),
-        _part("provenance", "Part 05 - Repeatability", "Provenance",
-              "Where these numbers come from.", _provenance_body(report)),
     ]
     return _shell("Monarch benchmark", _toc_links(_EXEC_TOC), hero, "".join(parts))
 
