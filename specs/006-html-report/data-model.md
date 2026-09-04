@@ -87,6 +87,17 @@ A row: `task_id`, `domain` or `None`, `tier` or `None`, and `cells`, a mapping
 competitor -> `{passed, attempted, infra, category, detail}` where `category` is
 one of `passed`, `unexpected change`, `assertion failed`, `error`, `infra`.
 
+### 2.4a `totals` and `monarch_attempts`
+
+`totals` is `{spend_usd, attempts, infra}` over the competitors on the page, for
+the overview section.
+
+`monarch_attempts` maps each Monarch competitor to a list, one entry per attempt
+in `(task_id, trial)` order, with the columns of `contracts/report.md` section
+5a: `task_id`, `trial`, `builder_outcome`, `questions_asked`, `builder_seconds`,
+`builder_cost`, `dispatch_outcome`, `dispatch_seconds`, `checker`, `reason`.
+Empty when no Monarch competitor ran, and the page then omits that section.
+
 ### 2.5 `failures`
 
 A list, one entry per attempt with `passed == false`, ordered by task, then

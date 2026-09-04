@@ -5,6 +5,101 @@ The page's authority. Each metric is defined once here, computed in one place in
 page. A metric the markdown report already shows keeps that report's value: the
 same function serves both.
 
+## 0a. Two formats, one dictionary
+
+`wb report --format html` (the default) writes the technical page; `--format
+executive` writes the stakeholder page. Both render the same `build_report`
+dictionary, so the audience gate and every number are identical; only the
+selection and the presentation differ. The markdown file is written either way
+and is unchanged.
+
+Both pages use **Monarch's design system**, copied from
+`local-docs/monarch-arquitetura.html`: the same `:root` tokens (paper, ink,
+accent with washes, blue, good, crit), the same three font families and their
+`<link>`, the same light/dark handling (light default, `prefers-color-scheme`,
+`[data-theme]`), and the same class names - `.layout`, `nav.toc` with the crown
+brand, `header.hero` with eyebrow/h1/lede/chips, `section.part` with
+`.part-eyebrow` and `.h2-sub`, `.tablewrap`, `.callout`, `.badge`, `.chip`.
+
+**Fitting a laptop.** The technical page must not scroll horizontally at
+1366x768. The sidebar is 200px, main padding 28px, `.content` full width, table
+text 12.5px, and header cells wrap with the full name in a `title` attribute -
+a column may be abbreviated, but the source line under the table always names
+every competitor in full.
+
+## 0b. The executive page (`--format executive`)
+
+Monarch first in every table, chart, card and row.
+
+| Section | Content |
+|---|---|
+| hero | eyebrow `Monarch benchmark`, the round name, one-sentence lede, chips: date, mode, prompts, attempts per competitor, spend |
+| Headline | three cards, Monarch's figure beside the best model's: success rate, cost per passed attempt, median time per attempt |
+| Every competitor | the same three metrics as bar charts, every competitor, Monarch first |
+| What each task asked | one full-width row per task: the request, the expected change in plain words, and **one verdict for Monarch alone** (pass / fail with its short reason / not run). The other competitors do not appear here; the whole field is two sections above |
+| In one sentence | the with-Monarch and without-Monarch summary, both computed |
+| Provenance | as the technical page |
+
+**Verdict colour**, per metric: Monarch at or above the best model is `--good`,
+below it is `--crit`. Success is higher-is-better; cost per passed attempt and
+median time are lower-is-better. An undefined figure (no passes, so no cost per
+passed attempt) is `--crit` with one line saying why - a number that cannot be
+computed is not a pass.
+
+The interruption notice, where a round stopped short, is a `.callout.warn`.
+
+## 0. The page's seven sections
+
+Carlos reviewed the first page (PDF of `run-20260904-192933`) and rejected its
+shape: too few sections, metrics of different kinds mixed into one table. The
+page is now seven sections, in this order, each with its own caption, a
+one-sentence reading guide and its source line. `wb summary` mirrors the
+success, cost and time tables per round.
+
+| # | Section (`id`) | Shows |
+|---|---|---|
+| 1 | Overview (`overview`) | the test mode in plain words, the size line, total spend, the competitor list, plan and product |
+| 2 | Success (`success`) | strict pass rate per competitor as a bar chart with error bars, the same table, the task x competitor matrix with its details table, and the paired comparison with its plain-words verdict |
+| 3 | Cost (`cost`) | total / per attempt / per passed attempt, a bar chart of cost per passed attempt, the four token counts and the cache hit rate; for Monarch, cost by phase (builder, dispatch) and by model of its team |
+| 4 | Time (`time`) | wall-clock mean and median with a bar chart of the median, turns and tool calls; for Monarch, builder and dispatch wall-clock separately |
+| 5 | Monarch phases (`monarch-phases`) | one row per Monarch attempt; rendered only when a Monarch competitor is on the page |
+| 6 | Failures (`failures`) | every attempt that did not pass |
+| 7 | Provenance (`provenance`) | what produced the numbers |
+
+**Plain names.** The page says **builder** and **dispatch**. `authoring` and
+`execution` remain the phase keys on the row and are named in the Monarch
+section's source line, nowhere else.
+
+**Test mode, in words**: `create-run` renders as `create + run: Monarch builds
+the workflow (builder) and runs it (dispatch)`; `run-only` as `run-only:
+dispatch only, on a workflow known to be correct`; `full-flow` as `full flow:
+discovery, then the builder, then dispatch`. A round with no recorded mode says
+nothing about one rather than guessing.
+
+**Charts** are inline SVG, drawn from the same `_fmt` output the table beside
+them shows, so a chart and its table can never print different numbers. A
+missing value renders the text `n/a`, never a zero-length bar: zero reads as
+"scored nothing" rather than "not known". No external resource of any kind.
+
+## 5a. Monarch phases table - one row per Monarch attempt
+
+Rendered only when a Monarch competitor is present. A single pass/fail hides the
+difference between a builder that declined, a builder that never finished, and
+an engine that timed out running a workflow that was written correctly.
+
+| Column | Source |
+|---|---|
+| task | `task_id` |
+| repetition | `trial` |
+| builder | `declined` when `no_workflow` is flagged; `timeout` when the attempt timed out with no `execution` phase; `error` on `agent_error`; else `done` |
+| questions | the `questions_asked=N` flag, summed |
+| builder s | `phases.authoring.wall_clock_s` |
+| builder cost | `phases.authoring.cost_usd` |
+| dispatch | `parked-timeout` on a timeout; `infrastructure` on `infra:*`; `refused` when `gate_refusals` is non-empty; `error` on `agent_error`; else `success` or `failed` on the checker's verdict |
+| dispatch s | `phases.execution.wall_clock_s` |
+| checker | `pass` / `fail`, from `passed` |
+| reason | `error`, first 200 characters |
+
 ## Notation
 
 - `rows` - the attempt rows of one competitor in one round, as

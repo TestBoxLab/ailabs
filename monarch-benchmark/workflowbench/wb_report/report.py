@@ -17,7 +17,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from wb_report.metrics import comparison, competitor_metrics
+from wb_report.metrics import (comparison, competitor_metrics, is_monarch,
+                               monarch_attempts, round_totals)
 from wb_results.store import Store
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
 from wb_stats.stats import sem as stats_sem
@@ -253,6 +254,11 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                      "per_competitor": len(tasks) * k, "competitors": len(arms),
                      "total": sum(len(per_arm_rows[a]) for a in arms)},
             "metrics": metrics, "comparisons": comparisons,
+            "totals": round_totals(metrics),
+            # one entry per Monarch attempt, per Monarch competitor; empty when
+            # none ran, and the page omits the section entirely
+            "monarch_attempts": {arm: monarch_attempts(per_arm_rows[arm])
+                                 for arm in arms if is_monarch(arm)},
             "matrix": _build_matrix(arms, per_arm_rows, config.get("task_info") or {}),
             "failures": _build_failures(arms, per_arm_rows),
             "provenance": _build_provenance(run, config, audience, stripped, per_arm_rows),
@@ -367,16 +373,34 @@ def render_html(report: dict[str, Any], sortable: bool = True) -> str:
     return render_page(report, sortable=sortable)
 
 
+def render_executive(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
+    """The stakeholder page: the same dictionary, selected and coloured."""
+    from wb_report.html import render_executive_page
+    return render_executive_page(report, tasks_dir=tasks_dir)
+
+
 def write_report(store: Store, run_id: str, out_dir: str | Path,
                  audience: str = "internal", sortable: bool = True,
+                 fmt: str = "html", tasks_dir: str | Path = "tasks",
                  **kw) -> dict[str, str]:
+    """Write the markdown report and one HTML page.
+
+    `fmt` picks which page: `html` is the seven-section technical page (the
+    default, what a round's own report is), `executive` the stakeholder one.
+    Both are built from the same `build_report` dictionary, so the gate and
+    every number are identical; only the selection and the dress differ.
+    """
     rep = build_report(store, run_id, audience=audience, **kw)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     md = out / f"report-{run_id}-{audience}.md"
-    htm = out / f"report-{run_id}-{audience}.html"
     md.write_text(render_md(rep), encoding="utf-8")
-    htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
+    if fmt == "executive":
+        htm = out / f"report-{run_id}-{audience}-executive.html"
+        htm.write_text(render_executive(rep, tasks_dir=tasks_dir), encoding="utf-8")
+    else:
+        htm = out / f"report-{run_id}-{audience}.html"
+        htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
     return {"md": str(md), "html": str(htm)}
 
 # The one sentence the summary page always carries (contracts section 9). A

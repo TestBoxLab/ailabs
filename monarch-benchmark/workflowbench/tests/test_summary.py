@@ -326,4 +326,6 @@ def test_summary_cli_no_sort(three_round_store, tmp_path):
     out = tmp_path / "nosort.html"
     assert main(["--db", str(three_round_store.path), "summary",
                  "--runs", "run-r1,run-r2", "--out", str(out), "--no-sort"]) == 0
-    assert "<script" not in out.read_text(encoding="utf-8")
+    # --no-sort is still accepted; the redesigned page has no sorting script to
+    # omit, so it simply writes the same page.
+    assert "<table" in out.read_text(encoding="utf-8")

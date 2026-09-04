@@ -19,7 +19,10 @@ Rules that hold everywhere here:
 """
 from __future__ import annotations
 
+import json
+import re
 import statistics
+from pathlib import Path
 from typing import Any
 
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
@@ -45,7 +48,25 @@ def attempt_seconds(row: dict) -> float | None:
 
 
 def _questions_asked(row: dict) -> int:
-    """The count carried on the `questions_asked=N` flag; 0 when absent."""
+    """How many questions the builder actually asked, deduplicated by request.
+
+    The flag `questions_asked=N` over-counts: the arm accumulates the questions
+    of every `awaiting_input` frame it sees, and the SSE stream re-delivers the
+    same frame whenever it reconnects. On run-20260904-192933 one request
+    (`ask_1_6b211c69`, two questions) was re-delivered once and recorded as 4.
+
+    So where the attempt's turn log is available, the count is the number of
+    questions across *distinct* request ids; the flag is the fallback for a row
+    whose log has been cleaned up.
+
+    # ponytail: dedupe at read time, in the reader. Fixing the writer in
+    # wb_arms/monarch.py is the real repair, but that file is owned by another
+    # feature right now and re-counting a stored log costs nothing. Ceiling:
+    # once the arm dedupes at write time this falls back to the flag and agrees.
+    """
+    counted = _questions_from_log(row)
+    if counted is not None:
+        return counted
     total = 0
     for flag in row.get("flags") or []:
         if flag.startswith("questions_asked="):
@@ -54,6 +75,32 @@ def _questions_asked(row: dict) -> int:
             except ValueError:
                 pass
     return total
+
+
+def _questions_from_log(row: dict) -> int | None:
+    """Questions across distinct `requestId`s in the attempt's turn log, or
+    `None` when there is no readable log to count from."""
+    uri = row.get("artifacts_uri")
+    if not uri:
+        return None
+    log = Path(uri) / "turns.jsonl"
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    seen: dict[str, int] = {}
+    for line in text.splitlines():
+        if "awaiting_reply" not in line:
+            continue
+        try:
+            ask = (json.loads(line).get("frame") or {}).get("awaiting_reply") or {}
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        rid = ask.get("requestId")
+        if rid:
+            # the same request re-delivered on reconnect counts once
+            seen[rid] = len(ask.get("questions") or [])
+    return sum(seen.values()) or None
 
 
 def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
@@ -177,4 +224,92 @@ def comparison(a: dict, b: dict, rows_arm: list[dict], rows_base: list[dict],
         # every comparison on the page (data-model.md section 2.3).
         "source": dict(source or {}, denominator=wl["pairs"],
                        arm=[a["arm"], b["arm"]]),
+    }
+
+
+# The two phase keys Monarch writes, and the words Carlos uses for them. The
+# keys stay `authoring` and `execution` on the row and in the source line; the
+# page says "builder" and "dispatch" everywhere a person reads it.
+BUILDER_PHASE = "authoring"
+DISPATCH_PHASE = "execution"
+PHASE_WORDS = {BUILDER_PHASE: "builder", DISPATCH_PHASE: "dispatch"}
+
+
+def is_monarch(arm: str) -> bool:
+    """Monarch competitors are named `monarch` or `monarch@<version>`, and the
+    lab ones `monarch-lab*`. The page needs to know which rows carry phases."""
+    return arm.startswith("monarch")
+
+
+def _builder_outcome(row: dict, phase: dict | None) -> str:
+    """What the builder did, in the words the round sheet uses.
+
+    `declined` is a real Monarch answer, not a failure: it decided the request
+    could not become a workflow. It is distinguished from an error and from a
+    timeout because the three mean different things to a reader.
+    """
+    if "no_workflow" in (row.get("flags") or []):
+        return "declined"
+    if phase is None:
+        return "n/a"
+    termination = str(row.get("termination") or "")
+    # A timeout inside the builder ends the attempt before dispatch exists.
+    if termination == "timeout" and not row.get("phases", {}).get(DISPATCH_PHASE):
+        return "timeout"
+    if termination == "agent_error":
+        return "error"
+    return "done"
+
+
+def _dispatch_outcome(row: dict, phase: dict | None) -> str:
+    """What the engine did with the workflow the builder produced."""
+    if phase is None:
+        return "n/a"
+    termination = str(row.get("termination") or "")
+    if termination == "timeout":
+        # The engine was still polling when the deadline passed: the workflow
+        # was parked, not refused and not failed.
+        return "parked-timeout"
+    if termination.startswith("infra:"):
+        return "infrastructure"
+    if row.get("gate_refusals"):
+        return "refused"
+    if termination == "agent_error":
+        return "error"
+    return "success" if row.get("passed") else "failed"
+
+
+def monarch_attempts(rows: list[dict]) -> list[dict]:
+    """One entry per Monarch attempt, for the Monarch phases section.
+
+    The page shows what happened in each half of the attempt separately, because
+    "the builder wrote a workflow and the engine timed out running it" and "the
+    builder never finished" are different results that a single pass/fail hides.
+    """
+    out = []
+    for row in sorted(rows, key=lambda r: (r["task_id"], r["trial"])):
+        phases = row.get("phases") or {}
+        builder = phases.get(BUILDER_PHASE)
+        dispatch = phases.get(DISPATCH_PHASE)
+        out.append({
+            "task_id": row["task_id"], "trial": row["trial"],
+            "builder_outcome": _builder_outcome(row, builder),
+            "questions_asked": _questions_asked(row),
+            "builder_seconds": (builder or {}).get("wall_clock_s"),
+            "builder_cost": (builder or {}).get("cost_usd"),
+            "dispatch_outcome": _dispatch_outcome(row, dispatch),
+            "dispatch_seconds": (dispatch or {}).get("wall_clock_s"),
+            "checker": "pass" if row.get("passed") else "fail",
+            # the reason, abbreviated the same way the failures table does it
+            "reason": (row.get("error") or "")[:200] or None,
+        })
+    return out
+
+
+def round_totals(metrics: list[dict]) -> dict[str, Any]:
+    """The whole round in three numbers, for the overview section."""
+    return {
+        "spend_usd": sum(m["cost_total"] for m in metrics),
+        "attempts": sum(m["attempts"] for m in metrics),
+        "infra": sum(m["infra"] for m in metrics),
     }

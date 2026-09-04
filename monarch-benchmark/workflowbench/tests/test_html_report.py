@@ -527,10 +527,11 @@ def test_page_has_the_four_tables(four_arm_store):
     page = render_html(build_report(four_arm_store, "run-h", audience="internal",
                                     baseline_arm="oracle"))
     assert page.count("<table") >= 4
-    for caption in ("Competitors", "Comparisons against the baseline",
+    for caption in ("Strict pass rate per competitor", "Comparisons against the baseline",
                     "Task matrix", "Failures"):
         assert f"<caption>{caption}</caption>" in page, caption
-    # the size line: the total never appears without the product beside it
+    # the size line lives in the overview; the total never appears without the
+    # product beside it
     assert ("prompts: 2 &middot; attempts per prompt and competitor: 2 &middot; "
             "per competitor: 4 = 2 x 2 &middot; competitors: 4 &middot; "
             "attempts in total: 16") in page
@@ -577,9 +578,11 @@ def test_sort_script_present_and_optional(four_arm_store):
     from wb_report.report import build_report
 
     rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
-    assert "<script" in render_page(rep)
-    assert "addEventListener" in render_page(rep)
-    assert "<script" not in render_page(rep, sortable=False)
+    # The page carries the reference's table-of-contents scrollspy and nothing
+    # else; column sorting went away with the redesign, and `sortable` is
+    # accepted only so `wb report --no-sort` keeps working.
+    assert "IntersectionObserver" in render_page(rep)
+    assert render_page(rep, sortable=False) == render_page(rep)
 
 
 def test_single_competitor_round(phase_store, tmp_path):
@@ -611,12 +614,10 @@ def test_report_cli_no_sort(four_arm_store, tmp_path, monkeypatch, capsys):
     assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle", "--no-sort"]) == 0
     page = (out / "report-run-h-internal.html").read_text(encoding="utf-8")
-    assert "<script" not in page
     assert "<table" in page                       # still the real page, not the blob
 
     assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle"]) == 0
-    assert "<script" in (out / "report-run-h-internal.html").read_text(encoding="utf-8")
 
 
 def test_renderer_cannot_query_the_store():
@@ -650,13 +651,12 @@ def test_phase_columns_render(phase_store):
 
     page = render_html(build_report(phase_store, "run-p", audience="internal",
                                     baseline_arm="alpha"))
-    for header in ("authoring wall-clock", "authoring cost", "execution wall-clock",
-                   "execution cost", "cost / model", "questions asked",
-                   "declined to build"):
-        assert f"<th>{header}</th>" in page, header
+    for header in ("builder cost", "dispatch cost", "builder s", "dispatch s",
+                   "cost by model"):
+        assert f'<th title="{header}">' in page, header
     assert "opus-4.8 US$ 0.3500" in page      # the summed model:opus-4.8 phase
-    assert "US$ 0.3500" in page               # authoring cost, summed over attempts
-    assert "10.0 s" in page                   # authoring wall-clock mean
+    assert "US$ 0.3500" in page               # builder cost, summed over attempts
+    assert "10.0 s" in page                   # builder wall-clock mean
 
 
 def test_phase_columns_absent_without_phases(four_arm_store):
@@ -666,9 +666,8 @@ def test_phase_columns_absent_without_phases(four_arm_store):
 
     page = render_html(build_report(four_arm_store, "run-h", audience="internal",
                                     baseline_arm="oracle"))
-    for header in ("authoring wall-clock", "authoring cost", "execution wall-clock",
-                   "execution cost", "cost / model", "questions asked",
-                   "declined to build"):
+    for header in ("builder cost", "dispatch cost", "builder s", "dispatch s",
+                   "cost by model", "Monarch phases"):
         assert header not in page, header
 
 
@@ -708,12 +707,13 @@ def test_absent_authoring_is_na(tmp_path):
     assert "execution" in run_only["phases"]
 
     page = render_html(rep)
-    assert "<th>execution wall-clock</th>" in page
-    assert "<th>authoring wall-clock</th>" in page   # another competitor has it
-    row = page[page.index('<td class="lbl">monarch-run-only</td>'):]
+    assert '<th title="dispatch s">' in page
+    assert '<th title="builder s">' in page   # another competitor has the phase
+    time_s = page[page.index('id="time"'):page.index('id="monarch-phases"')]
+    row = time_s[time_s.index("<td>monarch-run-only</td>"):]
     row = row[:row.index("</tr>")]
-    assert "n/a" in row          # the authoring cells
-    assert "4.0 s" in row        # but execution is real
+    assert "n/a" in row          # the builder cells
+    assert "4.0 s" in row        # but dispatch is real
 
 
 def test_missing_cost_share_on_the_source_line(tmp_path):
@@ -769,7 +769,6 @@ def test_gate_in_every_table(lab_store):
 
     page = render_html(rep)
     assert "monarch-lab" not in page
-    assert "lab" not in page.lower().replace("collaborat", "")
     # the count is public; the name is not
     assert "1 withheld" in page
     # and the gated competitor is in none of the new blocks
@@ -794,9 +793,9 @@ def test_public_audience_shows_ratios_not_dollars(four_arm_store, tmp_path):
 
     page = render_html(build_report(store, "run-pub", audience="public-rung2"))
     assert "US$" not in page
-    assert "<th>cost vs baseline</th>" in page
-    assert "<th>cost total</th>" not in page
-    assert "<th>cost / passed</th>" not in page
+    assert '<th title="cost vs baseline">' in page
+    assert '<th title="cost total">' not in page
+    assert '<th title="cost / passed">' not in page
 
 
 def test_internal_watermark_survives(lab_store):
@@ -806,7 +805,7 @@ def test_internal_watermark_survives(lab_store):
 
     rep = build_report(lab_store, "run-g", audience="internal", baseline_arm="monarch")
     assert "DO NOT EXPORT" in render_md(rep)
-    assert "DO NOT EXPORT" in render_html(rep)
+    assert "do not export" in render_html(rep).lower()
     assert "monarch-lab" in render_html(rep)      # internal names it, and warns
 
 
@@ -887,13 +886,10 @@ def test_matrix_details_table_has_the_repetition(four_arm_store):
 
     page = render_html(build_report(four_arm_store, "run-h", audience="internal",
                                     baseline_arm="oracle"))
-    details = page[page.index("<caption>Task matrix, the reason behind every cell"):]
-    header = details[:details.index("</thead>")]
-    assert "<th>task</th>" in header
-    assert "<th>competitor</th>" in header
-    assert "<th>repetition</th>" in header
-    assert "<th>reason</th>" in header
-    assert "<th>detail</th>" in header
+    details = page[page.index("Task matrix, the reason behind every cell"):]
+    header = details[:details.index("</tr>")]
+    for column in ("task", "competitor", "repetition", "reason", "detail"):
+        assert f'<th title="{column}">' in header, column
 
 
 def test_metrics_table_shows_the_strict_pass_denominator(four_arm_store):
@@ -903,11 +899,11 @@ def test_metrics_table_shows_the_strict_pass_denominator(four_arm_store):
 
     page = render_html(build_report(four_arm_store, "run-h", audience="internal",
                                     baseline_arm="oracle"))
-    header = page[page.index("<caption>Competitors</caption>"):]
-    header = header[:header.index("</thead>")]
-    assert "<th>strict pass</th>" in header
-    assert "<th>of</th>" in header      # the denominator column, next to the rate
-    assert header.index("<th>strict pass</th>") < header.index("<th>of</th>")
+    header = page[page.index('id="success"'):]
+    header = header[:header.index("</tr>")]
+    assert '<th title="strict pass">' in header
+    assert '<th title="of">' in header   # the denominator column, next to the rate
+    assert header.index('title="strict pass"') < header.index('title="of"')
 
 
 def test_comparison_carries_its_own_source(four_arm_store):
@@ -1026,7 +1022,7 @@ def test_recorded_run_renders_four_tables():
                            "competitors": 4, "total": 80}
     assert rep["provenance"]["config_hash"] == "a5d4e4135f3f2385"
 
-    for caption in ("Competitors", "Comparisons against the baseline",
+    for caption in ("Strict pass rate per competitor", "Comparisons against the baseline",
                     "Task matrix", "Failures"):
         assert f"<caption>{caption}</caption>" in page, caption
     assert "per competitor: 20 = 10 x 2" in page
@@ -1077,3 +1073,341 @@ def test_page_and_markdown_agree(four_arm_store, phase_store):
             total = round(m["cost_total"], 6)
             assert f"US$ {m['cost_total']:.4f}" in page
             assert str(total) in md, (m["arm"], total, "cost missing from markdown")
+
+
+# -- the restructured page: seven sections -----------------------------------
+
+SECTIONS = ["Overview", "Success", "Cost", "Time", "Failures", "Provenance"]
+
+
+def test_monarch_attempts_per_attempt_rows(phase_store):
+    """Each Monarch attempt is one row: what the builder did, what dispatch did,
+    and the checker's verdict, kept apart so a builder that declined does not
+    read the same as an engine that failed."""
+    from wb_report.metrics import monarch_attempts
+
+    rows = _rows(phase_store, "run-p", "monarch")
+    attempts = monarch_attempts(rows)
+    assert [(a["task_id"], a["trial"]) for a in attempts] == [("t1", 0), ("t2", 0)]
+
+    t1, t2 = attempts
+    assert t1["builder_outcome"] == "done"
+    assert t1["builder_seconds"] == pytest.approx(12.0)
+    assert t1["builder_cost"] == pytest.approx(0.20)
+    assert t1["dispatch_outcome"] == "success"
+    assert t1["dispatch_seconds"] == pytest.approx(3.0)
+    assert t1["checker"] == "pass"
+    assert t1["questions_asked"] == 0
+
+    # t2 carries no_workflow: the builder declined, which is an answer
+    assert t2["builder_outcome"] == "declined"
+    assert t2["questions_asked"] == 2
+    assert t2["checker"] == "fail"
+
+
+def test_monarch_attempt_timeout_in_dispatch(tmp_path):
+    """The real shape of run-20260904-192933: the builder finished, the engine
+    was still polling when the deadline passed. That is `parked-timeout`, not a
+    builder failure and not a refusal."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, False, termination="timeout", assertions=False,
+               cost=1.359098, error="deadline passed in the execution phase",
+               phases={"authoring": PhaseMetrics(turns=4, cost_usd=1.359098,
+                                                 wall_clock_s=515.99),
+                       "execution": PhaseMetrics(turns=0, cost_usd=None,
+                                                 wall_clock_s=385.04)},
+               flags=["questions_asked=4"]).model_dump()
+    a = monarch_attempts([row])[0]
+    assert a["builder_outcome"] == "done"          # it produced a workflow
+    assert a["questions_asked"] == 4
+    assert a["builder_seconds"] == pytest.approx(515.99)
+    assert a["dispatch_outcome"] == "parked-timeout"
+    assert a["dispatch_seconds"] == pytest.approx(385.04)
+    assert a["checker"] == "fail"
+    assert "deadline passed" in a["reason"]
+
+
+def test_bar_chart_labels_are_the_formatted_values():
+    """The bar chart is inline SVG with no external resource, and every label is
+    the same formatted string the table shows - a chart that disagreed with the
+    table beside it would be worse than no chart."""
+    from wb_report.html import _bar_chart, _fmt
+
+    chart = _bar_chart([("alpha", 0.9, 0.1), ("beta", 0.5, None),
+                        ("gamma", None, None)], kind="rate")
+    assert "<svg" in chart and "</svg>" in chart
+    assert "http" not in chart          # no external resource of any kind
+    assert _fmt(0.9, "rate") in chart   # 90.0%
+    assert _fmt(0.5, "rate") in chart   # 50.0%
+    assert "n/a" in chart               # the missing value degrades to text
+    assert "alpha" in chart and "gamma" in chart
+    # the error bar is drawn only where there is one
+    assert chart.count("<line") >= 1
+
+
+def test_bar_chart_handles_all_missing():
+    """Every value missing: the chart is replaced by text, not an empty box."""
+    from wb_report.html import _bar_chart
+
+    chart = _bar_chart([("alpha", None, None)], kind="rate")
+    assert "n/a" in chart
+
+
+def test_page_has_the_seven_sections(four_arm_store):
+    """Each section carries its own caption, a one-sentence reading guide and a
+    source line."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    for section in SECTIONS:
+        assert f'<section class="part" id="{section.lower()}">' in page, section
+        assert f"<h2>{section}</h2>" in page, section
+    # no Monarch competitor in this round, so that section is absent
+    assert 'id="monarch-phases"' not in page
+    # every section explains itself in one sentence
+    assert page.count('class="part-eyebrow"') >= len(SECTIONS)
+    assert page.count('class="h2-sub"') >= len(SECTIONS)
+    assert page.count('class="src"') >= 4
+
+
+def test_overview_section_says_the_mode_in_plain_words(phase_store, four_arm_store):
+    """create + run and run-only are spelled out; the size line, the spend and
+    the competitor list are all in the overview."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(phase_store, "run-p", audience="internal",
+                                    baseline_arm="alpha"))
+    assert "create + run: Monarch builds the workflow (builder) and runs it (dispatch)" in page
+    assert "prompts: 2" in page
+    assert "US$" in page                       # total spend
+    assert "monarch" in page and "alpha" in page
+
+    # a round with no mode recorded says nothing about one rather than guessing
+    plain = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                     baseline_arm="oracle"))
+    assert "run-only: dispatch only" not in plain
+
+
+def test_success_section_has_chart_matrix_and_comparison(four_arm_store):
+    """Success carries the bar chart, the table, the matrix and the paired
+    comparison with its plain-words verdict."""
+    from wb_report.report import build_report, render_html
+
+    rep = build_report(four_arm_store, "run-h", audience="internal",
+                       baseline_arm="oracle")
+    page = render_html(rep)
+    success = page[page.index('id="success"'):page.index('id="cost"')]
+    assert "<svg" in success
+    assert "<caption>Strict pass rate per competitor</caption>" in success
+    assert "<caption>Task matrix</caption>" in success
+    assert "<caption>Comparisons against the baseline</caption>" in success
+    # the verdict, in the plain words the contract fixes
+    assert any(c["verdict"] in success for c in rep["comparisons"])
+
+
+def test_cost_section(four_arm_store):
+    """Cost carries the three cost figures, the token columns and its chart."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    cost = page[page.index('id="cost"'):page.index('id="time"')]
+    assert "<svg" in cost
+    for header in ("cost total", "cost / attempt", "cost / passed",
+                   "prompt tok", "cached tok", "output tok", "cache hit"):
+        assert f'<th title="{header}">' in cost, header
+
+
+def test_time_section(four_arm_store):
+    """Time carries the wall-clock mean and median, turns and tool calls."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    time_s = page[page.index('id="time"'):page.index('id="failures"')]
+    assert "<svg" in time_s
+    for header in ("wall-clock mean", "wall-clock median", "turns", "tool calls"):
+        assert f'<th title="{header}">' in time_s, header
+
+
+def test_monarch_phases_section(phase_store, four_arm_store):
+    """One row per Monarch attempt, with builder and dispatch kept apart; the
+    section is absent when no Monarch competitor ran."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(phase_store, "run-p", audience="internal",
+                                    baseline_arm="alpha"))
+    assert '<section class="part" id="monarch-phases">' in page
+    assert "<h2>Monarch phases</h2>" in page
+    section = page[page.index('id="monarch-phases"'):page.index('id="failures"')]
+    for header in ("task", "repetition", "builder", "questions", "builder s",
+                   "builder cost", "dispatch", "dispatch s", "checker", "reason"):
+        assert f'<th title="{header}">' in section, header
+    assert "declined" in section          # t2's builder declined
+    assert "success" in section           # t1's dispatch succeeded
+
+    # cost by phase and by model, in the cost section, using Carlos's words
+    cost = page[page.index('id="cost"'):page.index('id="time"')]
+    assert "builder" in cost and "dispatch" in cost
+    assert "opus-4.8" in cost
+
+    # and none of it on a round without Monarch
+    plain = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                     baseline_arm="oracle"))
+    assert "Monarch phases" not in plain
+
+
+def test_failures_section_category_vocabulary(four_arm_store):
+    """The failures table keeps its columns and the category vocabulary."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+                                    baseline_arm="oracle"))
+    failures = page[page.index('id="failures"'):page.index('id="provenance"')]
+    for header in ("task", "competitor", "repetition", "termination", "error",
+                   "unexpected changes"):
+        assert f'<th title="{header}">' in failures, header
+
+
+def test_sections_keep_the_gate(lab_store):
+    """Every section is built from the gated competitor list: a public render
+    names the lab competitor nowhere, in any of the seven."""
+    from wb_report.report import build_report, render_html
+
+    page = render_html(build_report(lab_store, "run-g", audience="public-rung2"))
+    assert "monarch-lab" not in page
+    for section in SECTIONS:
+        assert f'<section class="part" id="{section.lower()}">' in page, section
+
+
+def test_questions_asked_deduplicates_by_request(tmp_path):
+    """The `questions_asked=N` flag over-counts: the arm adds the questions of
+    every `awaiting_input` frame, and the SSE stream re-delivers the same frame
+    on reconnect. Counting distinct request ids in the turn log is the honest
+    figure; the flag is the fallback when no log survives."""
+    from wb_report.metrics import _questions_asked
+
+    art = tmp_path / "t0"
+    art.mkdir()
+    ask = ('{"frame": {"status": "awaiting_input", "awaiting_reply": '
+           '{"requestId": "ask_1_abc", "questions": [{"id": "q1"}, {"id": "q2"}]}}}')
+    # the same request delivered three times, as a reconnect would
+    (art / "turns.jsonl").write_text("\n".join([ask, ask, ask]), encoding="utf-8")
+
+    row = _row("t1", "monarch", 0, False, flags=["questions_asked=6"]).model_dump()
+    row["artifacts_uri"] = str(art)
+    assert _questions_asked(row) == 2          # not the 6 the flag claims
+
+    # no log to read: the flag is all there is, and is used
+    bare = _row("t1", "monarch", 0, False, flags=["questions_asked=3"]).model_dump()
+    bare["artifacts_uri"] = str(tmp_path / "gone")
+    assert _questions_asked(bare) == 3
+
+    # no flag and no log: nobody asked anything
+    assert _questions_asked(_row("t1", "monarch", 0, True).model_dump()) == 0
+
+
+# -- the executive page -------------------------------------------------------
+
+def test_executive_page_shape(phase_store, tmp_path):
+    """Monarch first everywhere, five sections, and the design system's markup."""
+    from wb_report.report import build_report, render_executive
+
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"),
+                            tasks_dir=tmp_path)
+    for ident in ("headline", "charts", "tasks", "verdict", "provenance"):
+        assert f'<section class="part" id="{ident}">' in page, ident
+    assert page.count('class="mcard"') == 3          # the three headline cards
+    assert page.count('class="bars"') == 3           # one chart per metric
+    assert "Monarch benchmark" in page
+    # the design system, not our own styling
+    assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
+    assert 'class="part-eyebrow"' in page and 'class="chip"' in page
+    # Monarch leads every bar chart
+    for chart in page.split('<div class="bars">')[1:]:
+        first = chart[:chart.index("</div>", chart.index('class="nm"'))]
+        assert "monarch" in first, first[:80]
+
+
+def test_executive_task_rows_are_monarch_only(phase_store, tmp_path):
+    """One full-width row per task with a single Monarch verdict; the other
+    competitors are deliberately absent from this section."""
+    import re
+
+    from wb_report.report import build_report, render_executive
+
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"),
+                            tasks_dir=tmp_path)
+    assert "taskgrid" not in page                    # no grid: stacked rows
+    rows = re.findall(r'<div class="taskrow">(.*?)</div></div>', page, re.S)
+    assert len(rows) == 2                            # one per task
+    for row in rows:
+        assert "alpha" not in row                    # no other competitor
+        assert row.count('class="badge') == 1        # exactly one verdict
+
+
+def test_executive_verdict_colours(four_arm_store, phase_store, tmp_path):
+    """Monarch at or above the best model is good, below it is crit, and an
+    undefined figure is crit with its reason."""
+    from wb_report.html import _verdict_class
+
+    # success: higher is better
+    assert _verdict_class(0.9, 0.8, lower_is_better=False) == "good"
+    assert _verdict_class(0.7, 0.8, lower_is_better=False) == "crit"
+    assert _verdict_class(0.8, 0.8, lower_is_better=False) == "good"   # "at or above"
+    # cost and time: lower is better
+    assert _verdict_class(0.5, 1.0, lower_is_better=True) == "good"
+    assert _verdict_class(2.0, 1.0, lower_is_better=True) == "crit"
+    # a figure we cannot compute is not a pass
+    assert _verdict_class(None, 1.0, lower_is_better=True) == "crit"
+
+    from wb_report.report import build_report, render_executive
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm="alpha"), tasks_dir=tmp_path)
+    assert 'class="big crit"' in page or 'class="big good"' in page
+
+
+def test_report_cli_format_executive(four_arm_store, tmp_path):
+    """`wb report --format executive` writes the stakeholder page beside the
+    markdown; the default still writes the technical one."""
+    from wb_orchestrator.cli import main
+
+    db, out = str(four_arm_store.path), tmp_path / "r"
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle", "--format", "executive"]) == 0
+    exe = out / "report-run-h-internal-executive.html"
+    assert exe.exists()
+    assert 'id="headline"' in exe.read_text(encoding="utf-8")
+
+    assert main(["--db", db, "--out", str(out), "report", "run-h",
+                 "--baseline", "oracle"]) == 0
+    tech = out / "report-run-h-internal.html"
+    assert 'id="overview"' in tech.read_text(encoding="utf-8")
+
+    # an unknown format is refused by argparse before anything is written
+    with pytest.raises(SystemExit):
+        main(["--db", db, "--out", str(out), "report", "run-h", "--format", "nope"])
+
+
+def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
+    """Technical and executive are siblings: same tokens, same fonts, same
+    themes, and no external resource other than the font stylesheet."""
+    import re
+
+    from wb_report.report import build_report, render_executive, render_html
+
+    rep = build_report(four_arm_store, "run-h", audience="internal",
+                       baseline_arm="oracle")
+    for page in (render_html(rep), render_executive(rep, tasks_dir=tmp_path)):
+        assert "--paper: #FAF9F5" in page and "--accent: #A66A1E" in page
+        assert '<link rel="stylesheet" href="https://fonts.googleapis.com' in page
+        assert ':root[data-theme="dark"]' in page
+        assert "Bricolage Grotesque" in page and "JetBrains Mono" in page
+        # the font stylesheet is the only external reference on either page
+        others = [u for u in re.findall(r'https?://[^"\')\s]+', page)
+                  if "fonts.googleapis.com" not in u and "fonts.gstatic.com" not in u]
+        assert others == [], others

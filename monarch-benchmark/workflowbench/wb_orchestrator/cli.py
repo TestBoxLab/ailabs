@@ -188,7 +188,8 @@ def cmd_report(args) -> int:
     store = _store(args)
     try:
         paths = write_report(store, args.run_id, args.out, audience=args.audience,
-                             baseline_arm=args.baseline, sortable=not args.no_sort)
+                             baseline_arm=args.baseline, sortable=not args.no_sort,
+                             fmt=args.format)
     except (GateError, KeyError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -393,7 +394,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--audience", default="internal", help="internal | public-rung2")
     p.add_argument("--baseline", default=None, help="baseline arm for paired stats")
     p.add_argument("--no-sort", action="store_true",
-                   help="omit the column-sorting script; ship the page as pure markup")
+                   help="accepted for compatibility; the page has no sorting script")
+    p.add_argument("--format", default="html", choices=("html", "executive"),
+                   help="html: the seven-section technical page (default); "
+                        "executive: the stakeholder page, Monarch first")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("summary", help="two to six rounds on one page")
