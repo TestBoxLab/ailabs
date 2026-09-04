@@ -104,6 +104,10 @@ def test_fake_monarch_routes_and_engine_calls():
             pass
 
         def do_PATCH(self):
+            # Drain the body before answering: replying to an unread request
+            # makes Windows reset the connection, which reached the caller as a
+            # transport error instead of the 200 this stub means to send.
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
             hits.append(self.path)
             self.send_response(200)
             self.send_header("Content-Length", "2")
