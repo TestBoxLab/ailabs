@@ -131,10 +131,29 @@ def _tokens(o: dict) -> tuple[int, int, int, int]:
 
 # ponytail: page_size is a test seam (force multi-page paging); production always uses
 # the contract's 100.
+def _one_trace(base_url: str, trace_id: str, auth: str, timeout: float):
+    """One trace by id. Returns None when Langfuse does not have it."""
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/api/public/traces/{trace_id}",
+                                 headers={"Authorization": auth})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None                       # not ingested yet, or never existed
+        raise LangfuseUnavailable(f"GET /api/public/traces/{trace_id}: {e}") from e
+    except (OSError, json.JSONDecodeError) as e:
+        raise LangfuseUnavailable(f"GET /api/public/traces/{trace_id}: {e}") from e
+
+
 def read_generations(base_url: str, public_key: str, secret_key: str, episode_id: str,
                      price_table, timeout: float = 10.0, page_size: int = 100,
-                     from_timestamp=None) -> list[Generation]:
+                     from_timestamp=None, trace_ids: list[str] | None = None) -> list[Generation]:
     """The episode's generations. `from_timestamp` (aware datetime) narrows the list.
+
+    `trace_ids` is the primary join: Monarch's own frames carry `traceId`, so the
+    attempt knows its traces exactly and each is fetched by id. Without them the
+    listing is scanned and filtered on metadata, which is the fallback below.
 
     Verified on Langfuse Cloud v4.28, 4 Sep 2026: GET /api/public/traces IGNORES
     the `metadata[bench_episode_id]` filter and returns every trace in the
@@ -144,6 +163,18 @@ def read_generations(base_url: str, public_key: str, secret_key: str, episode_id
     is what keeps the listing from growing without bound.
     """
     auth = "Basic " + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+    if trace_ids:
+        out = []
+        for trace_id in trace_ids:
+            trace = _one_trace(base_url, trace_id, auth, timeout)
+            if trace is None:
+                continue
+            obs = trace.get("observations")
+            if obs is None:                   # older Langfuse: observations not inline
+                obs = _get(base_url, "/api/public/observations",
+                           {"traceId": trace_id}, auth, timeout, page_size)
+            out += _generations(obs, trace_id, price_table)
+        return out
     params = {"metadata[bench_episode_id]": episode_id}
     if from_timestamp is not None:
         params["fromTimestamp"] = from_timestamp.isoformat()
@@ -154,16 +185,23 @@ def read_generations(base_url: str, public_key: str, secret_key: str, episode_id
             continue
         obs = _get(base_url, "/api/public/observations",
                    {"traceId": trace["id"]}, auth, timeout, page_size)
-        by_id = {o["id"]: o for o in obs}
-        for o in obs:
-            if o.get("type") != "GENERATION":
-                continue
-            phase, ancestor = _phase_of(o, by_id)
-            i, out_t, read, write = _tokens(o)
-            out.append(Generation(
-                trace_id=trace["id"], observation_id=o["id"], model=o.get("model"),
-                family=_family(o.get("model"), price_table), phase=phase, ancestor=ancestor,
-                input=i, output=out_t, cache_read=read, cache_write=write))
+        out += _generations(obs, trace["id"], price_table)
+    return out
+
+
+def _generations(obs: list[dict], trace_id: str, price_table) -> list[Generation]:
+    """The priced generations among one trace's observations."""
+    by_id = {o["id"]: o for o in obs}
+    out = []
+    for o in obs:
+        if o.get("type") != "GENERATION":
+            continue
+        phase, ancestor = _phase_of(o, by_id)
+        i, out_t, read, write = _tokens(o)
+        out.append(Generation(
+            trace_id=trace_id, observation_id=o["id"], model=o.get("model"),
+            family=_family(o.get("model"), price_table), phase=phase, ancestor=ancestor,
+            input=i, output=out_t, cache_read=read, cache_write=write))
     return out
 
 

@@ -32,7 +32,7 @@ from tests.test_config import (  # noqa: F401  (site is a fixture)
     HARNESS_MONARCH, HARNESS_SCRIPTED, PLAN, PRICE_TABLE, edit, site, write)
 from tests.test_monarch_client import header
 from wb_arms.api_loop import EpisodeTimeout, InfraError
-from wb_arms.monarch import MonarchArm
+from wb_arms.monarch import MonarchArm, bench_episode_id
 from wb_orchestrator import config
 from wb_orchestrator.config import ConfigError, load_product
 from wb_orchestrator.orchestrator import Orchestrator, build_arm_for
@@ -113,7 +113,9 @@ def test_completed_attempt(site, repo):
     starts = [r for r in fake.requests
               if r["path"] == "/api/workflows/recipe/runs" or r["path"].endswith("/run")]
     assert len(starts) == 2
-    assert all(header(r, "x-bench-episode-id") == ep.episode_id for r in starts)
+    # The header carries the id mapped into Monarch's charset, not the raw one.
+    assert all(header(r, "x-bench-episode-id") == bench_episode_id(ep.episode_id)
+               for r in starts)
     assert fake.deleted_workflows == ["wf-1"]
     assert result.phases["authoring"].wall_clock_s > 0
     assert result.phases["execution"].wall_clock_s > 0
@@ -232,7 +234,8 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
         monarch_arm = build_arm_for(
             next(c for c in rc.competitors if c.harness.kind == "monarch"), rc)
         sc.engine_calls_by_episode = {
-            f"run-pilot/{t['task']}/{monarch_arm.name}/t{trial}": engine_calls_for(t)
+            bench_episode_id(f"run-pilot/{t['task']}/{monarch_arm.name}/t{trial}"):
+                engine_calls_for(t)
             for t in tasks for trial in range(2)}
         run_id = orch.run("run-pilot")
 
@@ -306,7 +309,9 @@ TERMINATION_ROWS = [
      {"run_outcome": {"status": "failed", "errorCode": "STEP_FAILED", "errorNodeId": "n7"}},
      ("row", "agent_error", "run_error:STEP_FAILED node=n7")),
     ("login refused", {"login_ok": False}, ("infra", "infra:harness_crash", True)),
-    ("the stream closed with nothing terminal", {"frames": [RUNNING]},
+    # A stream that just ends is a cut connection, not a verdict: only a job
+    # Monarch no longer has (404 on reconnect) is `stream_closed`.
+    ("the authoring job is gone", {"frames": [RUNNING], "stream_404_after": 1},
      ("row", "agent_error", "stream_closed")),
     ("Monarch asked for an account",
      {"frames": [RUNNING, {"status": "awaiting_input",
@@ -373,7 +378,7 @@ def test_timeout_during_run(site, repo):
         arm = arm_against(site, fake, port, repo, langfuse=lf,
                           env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
         arm.timeout_s = 1.0
-        both_phases(lf, EPISODE)
+        both_phases(lf, BENCH_EPISODE)
         with pytest.raises(EpisodeTimeout) as exc:
             arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
 
@@ -453,6 +458,8 @@ def test_an_attempt_with_no_questions_records_none(site, repo):
 OPUS = "anthropic.claude-opus-4-8-20260101-v1:0"
 SONNET = "anthropic.claude-sonnet-5-20260101-v1:0"
 EPISODE = "run-x/t/monarch/t0"
+# What Monarch actually stamps on the trace: the header-safe form of EPISODE.
+BENCH_EPISODE = bench_episode_id(EPISODE)
 USAGE = {"input": 1000, "output": 200, "cache_read_input_tokens": 500,
          "cache_creation_input_tokens": 100}
 
@@ -466,7 +473,7 @@ def costed_attempt(site, repo, langfuse, trace=None, env=None):
         arm = arm_against(site, fake, port, repo, langfuse=langfuse,
                           env=env or {**MONARCH_ENV, **LANGFUSE_ENV(langfuse)})
         if trace is not None:
-            trace(langfuse, EPISODE)
+            trace(langfuse, BENCH_EPISODE)
         result = arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
     free(port)
     return result
@@ -591,7 +598,7 @@ def test_a_timed_out_row_keeps_its_spend(site, repo, tmp_path, monkeypatch):
         rc.tasks = [t for t in rc.tasks if t["task"] == one_task.stem]
         store = Store(tmp_path / "wb.sqlite3")
         orch = Orchestrator.from_config(store, rc, tmp_path / "out")
-        both_phases(lf, f"run-t/{one_task.stem}/{arm.name}/t0")
+        both_phases(lf, bench_episode_id(f"run-t/{one_task.stem}/{arm.name}/t0"))
         orch.run("run-t")
 
     row = store.episodes(run="run-t")["rows"][0]
@@ -624,7 +631,7 @@ def test_an_infra_failure_keeps_its_spend(site, repo):
     with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
         arm = arm_against(site, fake, port, repo, langfuse=lf,
                           env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
-        both_phases(lf, EPISODE)
+        both_phases(lf, BENCH_EPISODE)
         with pytest.raises(InfraError) as exc:
             arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
 
@@ -645,7 +652,7 @@ def test_each_generation_is_billed_once_across_retries(site, repo):
     with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
         arm = arm_against(site, fake, port, repo, langfuse=lf,
                           env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
-        both_phases(lf, EPISODE)
+        both_phases(lf, BENCH_EPISODE)
 
         def attempt():
             return arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
@@ -653,7 +660,7 @@ def test_each_generation_is_billed_once_across_retries(site, repo):
         first = attempt()
         second = attempt()
         # A generation the previous attempts never saw: only that one is new.
-        lf.add_trace(EPISODE, spans=[("s3", "recipe.plan", None)],
+        lf.add_trace(BENCH_EPISODE, spans=[("s3", "recipe.plan", None)],
                      generations=[("g3", "s3", OPUS, USAGE)])
         third = attempt()
 
@@ -663,4 +670,102 @@ def test_each_generation_is_billed_once_across_retries(site, repo):
     one_opus = (1000 * 5.00 + 500 * 0.50 + 100 * 6.25 + 200 * 25.00) / 1e6
     assert third.cost_usd == pytest.approx(one_opus)
     assert "cost_missing" not in third.flags
+    free(port)
+
+
+# -- live fixes from the first Railway attempt --------------------------------
+
+# What the orchestrator really builds: slashes, an @ and a + in the arm name.
+LIVE_EPISODE = "run-20260904-133230/simple.sf_opp_amount_update/monarch@e21dc0044+feat_railway-dev-deploy/t0"
+
+
+def test_bench_episode_id_passes_monarch_header_regex():
+    """Monarch drops a header outside `^[A-Za-z0-9._:-]{1,128}$`, losing the trace join."""
+    from wb_arms.monarch import HEADER_SAFE, bench_episode_id
+    got = bench_episode_id(LIVE_EPISODE)
+    assert HEADER_SAFE.fullmatch(got), got
+    # Readable, not hashed: the id still says which run, task and attempt.
+    assert got.startswith("run-20260904-133230-simple.sf_opp_amount_update-monarch-e21dc0044")
+    assert got.endswith("-t0") and "--" not in got
+    assert bench_episode_id("a" * 200) == "a" * 128
+    assert HEADER_SAFE.fullmatch(bench_episode_id("run/1/monarch@sha+br/t0"))
+
+
+def test_the_safe_episode_id_is_what_monarch_and_langfuse_see(site, repo):
+    """Both start requests carry it, and it is recorded so a human can find the trace."""
+    from wb_arms.monarch import bench_episode_id
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id=LIVE_EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    safe = bench_episode_id(LIVE_EPISODE)
+    starts = [r for r in fake.requests
+              if r["path"] == "/api/workflows/recipe/runs" or r["path"].endswith("/run")]
+    assert len(starts) == 2
+    assert all(header(r, "x-bench-episode-id") == safe for r in starts)
+    assert result.turn_log[0]["monarch"]["bench_episode_id"] == safe
+
+
+def test_a_cut_stream_is_reconnected(site, repo):
+    """Railway cuts a long SSE response; the job is still running, so we reconnect."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, RUNNING, RUNNING, DONE],
+                  stream_cut_after=2,
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert fake.stream_connections == 2          # cut once, resumed once
+    assert result.turn_log[0]["monarch"]["workflowId"] == "wf-1"
+    free(port)
+
+
+def test_a_stream_that_404s_on_reconnect_is_a_lost_job(site, repo):
+    """The job is gone: reconnecting forever would only burn the deadline."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, RUNNING, DONE],
+                  stream_cut_after=1, stream_404_after=1)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error" and result.error == "stream_closed"
+    free(port)
+
+
+def test_cost_is_read_by_the_trace_ids_the_frames_named(site, repo):
+    """The frames carry `traceId`; that is the join, not a metadata filter Cloud ignores."""
+    port = free_port()
+    trace_id = "6d84c5162775ed67b5f353fedd3c009f"
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[{**RUNNING, "traceId": trace_id}, {**DONE, "traceId": trace_id}],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
+        # No bench_episode_id on the trace: only the id from the frames can find
+        # it, which is the whole point -- Cloud ignores the metadata filter.
+        lf.add_trace(None, spans=[("s1", "recipe.plan", None)],
+                     generations=[("g1", "s1", OPUS, USAGE)])
+        lf.traces[-1]["id"] = trace_id
+        for o in lf.observations:
+            o["traceId"] = trace_id
+        arm = arm_against(site, fake, port, repo, langfuse=lf,
+                          env={**MONARCH_ENV, **LANGFUSE_ENV(lf)})
+        result = arm.run(Episode(task(), episode_id=LIVE_EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert result.cost_usd > 0 and "cost_missing" not in result.flags
+    assert trace_id in arm._trace_ids
+    # Fetched by id, so the listing endpoint is never asked.
+    assert any(f"/api/public/traces/{trace_id}" in r["path"] for r in lf.requests)
     free(port)

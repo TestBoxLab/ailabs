@@ -132,6 +132,16 @@ class FakeLangfuse:
                              or datetime.fromisoformat(
                                  t["timestamp"].replace("Z", "+00:00")) >= cutoff]
                     self._reply(200, outer._page(items, q))
+                elif sp.path.startswith("/api/public/traces/"):
+                    # One trace by id, observations inline: what the arm uses when
+                    # the frames named their trace.
+                    want = sp.path[len("/api/public/traces/"):]
+                    trace = next((t for t in outer.traces if t["id"] == want), None)
+                    if trace is None:
+                        self._reply(404, {"error": "not_found"})
+                        return
+                    self._reply(200, {**trace, "observations": [
+                        o for o in outer.observations if o["traceId"] == want]})
                 elif sp.path == "/api/public/observations":
                     want = q.get("traceId", [None])[0]
                     items = [o for o in outer.observations

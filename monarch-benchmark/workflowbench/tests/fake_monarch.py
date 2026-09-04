@@ -42,6 +42,10 @@ class Scenario:
     shim_url: str | None = None
     delay_s: dict[str, float] = field(default_factory=dict)   # login/authoring/frame/run/poll
     run_never_finishes: bool = False
+    # Railway's edge cuts a long SSE response: the first connection stops after N
+    # frames without a terminal one, and the next resumes where it left off.
+    stream_cut_after: int | None = None
+    stream_404_after: int | None = None       # connection N+1 onwards answers 404
     delete_fails_once: bool = False
     preset_token: str | None = None           # accept this session token without a login
     server_error: bool = False                # every route answers 500
@@ -68,6 +72,7 @@ class FakeMonarch:
         self.episode_headers: list[str] = []
         self.engine_responses: list[dict] = []
         self.authoring_started_at: list[float] = []
+        self.stream_connections = 0                # how often the stream was opened
         self.run_started_at: list[float] = []
         self.token = "sess-1"
         self._reply_events: dict[str, threading.Event] = {}
@@ -77,6 +82,10 @@ class FakeMonarch:
         self._cancelled: set[str] = set()          # recipe run ids cancelled by the client
         self._delete_failed_once = False
         self._run_n = 0                            # workflow runs get run-1, run-2, ...
+        # Resume point per recipe run: a reconnected stream carries on where the
+        # cut one stopped, while a second attempt starts from the beginning.
+        self._frames_sent: dict[str, int] = {}
+        self._connections: dict[str, int] = {}     # stream opens, per recipe run
         self._lock = threading.Lock()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.httpd.server_address[1]
@@ -224,6 +233,10 @@ class FakeMonarch:
                     time.sleep(sc.delay_s.get("authoring", 0))
                     with outer._lock:
                         outer.authoring_started_at.append(time.monotonic())
+                        # A new job replays its frames from the start, even though
+                        # the fake reuses the run id across attempts.
+                        outer._frames_sent.pop("rr-1", None)
+                        outer._connections.pop("rr-1", None)
                     self._reply(201, {"runId": "rr-1", "token": "t"})
                 elif path.startswith("/api/workflows/recipe/runs/") and path.endswith("/reply"):
                     rid = (body or {}).get("requestId", "")
@@ -288,15 +301,32 @@ class FakeMonarch:
                 sc = outer.scenario
                 run_id = urlsplit(self.path).path[
                     len("/api/workflows/recipe/runs/"):-len("/stream")]
+                with outer._lock:
+                    outer.stream_connections += 1
+                    connection = outer._connections[run_id] = (
+                        outer._connections.get(run_id, 0) + 1)
+                    # Only a scenario that asks to be cut resumes; every other
+                    # connection replays the job from the start, which is what
+                    # the real backend does when a client re-opens the stream.
+                    start = (outer._frames_sent.get(run_id, 0)
+                             if sc.stream_cut_after is not None else 0)
+                if sc.stream_404_after is not None and connection > sc.stream_404_after:
+                    self._reply(404, {"error": "not_found"})   # the job is gone
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
                 self._chunk(b": ping\n\n")
-                for frame in sc.frames:
+                for i, frame in enumerate(sc.frames[start:], start=start):
+                    if (sc.stream_cut_after is not None and connection == 1
+                            and i - start >= sc.stream_cut_after):
+                        break                      # the edge cut the response
                     time.sleep(sc.delay_s.get("frame", 0))
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
+                    with outer._lock:
+                        outer._frames_sent[run_id] = i + 1
                     if frame.get("status") == "awaiting_input":
                         rid = (frame.get("awaiting_reply") or {}).get("requestId", "")
                         outer._event(rid).wait(timeout=REPLY_GATE_TIMEOUT_S)

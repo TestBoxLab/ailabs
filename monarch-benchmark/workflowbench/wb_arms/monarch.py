@@ -9,6 +9,7 @@ produced it. See specs/002 for the attempt flow.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 import time
@@ -48,6 +49,18 @@ LLM_ERROR_KEYWORDS = ("bedrock", "aws", "credential", "not configured", "accessd
 # The same sentence for every question, so no attempt is helped more than another
 # (rule 1: same request text for every competitor). It is code, never config.
 FIXED_REPLY = "No further information is available. Proceed with your best judgment."
+
+# Monarch validates `x-bench-episode-id` against this and silently drops a header
+# that fails, which loses the trace join and the whole attempt's cost. Our episode
+# ids carry `/`, `@` and `+` (run/task/monarch@sha+branch/t0), so they are mapped
+# into the charset first. Verified on Railway, 4 Sep 2026.
+HEADER_SAFE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_UNSAFE = re.compile(r"[^A-Za-z0-9._:-]+")
+
+
+def bench_episode_id(episode_id: str) -> str:
+    """The episode id as a header value: unsafe runs become one `-`, capped at 128."""
+    return _UNSAFE.sub("-", episode_id)[:128]
 
 
 def _classify_authoring_error(message: str) -> InfraError | None:
@@ -101,6 +114,8 @@ class MonarchArm:
         # episode id -> generations already priced, because the orchestrator
         # retries an episode under its own id and sums every attempt's spend
         self._billed: dict[str, set[str]] = {}
+        self._bench_id = ""              # this attempt's header-safe episode id
+        self._trace_ids: list[str] = []  # Langfuse traces this attempt's frames named
         self._started_at: datetime | None = None   # set by run(); bounds the cost read
 
     def prepare(self) -> None:
@@ -141,8 +156,11 @@ class MonarchArm:
         # The window `_add_cost` asks Langfuse for. A minute of margin covers the
         # clock skew between this machine and the trace timestamps.
         self._started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+        # Inside the lock: `_bench_id` is per-attempt state on a shared arm, and
+        # the orchestrator runs attempts of one competitor concurrently.
         with _LOCK:
             self._infra = None          # reset and read in this function only
+            self._bench_id = bench_episode_id(ep.episode_id)
             attempt_deadline = time.monotonic() + self.timeout_s
             port = h.shim_port
             try:
@@ -162,7 +180,7 @@ class MonarchArm:
                 shim.stop()
         # Cost is read after the front door is down and the lock is free: it is
         # bookkeeping, and a slow Langfuse must not hold the next attempt.
-        self._add_cost(res, ep.episode_id)
+        self._add_cost(res, self._bench_id)
         # A refusal classified as infrastructure was stored rather than raised,
         # so cleanup could finish first (FR-011); it is raised here, outside the
         # lock and against a free port. `_add_cost` may have stored one of its
@@ -185,7 +203,9 @@ class MonarchArm:
                 expand(h.langfuse_url, self.env, "langfuse_url"),
                 self.env.get(h.langfuse_public_key_env or "") or "",
                 self.env.get(h.langfuse_secret_key_env or "") or "",
-                episode_id, self.price_table, from_timestamp=self._started_at)
+                episode_id, self.price_table, from_timestamp=self._started_at,
+                # The frames named their traces; the metadata filter is the fallback.
+                trace_ids=self._trace_ids or None)
         except LangfuseUnavailable:
             # The attempt's verdict stands; the report shows the cost as missing.
             # An unset address or key never reaches here: resolve() refuses the
@@ -252,10 +272,12 @@ class MonarchArm:
     def _attempt(self, ep: Episode, deadline: float) -> ArmResult:
         # Held on the arm so a timeout can still report the phases it reached.
         res = self._partial = ArmResult()
+        self._trace_ids = []
         client = self._client(deadline)
         self._sweep(client)
         goal = ep.task["prompt"][1]["content"]
-        ids: dict = {}
+        # bench_episode_id is recorded so a human can find the attempt's traces.
+        ids: dict = {"bench_episode_id": self._bench_id}
         res.turn_log.append({"monarch": ids})
         workflow_id = None
         try:
@@ -271,6 +293,12 @@ class MonarchArm:
                 if not self._delete(client, workflow_id):
                     res.turn_log.append({"cleanup_failed": workflow_id})
                     res.flags.append("workflow_not_deleted")
+
+    def _note_trace(self, frame: dict) -> None:
+        """Remember the trace a frame names: the primary join for the cost read."""
+        trace_id = frame.get("traceId")
+        if trace_id and trace_id not in self._trace_ids:
+            self._trace_ids.append(trace_id)
 
     def _reply(self, client, recipe_run: str, frame: dict, deadline: float) -> int | None:
         """Answer every question in the frame with the one sentence; count them.
@@ -313,37 +341,62 @@ class MonarchArm:
     def _author(self, client, ep, goal, deadline, res, ids) -> str | None:
         """Stream the authoring run; return the workflow id, or fill `res` and return None."""
         t0 = time.monotonic()
-        recipe_run = client.start_authoring(goal, ep.episode_id, deadline=deadline)
+        recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline)
         ids["recipeRunId"] = recipe_run
         workflow_id, questions = None, 0
         try:
             try:
-                for frame in client.stream(recipe_run, deadline=deadline):
-                    res.turn_log.append({"frame": frame})
-                    status = frame.get("status")
-                    if status == "done":
-                        workflow_id = frame.get("workflowId")
-                        ids["workflowId"] = workflow_id
-                        ids["recipeVersion"] = frame.get("recipeVersion")
-                        break
-                    if status == "error":
-                        message = frame.get("error")
-                        self._infra = _classify_authoring_error(message)
+                # The stream can end without a terminal frame while the job runs
+                # on: Railway's edge cuts a long SSE response (seen 4 Sep 2026,
+                # frames stopped at ~85 s of a ~120 s authoring). There is no job
+                # view to poll -- GET recipe/runs/<id> is 404 -- so the stream is
+                # re-opened, which resends the current view, until a terminal
+                # frame arrives, the job is gone (404), or the deadline passes.
+                done = False
+                while not done:
+                    try:
+                        frames = client.stream(recipe_run, deadline=deadline)
+                        for frame in frames:
+                            res.turn_log.append({"frame": frame})
+                            self._note_trace(frame)
+                            status = frame.get("status")
+                            if status == "done":
+                                workflow_id = frame.get("workflowId")
+                                ids["workflowId"] = workflow_id
+                                ids["recipeVersion"] = frame.get("recipeVersion")
+                                done = True
+                                break
+                            if status == "error":
+                                message = frame.get("error")
+                                self._infra = _classify_authoring_error(message)
+                                res.termination = "agent_error"
+                                res.error = f"authoring_error: {message}"
+                                done = True
+                                break
+                            if status == "awaiting_input":
+                                asked = self._reply(client, recipe_run, frame, deadline)
+                                if asked is None:   # an account prompt, or nothing to answer
+                                    res.termination = "agent_error"
+                                    res.error = "account_requested"
+                                    self._cancel(client, recipe_run)
+                                    done = True
+                                    break
+                                questions += asked
+                    except InfraError as e:
+                        # A 404 means the job no longer exists; reconnecting to a
+                        # backend that is merely unwell is the deadline's problem.
+                        if "404" not in str(e):
+                            raise
                         res.termination = "agent_error"
-                        res.error = f"authoring_error: {message}"
-                        break
-                    if status == "awaiting_input":
-                        asked = self._reply(client, recipe_run, frame, deadline)
-                        if asked is None:      # an account prompt, or nothing to answer
-                            res.termination = "agent_error"
-                            res.error = "account_requested"
-                            self._cancel(client, recipe_run)
-                            break
-                        questions += asked
-                        continue
-                else:
-                    res.termination = "agent_error"
-                    res.error = "stream_closed"
+                        res.error = "stream_closed"
+                        done = True
+                    if not done:
+                        # Paced, so a backend that closes instantly cannot spin.
+                        if time.monotonic() + self.POLL_INTERVAL_S >= deadline:
+                            raise EpisodeTimeout(
+                                f"deadline passed reconnecting to authoring run {recipe_run}")
+                        res.turn_log.append({"stream_reconnect": recipe_run})
+                        time.sleep(self.POLL_INTERVAL_S)
             except EpisodeTimeout as e:
                 # FR-012: nothing is left running behind a timed-out attempt.
                 self._cancel(client, recipe_run)
@@ -365,7 +418,7 @@ class MonarchArm:
                 raise EpisodeTimeout(
                     "deadline passed in the execution phase, before the run started")
             try:
-                started = client.run_workflow(workflow_id, ep.episode_id, deadline=deadline)
+                started = client.run_workflow(workflow_id, self._bench_id, deadline=deadline)
             except MonarchRefused as e:
                 self._infra = _classify_refusal(e.code)
                 res.termination = "agent_error"

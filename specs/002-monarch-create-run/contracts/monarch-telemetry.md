@@ -28,7 +28,12 @@ x-bench-episode-id: <attempt id>
 ```
 
 `<attempt id>` is an opaque string, at most 128 characters, safe for metadata
-(letters, digits, `-`, `_`, `.`, `:`). Monarch MUST:
+(letters, digits, `-`, `_`, `.`, `:`). Monarch validates it against
+`^[A-Za-z0-9._:-]{1,128}$` and **silently drops a header that fails**, which
+loses the attempt's cost entirely; the benchmark therefore maps its own episode
+id into that charset before sending (`bench_episode_id` in `wb_arms/monarch.py`:
+every other run of characters becomes one `-`). Verified on Railway, 4 Sep 2026.
+Monarch MUST:
 
 - store it as trace metadata `bench_episode_id` on every Langfuse trace created
   while serving that request, and on every trace of the jobs that request
@@ -37,6 +42,14 @@ x-bench-episode-id: <attempt id>
   traces;
 - ignore the header when absent: no metadata, no other change;
 - never echo the header into workflow content, prompts, or model input.
+
+**The trace id in the frames is the primary join.** Every authoring SSE frame
+carries `traceId`, so the benchmark collects the ids it saw and fetches those
+traces by id (`GET /api/public/traces/<id>`), which is exact and needs no
+listing. The `bench_episode_id` metadata stays the fallback for a trace no frame
+named -- and it is only a fallback because Langfuse Cloud ignores the
+`metadata[...]` filter on the listing endpoint (v4.28, 4 Sep 2026), so filtering
+happens client-side.
 
 Queries the benchmark issues (public Langfuse API):
 
