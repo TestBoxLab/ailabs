@@ -726,3 +726,78 @@ def test_missing_cost_share_on_the_source_line(tmp_path):
     page = render_html(rep)
     assert "cost missing on 1/3 attempts" in page
     assert rep["provenance"]["missing_cost"] == {"missing": 1, "total": 3}
+
+
+# -- Phase 5: the gate holds in every table -----------------------------------
+
+@pytest.fixture()
+def lab_store(tmp_path):
+    """A round with `monarch` and `monarch-lab`, so the gate has something to
+    strip for a non-internal audience."""
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-g", "cfgg", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch", "monarch-lab"],
+                      "k": 2, "n_tasks": 2})
+    for arm, passes in (("monarch", [True, False, True, True]),
+                        ("monarch-lab", [True, True, True, False])):
+        i = 0
+        for task in ("t1", "t2"):
+            for trial in (0, 1):
+                store.record_episode(_row(task, arm, trial, passes[i], run="run-g",
+                                          assertions=passes[i]))
+                i += 1
+    store.finish_run("run-g")
+    return store
+
+
+def test_gate_in_every_table(lab_store):
+    """T038 (FR-023, SC-003): rendered for public-rung2, the string monarch-lab
+    appears nowhere in the file - not in a table, a title attribute, a caption,
+    a source line or the provenance block."""
+    from wb_report.report import build_report, render_html
+
+    rep = build_report(lab_store, "run-g", audience="public-rung2")
+    assert rep["arms"] == ["monarch"]
+    assert rep["arms_stripped_by_gate"] == ["monarch-lab"]
+
+    page = render_html(rep)
+    assert "monarch-lab" not in page
+    assert "lab" not in page.lower().replace("collaborat", "")
+    # the count is public; the name is not
+    assert "1 withheld" in page
+    # and the gated competitor is in none of the new blocks
+    for row in rep["matrix"]["rows"]:
+        assert "monarch-lab" not in row["cells"]
+    assert all(f["arm"] != "monarch-lab" for f in rep["failures"])
+    assert all(m["arm"] != "monarch-lab" for m in rep["metrics"])
+
+
+def test_public_audience_shows_ratios_not_dollars(four_arm_store, tmp_path):
+    """T039 (FR-024): no dollar figure reaches a non-internal audience; the cost
+    columns are ratios against the baseline."""
+    from wb_report.report import build_report, render_html
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-pub", "cfgpub", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch"], "k": 2, "n_tasks": 2})
+    for task in ("t1", "t2"):
+        for trial in (0, 1):
+            store.record_episode(_row(task, "monarch", trial, True, run="run-pub"))
+    store.finish_run("run-pub")
+
+    page = render_html(build_report(store, "run-pub", audience="public-rung2"))
+    assert "US$" not in page
+    assert "<th>cost vs baseline</th>" in page
+    assert "<th>cost total</th>" not in page
+    assert "<th>cost / passed</th>" not in page
+
+
+def test_internal_watermark_survives(lab_store):
+    """T042: an internal page carrying a lab competitor still says DO NOT
+    EXPORT, as the markdown report already does."""
+    from wb_report.report import build_report, render_html, render_md
+
+    rep = build_report(lab_store, "run-g", audience="internal", baseline_arm="monarch")
+    assert "DO NOT EXPORT" in render_md(rep)
+    assert "DO NOT EXPORT" in render_html(rep)
+    assert "monarch-lab" in render_html(rep)      # internal names it, and warns
