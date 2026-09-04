@@ -5,6 +5,11 @@ money. Fixtures are modelled on tests/test_m4.py::seeded_store.
 """
 from __future__ import annotations
 
+import json
+import re
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 from runner.schema import EpisodeRow, PhaseMetrics, TokenUsage
@@ -926,3 +931,149 @@ def test_comparison_carries_its_own_source(four_arm_store):
     src = tail[tail.index('<p class="src">'):tail.index("</p>", tail.index('<p class="src">'))]
     assert "7 rows" in src
     assert "n=7" not in src
+
+
+# -- Phase 7: the real recorded round, and the two pages agreeing -------------
+
+_RECORDED_DB = Path(__file__).resolve().parent.parent / "out" / "wb.sqlite3"
+_RECORDED_RUN = "run-20260904-125645"
+
+
+class _ReadOnlyStore:
+    """The recorded round, opened read-only.
+
+    A live round may be writing to `out/wb.sqlite3` while this test reads it, so
+    this never opens the file read-write: `Store()` would set `journal_mode=WAL`
+    and run its schema DDL, which is a write. Only the two methods `build_report`
+    calls are implemented; anything else is deliberately absent so a future test
+    cannot quietly start writing through this class.
+
+    # ponytail: two methods and a read-only URI, not a second Store subclass.
+    # Ceiling: if a page ever needs another query, add the one method it needs.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        # mode=ro, and deliberately NOT immutable=1: a round may be writing this
+        # database right now, and `immutable` tells SQLite to ignore the WAL,
+        # which would read torn data. Read-only is the requirement; pretending
+        # the file cannot change is a different and wrong claim.
+        self._conn = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
+        self._conn.row_factory = sqlite3.Row
+
+    def close(self):
+        self._conn.close()
+
+    def run(self, run_id):
+        r = self._conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        return dict(r) if r else None
+
+    def episodes(self, suite=None, arm=None, run=None):
+        q, args = "SELECT row_json FROM episodes WHERE 1=1", []
+        for column, value in (("suite", suite), ("arm", arm), ("run_id", run)):
+            if value:
+                q += f" AND {column}=?"
+                args.append(value)
+        rows = [json.loads(r["row_json"]) for r in self._conn.execute(q, args)]
+        suites = sorted({r["suite"] for r in rows})
+        return {"source": {"suite": suite or (suites[0] if len(suites) == 1 else suites),
+                           "suite_version": sorted({s.split("@")[-1] for s in suites}),
+                           "denominator": len(rows),
+                           "arm": arm or sorted({r["arm"] for r in rows}),
+                           "run_id": run or sorted({r["run_id"] for r in rows})},
+                "rows": rows}
+
+
+def _recorded_run_missing() -> bool:
+    """True when the database or that run is absent, so a fresh clone stays
+    green rather than failing on a file nobody has."""
+    if not _RECORDED_DB.exists():
+        return True
+    try:
+        store = _ReadOnlyStore(_RECORDED_DB)
+    except sqlite3.Error:
+        return True
+    try:
+        return store.run(_RECORDED_RUN) is None
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(_recorded_run_missing(),
+                    reason=f"{_RECORDED_RUN} is not in out/wb.sqlite3")
+def test_recorded_run_renders_four_tables():
+    """T053 (SC-001): the page built from the real 80-attempt round.
+
+    Everything asserted here was read off the recorded run, so a change that
+    quietly alters a figure fails against real data, not a fixture.
+    """
+    import re
+
+    from wb_report.report import build_report, render_html
+
+    store = _ReadOnlyStore(_RECORDED_DB)
+    try:
+        rep = build_report(store, _RECORDED_RUN, audience="internal",
+                           baseline_arm="claude-opus-5/api")
+        page = render_html(rep)
+    finally:
+        store.close()
+
+    assert len(rep["metrics"]) == 4
+    assert len(rep["comparisons"]) == 3
+    assert len(rep["matrix"]["rows"]) == 10
+    assert rep["size"] == {"prompts": 10, "repetitions": 2, "per_competitor": 20,
+                           "competitors": 4, "total": 80}
+    assert rep["provenance"]["config_hash"] == "a5d4e4135f3f2385"
+
+    for caption in ("Competitors", "Comparisons against the baseline",
+                    "Task matrix", "Failures"):
+        assert f"<caption>{caption}</caption>" in page, caption
+    assert "per competitor: 20 = 10 x 2" in page
+    assert "a5d4e4135f3f2385" in page
+    assert not re.search(r"\binf\b|\bnan\b", page, re.IGNORECASE)
+
+    # the recorded figures themselves: oracle passes everything, opus 90%
+    by_arm = {m["arm"]: m for m in rep["metrics"]}
+    assert by_arm["oracle"]["strict_pass"]["mean"] == pytest.approx(1.0)
+    assert by_arm["claude-opus-5/api"]["strict_pass"]["mean"] == pytest.approx(0.9)
+    # no pilot task carries a domain or a tier (research R8)
+    assert rep["matrix"]["has_domain"] is False
+    assert rep["matrix"]["has_tier"] is False
+
+
+def _rates_in(text: str) -> set[str]:
+    """Every percentage with one decimal, as it is printed."""
+    return set(re.findall(r"\d+\.\d%", text))
+
+
+def test_page_and_markdown_agree(four_arm_store, phase_store):
+    """T054 (SC-002): every strict pass rate and cost total the page prints also
+    appears in the markdown report of the same round, parsed out of both.
+
+    The two renderers read the same numbers from different code paths - the page
+    from `metrics`, the markdown from `figures` - so this is what catches them
+    drifting apart.
+    """
+    import re
+
+    from wb_report.report import build_report, render_html, render_md
+
+    for store, run_id, baseline in ((four_arm_store, "run-h", "oracle"),
+                                    (phase_store, "run-p", "alpha")):
+        rep = build_report(store, run_id, audience="internal", baseline_arm=baseline)
+        page, md = render_html(rep), render_md(rep)
+
+        for m in rep["metrics"]:
+            mean = m["strict_pass"]["mean"]
+            if mean is None:
+                continue
+            printed = f"{mean * 100:.1f}%"
+            assert printed in page, (m["arm"], printed, "missing from the page")
+            # the markdown prints the same rate through its own formatter
+            assert printed in md, (m["arm"], printed, "missing from the markdown")
+
+            # and the cost total, which the markdown prints rounded to 6 places
+            total = round(m["cost_total"], 6)
+            assert f"US$ {m['cost_total']:.4f}" in page
+            assert str(total) in md, (m["arm"], total, "cost missing from markdown")
