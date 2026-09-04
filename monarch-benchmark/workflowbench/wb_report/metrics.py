@@ -12,7 +12,10 @@ Rules that hold everywhere here:
   definition `wb_stats` already uses; it is excluded from every pass
   denominator and reported on its own (PLAN.md section 1, rule 7);
 - every division whose denominator is 0 yields `None`, never `inf`, `nan` or a
-  silent 0. `None` is what the renderer prints as `n/a`.
+  silent 0. `None` is what the renderer prints as `n/a`;
+- the four figures taken from `arm_summary` arrive rounded (that function rounds
+  for the markdown report); the ones computed here are deliberately unrounded,
+  and the renderer does all formatting.
 """
 from __future__ import annotations
 
@@ -136,19 +139,20 @@ def verdict(pairs: int, p: float, wins: int, losses: int) -> str:
     if p >= 0.05:
         return "no significant difference at this size"
     direction = "better" if wins > losses else "worse"
-    return f"{direction} than the baseline (p = {p})"
+    return f"{direction} than the baseline (p = {p:.3f})"
 
 
-def comparison(rows_arm: list[dict], rows_base: list[dict], k: int) -> dict[str, Any]:
+def comparison(a: dict, b: dict, rows_arm: list[dict],
+               rows_base: list[dict]) -> dict[str, Any]:
     """One row of the comparison table, per contracts section 2.
 
-    Every figure is on the identical attempt set - the pairs `paired_wl` finds -
-    and an infrastructure attempt on either side drops the pair, exactly as the
-    markdown report already does.
+    `a` and `b` are the two competitors' already-computed `competitor_metrics`
+    entries, so the comparison table can never disagree with the metrics table
+    above it; the rows are needed only for the pairing. Every figure is on the
+    identical attempt set - the pairs `paired_wl` finds - and an infrastructure
+    attempt on either side drops the pair, exactly as the markdown report does.
     """
     wl = paired_wl(rows_arm, rows_base)
-    a = competitor_metrics(rows_arm, k)
-    b = competitor_metrics(rows_base, k)
     a_rate, b_rate = a["strict_pass"]["mean"], b["strict_pass"]["mean"]
     diff = (a_rate - b_rate) * 100 if a_rate is not None and b_rate is not None else None
     return {

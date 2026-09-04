@@ -46,6 +46,7 @@ numbers or `None`; `None` renders as `n/a`.
 | `arm` | str |
 | `attempts`, `passed`, `infra`, `agent_errors`, `timeouts` | int |
 | `strict_pass` | `{mean, sem}`, either may be `None` |
+| `strict_pass_denominator` | int - the non-infrastructure attempts the rate divides by |
 | `pass_over_repetitions` | `{k, mean, sem}` |
 | `infra_rate`, `cache_hit_rate` | float or `None` |
 | `cost_total`, `cost_per_attempt`, `cost_per_passed` | float or `None` |

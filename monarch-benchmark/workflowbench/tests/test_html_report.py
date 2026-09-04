@@ -285,7 +285,9 @@ def test_comparison_row(four_arm_store, zero_pass_store):
     rows_alpha = _rows(four_arm_store, "run-h", "alpha")
     rows_oracle = _rows(four_arm_store, "run-h", "oracle")
     wl = paired_wl(rows_alpha, rows_oracle)
-    c = comparison(rows_alpha, rows_oracle, k=2)
+    a = competitor_metrics(rows_alpha, k=2)
+    b = competitor_metrics(rows_oracle, k=2)
+    c = comparison(a, b, rows_alpha, rows_oracle)
 
     assert c["arm"] == "alpha" and c["baseline"] == "oracle"
     assert c["wins"] == wl["wins"]
@@ -296,8 +298,6 @@ def test_comparison_row(four_arm_store, zero_pass_store):
     assert c["dropped_infra"] == wl["dropped_infra"]
     assert c["mcnemar"] == wl["mcnemar"]
 
-    a = competitor_metrics(rows_alpha, k=2)
-    b = competitor_metrics(rows_oracle, k=2)
     assert c["strict_pass_diff_pp"] == pytest.approx(
         (a["strict_pass"]["mean"] - b["strict_pass"]["mean"]) * 100)
     assert c["pass_rate_ratio"] == pytest.approx(
@@ -307,8 +307,9 @@ def test_comparison_row(four_arm_store, zero_pass_store):
 
     # a baseline that passed nothing: neither ratio is computable
     rows_null = _rows(zero_pass_store, "run-z", "null-arm")
-    against_null = comparison(
-        [dict(r, arm="alpha") for r in rows_null], rows_null, k=1)
+    as_alpha = [dict(r, arm="alpha") for r in rows_null]
+    against_null = comparison(competitor_metrics(as_alpha, k=1),
+                              competitor_metrics(rows_null, k=1), as_alpha, rows_null)
     assert against_null["pass_rate_ratio"] is None
     assert against_null["cost_per_passed_ratio"] is None
 
@@ -322,3 +323,5 @@ def test_verdict_wording():
     assert verdict(pairs=8, p=0.4, wins=3, losses=1) == "no significant difference at this size"
     assert verdict(pairs=10, p=0.012, wins=9, losses=1) == "better than the baseline (p = 0.012)"
     assert verdict(pairs=10, p=0.012, wins=1, losses=9) == "worse than the baseline (p = 0.012)"
+    # p is rendered at three decimals, so mcnemar's six do not leak into the page
+    assert verdict(pairs=10, p=0.026857, wins=9, losses=1) == "better than the baseline (p = 0.027)"

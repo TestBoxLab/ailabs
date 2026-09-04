@@ -26,6 +26,7 @@ same function serves both.
 | passed | `sum(1 for r in ok if r["passed"])` | |
 | strict pass rate +/- error | `arm_summary(rows)["strict_pass"]` - mean and SEM over per-task rates, infrastructure attempts excluded | `wb_stats.arm_summary`, unchanged |
 | pass rate over repetitions | `pass_hat_k(rows, k)["mean"] +/- ["sem"]` | `wb_stats.pass_hat_k`, unchanged |
+| strict pass denominator | `len(ok)` | the attempts the rate divides by; shown so the exclusion is visible beside the rate |
 | infra failures | `len(rows) - len(ok)` | |
 | infra rate | `(len(rows) - len(ok)) / len(rows)` | **excluded from the pass denominator**; reported on its own (PLAN.md section 1, rule 7) |
 | agent errors | `sum(1 for r in rows if r["termination"] == "agent_error")` | |
