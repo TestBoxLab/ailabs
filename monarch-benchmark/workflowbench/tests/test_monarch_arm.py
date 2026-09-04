@@ -39,6 +39,7 @@ from wb_orchestrator.orchestrator import Orchestrator, build_arm_for
 from wb_report.report import build_report, render_md
 from wb_results.store import Store
 from wb_world.episode import Episode, load_suite, load_task_file
+from wb_world.seeds import product_slug
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_PATH = ROOT / "config/products/simulated-apps.yaml"
@@ -214,7 +215,8 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     for k, v in MONARCH_ENV.items():
         monkeypatch.setenv(k, v)
     tasks = load_suite(TASKS_DIR)
-    kb_hashes = {f"bench-{s}": f"{i:012x}" for i, s in enumerate(load_product(PRODUCT_PATH).services)}
+    kb_hashes = {product_slug(s): f"{i:012x}"
+                 for i, s in enumerate(load_product(PRODUCT_PATH).services)}
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}")
 
     with FakeMonarch(sc) as monarch, fd_serving(kb_hashes) as fd:

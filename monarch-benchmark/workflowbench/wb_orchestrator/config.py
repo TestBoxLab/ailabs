@@ -19,6 +19,7 @@ from pathlib import Path
 import yaml
 
 from wb_world.episode import contract_hash, load_suite
+from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
 MODES = ("full-flow", "create-run", "run-only")
@@ -457,7 +458,7 @@ class MonarchKb:
     generated_at: str
     seeds_format: str
     shim_public_url: str
-    kb: dict[str, str]  # "bench-<service>" -> knowledge-base hash
+    kb: dict[str, str]  # product_slug(service) -> knowledge-base hash
 
 
 def load_monarch_kb(path, product: Product) -> MonarchKb:
@@ -470,7 +471,7 @@ def load_monarch_kb(path, product: Product) -> MonarchKb:
     for k, v in kb.items():
         if not isinstance(k, str) or not isinstance(v, str):
             c.fail("kb", "keys and hashes must be strings")
-    want = {f"bench-{s}" for s in product.services}
+    want = {product_slug(s) for s in product.services}
     for slug in sorted(want - set(kb)):
         c.fail(f"kb.{slug}", "no entry; run `wb monarch setup` again")
     for slug in sorted(set(kb) - want):

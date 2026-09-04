@@ -373,7 +373,12 @@ def test_monarch_needs_its_addresses_and_langfuse_keys(site):
 
 # -- 004 T008: the recipes file in resolve() and in the hash --------------------
 
-CREATE_RUN_HASH = "df58417a1d17288a"
+# Moved on 4 Sep 2026 from df58417a1d17288a: the knowledge-base file now keys
+# apps by their hyphenated product slug (bench-google-ads, not bench-google_ads),
+# because the discovery service slugifies and was creating two products per app.
+# A deliberate input change: rows from before this date are not regradable against
+# runs after it. Pre-registration (PLAN.md rule 5) -- needs Lucas's sign-off.
+CREATE_RUN_HASH = "b3de0ef1b8af73b4"
 
 # The fixture's second task moved from `recipes` to `missing`: the same file with
 # one fewer known-correct recipe, used by the hash tests and the exclusion tests.
