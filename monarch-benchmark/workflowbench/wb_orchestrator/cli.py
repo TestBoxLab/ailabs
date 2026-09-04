@@ -64,8 +64,18 @@ def _monarch_line(rc) -> str | None:
     except ValueError:
         name = "version unreadable"
     table = rc.price_tables.get(h.price_table)
-    return (f"monarch   {name}, kb {len(rc.monarch_kb.kb)} apps, "
+    line = (f"monarch   {name}, kb {len(rc.monarch_kb.kb)} apps, "
             f"price table {h.price_table}@{table.prices_verified if table else '—'}")
+    if rc.monarch_recipes is None:
+        return line
+    # contracts/cli.md: run-only says what it will execute and what left the set.
+    n, excluded = len(rc.monarch_recipes.recipes), rc.excluded_tasks
+    line += f", mode run-only, {n} recipe{'s' if n != 1 else ''}"
+    if excluded:
+        reasons = ", ".join(sorted(set(excluded.values())))
+        line += (f", {len(excluded)} task{'s' if len(excluded) != 1 else ''} "
+                 f"excluded ({reasons})")
+    return line
 
 
 def _banner(rc) -> str:

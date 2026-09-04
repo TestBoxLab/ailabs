@@ -540,6 +540,7 @@ def load_monarch_recipes(path, product: str, tasks, tasks_name: str | None = Non
                 r.keys(("reason", "attempts_used", "detail"))
                 missing[task] = MissingRow(
                     reason=r.get("reason", str, enum=MISSING_REASONS),
+                    # minimum 0: an infrastructure failure consumes no attempt
                     attempts_used=r.get("attempts_used", int, minimum=0),
                     detail=r.get("detail", str))
     for task in sorted(set(recipes) & set(missing)):
@@ -635,6 +636,8 @@ class RunConfig:
     def config_json(self) -> dict:
         return {**self._hashed(), "product_path": self.product_path, "plan_path": self.plan_path,
                 "tasks_dir": self.plan.tasks, "n_tasks": len(self.tasks), "mode": self.plan.mode,
+                "excluded_tasks": self.excluded_tasks,  # not hashed; the report's source line
+
                 "attempts_total": self.attempts_total,
                 "cost_ceiling_usd": self.plan.cost_ceiling_usd,  # not hashed; wb status reads it
                 "suite_dir": self.tasks_dir,  # ponytail: old readers (wb grade) key on suite_dir
@@ -776,6 +779,17 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
                               "file is missing; run `wb monarch recipes` first")
         monarch_recipes = load_monarch_recipes(rpath, product.name,
                                                [t["task"] for t in tasks], plan.tasks)
+        # ponytail: exclusion at the top -- per-competitor filtering is what rule 7
+        # forbids, not an optimisation left undone (research R6). A task in neither
+        # map was simply never attempted, and is excluded on the same footing.
+        excluded_tasks = {t["task"]: (r.reason if (r := monarch_recipes.missing.get(t["task"]))
+                                      else "not_attempted")
+                          for t in tasks if t["task"] not in monarch_recipes.recipes}
+        tasks = [t for t in tasks if t["task"] not in excluded_tasks]
+        if not tasks:
+            raise ConfigError(rpath, "recipes",
+                              "every task of the set is missing a known-correct recipe, so there "
+                              "is nothing to compare; run `wb monarch recipes` first")
 
     per_competitor = len(tasks) * plan.repetitions
     if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:

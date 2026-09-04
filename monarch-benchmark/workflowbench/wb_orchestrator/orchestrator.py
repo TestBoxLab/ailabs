@@ -126,9 +126,19 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         except ValueError as e:
             raise ConfigError(config_dir / "harnesses" / f"{h.name}.yaml", "monarch_repo",
                               f"cannot read the Monarch version: {e}") from e
+        mode = run_config.plan.mode
+        if mode == "run-only" and run_config.monarch_recipes is None:
+            raise ConfigError(config_dir / "products"
+                              / f"{run_config.product.name}.monarch-recipes.yaml", "recipes",
+                              "a run-only Monarch competitor needs the recipes file; "
+                              "run `wb monarch recipes` first")
+        products = config_dir / "products"
         return MonarchArm(harness=h, timeout_s=run_config.plan.timeout_s,
                           price_table=run_config.price_tables.get(h.price_table),
-                          kb=run_config.monarch_kb, env=os.environ, name=name)
+                          kb=run_config.monarch_kb, env=os.environ, name=name, mode=mode,
+                          recipes=run_config.monarch_recipes,
+                          kb_path=products / f"{run_config.product.name}.monarch-kb.yaml",
+                          recipes_path=products / f"{run_config.product.name}.monarch-recipes.yaml")
     arm.name = competitor.name
     return arm
 

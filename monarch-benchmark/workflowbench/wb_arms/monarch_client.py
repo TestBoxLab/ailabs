@@ -163,6 +163,12 @@ class MonarchClient:
         return self._call("POST", f"/api/workflows/{workflow_id}/run", {"mode": mode},
                           headers={"x-bench-episode-id": episode_id}, deadline=deadline)
 
+    def get_workflow(self, workflow_id: str, deadline: float | None = None) -> dict | None:
+        """The workflow detail, with its `recipeVersion`; None when Monarch no longer has it."""
+        out = self._call("GET", f"/api/workflows/{workflow_id}", deadline=deadline,
+                         ok_status=(404,))
+        return None if out.get("error") == "not_found" else out
+
     def get_run(self, run_id: str, deadline: float | None = None) -> dict:
         return self._call("GET", f"/api/workflows/runs/{run_id}", deadline=deadline)
 

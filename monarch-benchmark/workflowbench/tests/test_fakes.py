@@ -305,7 +305,8 @@ def test_fake_monarch_workflow_read_serves_the_recipe_version():
     """GET /api/workflows/<id> answers {recipeVersion} for a known workflow, 404 otherwise."""
     with FakeMonarch(Scenario(workflows={"wf-1": {"recipeVersion": 3}})) as m:
         sess = {"x-monarch-session": m.token}
-        assert _http("GET", f"{m.url}/api/workflows/wf-1", headers=sess)[0] == 401 or True
+        # The detail route is behind the session, like every other read.
+        assert _http("GET", f"{m.url}/api/workflows/wf-1")[0] == 401
         _http("POST", f"{m.url}/api/auth/login", {"email": "a@b.c", "password": "p"})
         status, body = _http("GET", f"{m.url}/api/workflows/wf-1", headers=sess)
         assert status == 200 and body["recipeVersion"] == 3

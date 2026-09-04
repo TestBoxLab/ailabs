@@ -372,6 +372,21 @@ def test_monarch_needs_its_addresses_and_langfuse_keys(site):
 
 CREATE_RUN_HASH = "df58417a1d17288a"
 
+# The fixture's second task moved from `recipes` to `missing`: the same file with
+# one fewer known-correct recipe, used by the hash tests and the exclusion tests.
+RECIPES_WITH_MISSING = RECIPES.replace("""  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+missing: {}
+""", """missing:
+  simple.sf_opp_closed_won:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'invariant failed'
+""")
+
 
 def test_resolve_loads_the_recipes_file_in_run_only(site):
     rc = resolve_monarch(run_only_site(site))
@@ -415,18 +430,7 @@ def test_hash_changes_with_a_recipe_input(site, old, new):
 
 def test_hash_changes_when_a_missing_key_appears(site):
     base = _hash_with(site, RECIPES)
-    moved = RECIPES.replace("""  simple.sf_opp_closed_won:
-    workflow_id: wf-2
-    recipe_version: 2
-    authored_at: '2026-09-04T12:09:40Z'
-    attempts_used: 3
-missing: {{}}
-""", """missing:
-  simple.sf_opp_closed_won:
-    reason: checker_failed
-    attempts_used: 3
-    detail: 'invariant failed'
-""")
+    moved = RECIPES_WITH_MISSING
     assert _hash_with(site, moved) != base
 
 
@@ -436,18 +440,7 @@ missing: {{}}
 ])
 def test_hash_ignores_generated_at_and_a_missing_detail(site, old, new):
     """A resume must not refuse because the file was rewritten or the reason text changed."""
-    with_missing = RECIPES.replace("""  simple.sf_opp_closed_won:
-    workflow_id: wf-2
-    recipe_version: 2
-    authored_at: '2026-09-04T12:09:40Z'
-    attempts_used: 3
-missing: {{}}
-""", """missing:
-  simple.sf_opp_closed_won:
-    reason: checker_failed
-    attempts_used: 3
-    detail: 'invariant failed'
-""")
+    with_missing = RECIPES_WITH_MISSING
     base = _hash_with(site, with_missing)
     assert _hash_with(site, with_missing.replace(old, new)) == base
 
@@ -463,3 +456,187 @@ def test_shipped_create_run_pilot_hash_is_unchanged(monkeypatch):
     rc = config.resolve(ROOT / "config/products/simulated-apps.yaml",
                         ROOT / "config/plans/pilot-monarch-create-run.yaml")
     assert rc.hash == CREATE_RUN_HASH
+
+
+# -- 004 T010: tasks with no recipe leave the task set of every competitor ------
+
+def test_missing_tasks_leave_the_task_set_of_every_competitor(site):
+    rc = resolve_monarch(run_only_site(site, recipes=RECIPES_WITH_MISSING))
+    assert [t["task"] for t in rc.tasks] == ["simple.email_sf_contact_city_update"]
+    assert rc.excluded_tasks == {"simple.sf_opp_closed_won": "checker_failed"}
+    # rule 7: the reduced set is what every competitor is measured on.
+    assert rc.attempts_per_competitor == 1 * rc.plan.repetitions
+    assert rc.attempts_total == rc.attempts_per_competitor * len(rc.competitors)
+
+
+def test_a_task_in_neither_map_is_excluded_as_not_attempted(site):
+    """The union need not cover the task set; what is uncovered was never attempted."""
+    only_one = RECIPES.replace("""  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+""", "")
+    rc = resolve_monarch(run_only_site(site, recipes=only_one))
+    assert rc.excluded_tasks == {"simple.sf_opp_closed_won": "not_attempted"}
+    assert [t["task"] for t in rc.tasks] == ["simple.email_sf_contact_city_update"]
+
+
+def test_create_run_excludes_nothing(site):
+    """Create + run never reads the file, so its task set is untouched."""
+    rc = resolve_monarch(monarch_site(site))
+    assert rc.excluded_tasks == {} and len(rc.tasks) == 2
+
+
+def test_every_task_missing_refuses_an_empty_comparison(site):
+    empty = RECIPES.replace("""recipes:
+  simple.email_sf_contact_city_update:
+    workflow_id: wf-1
+    recipe_version: 3
+    authored_at: '2026-09-04T12:03:11Z'
+    attempts_used: 1
+  simple.sf_opp_closed_won:
+    workflow_id: wf-2
+    recipe_version: 2
+    authored_at: '2026-09-04T12:09:40Z'
+    attempts_used: 3
+missing: {}
+""", """recipes: {}
+missing:
+  simple.email_sf_contact_city_update:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'no'
+  simple.sf_opp_closed_won:
+    reason: checker_failed
+    attempts_used: 3
+    detail: 'no'
+""")
+    with pytest.raises(ConfigError) as exc:
+        resolve_monarch(run_only_site(site, recipes=empty))
+    assert "every task" in str(exc.value) and "wb monarch recipes" in str(exc.value)
+
+
+# -- 004 T012: per-recipe drift stops a run-only run before any run request -----
+
+RECIPES_LIVE_KB = RECIPES.replace(
+    "kb_hash_file_sha: 9f2c1d0ea3b47856c9d2e0f1a4b6c8d90e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b",
+    "kb_hash_file_sha: <the kb file sha>")
+
+# The two workflows the fixture's recipes name, as Monarch would serve them.
+LIVE_WORKFLOWS = {"wf-1": {"recipeVersion": 3}, "wf-2": {"recipeVersion": 2}}
+
+
+def _run_only_arm(site, tmp_path, recipes, workflows, kb=KB):
+    """Build the run-only Monarch arm against the fakes; returns (arm, rc, fake, fd)."""
+    from tests.fake_fd import fd_serving
+    from tests.fake_monarch import FakeMonarch, Scenario
+    from tests.monarch_helpers import arm_against, free_port
+
+    git_repo = tmp_path / "monarch-checkout"
+    git_repo.mkdir()
+    _git_init(git_repo)
+    on_disk = {slug: h for slug, h in
+               (line.strip().split(": ") for line in kb.splitlines()
+                if line.startswith("  bench-"))}
+    port = free_port()
+    monarch, fd = FakeMonarch(Scenario(workflows=workflows)).start(), fd_serving(on_disk).start()
+    try:
+        arm_against(site, monarch, port, git_repo, fd=fd, kb=kb)
+        run_only_site(site, recipes=recipes, kb=kb, monarch_repo=str(git_repo))
+        # run_only_site rewrites the harness from the template, so point it back
+        # at the fakes and keep the free port.
+        text = (site / "config/harnesses/monarch.yaml").read_text()
+        from tests.test_config import edit as _edit
+        text = (_edit(_edit(text, "base_url", monarch.url), "fd_url", fd.url)
+                .replace("shim_port: 9105", f"shim_port: {port}")
+                .replace("shim_public_host: host.docker.internal",
+                         "shim_public_host: 127.0.0.1"))
+        write(site / "config/harnesses", text)
+        rc = resolve_monarch(site)
+        store = Store(tmp_path / "wb.sqlite3")
+        orch = Orchestrator.from_config(store, rc, tmp_path / "out")
+        yield orch, monarch
+    finally:
+        monarch.stop()
+        fd.stop()
+
+
+def _refuses(site, tmp_path, recipes, workflows, kb=KB) -> tuple:
+    """Run the orchestrator and return (the InfraError, the fake's requests)."""
+    from wb_arms.api_loop import InfraError
+    gen = _run_only_arm(site, tmp_path, recipes, workflows, kb=kb)
+    orch, monarch = next(gen)
+    try:
+        with pytest.raises(InfraError) as exc:
+            orch.run("run-drift")
+        return exc.value, list(monarch.requests)
+    finally:
+        gen.close()
+
+
+def test_recipe_drift_refuses(site, tmp_path):
+    """A recipe version that moved: the run stops naming the task and both versions."""
+    live = {"wf-1": {"recipeVersion": 4}, "wf-2": {"recipeVersion": 2}}
+    err, requests = _refuses(site, tmp_path, RECIPES_LIVE_KB, live)
+    assert err.kind == "infra:harness_crash" and not err.retryable
+    assert "simple.email_sf_contact_city_update" in str(err)
+    assert "3" in str(err) and "4" in str(err)
+    assert "monarch-recipes.yaml" in str(err)
+    assert not [r for r in requests if r["path"].endswith("/run")]
+
+
+def test_a_gone_workflow_refuses_and_says_to_rerun_the_command(site, tmp_path):
+    err, requests = _refuses(site, tmp_path, RECIPES_LIVE_KB, {"wf-1": {"recipeVersion": 3}})
+    assert err.kind == "infra:harness_crash" and not err.retryable
+    assert "simple.sf_opp_closed_won" in str(err) and "wb monarch recipes" in str(err)
+    assert not [r for r in requests if r["path"].endswith("/run")]
+
+
+def test_a_changed_knowledge_base_file_refuses(site, tmp_path):
+    """The recipes were made against another kb file, so they must be remade."""
+    err, requests = _refuses(site, tmp_path, RECIPES, LIVE_WORKFLOWS)   # the fixture's fake sha
+    assert err.kind == "infra:harness_crash" and not err.retryable
+    assert "the recipes must be remade" in str(err)
+    assert not [r for r in requests if r["path"].endswith("/run")]
+
+
+def test_recipes_that_match_do_not_refuse(site, tmp_path):
+    """Every recorded workflow is read, and a matching set lets the run proceed."""
+    gen = _run_only_arm(site, tmp_path, RECIPES_LIVE_KB, LIVE_WORKFLOWS)
+    orch, monarch = next(gen)
+    try:
+        arm = orch._arm_for_prepare() if hasattr(orch, "_arm_for_prepare") else None
+        from wb_orchestrator.orchestrator import build_arm_for
+        arm = build_arm_for(next(c for c in orch.run_config.competitors
+                                 if c.harness.kind == "monarch"), orch.run_config)
+        arm.env = MONARCH_ENV
+        arm.prepare()
+    finally:
+        gen.close()
+    reads = [r["path"] for r in monarch.requests if r["method"] == "GET"
+             and r["path"].startswith("/api/workflows/wf-")]
+    assert sorted(reads) == ["/api/workflows/wf-1", "/api/workflows/wf-2"]
+
+
+# -- 004 T015: the run-only banner line ----------------------------------------
+
+def test_banner_states_the_mode_the_recipes_and_the_exclusions(site, tmp_path):
+    """contracts/cli.md: a run-only run says what it will run and what it dropped."""
+    git_repo = tmp_path / "checkout"
+    git_repo.mkdir()
+    _git_init(git_repo)
+    run_only_site(site, recipes=RECIPES_WITH_MISSING, monarch_repo=str(git_repo))
+    line = _banner(resolve_monarch(site)).splitlines()[-1]
+    assert line.startswith("monarch   monarch@")
+    assert "mode run-only" in line
+    assert "1 recipe," in line and "1 task excluded (checker_failed)" in line
+
+
+def test_banner_of_a_create_run_plan_says_nothing_about_recipes(site, tmp_path):
+    git_repo = tmp_path / "checkout"
+    git_repo.mkdir()
+    _git_init(git_repo)
+    monarch_site(site, monarch_repo=str(git_repo))
+    line = _banner(resolve_monarch(site)).splitlines()[-1]
+    assert "run-only" not in line and "recipe" not in line and "excluded" not in line

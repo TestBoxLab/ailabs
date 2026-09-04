@@ -223,3 +223,34 @@ def test_source_line_unchanged_without_price_tables_or_monarch(tmp_path):
     md = render_md(build_report(store, "run-n", audience="internal"))
     assert "price table" not in md and "cost missing" not in md
     assert "`src: workflowbench-synthetic@0.1 · v0.1 · n=1 · kimi-k3/api · run-n`" in md
+
+
+# -- 004 T014: the run-only source line ---------------------------------------
+
+RUN_ONLY_SENTENCE = ("Monarch executed a fixed known-correct workflow; the other competitors "
+                     "did the whole task from the request text.")
+
+
+@pytest.fixture()
+def run_only_store(tmp_path):
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-r", "cfg789", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch@abc1234", "oracle"],
+                      "k": 1, "n_tasks": 2, "timeout_s": 600, "mode": "run-only",
+                      "excluded_tasks": {"t3": "checker_failed", "t4": "not_attempted"}})
+    for task in ("t1", "t2"):
+        store.record_episode(_row(task, "monarch@abc1234", 0, True, run="run-r"))
+        store.record_episode(_row(task, "oracle", 0, True, run="run-r"))
+    store.finish_run("run-r")
+    return store
+
+
+def test_run_only_source_line_states_the_exclusions_and_what_was_compared(run_only_store):
+    md = render_md(build_report(run_only_store, "run-r", audience="internal"))
+    assert "2 tasks excluded (checker_failed, not_attempted)" in md
+    assert RUN_ONLY_SENTENCE in md
+
+
+def test_create_run_source_line_says_nothing_about_run_only(monarch_store):
+    md = render_md(build_report(monarch_store, "run-m", audience="internal"))
+    assert "excluded" not in md and RUN_ONLY_SENTENCE not in md

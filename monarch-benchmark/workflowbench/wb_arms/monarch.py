@@ -8,6 +8,7 @@ produced it. See specs/002 for the attempt flow.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -98,13 +99,20 @@ class MonarchArm:
     provider_key = "monarch"
     POLL_INTERVAL_S = 2.0
 
-    def __init__(self, harness, timeout_s: float, price_table, kb, env, name: str):
+    def __init__(self, harness, timeout_s: float, price_table, kb, env, name: str,
+                 mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None):
         self.harness = harness
         self.timeout_s = timeout_s
         self.price_table = price_table
         self.kb = kb
         self.env = env
         self.name = name
+        # run-only: the frozen recipes this competitor may run, and the knowledge-base
+        # file they were made against. Both are None in create + run.
+        self.mode = mode
+        self.recipes = recipes
+        self.kb_path = kb_path
+        self.recipes_path = recipes_path
         self.model_label = name          # recorded as EpisodeRow.model (R6)
         self._token: str | None = None   # one login per run, cached here
         self._infra: InfraError | None = None   # raised after cleanup, see run()
@@ -142,6 +150,48 @@ class MonarchArm:
                     f"knowledge base drift for {slug}: the run was frozen with {want}, "
                     f"the discovery service reports {got or 'nothing imported'}; "
                     "rerun `wb monarch setup` or use the matching build",
+                    retryable=False)
+        if self.mode == "run-only":
+            self._check_recipes()
+
+    def _check_recipes(self) -> None:
+        """Refuse a run-only run whose frozen recipes are not the ones Monarch holds.
+
+        Two reads, both before any run request: the knowledge-base file must be the
+        one the recipes were made against (FR-027), and each recorded workflow must
+        still exist at the recorded recipe version (FR-026). Neither is retryable:
+        a drifted recipe is a different run, not a flaky one.
+        """
+        recipes, path = self.recipes, str(self.recipes_path or "the recipes file")
+        sha = hashlib.sha256(Path(self.kb_path).read_bytes()).hexdigest()
+        if sha != recipes.kb_hash_file_sha:
+            raise InfraError(
+                "infra:harness_crash",
+                f"the knowledge-base file {self.kb_path} is not the one the recipes in {path} "
+                f"were made against (recorded {recipes.kb_hash_file_sha[:12]}, on disk "
+                f"{sha[:12]}); the recipes must be remade with `wb monarch recipes`",
+                retryable=False)
+        # No lock and no front door: these are reads, and no attempt has started.
+        client = MonarchClient(expand(self.harness.base_url, self.env, "base_url"),
+                               token=self.env.get(self.harness.credential_env or ""))
+        deadline = time.monotonic() + 60
+        if not client.token:
+            client.login(self.harness.login_email,
+                         self.env.get(self.harness.login_password_env or ""), deadline=deadline)
+        for task_id, row in sorted(recipes.recipes.items()):
+            live = client.get_workflow(row.workflow_id, deadline=deadline)
+            if live is None:
+                raise InfraError(
+                    "infra:harness_crash",
+                    f"the recipe for task {task_id} is gone: Monarch does not hold workflow "
+                    f"{row.workflow_id}, which {path} records; rerun `wb monarch recipes`",
+                    retryable=False)
+            if live.get("recipeVersion") != row.recipe_version:
+                raise InfraError(
+                    "infra:harness_crash",
+                    f"recipe drift for task {task_id}: {path} froze workflow {row.workflow_id} "
+                    f"at recipe version {row.recipe_version}, Monarch now holds version "
+                    f"{live.get('recipeVersion')}; rerun `wb monarch recipes`",
                     retryable=False)
 
     def run(self, ep: Episode, deadline: float | None = None) -> ArmResult:

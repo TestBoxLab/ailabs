@@ -154,6 +154,16 @@ def _source_suffix(config: dict, per_arm_rows: dict[str, list[dict]]) -> str:
     if monarch_rows:
         missing = sum(1 for r in monarch_rows if "cost_missing" in (r.get("flags") or []))
         parts.append(f"cost missing on {missing}/{len(monarch_rows)} attempts")
+    if config.get("mode") == "run-only":
+        # FR-030: how many tasks left the comparison, and what run-only actually
+        # compares -- an engine on a frozen recipe against whole-task attempts.
+        excluded = config.get("excluded_tasks") or {}
+        if excluded:
+            reasons = ", ".join(sorted(set(excluded.values())))
+            parts.append(f"{len(excluded)} task{'s' if len(excluded) != 1 else ''} "
+                         f"excluded ({reasons})")
+        parts.append("Monarch executed a fixed known-correct workflow; the other competitors "
+                     "did the whole task from the request text.")
     return "".join(f" · {p}" for p in parts)
 
 

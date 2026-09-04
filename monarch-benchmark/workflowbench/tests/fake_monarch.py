@@ -54,7 +54,9 @@ class Scenario:
     workflows: dict[str, dict] = field(default_factory=dict)
     # workflow id -> how many run requests are refused with RUN_ALREADY_ACTIVE first
     active_run_for: dict[str, int] = field(default_factory=dict)
-    active_run_never_clears: bool = False     # the leftover run polls as running forever
+    # The leftover run polls as running forever, so a bounded wait expires. Like
+    # `active_run_for`, it only refuses workflows listed in `workflows`.
+    active_run_never_clears: bool = False
 
 
 class _ClientGone(Exception):
@@ -230,6 +232,8 @@ class FakeMonarch:
                     else:
                         self._reply(200, dict(failed or outer.scenario.run_outcome))
                 elif path.startswith("/api/workflows/"):
+                    # The workflow detail. Must stay LAST of the /api/workflows/
+                    # branches: its prefix also matches every route above it.
                     wfid = path[len("/api/workflows/"):]
                     detail = outer.scenario.workflows.get(wfid)
                     if detail is None:

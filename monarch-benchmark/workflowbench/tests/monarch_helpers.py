@@ -5,6 +5,7 @@ so neither test module has to import the other.
 """
 from __future__ import annotations
 
+import hashlib
 import socket
 import subprocess
 
@@ -111,7 +112,7 @@ def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None)
 
 RECIPES = """\
 product: simulated-apps
-tasks: {tasks}
+tasks: <the plan's task set>
 generated_at: '2026-09-04T12:00:00Z'
 kb_hash_file_sha: 9f2c1d0ea3b47856c9d2e0f1a4b6c8d90e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b
 monarch: monarch@1a2b3c4
@@ -126,7 +127,7 @@ recipes:
     recipe_version: 2
     authored_at: '2026-09-04T12:09:40Z'
     attempts_used: 3
-missing: {{}}
+missing: {}
 """
 
 
@@ -138,6 +139,19 @@ def run_only_site(site, recipes=RECIPES, kb=KB, monarch_repo=None):
     write(site / "config/plans", plan.replace("mode: create-run", "mode: run-only"))
     if recipes is not None:
         tasks = config.load_plan(site / "config/plans/smoke-frontier.yaml").tasks
-        (site / "config/products/simulated-apps.monarch-recipes.yaml").write_text(
-            recipes.format(tasks=f'"{tasks}"'))
+        # Two placeholders only the site knows: the plan's task set, and the
+        # fingerprint of the kb file the tests that check drift want to match.
+        text = (recipes.replace(TASKS_MARKER, f'"{tasks}"')
+                .replace(KB_SHA_MARKER, kb_file_sha(site)))
+        (site / "config/products/simulated-apps.monarch-recipes.yaml").write_text(text)
     return site
+
+
+TASKS_MARKER = "<the plan's task set>"
+KB_SHA_MARKER = "<the kb file sha>"
+
+
+def kb_file_sha(site) -> str:
+    """The fingerprint `wb monarch recipes` records: sha256 of the kb file's bytes."""
+    return hashlib.sha256(
+        (site / "config/products/simulated-apps.monarch-kb.yaml").read_bytes()).hexdigest()
