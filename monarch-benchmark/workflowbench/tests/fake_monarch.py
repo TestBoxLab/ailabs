@@ -57,6 +57,11 @@ class Scenario:
     # The leftover run polls as running forever, so a bounded wait expires. Like
     # `active_run_for`, it only refuses workflows listed in `workflows`.
     active_run_never_clears: bool = False
+    # Each authoring job produces its own workflow (wf-1, wf-2, ...), as the real
+    # backend does, instead of replaying the frame list's fixed id. `wb monarch
+    # recipes` needs it: it authors the same task several times and must be able
+    # to tell one attempt's workflow from another's.
+    unique_workflow_ids: bool = False
 
 
 class _ClientGone(Exception):
@@ -100,6 +105,8 @@ class FakeMonarch:
         # cut one stopped, while a second attempt starts from the beginning.
         self._frames_sent: dict[str, int] = {}
         self._connections: dict[str, int] = {}     # stream opens, per recipe run
+        self._authoring_jobs = 0                   # POSTs to recipe/runs, so far
+        self._workflow_for_job: dict[int, str] = {}
         self._lock = threading.Lock()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.httpd.server_address[1]
@@ -139,6 +146,16 @@ class FakeMonarch:
                                                "error": transport_error}
                 self._run_done[run_id] = True
             self._run_finished(run_id).set()
+
+    def _workflow_of(self, recipe_run_id: str) -> str:
+        """The workflow this authoring job produced: one per job, `wf-<n>`.
+
+        The fake reuses the recipe-run id across attempts, so the job counter --
+        bumped by POST /api/workflows/recipe/runs -- is what tells them apart.
+        """
+        with self._lock:
+            return self._workflow_for_job.setdefault(self._authoring_jobs,
+                                                     f"wf-{self._authoring_jobs}")
 
     def _run_finished(self, run_id: str) -> threading.Event:
         """Set once the engine calls for this run are done and it turned terminal."""
@@ -267,6 +284,7 @@ class FakeMonarch:
                     time.sleep(sc.delay_s.get("authoring", 0))
                     with outer._lock:
                         outer.authoring_started_at.append(time.monotonic())
+                        outer._authoring_jobs += 1
                         # A new job replays its frames from the start, even though
                         # the fake reuses the run id across attempts.
                         outer._frames_sent.pop("rr-1", None)
@@ -381,6 +399,8 @@ class FakeMonarch:
                             and i - start >= sc.stream_cut_after):
                         break                      # the edge cut the response
                     time.sleep(sc.delay_s.get("frame", 0))
+                    if sc.unique_workflow_ids and frame.get("workflowId"):
+                        frame = {**frame, "workflowId": outer._workflow_of(run_id)}
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     with outer._lock:
                         outer._frames_sent[run_id] = i + 1

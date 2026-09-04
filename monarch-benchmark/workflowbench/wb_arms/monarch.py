@@ -124,6 +124,10 @@ class MonarchArm:
         self.recipes = recipes
         self.kb_path = kb_path
         self.recipes_path = recipes_path
+        # `wb monarch recipes` sets this: the attempt leaves its workflow standing
+        # so the command can grade it first and then keep it or delete it.
+        self.keep_workflows = False
+        self._kept: list[str] = []
         self.model_label = name          # recorded as EpisodeRow.model (R6)
         self._token: str | None = None   # one login per run, cached here
         self._infra: InfraError | None = None   # raised after cleanup, see run()
@@ -375,7 +379,12 @@ class MonarchArm:
             self._execute(client, ep, workflow_id, deadline, res, ids)
             return res
         finally:
-            if workflow_id:
+            if workflow_id and self.keep_workflows:
+                # `wb monarch recipes` decides keep-or-delete from the checker's
+                # verdict, which needs the snapshot this attempt has not taken yet,
+                # so the delete is deferred to it (`delete_workflow`).
+                self._kept.append(workflow_id)
+            elif workflow_id:
                 # Cleanup must not turn a graded attempt into a crash; the row
                 # keeps its termination and the leftover shows up in the log.
                 if not self._delete(client, workflow_id):
@@ -419,6 +428,18 @@ class MonarchArm:
                 self._leftover.append(workflow_id)
             return False
         return True
+
+    def delete_workflow(self, workflow_id: str) -> bool:
+        """Delete a workflow a `keep_workflows` attempt left standing.
+
+        Only `wb monarch recipes` calls this, once it knows from the checker that
+        the attempt did not pass. Takes the lock because it logs in.
+        """
+        with _LOCK:
+            ok = self._delete(self._client(time.monotonic() + 30), workflow_id)
+        if ok and workflow_id in self._kept:
+            self._kept.remove(workflow_id)
+        return ok
 
     def _sweep(self, client) -> None:
         """Clear what a previous attempt could not delete, before authoring a new one."""

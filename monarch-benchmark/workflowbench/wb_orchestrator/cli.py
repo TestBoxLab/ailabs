@@ -336,6 +336,23 @@ def cmd_monarch_setup(args) -> int:
         return 2
 
 
+def cmd_monarch_recipes(args) -> int:
+    from wb_orchestrator import monarch_recipes
+    if bool(args.plan) == bool(args.tasks):
+        print("wb monarch recipes: give exactly one of --plan and --tasks", file=sys.stderr)
+        return 2
+    try:
+        return monarch_recipes.run(
+            product_path=config.resolve_name_or_path(args.product, "product"),
+            harness_path=config.resolve_name_or_path(args.harness, "harness"),
+            plan_path=config.resolve_name_or_path(args.plan, "plan") if args.plan else None,
+            tasks_dir=args.tasks, attempts=args.attempts, yes=args.yes,
+            env=os.environ, stdout=sys.stdout)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()   # keys live in workflowbench/.env (gitignored), never in code
     ap = argparse.ArgumentParser(prog="wb", description="WorkflowBench runner")
@@ -425,6 +442,16 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
     ms.add_argument("--out", default="out/monarch-seeds", help="where the seed folders are written")
     ms.set_defaults(fn=cmd_monarch_setup)
+    mr = msub.add_parser("recipes",
+                         help="author one known-correct workflow per task and freeze it "
+                              "(SPENDS MODEL MONEY)")
+    mr.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
+    mr.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
+    mr.add_argument("--plan", default=None, help="name in config/plans or a path; its task set is used")
+    mr.add_argument("--tasks", default=None, help="a task folder, instead of --plan")
+    mr.add_argument("--attempts", type=int, default=3, help="most authoring attempts per task")
+    mr.add_argument("--yes", action="store_true", help="proceed without an approved plan")
+    mr.set_defaults(fn=cmd_monarch_recipes)
 
     p = sub.add_parser("legacy-import")
     p.add_argument("runs_dir", help=r"e.g. C:\...\Monarch_Main\bench-host-state\runs")
