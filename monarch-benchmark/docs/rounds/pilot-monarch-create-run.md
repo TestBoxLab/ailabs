@@ -1,7 +1,7 @@
 # Round: Monarch pilot, create + run mode
 
 Plan `pilot-monarch-create-run` · product `simulated-apps` · prepared 4 Sep 2026 ·
-configuration hash `df58417a1d17288a` (changes if any input file changes).
+configuration hash `b3de0ef1b8af73b4` (changes if any input file changes).
 Status: **configured, not run.** It runs only after Carlos confirms it with the
 cost band below. Every number here is read from the configuration files, not
 typed by hand.

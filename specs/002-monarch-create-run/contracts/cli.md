@@ -18,7 +18,7 @@ wb monarch setup [--product NAME|PATH] [--harness NAME|PATH] [--out DIR]
      refuses to write a partial set (exit 2, nothing written).
   2. `mounted`: `GET <fd_url>/v1/seeds` must list all 47 slugs. If not, prints
      the `docker-compose.override.yaml` snippet below and exits 3.
-  3. `register`: `POST <fd_url>/v1/products {slug, display_name}` × 47.
+  3. `register`: removed on 4 Sep 2026; the seed import creates the product (the discovery service slugifies registered slugs, which created empty duplicates).
   4. `import`: `POST <fd_url>/v1/seeds/<slug>/import` × 47; prints
      `actions_imported` and `kb_hash` per slug.
   5. `granted`: prints the slugs the bench user's organisation cannot use, or

@@ -1,7 +1,7 @@
 # Rodada: piloto do Monarch, modo criar + executar
 
 Plano `pilot-monarch-create-run` · produto `simulated-apps` · preparada em 4 set 2026 ·
-hash de configuração `df58417a1d17288a` (muda se qualquer arquivo de entrada mudar).
+hash de configuração `b3de0ef1b8af73b4` (muda se qualquer arquivo de entrada mudar).
 Situação: **configurada, não executada.** Só roda depois que o Carlos confirmar
 com a faixa de custo abaixo. Todos os números aqui vêm dos arquivos de
 configuração, não foram digitados à mão.
