@@ -346,10 +346,32 @@ def cmd_monarch_setup(args) -> int:
     try:
         return monarch_setup.run(config.resolve_name_or_path(args.product, "product"),
                                  config.resolve_name_or_path(args.harness, "harness"),
-                                 args.out, os.environ, sys.stdout)
+                                 args.out, os.environ, sys.stdout,
+                                 conform=not args.no_conform)
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
+
+
+def cmd_monarch_conform(args) -> int:
+    """Is every catalogue action TRUE against the simulated apps? (feature 008)"""
+    from wb_world import conformance
+    seeds_dir = Path(args.seeds)
+    if not seeds_dir.is_dir():
+        print(f"no seed folders at {seeds_dir}; run `wb monarch setup` first", file=sys.stderr)
+        return 2
+    corpus = conformance.default_corpus_dirs()
+    services = [s.strip() for s in args.services.split(",") if s.strip()] if args.services else None
+    report = conformance.check(seeds_dir, corpus, services)
+    report.print_table(sys.stdout)
+    out = seeds_dir / "conformance.json"
+    report.write_json(out)
+    print(f"report: {out}")
+    failed = report.failed_services()
+    if failed:
+        print(f"mismatching services: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_monarch_recipes(args) -> int:
@@ -460,7 +482,17 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
     ms.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
     ms.add_argument("--out", default="out/monarch-seeds", help="where the seed folders are written")
+    ms.add_argument("--no-conform", action="store_true",
+                    help="import without checking that every action is true against "
+                         "the simulated apps (see `wb monarch conform`)")
     ms.set_defaults(fn=cmd_monarch_setup)
+    mc = msub.add_parser("conform",
+                         help="execute every catalogue action against the simulated apps "
+                              "and report the seeds that are not true")
+    mc.add_argument("--seeds", default="out/monarch-seeds", help="the generated seed folders")
+    mc.add_argument("--services", default=None,
+                    help="comma list of services; default: every service in the seeds")
+    mc.set_defaults(fn=cmd_monarch_conform)
     mr = msub.add_parser("recipes",
                          help="author one known-correct workflow per task and freeze it "
                               "(SPENDS MODEL MONEY)")

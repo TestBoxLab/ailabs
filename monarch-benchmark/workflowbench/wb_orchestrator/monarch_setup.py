@@ -5,6 +5,9 @@ Five steps, printed one line each (contracts/cli.md):
   generate  write the seed folders from the product's OpenAPI documents, then
             run Monarch's own `validate-seeds.mjs` when `MONARCH_SEED_VALIDATOR`
             names it (unset: skipped silently)
+  conform   every action of the product's services is executed against the
+            simulated apps; a read whose declared response is false stops the
+            command before anything is imported (feature 008)
   mounted   the discovery service must already see them on disk
   import    one knowledge-base import per app, hashes recorded; it also
             creates the product, so the bench never registers one itself
@@ -99,7 +102,8 @@ def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S,
         raise Stop(4, step, f"{url} failed: {e}") from e
 
 
-def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
+def run(product_path, harness_path, out_dir, env: dict, stdout,
+        conform: bool = True) -> int:
     def say(mark: str, step: str, detail: str = "") -> None:
         print(f"[{mark}] {step}{': ' + detail if detail else ''}", file=stdout)
 
@@ -121,6 +125,8 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
         say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
                               f"files_written={summary.files_written} folders={len(summary.folders)}")
         _run_seed_validator(out, env, stdout)
+        if conform:
+            _conform_gate(out, product.services, stdout)
 
         # 2. mounted
         want = sorted(seeds.product_slug(s) for s in product.services)
@@ -198,6 +204,42 @@ def _run_seed_validator(out: Path, env: dict, stdout) -> None:
         raise Stop(2, "generate",
                    f"seed validator reported errors (exit {done.returncode})")
     print("[ok] validate: seed validator reported no errors", file=stdout)
+
+
+def _conform_gate(out: Path, services: list[str], stdout) -> None:
+    """Feature 008: is every action of this product's services TRUE?
+
+    A read or list whose declared response is not the response the front door
+    really returns is what broke Google Sheets, so it stops the command before
+    anything is imported. A failing write only warns: a write needs inputs the
+    check cannot always invent.
+    """
+    from wb_world import conformance
+
+    corpus = conformance.default_corpus_dirs()
+    if not corpus:
+        return                                   # no corpus, no worlds to check against
+    report = conformance.check(out, corpus, list(services))
+    report.write_json(out / "conformance.json")
+    bad_reads = [r for r in report.rows if r.is_read and r.verdict in
+                 ("schema_mismatch", "extract_empty", "request_rejected")]
+    no_handler = [r for r in report.rows if r.verdict == "no_handler"]
+    if no_handler:
+        print(f"[warn] conform: {len(no_handler)} action(s) name a route the simulated "
+              f"app does not serve (first: {no_handler[0].action_id})", file=stdout)
+    bad_writes = [r for r in report.rows if not r.is_read and r.verdict not in
+                  conformance.BENIGN]
+    if bad_writes:
+        print(f"[warn] conform: {len(bad_writes)} write action(s) did not check out "
+              f"(first: {bad_writes[0].action_id} {bad_writes[0].verdict})", file=stdout)
+    if bad_reads:
+        for r in bad_reads[:5]:
+            print(f"      {r.action_id}: {r.verdict}: {r.detail[:110]}", file=stdout)
+        raise Stop(2, "conform",
+                   f"{len(bad_reads)} read action(s) do not match the simulated apps; "
+                   f"nothing imported (see {out / 'conformance.json'})")
+    print(f"[ok] conform: {len(report.rows)} actions true against the simulated apps",
+          file=stdout)
 
 
 def _override_snippet(out: Path) -> str:
