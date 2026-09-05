@@ -51,12 +51,12 @@ blended average.
 | Item | Value |
 |---|---|
 | Prompts (tasks) | 10 |
-| Attempts per prompt, for each competitor | 2 |
-| Attempts per competitor | 20 = 10 prompts × 2 attempts |
-| Attempts in total | 140 = 7 competitors × 20, of which 120 paid |
+| Attempts per prompt, for each competitor | 1, plus 1 retry if the first attempt fails (`retry_on_fail: 1`) |
+| Attempts per competitor | 10 to 20 = 10 prompts × (1 + up to 1 retry) |
+| Attempts in total | 70 to 140 = 7 competitors × 10 to 20, of which up to 120 paid |
 | Timeout per attempt | 900 s |
 | Cost ceiling in the plan | US$ 60 |
-| Cost band | models about US$ 5 to 7; Monarch US$ 18 to 30 on simple tasks, likely more on complex ones (longer authoring); total US$ 25 to 45 |
+| Cost band | models about US$ 3 to 7; Monarch US$ 15 to 30 (US$ 1.5 per attempt, 10 to 20 attempts); total US$ 20 to 40 |
 | Approval | `approved_by` empty; Carlos approves each round separately |
 
 ## Blockers before the draw

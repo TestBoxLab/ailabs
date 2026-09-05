@@ -50,12 +50,12 @@ aleatório confere a média combinada.
 | Item | Valor |
 |---|---|
 | Prompts (tarefas) | 10 |
-| Tentativas por prompt, para cada competidor | 2 |
-| Tentativas por competidor | 20 = 10 prompts × 2 tentativas |
-| Tentativas no total | 140 = 7 competidores × 20, das quais 120 pagas |
+| Tentativas por prompt, para cada competidor | 1, mais 1 nova tentativa se a primeira reprovar (`retry_on_fail: 1`) |
+| Tentativas por competidor | 10 a 20 = 10 prompts × (1 + até 1 nova tentativa) |
+| Tentativas no total | 70 a 140 = 7 competidores × 10 a 20, das quais até 120 pagas |
 | Timeout por tentativa | 900 s |
 | Teto de custo no plano | US$ 60 |
-| Faixa de custo | modelos cerca de US$ 5 a 7; Monarch US$ 18 a 30 em tarefas simples, provavelmente mais nas complexas (authoring mais longo); total US$ 25 a 45 |
+| Faixa de custo | modelos cerca de US$ 3 a 7; Monarch US$ 15 a 30 (US$ 1,5 por tentativa, 10 a 20 tentativas); total US$ 20 a 40 |
 | Aprovação | `approved_by` vazio; o Carlos aprova cada rodada separadamente |
 
 ## Bloqueios antes do sorteio
