@@ -62,6 +62,12 @@ class Scenario:
     # recipes` needs it: it authors the same task several times and must be able
     # to tell one attempt's workflow from another's.
     unique_workflow_ids: bool = False
+    # -- inputs and the LLM-loop stamp (002) -----------------------------------
+    # The recipe's declared inputs: [{name, label, type, required, default?}, ...].
+    # Served on the done frame's `recipe` and on the workflow detail.
+    recipe_inputs: list[dict] = field(default_factory=list)
+    # The recipe version has an LLM loop, so it must be acked before it may run.
+    has_llm_loop: bool = False
 
 
 class _ClientGone(Exception):
@@ -69,6 +75,27 @@ class _ClientGone(Exception):
 
 
 _REFUSAL_STATUS = {"RUN_ALREADY_ACTIVE": 409, "product_not_granted": 403}
+
+_JSON_TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool}
+
+
+def _input_errors(declared: list[dict], sent: dict) -> list[dict]:
+    """The backend's INPUT_INVALID detail: one {name, reason} per bad input."""
+    by_name = {d["name"]: d for d in declared}
+    bad = [{"name": k, "reason": "not declared by the recipe"}
+           for k in sent if k not in by_name]
+    for d in declared:
+        value = sent.get(d["name"])
+        if value is None:                       # missing or explicitly null
+            if d.get("required") and "default" not in d:
+                bad.append({"name": d["name"], "reason": "required input not provided"})
+            continue
+        want = _JSON_TYPES.get(d.get("type", "string"), str)
+        # bool is a subclass of int, so a boolean must never satisfy `number`
+        if not isinstance(value, want) or (isinstance(value, bool) and want is not bool):
+            bad.append({"name": d["name"],
+                        "reason": f"expected {d.get('type')}, got {type(value).__name__}"})
+    return bad
 
 # ponytail: a cap so a test that never replies still ends; lower it in a test if needed
 REPLY_GATE_TIMEOUT_S = 30.0
@@ -91,6 +118,9 @@ class FakeMonarch:
         self.authoring_started_at: list[float] = []
         self.stream_connections = 0                # how often the stream was opened
         self.run_started_at: list[float] = []
+        self.llm_acks: list[tuple[str, str]] = []   # (workflow id, version) acked
+        self.run_bodies: list[dict] = []            # every POST .../run body, in order
+        self._acked: set[tuple[str, str]] = set()
         self.token = "sess-1"
         self._reply_events: dict[str, threading.Event] = {}
         self._run_done: dict[str, bool] = {}
@@ -187,6 +217,11 @@ class FakeMonarch:
                 except json.JSONDecodeError:
                     return None
 
+            def _json_body_recorded(self) -> dict:
+                """The body do_POST already read for this request (it is recorded)."""
+                with outer._lock:
+                    return outer.requests[-1].get("body") or {}
+
             def _record(self, body):
                 ep = self.headers.get("x-bench-episode-id")
                 with outer._lock:
@@ -256,7 +291,8 @@ class FakeMonarch:
                     if detail is None:
                         self._reply(404, {"error": "not_found"})
                     else:
-                        self._reply(200, {"id": wfid, **detail})
+                        recipe = {"inputs": outer.scenario.recipe_inputs}
+                        self._reply(200, {"id": wfid, "recipe": recipe, **detail})
                 else:
                     self._reply(404, {"error": "not_found"})
 
@@ -304,6 +340,8 @@ class FakeMonarch:
                     for ev in pending:          # release the stream from any reply gate
                         ev.set()
                     self._reply(200, {"status": "cancelled"})
+                elif path.startswith("/api/workflows/") and path.endswith("/llm-ack"):
+                    self._llm_ack()
                 elif path.startswith("/api/workflows/") and path.endswith("/run"):
                     self._workflow_run()
                 else:
@@ -332,7 +370,21 @@ class FakeMonarch:
                         answer = (200, {})
                 self._reply(*answer)
 
-            # -- the two interesting routes ------------------------------------
+            # -- the interesting routes ----------------------------------------
+            def _llm_ack(self):
+                """Stamp this recipe version, or say it has no loop to stamp."""
+                rest = urlsplit(self.path).path[len("/api/workflows/"):-len("/llm-ack")]
+                wfid, _, version = rest.partition("/versions/")
+                if not outer.scenario.has_llm_loop:
+                    self._reply(422, {"code": "LLM_LOOP_NOT_PRESENT",
+                                      "error": "this version has no LLM loop"})
+                    return
+                with outer._lock:
+                    outer.llm_acks.append((wfid, version))
+                    outer._acked.add((wfid, version))
+                self._reply(200, {"version": int(version) if version.isdigit() else version,
+                                  "acknowledgedAt": "2026-09-05T00:00:00Z"})
+
             def _workflow_run(self):
                 sc = outer.scenario
                 wfid = urlsplit(self.path).path[len("/api/workflows/"):-len("/run")]
@@ -361,6 +413,19 @@ class FakeMonarch:
                 if sc.run_refusal:
                     code = _REFUSAL_STATUS.get(sc.run_refusal, 422)
                     self._reply(code, {"code": sc.run_refusal, "error": sc.run_refusal})
+                    return
+                body = self._json_body_recorded()
+                with outer._lock:
+                    outer.run_bodies.append(body)
+                    acked = any(w == wfid for w, _ in outer._acked)
+                if sc.has_llm_loop and not acked:
+                    self._reply(422, {"code": "LLM_LOOP_UNACKNOWLEDGED",
+                                      "error": "acknowledge the LLM loop first"})
+                    return
+                bad = _input_errors(sc.recipe_inputs, body.get("inputs") or {})
+                if bad:
+                    self._reply(422, {"code": "INPUT_INVALID", "error": "INPUT_INVALID",
+                                      "inputs": bad})
                     return
                 with outer._lock:
                     outer._run_n += 1
@@ -401,6 +466,8 @@ class FakeMonarch:
                     time.sleep(sc.delay_s.get("frame", 0))
                     if sc.unique_workflow_ids and frame.get("workflowId"):
                         frame = {**frame, "workflowId": outer._workflow_of(run_id)}
+                    if sc.recipe_inputs and frame.get("status") == "done":
+                        frame = {**frame, "recipe": {"inputs": sc.recipe_inputs}}
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     with outer._lock:
                         outer._frames_sent[run_id] = i + 1

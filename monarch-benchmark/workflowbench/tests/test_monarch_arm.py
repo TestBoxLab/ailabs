@@ -857,3 +857,131 @@ def test_run_status_success_is_completed(site, repo):
         ep = Episode(task(), episode_id="run-x/simple.email_sf_contact_city_update/monarch/t0")
         result = arm.run(ep, deadline=time.monotonic() + 60)
     assert result.termination == "completed" and result.error is None
+
+
+# -- the run contract: the LLM-loop stamp and the declared inputs --------------
+# 7 of 20 live attempts (4 Sep 2026) were refused at start with
+# LLM_LOOP_UNACKNOWLEDGED or INPUT_INVALID. The stamp is per recipe version; the
+# inputs are filled with no information beyond the request.
+
+DENVER = [("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})]
+
+
+def run_body(fake) -> dict:
+    return fake.run_bodies[-1]
+
+
+def test_a_recipe_with_an_llm_loop_is_acked_once_and_runs(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", has_llm_loop=True, engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert fake.llm_acks == [("wf-1", "1")]
+    assert "llm_loop_acked=1" in result.flags
+    assert run_body(fake) == {"mode": "live"}
+    free(port)
+
+
+def test_a_recipe_without_a_loop_gets_the_422_and_still_runs(site, repo):
+    """LLM_LOOP_NOT_PRESENT is the normal answer for a recipe with no loop."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed" and result.error is None
+    assert [r["path"] for r in fake.requests].count(
+        "/api/workflows/wf-1/versions/1/llm-ack") == 1
+    assert fake.llm_acks == []
+    assert "llm_loop_acked=1" not in result.flags
+    free(port)
+
+
+REQUIRED_INPUTS = [
+    {"name": "spreadsheet_id", "label": "Budget spreadsheet ID", "type": "string",
+     "required": True},
+    {"name": "row_count", "label": "Rows", "type": "number", "required": True},
+    {"name": "notify", "label": "Notify", "type": "boolean", "required": True},
+    {"name": "folder", "label": "Folder", "type": "string", "required": False},
+    {"name": "region", "label": "Region", "type": "string", "required": True,
+     "default": "us-east"},
+]
+
+
+def test_required_inputs_are_filled_with_the_attempt_s_sentence(site, repo):
+    """Every required input with no default is filled by declared type; nothing else is sent."""
+    from wb_arms.monarch import FIXED_REPLY
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", recipe_inputs=REQUIRED_INPUTS,
+                  engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert run_body(fake) == {"mode": "live", "inputs": {
+        "spreadsheet_id": FIXED_REPLY, "row_count": 0, "notify": False}}
+    assert "inputs_filled=3" in result.flags
+    logged = next(t["inputs"] for t in result.turn_log if "inputs" in t)
+    assert logged["declared"] == REQUIRED_INPUTS
+    assert logged["sent"]["spreadsheet_id"] == FIXED_REPLY
+    free(port)
+
+
+def test_a_retry_fills_a_string_input_with_the_retry_sentence(site, repo):
+    from wb_arms.monarch import RETRY_REPLY
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER,
+                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True}])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t1"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert run_body(fake)["inputs"]["sheet"] == RETRY_REPLY.format(
+        goal=task()["prompt"][1]["content"])[:4000]
+    free(port)
+
+
+def test_no_declared_inputs_sends_mode_only(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed"
+    assert run_body(fake) == {"mode": "live"}
+    assert not [f for f in result.flags if f.startswith("inputs_filled")]
+    free(port)
+
+
+def test_an_undeclared_key_is_still_a_run_refusal(site, repo):
+    """The backend's INPUT_INVALID reaches the row exactly as it does today."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True}])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        # the arm's filler is bypassed: the recipe it read declares another name
+        monkey = {"other": "x"}
+        original = MonarchArm._run_inputs
+        MonarchArm._run_inputs = lambda self, decl: monkey
+        try:
+            result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                             deadline=time.monotonic() + 60)
+        finally:
+            MonarchArm._run_inputs = original
+
+    assert result.termination == "agent_error"
+    assert result.error == "run_refused:INPUT_INVALID"
+    free(port)

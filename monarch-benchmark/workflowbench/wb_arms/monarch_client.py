@@ -159,9 +159,19 @@ class MonarchClient:
     # -- running and cleanup ---------------------------------------------------
 
     def run_workflow(self, workflow_id: str, episode_id: str, mode: str = "live",
-                     deadline: float | None = None) -> dict:
-        return self._call("POST", f"/api/workflows/{workflow_id}/run", {"mode": mode},
+                     deadline: float | None = None, inputs: dict | None = None) -> dict:
+        body = {"mode": mode} if not inputs else {"mode": mode, "inputs": inputs}
+        return self._call("POST", f"/api/workflows/{workflow_id}/run", body,
                           headers={"x-bench-episode-id": episode_id}, deadline=deadline)
+
+    def llm_ack(self, workflow_id: str, version, deadline: float | None = None) -> dict:
+        """Stamp a recipe version's LLM loop; a version with no loop answers 422.
+
+        The stamp is per version, not per run, so it is sent once before the run.
+        MonarchRefused("LLM_LOOP_NOT_PRESENT") is the "nothing to stamp" answer.
+        """
+        return self._call("POST", f"/api/workflows/{workflow_id}/versions/{version}/llm-ack",
+                          {}, deadline=deadline)
 
     def get_workflow(self, workflow_id: str, deadline: float | None = None) -> dict | None:
         """The workflow detail, with its `recipeVersion`; None when Monarch no longer has it."""

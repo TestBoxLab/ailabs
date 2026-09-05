@@ -74,6 +74,10 @@ RETRY_REPLY = ("No further information is available beyond the original request,
 # ids carry `/`, `@` and `+` (run/task/monarch@sha+branch/t0), so they are mapped
 # into the charset first. Verified on Railway, 4 Sep 2026.
 HEADER_SAFE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+# The run route's limits on `inputs` (Monarch team, 5 Sep 2026): scalars only,
+# at most 32 keys, at most 4,000 characters per string.
+MAX_INPUTS = 32
+MAX_INPUT_CHARS = 4000
 _UNSAFE = re.compile(r"[^A-Za-z0-9._:-]+")
 
 
@@ -147,6 +151,7 @@ class MonarchArm:
         self._bench_id = ""              # this attempt's header-safe episode id
         self._trace_ids: list[str] = []  # Langfuse traces this attempt's frames named
         self._started_at: datetime | None = None   # set by run(); bounds the cost read
+        self._done_recipe: dict | None = None  # the done frame's recipe, for its `inputs`
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -368,6 +373,7 @@ class MonarchArm:
         # Held on the arm so a timeout can still report the phases it reached.
         res = self._partial = ArmResult()
         self._trace_ids = []
+        self._done_recipe: dict | None = None
         client = self._client(deadline)
         self._sweep(client)
         goal = ep.task["prompt"][1]["content"]
@@ -486,6 +492,9 @@ class MonarchArm:
                                 workflow_id = frame.get("workflowId")
                                 ids["workflowId"] = workflow_id
                                 ids["recipeVersion"] = frame.get("recipeVersion")
+                                # The declaration the run must satisfy; the
+                                # workflow detail is the fallback (_declared_inputs).
+                                self._done_recipe = frame.get("recipe")
                                 if not workflow_id:
                                     # Monarch finished by declining to build one.
                                     # There is nothing to run, and reading it as
@@ -544,7 +553,8 @@ class MonarchArm:
             res.flags.append(f"questions_asked={questions}")
         return workflow_id
 
-    def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
+    def _start_run(self, client, ep, workflow_id, deadline, res,
+                   inputs: dict | None = None) -> dict | None:
         """Start the workflow, waiting out a run already in flight on it (FR-018).
 
         Create + run authors a fresh workflow every attempt, so it can never meet
@@ -555,7 +565,8 @@ class MonarchArm:
         started_waiting = None
         while True:
             try:
-                return client.run_workflow(workflow_id, self._bench_id, deadline=deadline)
+                return client.run_workflow(workflow_id, self._bench_id, deadline=deadline,
+                                           inputs=inputs)
             except MonarchRefused as e:
                 if e.code != "RUN_ALREADY_ACTIVE" or self.mode != "run-only":
                     raise
@@ -589,6 +600,50 @@ class MonarchArm:
                                                                    deadline=deadline)})
             time.sleep(self.POLL_INTERVAL_S)
 
+    def _llm_ack(self, client, workflow_id, version, deadline) -> bool:
+        """Stamp the recipe version's LLM loop; True when a stamp was made.
+
+        A version with no loop answers 422 LLM_LOOP_NOT_PRESENT, which is the
+        normal case and not a refusal. Any other refusal is left to the caller,
+        so it lands on the row as `run_refused:<code>` like the run's own.
+        """
+        if version is None:
+            return False
+        try:
+            client.llm_ack(workflow_id, version, deadline=deadline)
+        except MonarchRefused as e:
+            if e.code == "LLM_LOOP_NOT_PRESENT":
+                return False
+            raise
+        return True
+
+    def _declared_inputs(self, client, workflow_id, deadline) -> list[dict]:
+        """The recipe's `inputs`: from the done frame, else from the workflow detail."""
+        recipe = self._done_recipe if self.mode != "run-only" else None
+        if recipe is None:
+            recipe = (client.get_workflow(workflow_id, deadline=deadline) or {}).get("recipe")
+        return [d for d in ((recipe or {}).get("inputs") or []) if d.get("name")]
+
+    def _run_inputs(self, declared: list[dict]) -> dict:
+        """Fill every required input that has no default, with nothing beyond the request.
+
+        A `null` or a missing key means "not provided", so an optional input and
+        one with a default are simply left out; a required one without a default
+        has no way to be skipped, and gets a value of its declared type.
+        """
+        values: dict = {}
+        for d in declared:
+            if not d.get("required") or "default" in d or len(values) >= MAX_INPUTS:
+                continue
+            kind = d.get("type", "string")
+            if kind == "boolean":
+                values[d["name"]] = False
+            elif kind in ("number", "integer"):
+                values[d["name"]] = 0
+            else:
+                values[d["name"]] = self._reply_text[:MAX_INPUT_CHARS]
+        return values
+
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
         try:
@@ -597,8 +652,17 @@ class MonarchArm:
             if time.monotonic() >= deadline:
                 raise EpisodeTimeout(
                     "deadline passed in the execution phase, before the run started")
+            declared = self._declared_inputs(client, workflow_id, deadline)
+            inputs = self._run_inputs(declared)
+            if declared or inputs:
+                res.turn_log.append({"inputs": {"declared": declared, "sent": inputs}})
+            if inputs:
+                res.flags.append(f"inputs_filled={len(inputs)}")
             try:
-                started = self._start_run(client, ep, workflow_id, deadline, res)
+                if self._llm_ack(client, workflow_id, ids.get("recipeVersion"), deadline):
+                    res.flags.append("llm_loop_acked=1")
+                started = self._start_run(client, ep, workflow_id, deadline, res,
+                                          inputs=inputs)
             except MonarchRefused as e:
                 self._infra = _classify_refusal(e.code)
                 res.termination = "agent_error"

@@ -396,3 +396,23 @@ def test_workflow_gone_is_infra(site, repo):
     assert exc.value.kind == "infra:harness_crash" and not exc.value.retryable
     assert TASK_ID in str(exc.value) and "monarch-recipes.yaml" in str(exc.value)
     assert fake.deleted_workflows == []
+
+
+# -- the run contract in run-only mode: the stamp and the inputs ---------------
+
+def test_run_only_acks_and_fills_from_the_stored_recipe(site, repo):
+    """No frames here, so the declaration comes from GET /api/workflows/wf-1."""
+    from wb_arms.monarch import FIXED_REPLY
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF, has_llm_loop=True,
+                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True},
+                                 {"name": "n", "type": "number", "required": False}],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = run_only_arm(site, fake, port, repo)
+        result = arm.run(episode(), deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert fake.llm_acks == [("wf-1", "3")]        # the recorded recipe version
+    assert fake.run_bodies[-1] == {"mode": "live", "inputs": {"sheet": FIXED_REPLY}}
+    assert "llm_loop_acked=1" in result.flags and "inputs_filled=1" in result.flags

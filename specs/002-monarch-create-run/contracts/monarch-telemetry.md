@@ -179,3 +179,64 @@ under a `recipe.*` span, so both sides test the same shape.
 - Adding span names is a contract change: update §2 here first, then Monarch.
 - Renaming or removing a span name is a breaking change: the benchmark's
   `cost_missing` share and `other` flag will show it in the next run's report.
+
+## 8. Starting a run: the LLM-loop stamp and the declared inputs
+
+Given by the Monarch team on 5 Sep 2026, after 7 of 20 attempts of the round of
+4 Sep were refused at start with `run_refused:INPUT_INVALID` or
+`run_refused:LLM_LOOP_UNACKNOWLEDGED`. This section is what the benchmark sends;
+it changes nothing on Monarch's side.
+
+### 8.1 The run body
+
+```
+POST /api/workflows/:id/run
+{"mode": "live", "inputs": {"<name>": <string|number|boolean>, ...}}
+```
+
+- Values are scalars only: no objects, no arrays. At most 32 keys, at most
+  4,000 characters per string.
+- A key the recipe does not declare is an error. A value whose JSON type differs
+  from the declared `type` is an error (a JSON number for `number`, not `"7"`).
+- The refusal is `INPUT_INVALID`, with the detail as
+  `inputs: [{name, reason}, ...]`.
+- `null`, or a key left out, means "not provided": the run takes the
+  declaration's `default`; without a default an optional input becomes null and
+  a required one is refused. **There is no way to run without a required input
+  that has no default.**
+- `inputs` is omitted entirely when the benchmark has nothing to send.
+
+### 8.2 The acknowledgment stamp
+
+```
+POST /api/workflows/:id/versions/:version/llm-ack     (no body)
+-> 200 {"version": n, "acknowledgedAt": "..."}
+-> 422 {"code": "LLM_LOOP_NOT_PRESENT"}               this version has no loop
+```
+
+The stamp is per recipe version, not a run field, so the benchmark sends it once
+per attempt before the run and ignores the 422. Any other refusal is recorded on
+the row as `run_refused:<code>`, exactly like a refused run.
+
+`:id` and `:version` are the authoring session's `saved_workflow_id` /
+`saved_recipe_version`, which the done frame carries as `workflowId` and
+`recipeVersion`. In run-only mode they are the recipe the bench froze.
+
+### 8.3 What the benchmark fills in
+
+The declaration is read from the done frame's `recipe.inputs`, and from
+`GET /api/workflows/:id` (`recipe.inputs`) when there is no frame -- run-only
+mode. For each input that is `required` and has **no** `default`, and for no
+other input, the benchmark sends a value of the declared type carrying **no
+information beyond the request** (rule 1: the same request text for every
+competitor):
+
+| declared `type` | value sent |
+|---|---|
+| `string` (or anything else) | the attempt's own sentence -- `FIXED_REPLY`, or `RETRY_REPLY` with the goal on a retry -- truncated to 4,000 characters |
+| `number`, `integer` | `0` |
+| `boolean` | `false` |
+
+The row records `inputs_filled=<n>` when n > 0 and `llm_loop_acked=1` when the
+stamp returned 200; the declaration and the values sent go into the attempt's
+turn log as one `{"inputs": {"declared": [...], "sent": {...}}}` entry.
