@@ -831,7 +831,7 @@ def test_tier_plans():
              for n in ("tier-simple", "tier-medium", "tier-complex", "random-10")}
 
     for name, pl in plans.items():
-        assert pl.name == name and pl.tasks == name        # each names its own task set
+        assert pl.name == name and pl.tasks == f"tasks/{name}"        # each names its own task set
         assert pl.mode == "create-run"
         assert pl.repetitions == 1 and pl.retry_on_fail == 1
         assert pl.baseline == "claude-opus-5/api"

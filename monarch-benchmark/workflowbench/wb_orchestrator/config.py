@@ -782,6 +782,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         c.fail("tasks", str(e))
     for t in tasks:
         for service in t["info"]["initial_state"]:
+            if service == "meta":            # the world's own header, not a service
+                continue
             if service not in product.services:
                 raise ConfigError(product_path, "services",
                                   f"task {t['task']} touches service {service}, which {product_path} "
