@@ -38,6 +38,10 @@ def _param_schema(p: dict[str, Any]) -> dict[str, Any]:
         schema["items"] = p.get("items", {"type": "string"})
     if "enum" in p:
         schema["enum"] = p["enum"]
+    # The documented default is what makes a parameter `selected` in the seeds
+    # (Gmail's userId = "me"): the builder sees it auto-filled and may override.
+    if "default" in p:
+        schema["default"] = p["default"]
     return schema
 
 

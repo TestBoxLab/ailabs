@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -75,23 +76,29 @@ def test_every_action_has_the_shape_the_importer_needs(generated):
         assert step["url_template"].startswith(SHIM + "/"), path
         rt = step["response_template"]
         assert isinstance(rt["schema"], dict) and rt["schema"], path
-        assert rt["extract"] and all(v.startswith("$.") for v in rt["extract"].values()), path
+        # extract may be {} -- a response with no body has nothing to name, and
+        # the builder reads that as known_empty ("run for effect").
+        assert all(v.startswith("$") for v in rt["extract"].values()), path
         # `parameters` and `creates_entities` are required on every
         # implementation: the importer's projectSeed maps over both unguarded.
         assert isinstance(impls[0]["parameters"], list), path
         assert isinstance(impls[0]["creates_entities"], list), path
         if ba["verb"] == "create":
-            ce = impls[0]["creates_entities"][0]
-            assert ce["identifier_path"] == "$.id", path
-            # the importer reads `type`, not `entity`
-            assert ce["type"] and "entity" not in ce, path
-            assert isinstance(ce["display_name_from"], str), path
+            for ce in impls[0]["creates_entities"]:
+                # the id the engine binds must be one this step really extracts
+                assert ce["identifier_path"] in rt["extract"].values(), path
+                # the importer reads `type`, not `entity`
+                assert ce["type"] and "entity" not in ce, path
+                assert isinstance(ce["display_name_from"], str), path
+                assert ce["identifier_keys"] == [], path
         else:
             assert impls[0]["creates_entities"] == [], path
 
 
 PARAM_REQUIRED = ("name", "classification", "location", "json_path", "type", "required")
-PARAM_OPTIONAL = ("entity_type", "example_value", "source_form_field", "constraints")
+# `source_form_field` is gone in v5: it is for captured HTML forms and feeds only
+# the entity-type resolver, so the builder never sees it.
+PARAM_OPTIONAL = ("entity_type", "example_value", "constraints", "items", "format")
 
 
 def test_every_placeholder_and_body_key_has_exactly_one_parameter(generated):
@@ -135,7 +142,7 @@ def test_parameter_shape_per_location(generated):
     assert body["name"] == {
         "name": "name", "classification": "typed", "location": "body",
         "json_path": "$.steps[0].body.name", "type": "string", "required": True,
-        "source_form_field": "name", "example_value": "Acme renewal",
+        "example_value": "Acme renewal",
         "constraints": {"helper_text": "Desired name for the new channel."}}
     assert body["is_private"]["type"] == "boolean"
     assert body["is_private"]["required"] is False
@@ -201,10 +208,13 @@ def test_body_parameters_are_typed_and_exampled(generated):
         for p in impl["parameters"]:
             if p["location"] != "body":
                 continue
-            assert p["type"] in {"number", "string", "boolean", "object"}, (path, p["name"])
+            assert p["type"] in {"integer", "number", "string", "boolean",
+                                 "object", "array"}, (path, p["name"])
             assert p["example_value"] != p["name"], (path, p["name"])
-            if "enum_options" in p["constraints"]:
-                assert all("value" in o for o in p["constraints"]["enum_options"])
+            for o in p["constraints"].get("enum_options", ()):
+                # a numeric enum value fails the executor's zod parse and makes
+                # the whole action unexecutable
+                assert isinstance(o.get("value"), str), (path, p["name"], o)
 
 
 def test_write_actions_carry_body_fields(generated):
@@ -280,11 +290,13 @@ def test_validate_names_the_gap_on_a_corrupted_file(generated, tmp_path):
     folder.mkdir()
     victim = next(f for f, _ in _actions(out) if f.parent.name == "bench-slack")
     doc = json.loads(victim.read_text(encoding="utf-8"))
-    doc["implementations"][0]["http_template"]["steps"][0]["response_template"]["extract"] = {}
+    # an extract that is not an object at all: `{}` is legal (known_empty), a
+    # list is not -- the engine maps over the names.
+    doc["implementations"][0]["http_template"]["steps"][0]["response_template"]["extract"] = []
     (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
     gaps = seeds.validate(tmp_path)
-    assert [g.file for g in gaps] == [victim.name]
-    assert "extract" in gaps[0].gap
+    assert {g.file for g in gaps} == {victim.name}
+    assert any("extract" in g.gap for g in gaps), [g.gap for g in gaps]
 
 
 def test_two_generations_are_byte_identical(generated, tmp_path):
@@ -344,8 +356,12 @@ def test_gmail_list_messages_extracts_from_the_wrapper_key(generated):
     coll = rt["schema"]["properties"]["messages"]
     assert coll["type"] == "array"
     assert sorted(coll["items"]["properties"]) == ["id", "threadId"]
-    assert rt["extract"] == {"id": "$.messages[*].id",
-                             "threadId": "$.messages[*].threadId"}
+    # The ARRAY itself is the output. The engine's path grammar has no `[*]`, so
+    # v4.1's `$.messages[*].id` resolved to nothing at run time; the builder
+    # iterates the array through the node's own `items.path` instead.
+    assert rt["extract"]["messages"] == "$.messages"
+    assert rt["extract"]["resultSizeEstimate"] == "$.resultSizeEstimate"
+    assert not any("[*]" in v for v in rt["extract"].values())
 
 
 def test_salesforce_read_contact_carries_the_record_fields(generated):
@@ -357,72 +373,224 @@ def test_salesforce_read_contact_carries_the_record_fields(generated):
     assert rt["extract"]["Id"] == "$.Id"
 
 
-def test_reads_and_lists_extract_more_than_an_id(generated):
-    """`extract_too_thin`: the v3 state of the world must not come back."""
+def test_a_read_names_the_record_fields_it_can_chain_on(generated):
+    """The v3 state of the world -- only `$.id` -- must not come back."""
     out, _ = generated
-    thin = [path.name for path, doc in _actions(out)
-            if doc["business_action"]["verb"] in ("read", "list")
-            and list(doc["implementations"][0]["http_template"]["steps"][0]
-                     ["response_template"]["extract"]) == ["id"]]
-    # What remains is a resource neither the world schema nor the corpus
-    # describes -- 16 of them in services that declare no schemas at all.
-    assert len(thin) <= 62, sorted(thin)[:10]
-    # A polymorphic query endpoint answers whatever the caller asked for, so it
-    # has no fixed record to name; every addressable resource must have one.
-    POLYMORPHIC = ("_list_query.json", "_list_search.json", "_list_v2-search.json",
-                   "_list_conversations-list.json", "_list_conversations-info.json")
     for path, doc in _actions(out):
-        if path.parent.name not in ("bench-gmail", "bench-salesforce", "bench-slack"):
+        if path.parent.name not in ("bench-gmail", "bench-salesforce"):
             continue
-        if doc["business_action"]["verb"] in ("read", "list")                 and not path.name.endswith(POLYMORPHIC):
-            rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
-            assert len(rt["extract"]) > 1, path
+        if doc["business_action"]["verb"] != "read":
+            continue
+        rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+        assert len(rt["extract"]) > 1, path
 
 
-def test_creates_and_updates_return_the_resource(generated):
-    """A create's response is the record, so its fields are extractable too."""
+def test_no_extract_path_uses_a_wildcard(generated):
+    """The engine resolves `$.a.b` with numeric `[n]` only. `[*]` silently
+    resolved to nothing, which is what made every v4.1 list read empty."""
     out, _ = generated
-    doc = json.loads((out / "bench-salesforce" / "bench-salesforce_update_opportunity.json")
-                     .read_text(encoding="utf-8"))
-    rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
-    assert "StageName" in rt["schema"]["properties"]
-    assert rt["extract"]["StageName"] == "$.StageName"
+    for path, doc in _actions(out):
+        for step in doc["implementations"][0]["http_template"]["steps"]:
+            for name, value in step["response_template"]["extract"].items():
+                assert re.fullmatch(r"\$(?:\.[A-Za-z0-9_-]+|\[\d+\])*", value), (path, value)
+                assert re.fullmatch(r"\w+", name), (path, name)
 
 
-def test_validate_names_extract_too_thin(generated, tmp_path):
-    out, _ = generated
-    folder = tmp_path / "thin" / "bench-gmail"
-    folder.mkdir(parents=True)
-    victim = out / "bench-gmail" / "bench-gmail_read_messages.json"
-    doc = json.loads(victim.read_text(encoding="utf-8"))
-    doc["implementations"][0]["http_template"]["steps"][0][
-        "response_template"]["extract"] = {"id": "$.id"}
-    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
-    gaps = seeds.validate(tmp_path / "thin")
-    assert any("extract_too_thin" in g.gap for g in gaps), [g.gap for g in gaps]
-
-
-def test_a_resource_with_no_known_fields_is_not_a_gap(generated, tmp_path):
-    """Only a *known* resource makes a thin extract a gap; an opaque one is fine."""
-    out, _ = generated
-    folder = tmp_path / "opaque" / "bench-gmail"
-    folder.mkdir(parents=True)
-    victim = out / "bench-gmail" / "bench-gmail_read_messages.json"
-    doc = json.loads(victim.read_text(encoding="utf-8"))
-    step = doc["implementations"][0]["http_template"]["steps"][0]
-    step["response_template"] = {"status": 200, "extract": {"id": "$.id"},
-                                 "schema": {"type": "object"}}
-    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
-    assert not any("extract_too_thin" in g.gap for g in seeds.validate(tmp_path / "opaque"))
-
-
-def test_get_steps_carry_no_body_and_no_content_type(generated):
-    """4 Sep: an empty body template on GET made Monarch's engine send a body."""
+def test_every_extract_path_exists_in_the_schema(generated):
+    """A path the schema cannot reach is a field the builder wires and the
+    response never carries."""
     out, _ = generated
     for path, doc in _actions(out):
         step = doc["implementations"][0]["http_template"]["steps"][0]
-        if step["method"] == "GET":
-            assert "body_template" not in step, path
-            assert "headers_template" not in step, path
+        rt = step["response_template"]
+        for value in rt["extract"].values():
+            assert seeds._schema_at(rt["schema"], value) is not None, (path, value)
+
+
+def test_a_list_extracts_the_array_itself(generated):
+    """The builder iterates through `items.path`, which the lint grounds on the
+    extract paths; a per-row path would ground nothing."""
+    out, _ = generated
+    for path, doc in _actions(out):
+        if doc["business_action"]["verb"] != "list":
+            continue
+        rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+        arrays = [n for n, s in (rt["schema"].get("properties") or {}).items()
+                  if isinstance(s, dict) and s.get("type") == "array"]
+        for name in arrays:
+            assert rt["extract"].get(name) == f"$.{name}", (path, name)
+
+
+def test_a_write_that_answers_nothing_declares_an_empty_response(generated):
+    """The Salesforce PATCH really returns `{}` (probed 4 Sep 2026, and
+    impl/salesforce.py:177+ returns it): declaring the record there would wire
+    the builder to fields the response never carries."""
+    out, _ = generated
+    doc = json.loads((out / "bench-salesforce" / "bench-salesforce_update_contact.json")
+                     .read_text(encoding="utf-8"))
+    rt = doc["implementations"][0]["http_template"]["steps"][0]["response_template"]
+    assert rt["extract"] == {}
+    assert rt["schema"]["properties"] == {}
+    assert rt["schema"]["additionalProperties"] is False
+
+
+def test_a_salesforce_create_answers_the_id_envelope(generated):
+    """`{id, success}`, not the record (impl/salesforce.py:177), and the created
+    id must be chainable through exactly that extract path."""
+    out, _ = generated
+    doc = json.loads((out / "bench-salesforce" / "bench-salesforce_create_contact.json")
+                     .read_text(encoding="utf-8"))
+    impl = doc["implementations"][0]
+    rt = impl["http_template"]["steps"][0]["response_template"]
+    assert rt["extract"] == {"id": "$.id", "success": "$.success"}
+    assert sorted(rt["schema"]["properties"]) == ["id", "success"]
+    ce = impl["creates_entities"][0]
+    assert ce["identifier_path"] == "$.id"
+    assert ce["type"] == "contact"
+
+
+def _broken(out, tmp_path, folder_name, victim_rel, mutate):
+    """Write one mutated copy of an action and validate just that folder."""
+    folder = tmp_path / folder_name / "bench-gmail"
+    folder.mkdir(parents=True)
+    victim = out / victim_rel
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    mutate(doc)
+    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
+    return seeds.validate(tmp_path / folder_name)
+
+
+GMAIL_READ = "bench-gmail/bench-gmail_read_messages.json"
+
+
+def test_validate_names_a_wildcard_extract(generated, tmp_path):
+    """The v4.1 defect: `[*]` resolves to nothing at run time."""
+    out, _ = generated
+
+    def mutate(d):
+        d["implementations"][0]["http_template"]["steps"][0][
+            "response_template"]["extract"] = {"id": "$.messages[*].id"}
+    gaps = _broken(out, tmp_path, "wildcard", GMAIL_READ, mutate)
+    assert any("extract_path_ungrammatical" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_validate_names_an_extract_absent_from_the_schema(generated, tmp_path):
+    out, _ = generated
+
+    def mutate(d):
+        d["implementations"][0]["http_template"]["steps"][0][
+            "response_template"]["extract"]["ghost"] = "$.ghost"
+    gaps = _broken(out, tmp_path, "unreachable", GMAIL_READ, mutate)
+    assert any("extract_not_in_schema" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_validate_names_a_body_on_a_bodyless_method(generated, tmp_path):
+    """`{}` is enough: the engine serializes it and fetch refuses the request."""
+    out, _ = generated
+
+    def mutate(d):
+        d["implementations"][0]["http_template"]["steps"][0]["body_template"] = {}
+    gaps = _broken(out, tmp_path, "getbody", GMAIL_READ, mutate)
+    assert any("carries a body_template" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_validate_names_a_numeric_enum_option(generated, tmp_path):
+    """A numeric value fails the executor's zod parse: the action is unexecutable."""
+    out, _ = generated
+
+    def mutate(d):
+        d["implementations"][0]["parameters"][0]["constraints"]["enum_options"] = [
+            {"value": 1}]
+    gaps = _broken(out, tmp_path, "enum", GMAIL_READ, mutate)
+    assert any("enum_options_not_string" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_validate_names_a_dangling_identifier_path(generated, tmp_path):
+    """A path matching no extract makes the engine bind the wrong field."""
+    out, _ = generated
+    victim = out / "bench-salesforce" / "bench-salesforce_create_contact.json"
+    folder = tmp_path / "ident" / "bench-salesforce"
+    folder.mkdir(parents=True)
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    doc["implementations"][0]["creates_entities"][0]["identifier_path"] = "$.nope"
+    (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
+    gaps = seeds.validate(tmp_path / "ident")
+    assert any("identifier_path_not_extracted" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_validate_names_an_optional_path_parameter(generated, tmp_path):
+    """An unfilled path token dispatches literally, so it cannot be optional."""
+    out, _ = generated
+
+    def mutate(d):
+        for p in d["implementations"][0]["parameters"]:
+            if p["location"] == "path":
+                p["required"] = False
+    gaps = _broken(out, tmp_path, "optpath", GMAIL_READ, mutate)
+    assert any("path_parameter_optional" in g.gap for g in gaps), [g.gap for g in gaps]
+
+
+def test_bodyless_methods_carry_an_explicit_null_body(generated):
+    """GET/HEAD/DELETE must send no body: the engine serializes even `{}` and
+    fetch rejects those methods with one. v4.1 still sent `{}` plus a
+    content-type on 60 DELETE steps."""
+    out, _ = generated
+    for path, doc in _actions(out):
+        step = doc["implementations"][0]["http_template"]["steps"][0]
+        headers = step["headers_template"]
+        if step["method"] in ("GET", "HEAD", "DELETE"):
+            assert step["body_template"] is None, path
+            assert headers == {}, path
         else:
-            assert "body_template" in step, path
+            assert isinstance(step["body_template"], dict), path
+            assert headers == {"content-type": "application/json"}, path
+
+
+# ---------------------------------------------------------------- v5: manifest
+
+
+def test_manifest_records_the_version_and_a_stable_digest(generated, tmp_path):
+    out, summary = generated
+    manifest = json.loads((out / "ok.txt").read_text(encoding="utf-8"))
+    assert manifest["version"] == "v5"
+    assert manifest["canonical"] is True
+    assert manifest["products"] == len(summary.folders)
+    assert manifest["actions"] == summary.files_written
+    assert manifest["front_door"] == SHIM
+    # the canonical rules, each checkable in the bytes that were written
+    assert manifest["bodyless_body_null"] is True
+    assert manifest["no_wildcard_extracts"] is True
+    assert manifest["enum_options_are_strings"] is True
+    # the digest is over the seeds, and a regeneration reproduces it
+    again = tmp_path / "again-manifest"
+    seeds.generate(again, SHIM)
+    assert manifest["sha256"] == seeds.folder_sha256(again)
+    assert len(manifest["sha256"]) == 64
+
+
+def test_a_changed_action_changes_the_digest(generated, tmp_path):
+    """The digest is what tells two knowledge bases apart."""
+    out, _ = generated
+    copy = tmp_path / "tampered"
+    shutil.copytree(out, copy)
+    victim = copy / "bench-gmail" / "bench-gmail_read_messages.json"
+    doc = json.loads(victim.read_text(encoding="utf-8"))
+    doc["business_action"]["label"] = "Something else"
+    victim.write_text(json.dumps(doc), encoding="utf-8")
+    assert seeds.folder_sha256(copy) != seeds.folder_sha256(out)
+
+
+def test_a_create_behind_an_envelope_is_still_chainable(generated):
+    """Slack answers `{ok, channel: {...}}` (impl/slack.py:45): the created id is
+    one level down, and only the handler code says so. The engine's grammar
+    reaches it, so `$.channel.id` is a legal identifier_path."""
+    out, _ = generated
+    doc = json.loads((out / "bench-slack" /
+                      "bench-slack_create_conversations-create.json")
+                     .read_text(encoding="utf-8"))
+    impl = doc["implementations"][0]
+    rt = impl["http_template"]["steps"][0]["response_template"]
+    ce = impl["creates_entities"][0]
+    assert ce["identifier_path"] == "$.channel.id"
+    assert ce["identifier_path"] in rt["extract"].values()   # must be an extract
+    assert ce["type"] == "channel"                           # not the RPC segment

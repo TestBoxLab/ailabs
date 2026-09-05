@@ -187,3 +187,57 @@ def test_cli_returns_the_step_exit_code(workspace, monkeypatch):
         monkeypatch.setenv("MONARCH_FD_URL", fd.url)
         monkeypatch.setenv("FRONT_DOOR_URL", FRONT_DOOR)
         assert cli.main(["monarch", "setup", "--product", str(product), "--out", str(out)]) == 3
+
+
+# ------------------------------------------------- the seed validator hook
+# Monarch's own `validate-seeds.mjs` is the authority on what the import accepts
+# and the engine executes. `MONARCH_SEED_VALIDATOR` names it; unset (CI, and any
+# box without the Monarch checkout) skips the check silently.
+
+
+def _fake_validator(tmp_path, exit_code: int, message: str = "validator says hi"):
+    """A stand-in for validate-seeds.mjs: node runs it, it prints, it exits."""
+    script = tmp_path / "fake-validate.mjs"
+    script.write_text(
+        f'console.log({message!r});\nprocess.exit({exit_code});\n', encoding="utf-8")
+    return script
+
+
+def test_validator_is_skipped_when_the_variable_is_unset(workspace):
+    product, out = workspace
+    with FakeFD(fixtures_dir=out) as fd, FakeMonarch(), FakeLangfuse():
+        code, text = _run(product, out, fd.url)
+    assert code == 0, text
+    assert "seed validator" not in text
+
+
+def test_validator_runs_and_passes(workspace, tmp_path):
+    product, out = workspace
+    script = _fake_validator(tmp_path, 0, "0 error(s), 3 warning(s)")
+    with FakeFD(fixtures_dir=out) as fd, FakeMonarch(), FakeLangfuse():
+        code, text = _run(product, out, fd.url,
+                          env={"MONARCH_SEED_VALIDATOR": str(script)})
+    assert code == 0, text
+    assert "0 error(s), 3 warning(s)" in text        # its output is printed
+    assert "no errors" in text
+
+
+def test_validator_failure_stops_with_code_2_and_prints_its_output(workspace, tmp_path):
+    product, out = workspace
+    script = _fake_validator(tmp_path, 1, "ERROR bench-gmail/x.json: boom")
+    with FakeFD(fixtures_dir=out) as fd, FakeMonarch(), FakeLangfuse() as langfuse:
+        code, text = _run(product, out, fd.url,
+                          env={"MONARCH_SEED_VALIDATOR": str(script)})
+    assert code == 2
+    assert "ERROR bench-gmail/x.json: boom" in text   # the reason is visible
+    assert "seed validator reported errors" in text
+    assert langfuse.requests == []                   # stopped before importing
+
+
+def test_validator_path_that_does_not_exist_is_named(workspace, tmp_path):
+    product, out = workspace
+    with FakeFD(fixtures_dir=out) as fd, FakeMonarch(), FakeLangfuse():
+        code, text = _run(product, out, fd.url,
+                          env={"MONARCH_SEED_VALIDATOR": str(tmp_path / "missing.mjs")})
+    assert code == 2
+    assert "does not name a file" in text

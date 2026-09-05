@@ -2,7 +2,9 @@
 
 Five steps, printed one line each (contracts/cli.md):
 
-  generate  write the seed folders from the product's OpenAPI documents
+  generate  write the seed folders from the product's OpenAPI documents, then
+            run Monarch's own `validate-seeds.mjs` when `MONARCH_SEED_VALIDATOR`
+            names it (unset: skipped silently)
   mounted   the discovery service must already see them on disk
   import    one knowledge-base import per app, hashes recorded; it also
             creates the product, so the bench never registers one itself
@@ -118,6 +120,7 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
             raise Stop(2, "generate", f"{len(e.gaps)} gap(s); nothing written") from e
         say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
                               f"files_written={summary.files_written} folders={len(summary.folders)}")
+        _run_seed_validator(out, env, stdout)
 
         # 2. mounted
         want = sorted(seeds.product_slug(s) for s in product.services)
@@ -154,6 +157,47 @@ def run(product_path, harness_path, out_dir, env: dict, stdout) -> int:
     except Stop as stop:
         say("stop", stop.step, stop.message)
         return stop.code
+
+
+def _run_seed_validator(out: Path, env: dict, stdout) -> None:
+    """Monarch's own seed validator, when the environment names it.
+
+    `MONARCH_SEED_VALIDATOR` points at `validate-seeds.mjs` in the Monarch
+    checkout. It is the authority on what the FD import accepts and what the
+    engine executes, so a non-zero exit stops the command before anything is
+    imported. Unset -- the usual case, and every CI box without the Monarch
+    checkout -- skips silently.
+    """
+    import shutil
+    import subprocess
+
+    script = (env.get("MONARCH_SEED_VALIDATOR") or "").strip()
+    if not script:
+        return
+    node = shutil.which("node")
+    if not node:
+        raise Stop(2, "generate", "MONARCH_SEED_VALIDATOR is set but `node` is not on PATH")
+    if not Path(script).is_file():
+        raise Stop(2, "generate", f"MONARCH_SEED_VALIDATOR does not name a file: {script}")
+    # A node process that dies on a Windows structured exception (0xC0000000+)
+    # never reached the seeds, so its exit code says nothing about them; retry
+    # once rather than stop a good run on a crashed child (seen once under the
+    # test suite's fake servers, 4 Sep 2026).
+    for attempt in (1, 2):
+        try:
+            done = subprocess.run([node, script, str(out), "--no-warn"],
+                                  capture_output=True, text=True, timeout=TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise Stop(2, "generate", f"seed validator failed to run: {e}") from e
+        if not (done.returncode > 0xC0000000 and attempt == 1):
+            break
+    output = (done.stdout or "") + (done.stderr or "")
+    for line in output.splitlines():
+        print(f"      {line}", file=stdout)
+    if done.returncode != 0:
+        raise Stop(2, "generate",
+                   f"seed validator reported errors (exit {done.returncode})")
+    print("[ok] validate: seed validator reported no errors", file=stdout)
 
 
 def _override_snippet(out: Path) -> str:
