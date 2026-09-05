@@ -16,7 +16,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wb_report.metrics import PHASE_WORDS, is_monarch
+from wb_report.metrics import (NOT_APPLICABLE_REASON, PHASE_WORDS, is_monarch,
+                               is_not_applicable)
 
 
 def _esc(value: Any) -> str:
@@ -45,6 +46,29 @@ def _fmt(value: Any, kind: str = "count") -> str:
     if kind == "seconds":
         return f"{value:.1f} s"
     return str(value)
+
+
+def _na(metric: dict) -> str | None:
+    """The reason to show `n/a` for this competitor everywhere, or `None`.
+
+    The scripted answer key on a task set it cannot act on has no result to
+    report; a rate of 0% would read as "it tried and failed" (contract section
+    1a). One helper, so no table or chart can forget the rule.
+    """
+    return NOT_APPLICABLE_REASON if metric.get("not_applicable") else None
+
+
+def _cells(metric: dict, values: list[Any]) -> list[Any]:
+    """A metric row's value cells, replaced by `n/a` with the reason on hover
+    where the competitor is not applicable."""
+    reason = _na(metric)
+    return [("n/a", reason) for _ in values] if reason else values
+
+
+def _series(metrics: list[dict], value) -> list[tuple[str, Any, Any]]:
+    """A chart series where a not-applicable competitor contributes `None`,
+    which every chart already draws as the text `n/a`."""
+    return [(m["arm"], None, None) if _na(m) else value(m) for m in metrics]
 
 
 def _table(headers: list[str], rows: list[list[str]], source_line: str = "",
@@ -445,6 +469,13 @@ def _comparison_table(report: dict) -> str:
     rows = []
     for c in report["comparisons"]:
         diff = c["strict_pass_diff_pp"]
+        if c.get("skipped"):
+            # one side had nothing to compare: every figure would be an artefact
+            # of its blank rows, so the row says so and shows none of them
+            rows.append([c["arm"], c["baseline"]]
+                        + [("n/a", c["skipped"])] * (len(headers) - 3)
+                        + [c["skipped"]])
+            continue
         row = [c["arm"], c["baseline"],
                f"{diff:+.1f}" if diff is not None else "n/a",
                _fmt(c["pass_rate_ratio"], "ratio")]
@@ -462,6 +493,7 @@ def _matrix_tables(report: dict) -> str:
     """Contracts section 3: the matrix, then the details table repeating every
     reason, so nothing is available only on hover (FR-008)."""
     m = report["matrix"]
+    na_arms = {x["arm"] for x in report["metrics"] if _na(x)}
     lead = ["task"] + (["domain"] if m["has_domain"] else []) + \
            (["tier"] if m["has_tier"] else [])
     headers = lead + list(m["arms"])
@@ -476,6 +508,10 @@ def _matrix_tables(report: dict) -> str:
             cell = r["cells"].get(arm)
             if cell is None:
                 row.append("n/a")
+                continue
+            if arm in na_arms:
+                # the answer key could not act on this task set: no result
+                row.append(("n/a", NOT_APPLICABLE_REASON))
                 continue
             text = f"{cell['passed']}/{cell['attempted']}"
             if cell["infra"]:
@@ -949,8 +985,10 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
             f'<div style="text-align:right"><div class="big">{_fmt(best[1], kind)}</div>'
             f'<div class="who">best model: {_esc(_short(best[0]))}</div></div></div>'
             f"{why}</div>")
+        # a not-applicable competitor contributes no value: `_bars` draws that
+        # as the text n/a, never as a zero-length bar
         charts.append(f"<h3>{_esc(label)}</h3>" + _bars(
-            [(m["arm"], get(m)) for m in metrics], kind,
+            [(m["arm"], None if _na(m) else get(m)) for m in metrics], kind,
             {m["arm"]: (cls if is_monarch(m["arm"]) else "") for m in metrics}))
 
     hero = (f'<header class="hero"><div class="eyebrow">Monarch benchmark</div>'
@@ -1082,32 +1120,46 @@ def _success_table(report: dict) -> str:
     headers = ["competitor", "attempts", "passed", "strict pass", "of",
                "first try", "after retry", "retries", "pass over reps", "infra",
                "infra rate", "agent errors", "timeouts"]
-    rows = [[m["arm"], _fmt(m["attempts"]), _fmt(m["passed"]),
-             _fmt(m["strict_pass"], "rate"), _fmt(m["strict_pass_denominator"]),
-             _fmt(m["first_try_pass"], "rate"), _fmt(m["pass_after_retry"], "rate"),
-             _fmt(m["retries"]["count"]),
-             _fmt(m["pass_over_repetitions"], "rate"), _fmt(m["infra"]),
-             _fmt(m["infra_rate"], "rate"), _fmt(m["agent_errors"]),
-             _fmt(m["timeouts"])]
+    # The attempt counts are real for every competitor; only the results are
+    # replaced by `n/a` where the answer key had nothing to act on.
+    rows = [[m["arm"], _fmt(m["attempts"])]
+            + _cells(m, [_fmt(m["passed"]),
+                         _fmt(m["strict_pass"], "rate"),
+                         _fmt(m["strict_pass_denominator"]),
+                         _fmt(m["first_try_pass"], "rate"),
+                         _fmt(m["pass_after_retry"], "rate"),
+                         _fmt(m["retries"]["count"]),
+                         _fmt(m["pass_over_repetitions"], "rate")])
+            + [_fmt(m["infra"]), _fmt(m["infra_rate"], "rate"),
+               _fmt(m["agent_errors"]), _fmt(m["timeouts"])]
             for m in report["metrics"]]
     return _table(headers, rows, _source_line_for(report, "metrics"),
                   "Strict pass rate per competitor")
 
 
+def _na_note(report: dict) -> str:
+    """One sentence under the success table naming every competitor shown as
+    `n/a` and why (contract section 1a). Empty when none is."""
+    names = [m["arm"] for m in report["metrics"] if _na(m)]
+    if not names:
+        return ""
+    return (f'<p class="note">{_esc(", ".join(names))}: '
+            f"{_esc(NOT_APPLICABLE_REASON)}, so every result below is shown as "
+            "n/a rather than as a 0%.</p>")
+
+
 def _success_section(report: dict) -> str:
     """Section 2: did it work. The chart, the table, the matrix, the comparison."""
-    series = [(m["arm"], m["strict_pass"]["mean"], m["strict_pass"]["sem"])
-              for m in report["metrics"]]
-    chart = "<h3>Strict pass rate</h3>" + _bar_chart(series, kind="rate")
-    chart += "<h3>First try</h3>" + _bar_chart(
-        [(m["arm"], m["first_try_pass"]["mean"], m["first_try_pass"]["sem"])
-         for m in report["metrics"]], kind="rate")
+    metrics = report["metrics"]
+    block = lambda key: _series(
+        metrics, lambda m: (m["arm"], m[key]["mean"], m[key]["sem"]))
+    chart = "<h3>Strict pass rate</h3>" + _bar_chart(block("strict_pass"), kind="rate")
+    chart += "<h3>First try</h3>" + _bar_chart(block("first_try_pass"), kind="rate")
     if _has_retries(report):
-        chart += f"<h3>{_RETRY_LABEL}</h3>" + _bar_chart(
-            [(m["arm"], m["pass_after_retry"]["mean"], m["pass_after_retry"]["sem"])
-             for m in report["metrics"]], kind="rate")
-    table = _success_table(report)
-    body = chart + table + _matrix_tables(report) + _comparison_table(report)
+        chart += f"<h3>{_RETRY_LABEL}</h3>" + _bar_chart(block("pass_after_retry"),
+                                                         kind="rate")
+    body = (chart + _success_table(report) + _na_note(report)
+            + _matrix_tables(report) + _comparison_table(report))
     return body
 
 
@@ -1129,9 +1181,10 @@ def _cost_section_table(report: dict) -> str:
     rows = []
     for m in metrics:
         if dollars:
+            # what it spent is real; cost per passed attempt is a result
             row = [m["arm"], _fmt(m["cost_total"], "money"),
-                   _fmt(m["cost_per_attempt"], "money"),
-                   _fmt(m["cost_per_passed"], "money")]
+                   _fmt(m["cost_per_attempt"], "money")] + _cells(
+                       m, [_fmt(m["cost_per_passed"], "money")])
         else:
             row = [m["arm"], _fmt((m["cost_total"] / base) if base else None, "ratio")]
         t = m["tokens"]
@@ -1158,7 +1211,7 @@ def _cost_section(report: dict) -> str:
     base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
                 None)
     if dollars:
-        series = [(m["arm"], m["cost_per_passed"], None) for m in metrics]
+        series = _series(metrics, lambda m: (m["arm"], m["cost_per_passed"], None))
         chart = _bar_chart(series, kind="money")
         guide = ("What the round paid for. Cost per passed attempt is the one "
                  "that compares competitors fairly; the bar shows it.")

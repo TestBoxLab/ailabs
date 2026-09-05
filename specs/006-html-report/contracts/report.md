@@ -147,6 +147,43 @@ p["wall_clock_s"] is not None)`, and is **absent** (not 0) when the attempt has
 no phase carrying one. Rows with no wall-clock do not contribute to the mean or
 the median, and the source line states how many contributed.
 
+### 1a. The answer key where it cannot act
+
+The scripted answer key (`arm == "oracle"`) only knows how to act on the pilot's
+Salesforce field-update tasks. Put in front of any other task set it searches,
+reads and stops, so every attempt fails with nothing changed - which is the
+answer key being out of its depth, not a competitor scoring 0%.
+
+An attempt is **not applicable** when all of these hold:
+
+- `arm == "oracle"` - the rule is the answer key's alone. A language model that
+  read the world and changed nothing simply failed, and the page keeps saying so;
+- the attempt did not pass, and is not an infrastructure failure;
+- `n_changes == 0` - it changed nothing;
+- `tool_calls <= 2` - it only searched and read.
+
+**In the metrics**: not-applicable attempts leave every pass denominator -
+`strict pass`, `first try`, `after retry`, `retries`, `pass over repetitions`,
+`strict pass denominator` and `cost per passed attempt` - and their number is
+recorded as `not_applicable_rows`. When **every** one of the competitor's
+attempts is not applicable, its entry carries `not_applicable: True` and
+`not_applicable_reason: "answer key does not cover this task set"`, and each of
+those figures is `None`. Attempts, cost, tokens, wall-clock, turns, tool calls
+and the infrastructure counts still cover every attempt that was made: the round
+did run them.
+
+**In the rendering**: on the technical page every result cell of a
+not-applicable competitor reads `n/a` with the reason in a `title` tooltip, in
+the success table, the cost table's cost-per-passed column, the task matrix and
+the comparison table; the Success section's charts draw it as `n/a` rather than
+a zero-length bar; one sentence under the success table names the competitor and
+the reason. A paired comparison with a not-applicable side is **skipped**: the
+row carries `skipped` and its verdict is the reason, because blank rows would
+otherwise be counted as losses. The markdown report shows `n/a` in the metrics
+table and one `not compared - <reason>` line in place of the paired figure. The
+executive page never lists the answer key among the models, and its charts show
+it as `n/a`.
+
 ### Monarch-only columns
 
 Rendered only when at least one competitor on the page has a phase key other

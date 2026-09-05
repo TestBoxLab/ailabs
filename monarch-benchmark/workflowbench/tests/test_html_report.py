@@ -71,10 +71,13 @@ def four_arm_store(tmp_path):
         _row("t2", "gamma", 0, False, termination="agent_error", assertions=True,
              error="<script>alert(1)</script>"),
         _row("t2", "gamma", 1, False, termination="timeout", assertions=True),
-        # oracle: t1 always, t2 never (the task everyone fails)
-        _row("t1", "oracle", 0, True), _row("t1", "oracle", 1, True),
-        _row("t2", "oracle", 0, False, assertions=False),
-        _row("t2", "oracle", 1, False, assertions=False),
+        # oracle: t1 always, t2 never (the task everyone fails). Its rows carry
+        # tool calls because this answer key acted; one that acts on nothing is
+        # not applicable, and that is a different fixture below.
+        _row("t1", "oracle", 0, True, tool_calls=4),
+        _row("t1", "oracle", 1, True, tool_calls=4),
+        _row("t2", "oracle", 0, False, assertions=False, tool_calls=4),
+        _row("t2", "oracle", 1, False, assertions=False, tool_calls=4),
     ]
     for r in rows:
         store.record_episode(r)
@@ -1684,3 +1687,163 @@ def test_task_row_says_pass_on_retry(tmp_path):
     assert m["first_try_pass"]["mean"] == pytest.approx(0.5)   # only t1
     assert m["pass_after_retry"]["mean"] == pytest.approx(1.0)  # both, with retry
     assert m["retries"]["count"] == 1
+
+
+# -- the answer key where it cannot act ---------------------------------------
+
+NA_REASON = "answer key does not cover this task set"
+
+
+def _oracle_store(tmp_path, oracle_rows, run="run-na"):
+    """One store with `alpha` (a normal competitor) and an `oracle` whose rows
+    the caller decides. `alpha` always passes, so a change to the oracle can
+    never be mistaken for a change to everybody."""
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run(run, "cfgna", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["alpha", "oracle"], "k": 1,
+                      "n_tasks": 2})
+    for task in ("t1", "t2"):
+        store.record_episode(_row(task, "alpha", 0, True, run=run))
+    for r in oracle_rows(run):
+        store.record_episode(r)
+    store.finish_run(run)
+    return store
+
+
+def _cannot_act(task, trial=0, run="run-na"):
+    """The shape the scripted answer key leaves on a task it does not cover: it
+    searched and read, changed nothing, and failed."""
+    return _row(task, "oracle", trial, False, run=run, assertions=False,
+                tool_calls=1, cost=0.0)
+
+
+def _acted(task, trial=0, run="run-na", passed=True):
+    """A pilot-style answer key attempt: it made changes through the tools."""
+    return _row(task, "oracle", trial, passed, run=run, tool_calls=4,
+                unexpected=[] if passed else [{"path": "crm.contacts[1].email"}])
+
+
+def test_answer_key_all_rows_not_applicable(tmp_path):
+    """Every oracle row acted on nothing: the competitor is not applicable, with
+    the reason, and its rates are not a 0%."""
+    from wb_report.metrics import competitor_metrics
+
+    store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
+                                                 _cannot_act("t2", run=run)])
+    m = competitor_metrics(_rows(store, "run-na", "oracle"), k=1)
+    assert m["not_applicable"] is True
+    assert m["not_applicable_reason"] == NA_REASON
+    assert m["not_applicable_rows"] == 2
+    assert m["strict_pass"]["mean"] is None
+    assert m["first_try_pass"]["mean"] is None
+    assert m["pass_after_retry"]["mean"] is None
+    assert m["strict_pass_denominator"] == 0
+
+
+def test_answer_key_some_rows_not_applicable(tmp_path):
+    """Only one prompt is uncovered: that row leaves the denominators, is
+    counted, and the competitor still has a rate on the rest."""
+    from wb_report.metrics import competitor_metrics
+
+    store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
+                                                 _acted("t2", run=run)])
+    m = competitor_metrics(_rows(store, "run-na", "oracle"), k=1)
+    assert m["not_applicable"] is False
+    assert m["not_applicable_rows"] == 1
+    assert m["strict_pass_denominator"] == 1
+    assert m["strict_pass"]["mean"] == pytest.approx(1.0)
+    assert m["first_try_pass"]["mean"] == pytest.approx(1.0)
+
+
+def test_answer_key_that_acted_is_untouched(tmp_path):
+    """The pilot's answer key changed things: nothing about it is n/a, whether
+    the attempt passed or failed."""
+    from wb_report.metrics import competitor_metrics
+
+    store = _oracle_store(tmp_path, lambda run: [_acted("t1", run=run),
+                                                 _acted("t2", run=run, passed=False)])
+    m = competitor_metrics(_rows(store, "run-na", "oracle"), k=1)
+    assert m["not_applicable"] is False
+    assert m["not_applicable_rows"] == 0
+    assert m["strict_pass_denominator"] == 2
+    assert m["strict_pass"]["mean"] == pytest.approx(0.5)
+
+
+def test_other_competitors_are_never_not_applicable(tmp_path):
+    """The rule is the answer key's alone: a model that searched, read and
+    changed nothing simply failed."""
+    from wb_report.metrics import competitor_metrics
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-o", "cfgo", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 2})
+    for task in ("t1", "t2"):
+        store.record_episode(_row(task, "alpha", 0, False, run="run-o",
+                                  assertions=False, tool_calls=1))
+    store.finish_run("run-o")
+    m = competitor_metrics(_rows(store, "run-o", "alpha"), k=1)
+    assert m["not_applicable"] is False
+    assert m["strict_pass"]["mean"] == pytest.approx(0.0)
+
+
+def test_technical_page_shows_the_answer_key_as_na(tmp_path):
+    """Tables, charts, matrix and the sentence under the success table."""
+    from wb_report.report import build_report, render_html, render_md
+
+    store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
+                                                 _cannot_act("t2", run=run)])
+    rep = build_report(store, "run-na", audience="internal", baseline_arm="alpha")
+    page = render_html(rep)
+    # the sentence under the success table, and the reason on every oracle cell
+    assert NA_REASON in page
+    assert page.count(f'title="{NA_REASON}"') >= 3
+    # the success table's oracle row shows n/a for every result column; the
+    # attempt and infrastructure counts stay real
+    row = re.search(r"<tr><td>oracle</td>.*?</tr>", page, re.S).group(0)
+    assert row.count(f'title="{NA_REASON}">n/a<') == 7
+    # the matrix cell for the oracle is n/a, and the charts show no oracle bar
+    assert '<td class="num" title="' + NA_REASON + '">n/a</td>' in page
+    # the paired comparison against the answer key is skipped, with the reason
+    comparisons = {c["arm"]: c for c in rep["comparisons"]}
+    assert comparisons["oracle"]["skipped"] == NA_REASON
+    assert comparisons["oracle"]["verdict"] == NA_REASON
+    md_oracle = [l for l in render_md(rep).splitlines() if l.startswith("| `oracle`")]
+    assert md_oracle and md_oracle[0].count("n/a") >= 4
+
+
+def test_executive_page_shows_the_answer_key_bar_as_na(tmp_path):
+    """The executive page never lists the answer key among the models, and its
+    charts show it as n/a rather than a zero-length bar."""
+    from wb_report.report import build_report, render_executive
+
+    store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
+                                                 _cannot_act("t2", run=run)])
+    rep = build_report(store, "run-na", audience="internal", baseline_arm="alpha")
+    page = render_executive(rep, tasks_dir=tmp_path)
+    assert "best model: alpha" in page
+    assert "best model: oracle" not in page
+    # the whole-field chart still carries the answer key, as n/a
+    assert 'title="oracle"' in page
+    assert "n/a" in page
+
+
+def test_real_round_renders_the_answer_key_as_na():
+    """The round of 2026-09-05 in the shared store: the answer key acted on
+    nothing, so the page must not read it as a 0%. Read-only; skipped where the
+    store is not present."""
+    from wb_report.report import build_report, render_html
+    from wb_results.store import Store as _Store
+
+    db = Path(__file__).resolve().parents[1] / "out" / "wb.sqlite3"
+    if not db.exists():
+        pytest.skip("no shared store in out/")
+    store = _Store(db)
+    if store.run("run-20260905-004921") is None:
+        pytest.skip("run-20260905-004921 not in the store")
+    rep = build_report(store, "run-20260905-004921", audience="internal")
+    oracle = next((m for m in rep["metrics"] if m["arm"] == "oracle"), None)
+    if oracle is None:
+        pytest.skip("no answer key in that round")
+    assert oracle["not_applicable"] is True
+    assert oracle["strict_pass"]["mean"] is None
+    assert NA_REASON in render_html(rep)

@@ -17,7 +17,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from wb_report.metrics import (comparison, competitor_metrics, is_monarch,
+from wb_report.metrics import (NOT_APPLICABLE_REASON, comparison,
+                               competitor_metrics, is_monarch, is_not_applicable,
                                monarch_attempts, round_totals)
 from wb_results.store import Store
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
@@ -207,8 +208,12 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
             # into one headline (BUILD-SPEC §2.9 acceptance).
             raise GateError(f"refusing to pool suites {sorted(suites)} into one figure")
         per_arm_rows[arm] = res["rows"]
-        summ = arm_summary(res["rows"])
-        phk = pass_hat_k(res["rows"], k)
+        # Attempts the scripted answer key could not act on are not results: they
+        # leave every rate here exactly as they leave the metrics block.
+        scored = [r for r in res["rows"] if not is_not_applicable(r)]
+        not_applicable = bool(res["rows"]) and not scored
+        summ = arm_summary(scored)
+        phk = pass_hat_k(scored, k)
         contract_hashes = sorted({r.get("contract_sha256") for r in res["rows"] if r.get("contract_sha256")})
         fig: dict[str, Any] = {
             "kind": "arm_summary", "arm": arm,
@@ -219,6 +224,8 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
             "source": res["source"],
             "contract_hashes": contract_hashes,
         }
+        if not_applicable:
+            fig["not_applicable"] = NOT_APPLICABLE_REASON
         if show_dollars:
             fig["cost_usd"] = summ["cost_usd"]
             fig["cost_per_episode"] = summ["cost_per_episode"]
@@ -230,8 +237,12 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
         for arm in arms:
             if arm == baseline:
                 continue
+            na = next((f.get("not_applicable") for f in figures
+                       if f["kind"] == "arm_summary" and f["arm"] in (arm, baseline)
+                       and f.get("not_applicable")), None)
             wl = paired_wl(per_arm_rows[arm], per_arm_rows[baseline])
             fig = {"kind": "paired", "arm": arm, "baseline": baseline,
+                   "not_applicable": na,
                    "wins": wl["wins"], "losses": wl["losses"],
                    "both_pass": wl["both_pass"], "neither_pass": wl["neither_pass"],
                    "dropped_infra": wl["dropped_infra"],
@@ -349,10 +360,15 @@ def render_md(report: dict[str, Any]) -> str:
         phk = f["pass_hat_k"]
         phk_s = _fmt_pm({"mean": phk["mean"], "sem": phk["sem"]}) if phk["mean"] is not None else "n/a"
         m = by_arm.get(f["arm"], {})
-        first = _fmt_pm(m.get("first_try_pass")) if m else "n/a"
-        after = _fmt_pm(m.get("pass_after_retry")) if m else "n/a"
-        retries = m.get("retries", {}).get("count", "n/a") if m else "n/a"
-        row = (f"| `{f['arm']}` | {_fmt_pm(f['strict_pass'])} | {first} | {after} "
+        strict = _fmt_pm(f["strict_pass"])
+        if f.get("not_applicable") or m.get("not_applicable"):
+            # the answer key on a task set it cannot act on: no result, not a 0%
+            strict = phk_s = first = after = retries = "n/a"
+        else:
+            first = _fmt_pm(m.get("first_try_pass")) if m else "n/a"
+            after = _fmt_pm(m.get("pass_after_retry")) if m else "n/a"
+            retries = m.get("retries", {}).get("count", "n/a") if m else "n/a"
+        row = (f"| `{f['arm']}` | {strict} | {first} | {after} "
                f"| {retries} | {phk_s} "
                f"| {f['infra_rate'] if f['infra_rate'] is not None else 'n/a'} "
                f"| {f['cache_hit_rate'] if f['cache_hit_rate'] is not None else 'n/a'} |")
@@ -367,6 +383,11 @@ def render_md(report: dict[str, Any]) -> str:
     if paired:
         lines.append("\n## Paired comparisons\n")
         for f in paired:
+            if f.get("not_applicable"):
+                lines.append(f"- `{f['arm']}` vs `{f['baseline']}`: not compared - "
+                             f"{f['not_applicable']}")
+                lines.append(f"  `{_source_line(f['source'])}{suffix}`")
+                continue
             m = f["mcnemar"]
             lines.append(
                 f"- `{f['arm']}` vs `{f['baseline']}`: **{f['wins']}W / {f['losses']}L** "

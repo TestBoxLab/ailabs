@@ -189,12 +189,44 @@ def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
     return phases, per_model
 
 
+# The scripted answer key (`oracle`) only knows how to act on the pilot's
+# Salesforce field updates. Put in front of another task set it searches, reads
+# and stops: no change, one or two tool calls, and a failed attempt. That is the
+# answer key being out of its depth, not a competitor scoring nothing, so the
+# report says "not applicable" instead of 0%.
+ANSWER_KEY_ARM = "oracle"
+NOT_APPLICABLE_REASON = "answer key does not cover this task set"
+# it only searched and read
+_NA_MAX_TOOL_CALLS = 2
+
+
+def is_not_applicable(row: dict) -> bool:
+    """Whether one attempt is the answer key acting on nothing.
+
+    Only the answer key can be not-applicable: a language model that read the
+    world and changed nothing simply failed the task, and the report must keep
+    saying so.
+    """
+    return (row.get("arm") == ANSWER_KEY_ARM
+            and not row.get("passed")
+            and not _is_infra(row)
+            and (row.get("n_changes") or 0) == 0
+            and (row.get("tool_calls") or 0) <= _NA_MAX_TOOL_CALLS)
+
+
 def competitor_metrics(rows: list[dict], k: int) -> dict[str, Any]:
     """One competitor's row of the metrics table, per contracts section 1."""
-    ok = [r for r in rows if not _is_infra(r)]
+    # Attempts the answer key could not act on leave every pass denominator;
+    # they are counted so the page can say how many, and the cost, token and
+    # time columns still cover every attempt that was actually made.
+    na_count = sum(1 for r in rows if is_not_applicable(r))
+    scored = [r for r in rows if not is_not_applicable(r)]
+    ok = [r for r in scored if not _is_infra(r)]
     passed = sum(1 for r in ok if r["passed"])
-    infra = len(rows) - len(ok)
-    phk = pass_hat_k(rows, k)
+    # infrastructure is counted over every attempt: a not-applicable one is
+    # still an attempt that did or did not hit infrastructure trouble
+    infra = sum(1 for r in rows if _is_infra(r))
+    phk = pass_hat_k(scored, k)
     # Every attempt was paid for, infrastructure ones included.
     cost_total = sum(r.get("cost_usd") or 0.0 for r in rows)
     # `tokens` is null on a row whose competitor reports none; it counts as 0.
@@ -212,11 +244,15 @@ def competitor_metrics(rows: list[dict], k: int) -> dict[str, Any]:
         "infra_rate": _div(infra, len(rows)),
         # The two rates are wb_stats' verbatim; both exclude infrastructure
         # attempts from their denominator inside those functions.
-        "strict_pass": arm_summary(rows)["strict_pass"],
+        "strict_pass": arm_summary(scored)["strict_pass"],
         # what one attempt achieved, and what one retry would have added
-        "first_try_pass": _first_try_pass(rows),
-        "pass_after_retry": _pass_after_retry(rows),
-        "retries": _retries(rows),
+        "first_try_pass": _first_try_pass(scored),
+        "pass_after_retry": _pass_after_retry(scored),
+        "retries": _retries(scored),
+        # the answer key on a task set it cannot act on: not a 0%
+        "not_applicable": bool(na_count) and not scored,
+        "not_applicable_rows": na_count,
+        "not_applicable_reason": NOT_APPLICABLE_REASON if na_count else None,
         "pass_over_repetitions": {"k": phk["k"], "mean": phk["mean"], "sem": phk["sem"]},
         "strict_pass_denominator": len(ok),
         "cost_total": cost_total,
@@ -264,6 +300,13 @@ def comparison(a: dict, b: dict, rows_arm: list[dict], rows_base: list[dict],
     identical attempt set - the pairs `paired_wl` finds - and an infrastructure
     attempt on either side drops the pair, exactly as the markdown report does.
     """
+    # A side that is not applicable has nothing to pair against: comparing it
+    # would read its blank rows as losses.
+    skipped = (NOT_APPLICABLE_REASON
+               if a.get("not_applicable") or b.get("not_applicable") else None)
+    if skipped:
+        rows_arm = [r for r in rows_arm if not is_not_applicable(r)]
+        rows_base = [r for r in rows_base if not is_not_applicable(r)]
     wl = paired_wl(rows_arm, rows_base)
     a_rate, b_rate = a["strict_pass"]["mean"], b["strict_pass"]["mean"]
     diff = (a_rate - b_rate) * 100 if a_rate is not None and b_rate is not None else None
@@ -278,7 +321,9 @@ def comparison(a: dict, b: dict, rows_arm: list[dict], rows_base: list[dict],
         "both": wl["both_pass"], "neither": wl["neither_pass"],
         "pairs": wl["pairs"], "dropped_infra": wl["dropped_infra"],
         "mcnemar": wl["mcnemar"],
-        "verdict": verdict(wl["pairs"], wl["mcnemar"]["p"], wl["wins"], wl["losses"]),
+        "verdict": skipped or verdict(wl["pairs"], wl["mcnemar"]["p"],
+                                      wl["wins"], wl["losses"]),
+        "skipped": skipped,
         # Its own source: this row's denominator is its pairs, not a total over
         # every comparison on the page (data-model.md section 2.3).
         "source": dict(source or {}, denominator=wl["pairs"],
