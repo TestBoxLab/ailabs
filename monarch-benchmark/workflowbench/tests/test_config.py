@@ -837,7 +837,7 @@ def test_tier_plans():
         assert pl.baseline == "claude-opus-5/api"
         assert pl.audience == "internal"
         assert pl.approved_by is None                      # Carlos approves each round
-        assert pl.timeout_s == 900 and pl.concurrency == 4
+        assert pl.timeout_s == 1800 and pl.concurrency == 4
         assert pl.cost_ceiling_usd == 60
         # the size in the agreed words, never a bare per-competitor total
         assert ("prompts: 10; attempts per prompt: 1 plus 1 retry on failure; "
