@@ -468,6 +468,26 @@ def test_a_replayed_prompt_is_answered_and_counted_once(site, repo):
     free(port)
 
 
+def test_a_retry_answers_questions_with_the_request_and_guidance(site, repo):
+    """Carlos, 4 Sep: on the retry the builder is told the request again plus
+    the same guidance the models get; still no data beyond the request."""
+    from wb_arms.monarch import RETRY_REPLY
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, asking("req-1", "q1"), DONE],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t1"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    text = fake.replies_received[0]["answers"][0]["text"]
+    assert text == RETRY_REPLY.format(goal=task()["prompt"][1]["content"])
+    assert "do not ask further questions" in text
+    free(port)
+
+
 def test_an_attempt_with_no_questions_records_none(site, repo):
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}",

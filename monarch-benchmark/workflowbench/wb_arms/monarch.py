@@ -63,6 +63,11 @@ LLM_ERROR_KEYWORDS = ("bedrock", "aws", "credential", "not configured", "accessd
 # The same sentence for every question, so no attempt is helped more than another
 # (rule 1: same request text for every competitor). It is code, never config.
 FIXED_REPLY = "No further information is available. Proceed with your best judgment."
+# On a retry (trial >= 1) the builder gets the request again plus the same
+# guidance the models' system prompt carries; still no data beyond the request.
+RETRY_REPLY = ("No further information is available beyond the original request, which was: "
+               "\"{goal}\" Make reasonable assumptions for anything it does not state, do not "
+               "ask further questions, and build the workflow with your best judgment.")
 
 # Monarch validates `x-bench-episode-id` against this and silently drops a header
 # that fails, which loses the trace join and the whole attempt's cost. Our episode
@@ -230,6 +235,9 @@ class MonarchArm:
         # The window `_add_cost` asks Langfuse for. A minute of margin covers the
         # clock skew between this machine and the trace timestamps.
         self._started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+        trial = ep.episode_id.rsplit("/t", 1)[-1]
+        self._reply_text = (RETRY_REPLY.format(goal=ep.task["prompt"][1]["content"])
+                            if trial.isdigit() and int(trial) >= 1 else FIXED_REPLY)
         # Inside the lock: `_bench_id` is per-attempt state on a shared arm, and
         # the orchestrator runs attempts of one competitor concurrently.
         with _LOCK:
@@ -412,7 +420,7 @@ class MonarchArm:
         if ask.get("kind") == "account" or not questions:
             return None
         client.reply(recipe_run, ask.get("requestId", ""),
-                     [{"id": q.get("id"), "text": FIXED_REPLY} for q in questions],
+                     [{"id": q.get("id"), "text": self._reply_text} for q in questions],
                      deadline=deadline)
         return len(questions)
 
