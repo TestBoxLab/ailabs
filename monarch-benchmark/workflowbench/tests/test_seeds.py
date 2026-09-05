@@ -552,7 +552,7 @@ def test_bodyless_methods_carry_an_explicit_null_body(generated):
 def test_manifest_records_the_version_and_a_stable_digest(generated, tmp_path):
     out, summary = generated
     manifest = json.loads((out / "ok.txt").read_text(encoding="utf-8"))
-    assert manifest["version"] == "v5"
+    assert manifest["version"] == seeds.VERSION == "v5.1"
     assert manifest["canonical"] is True
     assert manifest["products"] == len(summary.folders)
     assert manifest["actions"] == summary.files_written
@@ -594,3 +594,158 @@ def test_a_create_behind_an_envelope_is_still_chainable(generated):
     assert ce["identifier_path"] == "$.channel.id"
     assert ce["identifier_path"] in rt["extract"].values()   # must be an extract
     assert ce["type"] == "channel"                           # not the RPC segment
+
+
+# --------------------------------------------------- v5.1: the wire, probed
+
+# One task per service that seeds it, one read whose real body v5 got wrong, and
+# the id to address it with. The expectation is never pasted here: the test
+# calls the world in process (the same `api_fetch` the front door serves) and
+# compares the keys it really answers with what the seed declares.
+#
+# Every entry is a shape v5 published wrongly, verified 4 Sep 2026: the record
+# instead of the envelope around it (`{Customer: {...}}`), the AutomationBench
+# record instead of the wire body (Sheets), or a collection missing the scalars
+# beside it (`ok`, `paging`, `total`).
+WIRE_PROBES = [
+    # (service, task, seed file, method, path, {path var: value})
+    ("google_sheets", "tier-simple/finance.annual_budget_prep.json",
+     "bench-google-sheets/bench-google-sheets_read_spreadsheets.json",
+     "GET", "/v4/spreadsheets/{spreadsheetId}", {"spreadsheetId": "ss_budget_prep"}),
+    ("google_sheets", "tier-simple/finance.annual_budget_prep.json",
+     "bench-google-sheets/bench-google-sheets_list_values-batchget.json",
+     "GET", "/v4/spreadsheets/{spreadsheetId}/values:batchGet",
+     {"spreadsheetId": "ss_budget_prep"}),
+]
+
+
+def _wire_keys(service: str, task_rel: str, method: str, path: str,
+               values: dict[str, str]) -> set[str]:
+    """The top-level keys the front door really answers with, called in process."""
+    from wb_world.episode import Episode
+    from wb_world.openapi import load_schemas
+    task = json.loads((Path("tasks") / task_rel).read_text(encoding="utf-8"))
+    episode = Episode(task, "seed-probe")
+    base = load_schemas()[service].get("baseUrl", "").rstrip("/")
+    for name, value in values.items():
+        path = path.replace("{%s}" % name, value)
+    body = json.loads(episode.api_fetch(method, base + path))
+    assert "error" not in body, f"{service} {path} answered an error: {body}"
+    return set(body)
+
+
+@pytest.mark.parametrize(
+    "service,task_rel,seed_file,method,path,values", WIRE_PROBES,
+    ids=[f"{p[0]}:{p[4]}" for p in WIRE_PROBES])
+def test_schema_and_extract_match_the_real_wire_body(
+        generated, service, task_rel, seed_file, method, path, values):
+    """Every key the front door answers is declared, and every extract is one of them.
+
+    The shape check that v5's validator could not make: it reads the files, not
+    the API. Monarch's planner refused every Google Sheets task because these
+    two reads described the AutomationBench `Spreadsheet` record
+    (`{id, title, worksheets}`) instead of the wire body.
+    """
+    out, _ = generated
+    real = _wire_keys(service, task_rel, method, path, values)
+    step = (json.loads((out / seed_file).read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    declared = set((step["response_template"]["schema"].get("properties") or {}))
+    assert not (real - declared), (
+        f"{service} {path} answers {sorted(real - declared)}, which the seed never names")
+    extract = step["response_template"]["extract"]
+    assert set(extract) <= declared
+    assert all(v == f"$.{k}" for k, v in extract.items()), extract
+
+
+def test_sheets_values_read_is_the_value_range_not_the_spreadsheet(generated):
+    """GET .../values/{range} answers `{range, majorDimension, values}`.
+
+    v5 reused the spreadsheet record here, so the planner saw no row values at
+    all -- the defect that made it say the catalog "doesn't expose the data".
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-google-sheets" /
+                        "bench-google-sheets_read_values.json").read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert sorted(props) == ["majorDimension", "range", "values"]
+    assert props["values"]["type"] == "array"          # rows, not a record
+    assert step["response_template"]["extract"]["values"] == "$.values"
+
+
+def test_sheets_append_body_is_values_not_spreadsheet_fields(generated):
+    """POST .../values/{range}:append takes `{values: [[...]]}`.
+
+    v5 sent `properties`/`sheets`/`spreadsheetUrl` -- spreadsheet fields on a
+    row-append -- so nothing the planner wrote could have reached the wire.
+    """
+    out, _ = generated
+    impl = (json.loads((out / "bench-google-sheets" /
+                        "bench-google-sheets_create_values.json")
+                       .read_text(encoding="utf-8"))["implementations"][0])
+    step = impl["http_template"]["steps"][0]
+    assert "values" in step["body_template"]
+    assert not {"properties", "sheets", "spreadsheetUrl"} & set(step["body_template"])
+    values = next(p for p in impl["parameters"] if p["name"] == "values")
+    assert values["location"] == "body"
+    # and the response is the append receipt, not the spreadsheet
+    props = step["response_template"]["schema"]["properties"]
+    assert "updates" in props and "tableRange" in props
+
+
+@pytest.mark.parametrize("seed_file,key", [
+    ("bench-quickbooks/bench-quickbooks_read_customer.json", "Customer"),
+    ("bench-zendesk/bench-zendesk_read_organizations.json", "organization"),
+    ("bench-xero/bench-xero_read_contacts.json", "Contacts"),
+    ("bench-google-calendar/bench-google-calendar_read_calendars.json", "calendar"),
+    ("bench-linkedin/bench-linkedin_read_organizations.json", "company"),
+])
+def test_a_record_served_inside_an_envelope_is_declared_as_one(generated, seed_file, key):
+    """These reads answer `{<key>: {...}}`, never the bare record.
+
+    v5 declared the record's own fields at the top level, so every field the
+    planner wired (`DisplayName`, `id`, `Name`) was `undefined` at run time.
+    """
+    out, _ = generated
+    step = (json.loads((out / seed_file).read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert key in props, f"{seed_file} does not declare the envelope key {key!r}"
+    assert step["response_template"]["extract"][key] == f"$.{key}"
+
+
+@pytest.mark.parametrize("seed_file,expected", [
+    ("bench-slack/bench-slack_list_users-list.json", {"ok", "members"}),
+    ("bench-slack/bench-slack_list_conversations-list.json", {"ok", "channels"}),
+    ("bench-hubspot/bench-hubspot_list_contacts.json", {"results", "paging"}),
+    ("bench-jira/bench-jira_list_search.json", {"values", "total", "isLast"}),
+    ("bench-google-drive/bench-google-drive_list_files.json",
+     {"kind", "files", "incompleteSearch"}),
+])
+def test_a_list_declares_the_scalars_the_handler_serves_beside_it(
+        generated, seed_file, expected):
+    """A list answers more than its collection: `ok`, `paging`, `total`, `kind`.
+
+    v5 named only the collection (and Slack's under the wrong key, `users` for
+    `members`), so the planner could neither page nor tell success from failure.
+    """
+    out, _ = generated
+    step = (json.loads((out / seed_file).read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert expected <= set(props), f"{seed_file}: missing {sorted(expected - set(props))}"
+
+
+def test_an_opaque_body_field_says_how_to_build_one(generated):
+    """Gmail's send takes `raw`, a base64url RFC 2822 message.
+
+    `helper_text` is the ONLY prose the builder sees per parameter, so if it does
+    not say what bytes go in the blob, nothing does.
+    """
+    out, _ = generated
+    impl = (json.loads((out / "bench-gmail" / "bench-gmail_create_messages-send.json")
+                       .read_text(encoding="utf-8"))["implementations"][0])
+    raw = next(p for p in impl["parameters"] if p["name"] == "raw")
+    helper = raw["constraints"]["helper_text"].lower()
+    assert "base64" in helper and "rfc 2822" in helper

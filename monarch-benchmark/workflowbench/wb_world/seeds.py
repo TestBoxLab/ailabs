@@ -33,6 +33,36 @@ v5 is Monarch's canonical format (their SPEC.md of 4 Sep 2026). What it changed:
     paths, or the action declares no entity at all.
   * `label` is a short verb phrase (the only text the builder ranks on) and
     `area` a lowercase plural noun; the OpenAPI sentence goes to `description`.
+
+v5.1 fixes what v5's shape rules could not catch: the seeds were VALID but not
+TRUE. Monarch's planner refused every Google Sheets task ("the catalog doesn't
+actually expose the data") because those seeds described AutomationBench's
+`Spreadsheet` RECORD where the wire carries something else entirely. The rule
+"resource record = response" was wrong for 13 of the 22 services the frozen
+task sets use (probed against the real front door, 4 Sep 2026). What changed:
+
+  * The HANDLER THAT SERVES THE REQUEST is now the first source of the response
+    shape, not the last. It was already read, but the route key was matched
+    against the wrong name -- `routes/<service>.py` maps a route to a key and
+    then `_HANDLERS[key]` to a differently-named function, so every service that
+    spells the two apart fell through to a guess. The lambda is read for the
+    function it calls, and `_HANDLERS: dict[...] = {...}` is parsed as well as
+    the bare assignment.
+  * A response is an ENVELOPE far more often than a record: `{Customer: {...}}`,
+    `{organization: {...}}`, `{success, calendar}`, `{ok, members}`. The
+    outermost error-free dict of the handler's return is the body -- v5 took the
+    widest, so a Salesforce report published its inner `report_result` as the
+    whole response -- plus the keys appended afterwards (`d["envelopeUri"] =
+    ...`, six of the DocuSign envelope's eleven fields) and the keys of a helper
+    the handler delegates to.
+  * The REQUEST body is the endpoint's stated contract, then the handler's own
+    arguments, and only then a record schema. Sheets' `values/{range}:append`
+    takes `{values: [[...]]}`; v5 sent it `properties`/`sheets`/`spreadsheetUrl`,
+    so nothing a planner wrote could reach the wire. A router lambda that never
+    forwards the request body (`f(w, ids[0], ids[1])`) declares no body at all.
+  * Where a body field is opaque -- Gmail's `raw`, a base64url RFC 2822 message
+    -- the endpoint's own request prose is appended to `constraints.helper_text`,
+    the only prose the builder sees per parameter.
 """
 from __future__ import annotations
 
@@ -407,8 +437,20 @@ def _observed(service: str, resource: str) -> dict[str, Any]:
     return {}
 
 
-def _resource_fields(service: str, path: str) -> tuple[str, dict[str, dict[str, Any]]]:
-    """(resource name, writable fields) for the resource a write path addresses."""
+def _resource_fields(service: str, path: str,
+                     method: str = "") -> tuple[str, dict[str, dict[str, Any]]]:
+    """(resource name, writable fields) for the resource a write path addresses.
+
+    v5.1: the HANDLER'S OWN SIGNATURE first. A write is not always a record write
+    -- `values/{range}:append` takes `{values: [[...]]}`, and v5 sent it the
+    `Spreadsheet` record's `properties`/`sheets`/`spreadsheetUrl`, so nothing the
+    planner wrote could reach the wire. Where the handler declares its arguments
+    they ARE the request contract; a record schema is the fallback for the
+    handlers that take a `**kwargs` bag.
+    """
+    declared = _handler_body_fields(service, path, method) if method else {}
+    if declared:
+        return _resource(path), declared
     schemas = _world_fields().get(service) or {}
     segments = [s for s in path.strip("/").split("/") if s and not s.startswith("{")]
     for segment in reversed(segments):
@@ -425,6 +467,174 @@ def _resource_fields(service: str, path: str) -> tuple[str, dict[str, dict[str, 
             return segment, {name: {"type": _json_type(v)} for name, v in values.items()
                              if name.lower() not in READ_ONLY}
     return (segments[-1] if segments else "root"), {}
+
+
+@lru_cache(maxsize=1)
+def _handler_signatures() -> dict[tuple[str, str, str], dict[str, str]]:
+    """(service, AB path pattern, METHOD) -> {argument: JSON type} of its handler.
+
+    The handler's own parameters are what the front door accepts. Only handlers
+    that spell their arguments out are read: one taking a bare `**kwargs` bag
+    (`quickbooks_customer_create(w, b)`) says nothing, and its record schema
+    remains the better description.
+    """
+    import importlib
+    import inspect
+    import typing
+
+    out: dict[tuple[str, str, str], dict[str, str]] = {}
+    for service in sorted(_raw_schemas()):
+        try:
+            routes_mod = importlib.import_module(
+                f"automationbench.tools.api.routes.{service}")
+            impl_mod = importlib.import_module(
+                f"automationbench.tools.api.impl.{service}")
+        except Exception:
+            continue
+        import ast
+        import textwrap
+        try:
+            routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
+        except Exception:
+            continue
+        handlers = _handler_names(routes_src, ast)
+        bindings = _handler_bindings(routes_src, ast)
+        for method, pattern, key in getattr(routes_mod, "_ROUTES", ()) or ():
+            fn = getattr(impl_mod, handlers.get(key, ""), None) or getattr(
+                impl_mod, f"{service}_{key}", None)
+            forwards_body, url_bound, url_named = bindings.get(key, (False, 0, set()))
+            # The router lambda says where each argument comes from:
+            # `f(w, ids[0], ids[1], **b)` binds two from the URL and the rest
+            # from the body; one that never forwards `**b` (`f(w, ids[0])`)
+            # takes no request body at all, and its signature says nothing about
+            # one. Salesforce's generic update is exactly that shape, and
+            # reading its signature naively published `{object_type, record_id}`
+            # -- the routing arguments -- as the record's fields.
+            if fn is None or not forwards_body:
+                continue
+            try:
+                sig = inspect.signature(fn)
+            except (TypeError, ValueError):
+                continue
+            fields: dict[str, str] = {}
+            positional = [name for name, p in sig.parameters.items()
+                          if name != "world" and p.kind in
+                          (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+            from_url = set(positional[:url_bound]) | url_named
+            for name, param in sig.parameters.items():
+                if (name == "world" or name in from_url
+                        or param.kind is param.VAR_KEYWORD
+                        or param.kind is param.VAR_POSITIONAL):
+                    continue
+                if not re.fullmatch(r"\w+", name) or name.lower() in READ_ONLY:
+                    continue
+                fields[name] = _annotation_type(
+                    None if param.annotation is inspect.Parameter.empty
+                    else param.annotation)[0]
+            if fields:
+                out[(service, pattern, method.upper())] = fields
+    return out
+
+
+def _handler_bindings(routes_src: Any, ast: Any) -> dict[str, tuple[bool, int, set[str]]]:
+    """route key -> (the lambda forwards the request body, how many args it takes from the URL).
+
+    `lambda w, ids, p, b: f(w, ids[0], ids[1], **{**p, **b})` -> (True, 2, set()),
+    and `f(w, object_type=ids[0], record_id=ids[1], **b)` names them instead.
+    """
+    out: dict[str, tuple[bool, int, set[str]]] = {}
+    for node in ast.walk(routes_src):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
+                and isinstance(node.value, ast.Dict)):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            call = next((c for c in ast.walk(value)
+                         if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), None)
+            if call is None:
+                continue
+            source = ast.dump(call)
+            # `**b` anywhere in the call -- bare, or merged as `**{**p, **b}`
+            forwards = "id='b'" in source.replace('"', "'")
+            url_bound = sum(1 for a in call.args
+                            if isinstance(a, ast.Subscript)
+                            and getattr(a.value, "id", "") == "ids")
+            named = {kw.arg for kw in call.keywords
+                     if kw.arg and isinstance(kw.value, ast.Subscript)
+                     and getattr(kw.value.value, "id", "") == "ids"}
+            out[key.value] = (forwards, url_bound, named)
+    return out
+
+
+# A top-level `name: <type>` of a stated request body. `?` marks it optional,
+# and the value may be an array (`[[cell, ...], ...]`), an object, or a word.
+_REQUEST_FIELD = re.compile(r"(?:^\{|,)\s*(\w+)\??\s*:\s*(\[|\{|\w+)")
+_PROSE_TYPE = {"[": "array", "{": "object", "int": "integer", "integer": "integer",
+               "number": "number", "float": "number", "bool": "boolean",
+               "boolean": "boolean", "true": "boolean", "false": "boolean"}
+
+
+def _stated_body_fields(service: str, path: str) -> dict[str, Any]:
+    """The request body AutomationBench states in prose, as field schemas, or {}.
+
+    A stated shape is a CONTRACT the handler ENFORCES, not a description of its
+    Python signature: Gmail's send declares "Message with raw (base64url-encoded
+    RFC 2822) or payload...", names `to`/`subject`/`body` as arguments, and then
+    answers 400 for exactly those (probed 4 Sep 2026). Sheets' append states
+    `{range, majorDimension?, values: [[cell, ...], ...]}`, which is the body the
+    front door accepts and nothing else describes. Where the prose is a
+    top-level object, it outranks both the signature and the record schema.
+    """
+    prose = _ab_requests().get((service, path), "").strip()
+    if not prose.startswith("{"):
+        return {}
+    in_path = {n.lower() for n in _PATH_VAR.findall(path)}
+    out: dict[str, Any] = {}
+    for name, token in _REQUEST_FIELD.findall(prose):
+        if name.lower() in READ_ONLY or name.lower() in in_path:
+            continue
+        out[name] = {"type": _PROSE_TYPE.get(token, "string")}
+    return out
+
+
+def _handler_body_fields(service: str, path: str, method: str) -> dict[str, Any]:
+    """The handler's arguments that belong in the BODY, as field schemas.
+
+    Everything the URL already carries -- a path placeholder, a declared query
+    parameter -- is dropped: a token placed twice is a parameter the engine
+    binds twice, and the validator rejects the mismatch.
+    """
+    if method.upper() in _BODYLESS:
+        return {}
+    stated = _stated_body_fields(service, path)
+    if stated:
+        return stated
+    if _ab_requests().get((service, path), "").strip():
+        # Prose that names a shape rather than listing fields ("Message with raw
+        # (base64url-encoded RFC 2822) or payload...") still says the signature
+        # is not the contract: Gmail's send answers 400 for the `to`/`subject`/
+        # `body` its own arguments name. Fall through to the record schema,
+        # which names `raw` and `payload`.
+        return {}
+    for (svc, pattern, verb), fields in _handler_signatures().items():
+        if svc != service or verb != method.upper():
+            continue
+        try:
+            if not re.search(pattern, _ab_path(service, path)):
+                continue
+        except re.error:
+            continue
+        in_url = {n.lower() for n in _PATH_VAR.findall(path)}
+        # the AB argument for a path segment is often spelled differently
+        # (`range_str` for `{range}`), so a prefix match counts as placed
+        return {name: {"type": type_} for name, type_ in fields.items()
+                if name.lower() not in in_url
+                and not any(name.lower().startswith(u) or u.startswith(name.lower())
+                            for u in in_url)}
+    return {}
 
 
 # Lists whose handler projects a stub instead of the record. Gmail's
@@ -702,6 +912,13 @@ def _handler_envelopes() -> dict[tuple[str, str, str], list[str]]:
 
     The success dict is the one carrying no `error` key; where several remain,
     the widest wins (an early return is usually a narrower special case).
+
+    The route key is NOT the handler's name: `routes/<service>.py` maps
+    `("GET", r"sheets/v4/spreadsheets/([^/]+)$", "get_spreadsheet")` and then
+    `_HANDLERS["get_spreadsheet"] = lambda ...: google_sheets_spreadsheets_get(...)`.
+    Guessing `<service>_<key>` missed every service that names the two apart, so
+    the lambda is read for the function it calls (v5.1: that alone recovered the
+    Sheets read, whose seed was describing the AB record instead of the wire body).
     """
     import ast
     import importlib
@@ -709,43 +926,264 @@ def _handler_envelopes() -> dict[tuple[str, str, str], list[str]]:
     import textwrap
 
     out: dict[tuple[str, str, str], list[str]] = {}
-    for service in _raw_schemas():
+    for service in sorted(_raw_schemas()):     # `_KEY_TYPES` is filled in this order
         try:
             routes_mod = importlib.import_module(
                 f"automationbench.tools.api.routes.{service}")
             impl_mod = importlib.import_module(
                 f"automationbench.tools.api.impl.{service}")
             source = ast.parse(textwrap.dedent(inspect.getsource(impl_mod)))
+            routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
         except Exception:
             continue
-        returns: dict[str, list[str]] = {}
-        for node in source.body:
-            if isinstance(node, ast.FunctionDef):
-                keys = _success_keys(node, ast)
-                if keys:
-                    returns[node.name] = keys
+        helpers = {node.name: node for node in source.body
+                   if isinstance(node, ast.FunctionDef)}
+        _READING.append(service)               # whose keys `_KEY_TYPES` is learning
+        try:
+            returns = {name: _success_keys(node, ast, helpers)
+                       for name, node in helpers.items()}
+        finally:
+            _READING.pop()
+        returns = {name: keys for name, keys in returns.items() if keys}
+        handlers = _handler_names(routes_src, ast)
         for method, pattern, key in getattr(routes_mod, "_ROUTES", ()) or ():
-            # the handler is named `<service>_<key>` in the impl module
-            keys = returns.get(f"{service}_{key}") or returns.get(key)
+            keys = (returns.get(handlers.get(key, ""))
+                    or returns.get(f"{service}_{key}") or returns.get(key))
             if keys:
                 out[(service, pattern, method.upper())] = keys
     return out
 
 
-def _success_keys(fn: Any, ast: Any) -> list[str]:
-    """The keys of the widest error-free dict a handler returns."""
+def _handler_names(routes_src: Any, ast: Any) -> dict[str, str]:
+    """route key -> the impl function `_HANDLERS[key]`'s lambda calls."""
+    out: dict[str, str] = {}
+    for node in ast.walk(routes_src):
+        # `_HANDLERS = {...}` and the annotated `_HANDLERS: dict[...] = {...}`
+        # alike -- half the routes modules write the second, and reading only the
+        # first left QuickBooks' companyinfo with no handler at all.
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
+                and isinstance(node.value, ast.Dict)):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            called = next((c.func.id for c in ast.walk(value)
+                           if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), "")
+            if called:
+                out[key.value] = called
+    return out
+
+
+def _success_keys(fn: Any, ast: Any, helpers: dict[str, Any] | None = None,
+                  depth: int = 0) -> list[str]:
+    """The keys of the widest error-free dict a handler returns.
+
+    A handler that hands off to a resource builder (`return
+    json.dumps(_envelope_to_resource(envelope))`) has no literal of its own; the
+    called helper is followed one level, or the only literal left is the 404
+    guard's -- which is exactly what v5 published for the DocuSign envelope read.
+    """
     best: list[str] = []
+    calls: list[str] = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Return):
             continue
         for literal in ast.walk(node):
+            if isinstance(literal, ast.Call) and isinstance(literal.func, ast.Name):
+                calls.append(literal.func.id)
+        # `return json.dumps(x.to_display_dict())` with NOTHING wrapping it: the
+        # body IS the record, and the models describe it far better than a key
+        # list can. Gmail's read has a literal too (the `format=minimal`
+        # projection), and taking it would publish `{id, threadId}` for the full
+        # read the planner needs. A `to_display_dict()` nested inside a dict is
+        # the opposite case -- `{"Customer": c.to_display_dict()}` IS an envelope.
+        if _returns_bare_record(node, ast):
+            return []
+        # The OUTERMOST error-free dict of this return is the body; a nested one
+        # is a field of it. v5 took the widest, so Salesforce's report read
+        # published the inner `report_result` object as if it were the response,
+        # while the wire carries `{success, report_result}`.
+        keys = _outermost_keys(node, ast, fn)
+        # `{"error": {...}}` and the inner `{"code", "message"}` alike: a dict
+        # reached from inside an error envelope is not the success body.
+        if keys and len(keys) > len(best):
+            best = keys
+    if not best and helpers and depth < 2:
+        for name in calls:
+            helper = helpers.get(name)
+            if helper is not None:
+                keys = _success_keys(helper, ast, helpers, depth + 1)
+                if len(keys) > len(best):
+                    best = keys
+    if not best:
+        # A builder that assembles its dict in a local and `return`s the name
+        # (`d = {...}; d["x"] = ...; return d`) has no literal under Return, so
+        # the widest error-free literal anywhere in the body is the body. Tried
+        # last: a handler's own error guard is a literal too, and following the
+        # helper it delegates to is the better answer wherever there is one.
+        for literal in ast.walk(fn):
             if not isinstance(literal, ast.Dict):
                 continue
             keys = [k.value for k in literal.keys
                     if isinstance(k, ast.Constant) and isinstance(k.value, str)]
-            if keys and "error" not in keys and len(keys) > len(best):
+            if keys and "error" not in keys and len(keys) > len(best) and not _under_error(fn, literal, ast):
                 best = keys
+        # ...plus every key the builder appends afterwards (`d["envelopeUri"] =
+        # ...`), which is where six of the DocuSign envelope's eleven wire fields
+        # live. Order-stable: source order, appended after the literal's own.
+        if best:
+            for extra, type_ in _subscript_keys(fn, ast).items():
+                if extra not in best:
+                    best.append(extra)
+                    svc = _READING[-1] if _READING else ""
+                    _KEY_TYPES.setdefault((svc, extra), type_)
+                    # appended behind an `if`, so present only sometimes
+                    _CONDITIONAL.add((svc, extra))
     return best
+
+
+def _subscript_keys(fn: Any, ast: Any) -> dict[str, str]:
+    """{key: type} for every `d["key"] = <value>` assignment in a builder."""
+    out: dict[str, str] = {}
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Subscript)
+                and isinstance(target.slice, ast.Constant)
+                and isinstance(target.slice.value, str)):
+            continue
+        value = node.value
+        out[target.slice.value] = (
+            "array" if isinstance(value, (ast.List, ast.ListComp, ast.Tuple))
+            else "object" if isinstance(value, (ast.Dict, ast.DictComp))
+            else _json_type(value.value) if isinstance(value, ast.Constant)
+            # an f-string builds a URI; anything else (a helper call, an
+            # attribute) is a sub-resource the code does not spell out here
+            else "string" if isinstance(value, ast.JoinedStr)
+            else "object" if isinstance(value, ast.Call)
+            else "string")
+    return out
+
+
+_RECORD_CALL = ("to_display_dict", "model_dump", "dict")
+
+
+def _returns_bare_record(node: Any, ast: Any) -> bool:
+    """True for `return json.dumps(x.to_display_dict())` and nothing around it."""
+    value = node.value
+    while isinstance(value, ast.Call) and not isinstance(value.func, ast.Attribute):
+        value = value.args[0] if value.args else None
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+        if value.func.attr == "dumps":
+            inner = value.args[0] if value.args else None
+            return (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr in _RECORD_CALL)
+        return value.func.attr in _RECORD_CALL
+    return False
+
+
+def _outermost_keys(root: Any, ast: Any, scope: Any = None) -> list[str]:
+    """The keys of the shallowest error-free dict literal under `root`, or []."""
+    frontier = [root]
+    while frontier:
+        nxt = []
+        for node in frontier:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.Dict):
+                    keys = [k.value for k in child.keys
+                            if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+                    if keys and "error" not in keys:
+                        service = _READING[-1] if _READING else ""
+                        for name, type_ in _literal_types(child, ast, scope).items():
+                            # first writer wins, and the sweep is over sorted
+                            # services: the map is the same on every run
+                            _KEY_TYPES.setdefault((service, name), type_)
+                        return keys
+                    # an error envelope: neither it nor anything under it
+                    if keys:
+                        continue
+                nxt.append(child)
+        frontier = nxt
+    return []
+
+
+# (service, key) -> the JSON type the handler's literal assigns it, filled in as
+# `_outermost_keys` reads each success dict. The value expression beside a key is
+# the only honest statement of its type: a `[...]` literal is an array, a `{...}`
+# an object, a bare string a string. Keyed by service because the same name is
+# not the same shape everywhere: Sheets' `values` is the row array, Airtable's a
+# field object, and one flat map gave the Sheets read an object where the
+# planner needed rows.
+_KEY_TYPES: dict[tuple[str, str], str] = {}
+_READING: list[str] = []            # the service `_handler_envelopes` is on
+# Keys a builder appends behind a guard (`if envelope.sender: d["sender"] = ...`):
+# typed like the rest, but never promised in `required`.
+_CONDITIONAL: set[tuple[str, str]] = set()
+
+
+def _literal_types(node: Any, ast: Any, scope: Any = None) -> dict[str, str]:
+    """{key: JSON type} for the entries of one dict literal whose value says so.
+
+    A key whose value is a plain name (`"values": values`) is resolved to the
+    type that name was last built as inside `scope` -- Sheets' values reader
+    assembles `values = []` row by row and then returns it, so without following
+    the name the row array reads as an untyped object and the planner is told
+    there are no rows.
+    """
+    locals_ = _local_types(scope, ast) if scope is not None else {}
+    out: dict[str, str] = {}
+    for key, value in zip(node.keys, node.values):
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            continue
+        type_ = _expr_type(value, ast)
+        if not type_ and isinstance(value, ast.Name):
+            type_ = locals_.get(value.id, "")
+        if type_:
+            out[key.value] = type_
+    return out
+
+
+def _expr_type(value: Any, ast: Any) -> str:
+    """The JSON type an expression plainly is, or "" when it does not say."""
+    if isinstance(value, (ast.List, ast.ListComp, ast.Tuple)):
+        return "array"
+    if isinstance(value, (ast.Dict, ast.DictComp)):
+        return "object"
+    if isinstance(value, ast.JoinedStr):
+        return "string"
+    if isinstance(value, ast.Constant):
+        return _json_type(value.value)
+    return ""
+
+
+def _local_types(scope: Any, ast: Any) -> dict[str, str]:
+    """{name: JSON type} for the locals a function assigns a self-describing value."""
+    out: dict[str, str] = {}
+    for node in ast.walk(scope):
+        if not isinstance(node, ast.Assign):
+            continue
+        type_ = _expr_type(node.value, ast)
+        if not type_:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                # first assignment wins: `values = []` then `values = [h] + values`
+                out.setdefault(target.id, type_)
+    return out
+
+
+def _under_error(root: Any, target: Any, ast: Any) -> bool:
+    """True when `target` sits under an `"error"` key of a dict inside `root`."""
+    for node in ast.walk(root):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (isinstance(key, ast.Constant) and key.value == "error"
+                        and any(child is target for child in ast.walk(value))):
+                    return True
+    return False
 
 
 def _envelope_for(service: str, path: str, method: str) -> list[str]:
@@ -808,25 +1246,35 @@ def _envelope_schema(service: str, path: str, method: str) -> dict[str, Any]:
     """A schema for the envelope the handler returns, or {}.
 
     Each key is typed from the service's own record when its name matches one
-    (Slack's `channel` is a channel), and left an open object otherwise -- the
-    keys are read from the code, the shapes are not guessed.
+    (Slack's `channel` is a channel), else from the JSON type the handler's own
+    literal gives it (`"values": [...]` is an array, `"tableRange": "..."` a
+    string) -- the keys AND their types are read from the code, never guessed.
     """
     keys = _envelope_for(service, path, method)
     if not keys:
         return {}
+    _handler_envelopes()                       # `_KEY_TYPES` is filled by the sweep
     models = _display_records().get(service) or {}
     props: dict[str, Any] = {}
     for key in keys:
         if not re.fullmatch(r"\w+", key):
             continue
-        if key == "ok":
+        if key in ("ok", "success", "done", "isLast", "incompleteSearch"):
             props[key] = {"type": "boolean"}
             continue
         record = models.get(key.lower()) or models.get(_singular(key.lower()))
-        if record:
+        literal = _KEY_TYPES.get((service, key))
+        if record and literal != "string":
             row = _model_schema(record)
-            props[key] = ({"type": "array", "items": row} if key != _singular(key)
-                          else row)
+            props[key] = ({"type": "array", "items": row}
+                          if key != _singular(key) or literal == "array" else row)
+        elif literal == "array":
+            # a row shape the code does not state: an open row, so the builder is
+            # told to use what it gets and never to invent names under it
+            props[key] = {"type": "array",
+                          "items": {"type": "object", "additionalProperties": True}}
+        elif literal in ("string", "integer", "number", "boolean"):
+            props[key] = {"type": literal}
         else:
             props[key] = {"type": "object", "additionalProperties": True}
     return {"type": "object", "properties": props} if props else {}
@@ -883,6 +1331,38 @@ def _with_required(schema: dict[str, Any]) -> dict[str, Any]:
         return schema          # a model already said exactly which keys survive
     identifier = _identifier_field(props)
     return {**schema, "required": [identifier]} if identifier else schema
+
+
+@lru_cache(maxsize=1)
+def _ab_requests() -> dict[tuple[str, str], str]:
+    """(service, real path) -> AutomationBench's prose for the REQUEST body.
+
+    The only place that says how to BUILD an opaque field: Gmail's send takes
+    `raw`, "base64url-encoded RFC 2822", and nothing in the parameter's own
+    description tells a planner what bytes go in it. Five endpoints across the 47
+    carry such a field; the prose is copied into their helper text verbatim.
+    """
+    from wb_world.openapi import real_path
+    out: dict[tuple[str, str], str] = {}
+    for service, doc in sorted(_raw_schemas().items()):
+        for ep in doc.get("endpoints") or ():
+            request = ep.get("request")
+            if isinstance(request, str) and request.strip():
+                out.setdefault((service, real_path(service, ep["path"])), request.strip())
+    return out
+
+
+def _body_helper(service: str, path: str, name: str, description: str) -> str:
+    """The parameter's own description, plus how the endpoint says to build a body.
+
+    Appended only when the field is opaque -- a blob the planner must assemble
+    (base64, RFC 2822, an octet stream) rather than a plain value it can supply.
+    """
+    helper = _helper(description, name, "body")
+    prose = _ab_requests().get((service, path), "")
+    if prose and re.search(r"base64|rfc\s*2822|octet-stream", prose, re.I):
+        return f"{helper} The endpoint's request body: {prose}"
+    return helper
 
 
 def _is_id(name: str) -> bool:
@@ -1012,7 +1492,8 @@ def _parameters(service: str, path: str, verb: str, op: dict[str, Any],
         # `source_form_field` is dropped: it is for captured HTML forms and only
         # feeds the entity-type resolver, giving the builder nothing.
         p = _param(name, "typed", "body", f"$.steps[0].body.{name}", type_, is_required,
-                   _helper(prop.get("description") or "", name, "body"), **extra)
+                   _body_helper(service, path, name,
+                                prop.get("description") or ""), **extra)
         enum = _enum_options(prop.get("enum"))
         if enum:
             p["constraints"]["enum_options"] = enum
@@ -1077,7 +1558,7 @@ def _action(base: str, service: str, path: str, method: str,
     product_id = product_slug(service)
     # Every writable field of the resource must be a token: a field with no token
     # in body_template never reaches the wire (there is no open bag).
-    noun, fields = _resource_fields(service, path)
+    noun, fields = _resource_fields(service, path, method)
     observed = _observed(service, noun)
     # The spec's own response schema when it describes something; the 47
     # simulated documents carry a bare {"type": "object"}, so in practice the
@@ -1095,6 +1576,59 @@ def _action(base: str, service: str, path: str, method: str,
         extract = {}
     elif declared.get("properties") or declared.get("items"):
         schema, extract = _with_required(declared), _extract(declared)
+    elif _envelope_for(service, path, method):
+        # v5.1: the handler that serves the request is the FIRST source, not the
+        # last. Every other source describes a RECORD, and the wire is very often
+        # an envelope around one -- `{Customer: {...}}`, `{organization: {...}}`,
+        # `{success, calendar}` -- or something the record does not resemble at
+        # all: the Sheets read answers `{spreadsheetId, properties, sheets}`,
+        # not the AB `Spreadsheet` record's `{id, title, worksheets}`, which is
+        # why Monarch's planner said the catalog "doesn't expose the data" and
+        # refused every Sheets task (4 Sep 2026).
+        schema = _envelope_schema(service, path, method)
+        # a collection under a key keeps the service's own record as its rows,
+        # instead of the open row `_envelope_schema` falls back to
+        for key, prop in (schema.get("properties") or {}).items():
+            if prop.get("type") != "array":
+                continue
+            row = _record_schema(service, path if _singular(key) == key
+                                 else f"{path}/{key}")
+            stub = _STUB_LIST_FIELDS.get((service, key))
+            if stub:
+                # the handler projects a stub, not the record: Gmail's list
+                # hardcodes format="minimal" and answers {id, threadId} only.
+                # Advertising the record here tells the planner it can skip the
+                # read -- the very step this file exists to make plannable.
+                fields = row.get("properties") or {}
+                row = {"type": "object",
+                       "properties": {f: fields.get(f, {"type": "string"}) for f in stub}}
+            if row.get("properties"):
+                prop["items"] = _with_required(row)
+        # ...and an envelope holding ONE open object is holding the record: type
+        # it, or a create's id is unreachable and the action declares no entity
+        # at all (Asana answers `{data: {gid, name, ...}}`).
+        objects = [k for k, p in (schema.get("properties") or {}).items()
+                   if p.get("type") == "object" and not p.get("properties")]
+        if len(objects) == 1:
+            record = _record_schema(service, path)
+            if record.get("properties"):
+                schema["properties"][objects[0]] = _with_required(record)
+        schema = {"$schema": JSON_SCHEMA, **_with_required(schema)}
+        # The handler writes an envelope's keys unconditionally into its success
+        # literal, so every one of them IS present -- unlike a record's fields,
+        # which `to_display_dict` prunes when empty. Saying so is what turns the
+        # builder's presence from `unknown` into `required` (SPEC.md 6.3).
+        # Every key of the literal is certain whether or not its VALUE said what
+        # type it is: the handler writes them all on the success path. Only the
+        # ones appended behind a guard are left out.
+        certain = sorted(k for k in (schema.get("properties") or {})
+                         if (service, k) not in _CONDITIONAL)
+        if certain:
+            schema["required"] = certain
+        # Every top-level key is an output: an array is extracted whole (the
+        # grammar has no `[*]`), a scalar or nested object by its own name.
+        extract = {n: f"$.{n}" for n in (schema.get("properties") or {})
+                   if re.fullmatch(r"\w+", n)}
     elif verb == "list":
         # The front door wraps a collection under its key -- {"messages": [...]},
         # never a bare array. The ARRAY ITSELF is the output: the engine's path
@@ -1141,8 +1675,10 @@ def _action(base: str, service: str, path: str, method: str,
         # wires a field the response will not carry.
         props = schema.get("properties") or {}
         extract = {n: p for n, p in extract.items() if n in props}
-    # A field that already addresses the record in the path is not a body field.
-    in_path = set(_PATH_VAR.findall(path))
+    # A field the URL already carries -- a path placeholder or a declared query
+    # parameter -- is not a body field: one token in two places is one parameter
+    # the engine binds twice.
+    in_path = set(_PATH_VAR.findall(path)) | set(_query_names(op))
     # GET, HEAD and DELETE carry no body at all: the engine serializes any
     # non-null body_template, `{}` included, and fetch rejects those methods with
     # a body ("Request with GET/HEAD method cannot have body"). v4.1 still sent
@@ -1296,7 +1832,7 @@ def generate(out_dir, shim_public_url: str) -> Summary:
                    folders=sorted(folders))
 
 
-VERSION = "v5"
+VERSION = "v5.1"
 
 
 def folder_sha256(folder) -> str:
