@@ -833,16 +833,16 @@ def test_tier_plans():
     for name, pl in plans.items():
         assert pl.name == name and pl.tasks == name        # each names its own task set
         assert pl.mode == "create-run"
-        assert pl.repetitions == 2
+        assert pl.repetitions == 1 and pl.retry_on_fail == 1
         assert pl.baseline == "claude-opus-5/api"
         assert pl.audience == "internal"
         assert pl.approved_by is None                      # Carlos approves each round
         assert pl.timeout_s == 900 and pl.concurrency == 4
-        assert pl.cost_ceiling_usd == 40
+        assert pl.cost_ceiling_usd == 60
         # the size in the agreed words, never a bare per-competitor total
-        assert ("prompts: 10; attempts per prompt and competitor: 2; attempts per "
-                "competitor: 20 = 10 x 2; competitors: 7; attempts in the round: "
-                "140") in pl.description.lower()
+        assert ("prompts: 10; attempts per prompt: 1 plus 1 retry on failure; "
+                "attempts per competitor: 10 to 20; competitors: 7; attempts in "
+                "the round: 70 to 140") in " ".join(pl.description.lower().split())
 
     # all four carry the same seven competitors, in the same order
     shapes = {n: [(c.model, c.harness) for c in pl.competitors] for n, pl in plans.items()}

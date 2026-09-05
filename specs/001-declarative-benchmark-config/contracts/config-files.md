@@ -130,6 +130,22 @@ cost_ceiling_usd: 5
 approved_by: null
 ```
 
+Optional plan key `retry_on_fail` (integer >= 0, 0 when absent): the extra
+attempts every prompt a competitor failed gets, on top of `repetitions`, on a
+fresh copy of the data. A prompt that passed is not retried; neither is one
+whose attempt ended on an `infra:` termination, because those are already
+retried inside the attempt and are not the task's verdict. The extra attempt's
+row carries the flag `retry`; the first attempt carries no flag. The key is
+part of the config hash. The cost ceiling and the `approved_by` gate both count
+every attempt it can cause, so a plan with `repetitions: 1` and
+`retry_on_fail: 1` over ten prompts is gated at twenty attempts per competitor,
+not ten.
+
+```yaml
+repetitions: 1
+retry_on_fail: 1
+```
+
 ## side-effects.yaml
 
 ```yaml

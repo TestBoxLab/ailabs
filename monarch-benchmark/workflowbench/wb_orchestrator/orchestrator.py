@@ -4,7 +4,11 @@ Episode state machine: PROVISION -> SNAPSHOT0 -> ARM_RUN(timeout) -> SNAPSHOT1
 -> GRADE -> RECORD. Grade and record always run, whatever ARM_RUN did.
 Checkpoint identity (run_id, task_id, arm, trial); resume skips completed
 identities and refuses on config-hash drift. Only infra:* terminations
-auto-retry (max 2, exponential backoff honoring Retry-After).
+auto-retry inside the episode (max 2, exponential backoff honoring Retry-After).
+
+A plan may also ask for `retry_on_fail` extra attempts of any prompt a
+competitor failed on a non-infra termination: each lands as trial + k, its row
+carries the flag `retry`, and resume re-derives the ones it still owes.
 
 Scheduling: the matrix is grouped by arm and each arm's episodes run
 back-to-back (cache TTLs are minutes-scale); arms run concurrently with each
@@ -152,7 +156,7 @@ class Orchestrator:
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
                    provider_concurrency=provider_concurrency or plan.concurrency,
-                   tasks=run_config.tasks)
+                   tasks=run_config.tasks, retry_on_fail=plan.retry_on_fail)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
         return self
@@ -160,9 +164,11 @@ class Orchestrator:
     def __init__(self, store: Store, suite_dir: str | Path, arms: list[str], k: int,
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None,
-                 tasks: list[dict] | None = None):
+                 tasks: list[dict] | None = None, retry_on_fail: int = 0):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
+        if retry_on_fail < 0:
+            raise ValueError(f"retry_on_fail must be >= 0, got {retry_on_fail}")
         if len(set(arms)) != len(arms):
             raise ValueError(f"duplicate arms would double-run identities: {arms}")
         for a in arms:
@@ -173,6 +179,7 @@ class Orchestrator:
         self.tasks = tasks if tasks is not None else load_suite(suite_dir)
         self.arm_keys = arms
         self.k = k
+        self.retry_on_fail = retry_on_fail
         self.out_dir = Path(out_dir)
         self.timeout_s = timeout_s
         self.provider_concurrency = provider_concurrency
@@ -221,6 +228,39 @@ class Orchestrator:
         self._execute(run_id, skip=self.store.completed_identities(run_id))
         return run_id
 
+    def _pending_retries(self, run_id: str, arm_name: str) -> list[tuple[dict, int]]:
+        """Retries a resumed run still owes: a recorded attempt that failed on a
+        non-infra termination, whose retry trial was never recorded.
+
+        Derived from the store rather than remembered, so an interrupted run
+        picks up exactly the retries it had not run yet.
+        """
+        if not self.retry_on_fail:
+            return []
+        by_task: dict[str, dict[int, dict]] = {}
+        for r in self.store.episodes(run=run_id)["rows"]:
+            if r["arm"] == arm_name:
+                by_task.setdefault(r["task_id"], {})[r["trial"]] = r
+        work = []
+        for task in self.tasks:
+            trials = by_task.get(task["task"], {})
+            for trial in sorted(trials):
+                row = trials[trial]
+                if (self._earns_a_retry(row["passed"], row["termination"])
+                        and self._retry_budget_left(trial) and trial + self.k not in trials):
+                    work.append((task, trial + self.k))
+        return work
+
+    def _earns_a_retry(self, passed: bool, termination: str) -> bool:
+        """A failed attempt is retried unless the infrastructure was what failed:
+        those are already retried inside the episode and are not the task's verdict."""
+        return bool(self.retry_on_fail) and not passed and not termination.startswith("infra:")
+
+    def _retry_budget_left(self, trial: int) -> bool:
+        """Trials 0..k-1 are the planned repetitions; each may spend `retry_on_fail`
+        extra attempts, laid out as trial + k, + 2k, ... so no two identities clash."""
+        return trial // self.k < self.retry_on_fail
+
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]]) -> None:
         arms = ([build_arm_for(c, self.run_config) for c in self.run_config.competitors]
                 if self.run_config
@@ -229,6 +269,8 @@ class Orchestrator:
         for arm in arms:
             work = [(task, trial) for task in self.tasks for trial in range(self.k)
                     if (task["task"], arm.name, trial) not in skip]
+            work += [(t, trial) for t, trial in self._pending_retries(run_id, arm.name)
+                     if (t["task"], arm.name, trial) not in skip]
             if not work:
                 continue
             t = threading.Thread(target=self._run_arm_group, args=(run_id, arm, work),
@@ -278,32 +320,45 @@ class Orchestrator:
         sem = self._sems.setdefault(sem_key, threading.Semaphore(self.provider_concurrency))
         with ThreadPoolExecutor(max_workers=self.provider_concurrency,
                                 thread_name_prefix=f"ep-{sem_key}") as pool:
+            # A failed attempt can add work, so the list is drained rather than
+            # zipped: `_episode_guarded` appends the retry it earned.
+            queue, done = list(work), 0
             futures = []
-            for task, trial in work:
-                if self._abort.is_set():
+            while True:
+                while done < len(queue):
+                    task, trial = queue[done]
+                    done += 1
+                    if self._abort.is_set():
+                        continue
+                    futures.append(pool.submit(self._episode_guarded, run_id, arm, task, trial,
+                                               sem, queue))
+                if not futures:
                     break
-                futures.append(pool.submit(self._episode_guarded, run_id, arm, task, trial, sem))
-            for f in futures:
+                f = futures.pop(0)
                 exc = f.exception()
                 if exc is not None:
                     self._thread_errors.append(exc)
                     self._abort.set()
 
     def _episode_guarded(self, run_id: str, arm, task: dict, trial: int,
-                         sem: threading.Semaphore) -> None:
+                         sem: threading.Semaphore, queue: list | None = None) -> None:
         if self._abort.is_set():
             return
         with sem:
             if self._abort.is_set():
                 return
-            self._run_episode(run_id, arm, task, trial)
+            earned = self._run_episode(run_id, arm, task, trial)
+        if earned and queue is not None and self._retry_budget_left(trial):
+            with self._count_lock:
+                queue.append((task, trial + self.k))
 
     def _run_dir(self, run_id: str) -> Path:
         d = self.out_dir / run_id
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _run_episode(self, run_id: str, arm, task: dict, trial: int) -> None:
+    def _run_episode(self, run_id: str, arm, task: dict, trial: int) -> bool:
+        """Run one attempt and record its row. Returns whether it earned a retry."""
         task_id = task["task"]
         eid = f"{run_id}/{task_id}/{arm.name.replace('/', '_')}/t{trial}"
         ep_dir = self._run_dir(run_id) / "episodes" / task_id / arm.name.replace("/", "_") / f"t{trial}"
@@ -384,6 +439,11 @@ class Orchestrator:
             # REAL-mode reset (or an auditor) knows this wasn't a clean no-op.
             result.flags.append("partial_writes_before_failure")
 
+        if trial >= self.k:
+            # An extra attempt this prompt earned by failing, not a planned
+            # repetition; flagged so a report can count and separate retries.
+            result.flags.append("retry")
+
         model = (getattr(arm, "model_label", None)
                  or getattr(getattr(arm, "provider", None), "model_id", None))
         test_mode = self.run_config.plan.mode if self.run_config else None
@@ -428,6 +488,7 @@ class Orchestrator:
                     and self._stop_reason is None):
                 self._stop_reason = "cost_ceiling"
                 self._abort.set()
+        return self._earns_a_retry(row.passed, termination)
 
 
 def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:

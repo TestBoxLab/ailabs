@@ -78,6 +78,25 @@ def _monarch_line(rc) -> str | None:
     return line
 
 
+def _size_line(rc) -> str:
+    """The size in the agreed words, so nobody recomputes it before spending; a
+    bare per-competitor total is never printed on its own (feature 005).
+
+    With `retry_on_fail`, the count is a range: retries only happen on failures,
+    so the round lands somewhere between all-pass and all-fail. The ceiling
+    counts every attempt, so the upper bound is what `attempts in the round` says.
+    """
+    plan, n = rc.plan, len(rc.tasks)
+    if not plan.retry_on_fail:
+        return (f"prompts: {n}; attempts per prompt and competitor: {plan.repetitions}; "
+                f"attempts per competitor: {rc.attempts_per_competitor}"
+                f" = {n} x {plan.repetitions}")
+    r = plan.retry_on_fail
+    return (f"prompts: {n}; attempts per prompt: {plan.repetitions} plus {r} "
+            f"retr{'y' if r == 1 else 'ies'} on failure; attempts per competitor: "
+            f"{rc.attempts_per_competitor_min} to {rc.attempts_per_competitor}")
+
+
 def _banner(rc) -> str:
     p, plan = rc.product, rc.plan
     data = "mutable data" if p.data.mutable else "read-only data"
@@ -86,11 +105,7 @@ def _banner(rc) -> str:
         f"product   {p.name} ({p.kind}, {data})",
         f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
         f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/",
-        # The size in the agreed words, so nobody recomputes it before spending;
-        # a bare per-competitor total is never printed on its own (feature 005).
-        f"prompts: {len(rc.tasks)}; attempts per prompt and competitor: "
-        f"{plan.repetitions}; attempts per competitor: {rc.attempts_per_competitor}"
-        f" = {len(rc.tasks)} x {plan.repetitions}",
+        _size_line(rc),
         f"competitors: {len(rc.competitors)}; attempts in the round: {rc.attempts_total}",
         f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}",
         *monarch])

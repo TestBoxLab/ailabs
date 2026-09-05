@@ -38,6 +38,23 @@ plus the front-door URL those seeds point at. `wb run` refuses a Monarch competi
 without it, and refuses again if the hashes have drifted. The file is committed only
 after the setup has run against a live Monarch, so it is absent until then.
 
+## plans/*.yaml, key `retry_on_fail`
+
+Optional, an integer of 0 or more, 0 when absent. A plan that sets it gives
+every prompt a competitor failed that many extra attempts, on a fresh copy of
+the data, on top of `repetitions`. Only a real failure earns one: a prompt that
+passed is not retried, and neither is one whose attempt died on the
+infrastructure (those are already retried inside the attempt and are not the
+task's verdict). The extra attempt's row carries the flag `retry`, so a report
+can count and separate them; the first attempt carries no flag.
+
+The key is part of the config hash, so changing it starts a different round. It
+also moves the size: a plan with `repetitions: 1` and `retry_on_fail: 1` runs
+between one and two attempts per prompt per competitor, and `wb run` prints the
+range before anything is spent. The cost ceiling counts every attempt, retries
+included, and so does the approval gate — the approval is for what the round
+could cost, not for its best case.
+
 ## plans/pilot-monarch-create-run.yaml
 
 The paired pilot plan for feature 002: `create-run` mode, the 10 pilot tasks, 2
@@ -68,11 +85,12 @@ until Carlos approves the specific run. Full example:
 ## plans/tier-simple.yaml, tier-medium.yaml, tier-complex.yaml, random-10.yaml
 
 Four pilot plans for feature 005: `create-run` mode, the same seven
-competitors and baseline as `pilot-monarch-create-run`, 2 repetitions,
-internal audience, `approved_by` left empty until Carlos approves each round
+competitors and baseline as `pilot-monarch-create-run`, one attempt per prompt
+plus one retry on failure (`repetitions: 1`, `retry_on_fail: 1`), internal
+audience, `approved_by` left empty until Carlos approves each round
 separately. Each `tasks:` points at one of the drawn task sets below. Every
-description states the size the same way: "prompts: 10; attempts per prompt
-and competitor: 2; attempts per competitor: 20 = 10 × 2". The four move as a
+description states the size the same way: "prompts: 10; attempts per prompt: 1
+plus 1 retry on failure; attempts per competitor: 10 to 20". The four move as a
 set: change a competitor, the ceiling or the baseline in one and change it in
 all four, or a difference between the rounds stops being a difference in the
 tasks. Field table and full examples:

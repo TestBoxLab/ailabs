@@ -152,6 +152,7 @@ class Plan:
     cost_ceiling_usd: float
     approved_by: str | None
     description: str | None = None
+    retry_on_fail: int = 0   # extra attempts a failed prompt gets, on top of `repetitions`
 
 
 # ---------------------------------------------------------------- checks
@@ -421,7 +422,8 @@ def load_harness(path) -> Harness:
 def load_plan(path) -> Plan:
     c = _read(path, "plan")
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
-            "baseline", "audience", "cost_ceiling_usd", "approved_by"), ("description",))
+            "baseline", "audience", "cost_ceiling_usd", "approved_by"),
+           ("description", "retry_on_fail"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -446,6 +448,7 @@ def load_plan(path) -> Plan:
         cost_ceiling_usd=c.get("cost_ceiling_usd", num, minimum=0, strict=True),
         approved_by=approved,
         description=c.get("description", str),
+        retry_on_fail=c.get("retry_on_fail", int, minimum=0, default=0),
     )
 
 
@@ -599,6 +602,15 @@ class RunConfig:
 
     @property
     def attempts_per_competitor(self) -> int:
+        """The most attempts one competitor can make: every prompt failing every
+        planned repetition and spending every retry. Retries only happen on
+        failures, so the floor is `len(tasks) x repetitions`; the ceiling counts
+        this number, because it counts every attempt that could be paid for."""
+        return len(self.tasks) * (self.plan.repetitions + self.plan.retry_on_fail)
+
+    @property
+    def attempts_per_competitor_min(self) -> int:
+        """With no failure, nothing is retried."""
         return len(self.tasks) * self.plan.repetitions
 
     @property
@@ -609,6 +621,10 @@ class RunConfig:
         """Everything the hash covers (research.md R2): guard fields out, secrets by name."""
         plan = asdict(self.plan)
         del plan["cost_ceiling_usd"], plan["approved_by"]
+        if not plan["retry_on_fail"]:
+            # A plan that asks for no retry is the plan it was before the key
+            # existed, and keeps the hash its stored runs were recorded under.
+            del plan["retry_on_fail"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
              "product": asdict(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},
@@ -791,7 +807,9 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
                               "every task of the set is missing a known-correct recipe, so there "
                               "is nothing to compare; run `wb monarch recipes` first")
 
-    per_competitor = len(tasks) * plan.repetitions
+    # The gate counts the most a competitor can attempt, retries included: the
+    # approval is for what the round could cost, not for its best case.
+    per_competitor = len(tasks) * (plan.repetitions + plan.retry_on_fail)
     if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
         c.fail("approved_by", f"{per_competitor} attempts per competitor exceed smoke scale "
                               f"({SMOKE_SCALE_ATTEMPTS}); set approved_by")
