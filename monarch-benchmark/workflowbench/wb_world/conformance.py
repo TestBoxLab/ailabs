@@ -16,6 +16,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from wb_world.episode import Episode, load_task_file
 from wb_world.openapi import load_schemas
@@ -205,6 +206,48 @@ def schema_diffs(schema: dict, value: Any, path: str = "$", limit: int = 3) -> l
 
     walk(schema, value, path)
     return out
+
+
+def fixture_gap(state: Any, collection: str, field: str | None = None) -> bool:
+    """Does the world under test simply carry no such record?
+
+    Three shapes, all of them the CORPUS's limit and never the seed's: the
+    collection key is absent (zoom seeds no `recordings`), it is present and
+    empty (zendesk's `groups`), or every record it holds lacks the field the
+    request needs (no slack fixture user carries an `email`).
+
+    The check picks one fixture per service -- the richest -- so this is about
+    that world, not about the corpus as a whole: another task may well seed the
+    collection, and re-picking per action would change which world each verdict
+    describes.
+    """
+    if not isinstance(state, dict) or not collection:
+        return False
+    rows = _collection_rows(state, collection)
+    if rows is None or not rows:
+        return True
+    if field is None:
+        return False
+    return not any(isinstance(r, dict) and r.get(field) not in (None, "", [], {})
+                   for r in rows)
+
+
+def _collection_rows(state: dict, collection: str) -> list | None:
+    """The rows `collection` names, or None when the fixture has no such key.
+
+    Matched case-insensitively and across the plural spellings the fixtures use
+    (`Accounts`, `accounts`, `company` -> `companies`), so the answer is about
+    the records, not about how a key happens to be spelled.
+    """
+    wanted = {collection.lower(), collection.lower().rstrip("s"),
+              collection.lower() + "s", collection.lower() + "es"}
+    if collection.lower().endswith("y"):
+        wanted.add(collection.lower()[:-1] + "ies")
+    found: list | None = None
+    for key, value in state.items():
+        if key.lower() in wanted and isinstance(value, list):
+            found = (found or []) + value
+    return found
 
 
 def is_error_body(body: Any) -> bool:
@@ -405,6 +448,7 @@ class _Filler:
     def __init__(self, params: list[dict], state: Any):
         self.by_name = {p.get("name"): p for p in params if p.get("name")}
         self.state = state
+        self.invented: set[str] = set()   # parameters no world value could fill
         self.fields = _record_fields(state)
         self.names = _named_values(state)
 
@@ -453,6 +497,15 @@ class _Filler:
 
     def value(self, name: str, *, path: bool = False) -> tuple[Any, bool]:
         """(value, from_the_world). `(None, False)`: nothing can fill it."""
+        got = self._value(name, path=path)
+        if got[0] is not None and not got[1]:
+            # An invented value: the world could not answer for this parameter.
+            # Remembered so a later "not found" can be told apart from a seed
+            # that describes the wrong thing.
+            self.invented.add(name)
+        return got
+
+    def _value(self, name: str, *, path: bool = False) -> tuple[Any, bool]:
         param = self.by_name.get(name) or {}
         got = self._from_world(name, param)
         if got is not None:
@@ -543,7 +596,6 @@ def _render_body(body_template: Any, filler: _Filler) -> Any:
 def front_door_to_world(url: str, schemas: dict) -> tuple[str, str] | None:
     """`https://<host>/<service>/<rest>` -> the service's baseUrl + rest, the
     same mapping wb_arms/http_shim.py::_rest does. None: unknown service."""
-    from urllib.parse import urlsplit
     sp = urlsplit(url)
     parts = sp.path.lstrip("/").split("/", 1)
     service = parts[0]
@@ -617,6 +669,141 @@ def _load_actions(seeds_dir: Path, schemas: dict,
     return out
 
 
+_SEEDED: dict[tuple[str, str], bool] = {}
+
+
+def _seeded_somewhere(service: str, collection: str,
+                      corpus_dirs: list[Path] | None = None) -> bool:
+    """Does ANY corpus fixture seed rows into `service.collection`?
+
+    This is what tells a fixture gap from a wrong seed. `google_sheets.values`
+    is seeded nowhere -- the cells live under `worksheets`, so the name is the
+    endpoint's, not a collection's, and its absence proves nothing. `zoom.
+    recordings` IS seeded (in one task of thirty-nine), so its absence from the
+    world under test is a genuine gap in that world.
+    """
+    key = (service, collection.lower())
+    if key in _SEEDED:
+        return _SEEDED[key]
+    found = False
+    for directory in (corpus_dirs if corpus_dirs is not None else default_corpus_dirs()):
+        for path in Path(directory).rglob("*.json"):
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))["info"]["initial_state"]
+            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                continue
+            rows = _collection_rows(state.get(service) or {}, collection) \
+                if isinstance(state.get(service), dict) else None
+            if rows:
+                found = True
+                break
+        if found:
+            break
+    _SEEDED[key] = found
+    return found
+
+
+def _fixture_gap_detail(service: str, doc: dict, filler: "_Filler", state: Any) -> str:
+    """"no fixture carries zendesk.groups", or "" when the corpus is not at fault.
+
+    A read can fail for two very different reasons: the seed describes something
+    the app does not serve, or the WORLD holds no record of the kind the request
+    needs. Only the first is a finding. Three signals, each checked against the
+    fixture actually under test:
+
+      * the collection this action addresses is absent or empty
+        (zoom seeds no `recordings`, zendesk's `groups` is `[]`);
+      * a parameter had to be invented because no record could answer it, and
+        the collection behind it is likewise empty;
+      * an invented parameter names a FIELD no record in its collection carries
+        (no slack fixture user has an `email` to look up).
+
+    Conservative by construction: with rows present and the field on some record,
+    it answers "" and the real verdict stands.
+    """
+    # The area is a LABEL, not proof of a collection: Sheets' `values` read has
+    # no `values` key in its fixture because the cells live under `worksheets`,
+    # and calling that a gap would have hidden the very mismatch this check
+    # exists to catch. So a collection counts only when some corpus fixture of
+    # this service does seed it -- then its absence HERE is a real gap.
+    for area in _addressed_collections(doc):
+        if _seeded_somewhere(service, area) and fixture_gap(state, area):
+            return f"no fixture carries {service}.{area}"
+    for param in doc["implementations"][0].get("parameters") or []:
+        name = str(param.get("name") or "")
+        if name not in filler.invented:
+            continue
+        # `groupId`/`group_id` -> the `groups` collection; `email` -> a field of
+        # whatever collection this action reads.
+        entity = str(param.get("entity_type") or "") or re.sub(r"(_?id|Id)$", "", name)
+        if (entity and entity != name and _seeded_somewhere(service, entity)
+                and fixture_gap(state, entity)):
+            return f"no fixture carries {service}.{entity}"
+        # A FIELD no record carries: the collection is here and populated, so the
+        # request is well formed and simply has nothing to match on.
+        # A FIELD no record carries, and only where the name really is a field of
+        # this kind of record: some fixture of the service must show it on one.
+        # `spreadsheetId` is a ROUTING name -- the records spell it `id` -- and
+        # reading its absence as a gap hid a genuine "not found" (the sheets test).
+        if not _is_record_field(service, name):
+            continue
+        for area in _addressed_collections(doc):
+            if _collection_rows(state, area) and fixture_gap(state, area, field=name):
+                return f"no fixture record of {service}.{area} carries {name!r}"
+    return ""
+
+
+_RECORD_FIELDS: dict[str, set[str]] = {}
+
+
+def _is_record_field(service: str, name: str,
+                     corpus_dirs: list[Path] | None = None) -> bool:
+    """Does any corpus record of this service carry `name` as a field?
+
+    The difference between "the fixtures hold no user with an email" (a gap) and
+    "this parameter is not a record field at all" (not evidence of anything).
+    """
+    if service not in _RECORD_FIELDS:
+        fields: set[str] = set()
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                fields.update(node)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        for directory in (corpus_dirs if corpus_dirs is not None else default_corpus_dirs()):
+            for path in Path(directory).rglob("*.json"):
+                try:
+                    state = json.loads(path.read_text(encoding="utf-8"))["info"]["initial_state"]
+                except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                    continue
+                walk(state.get(service))
+        _RECORD_FIELDS[service] = fields
+    return name in _RECORD_FIELDS[service]
+
+
+def _addressed_collections(doc: dict) -> list[str]:
+    """The collections this action might read, best guess first.
+
+    The `area` is the seed's own label and usually right; where it is an RPC
+    name (`users-lookupbyemails` for `users.lookupByEmail`) the URL's own first
+    non-placeholder segment is the collection instead.
+    """
+    out = [str((doc.get("business_action") or {}).get("area") or "")]
+    url = str(doc["implementations"][0]["http_template"]["steps"][0].get("url_template") or "")
+    path = urlsplit(url).path.lstrip("/").split("/")[1:]      # drop the service prefix
+    for segment in path:
+        if "{" in segment:
+            continue
+        # `users.lookupByEmail` names `users`; a plain segment names itself.
+        out.append(segment.split(".")[0])
+    return [c for c in dict.fromkeys(out) if c]
+
+
 def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     action_id = str((doc.get("business_action") or {}).get("id") or "?")
     impl = doc["implementations"][0]
@@ -652,7 +839,6 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     # front door (`wb_arms/http_shim.py::_rest`) splits it off and passes it as
     # `params`. Inlining it made the Sheets read ask for a spreadsheet named
     # `ss_parking?ranges=...`, a "not found" that read as a broken seed.
-    from urllib.parse import parse_qs, urlsplit
     split = urlsplit(row.url)
     params = {k: v[-1] for k, v in parse_qs(split.query, keep_blank_values=True).items()}
     try:
@@ -682,16 +868,18 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     if isinstance(err, dict) and err.get("code", 200) >= 300:
         # An error body is not the success contract, so it is never schema-checked:
         # the request was wrong (usually this check's fault), not the schema.
-        row.verdict = "request_rejected"
-        row.detail = f"{err.get('code')}: {err.get('message') or ''}"[:200]
+        gap = _fixture_gap_detail(service, doc, filler, state)
+        row.verdict = "not_executable" if gap else "request_rejected"
+        row.detail = gap or f"{err.get('code')}: {err.get('message') or ''}"[:200]
         return row
     if is_error_body(response):
         # The same rule for the shapes that carry no code: a refusal is a refusal
         # whether the app spells it `{"error": "RecordNotFound"}`, `{"success":
         # false}` or `{"errors": [...]}`. Schema-checking these blamed the seed
         # for a record the request never asked for successfully.
-        row.verdict = "request_rejected"
-        row.detail = json.dumps(response)[:200]
+        gap = _fixture_gap_detail(service, doc, filler, state)
+        row.verdict = "not_executable" if gap else "request_rejected"
+        row.detail = gap or json.dumps(response)[:200]
         return row
 
     extracts = (step.get("response_template") or {}).get("extract") or {}
@@ -703,7 +891,9 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     if isinstance(schema, dict):
         diffs = schema_diffs(schema, response)
         if diffs:
-            row.verdict, row.detail = "schema_mismatch", "; ".join(diffs)
+            gap = _fixture_gap_detail(service, doc, filler, state)
+            row.verdict = "not_executable" if gap else "schema_mismatch"
+            row.detail = gap or "; ".join(diffs)
             return row
 
     # An optional field that this particular record leaves blank (a mail with no
@@ -719,7 +909,9 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
                     if _required_in_schema(schema, extracts.get(name))}
         if required or len(empty) == len(extracts):
             which = sorted(required) or sorted(empty)
-            row.verdict, row.detail = "extract_empty",                 f"{', '.join(which)} resolve to nothing"
+            gap = _fixture_gap_detail(service, doc, filler, state)
+            row.verdict = "not_executable" if gap else "extract_empty"
+            row.detail = gap or f"{', '.join(which)} resolve to nothing"
             return row
 
     if method not in READ_METHODS and not _changed(ep.snapshot0, ep.finish()):

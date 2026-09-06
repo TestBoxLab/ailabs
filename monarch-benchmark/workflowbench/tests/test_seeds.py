@@ -1144,3 +1144,42 @@ def test_the_digest_ignores_the_conformance_report(generated):
             "the check's own report changed the knowledge-base digest"
     finally:
         (out / "conformance.json").unlink()
+
+
+def test_generate_prunes_a_stale_action_file(tmp_path):
+    """A file the current run did not write is gone after it.
+
+    Renaming a path leaves the old action behind -- the bamboohr base-URL fix did
+    exactly that, and the orphan made the validator count 687 actions for a
+    686-action set and stayed in the digest as a seed nothing generates.
+    """
+    out = tmp_path / "pruned"
+    summary = seeds.generate(out, SHIM)
+    folder = out / summary.folders[0]
+    stale = folder / "bench-stale_read_gone.json"
+    stale.write_text('{"business_action": {}}', encoding="utf-8")
+    again = seeds.generate(out, SHIM)
+    assert not stale.exists(), "a stale action file survived a regeneration"
+    assert again.files_written == summary.files_written
+    # ...and the digest is the one a clean run produces
+    clean = tmp_path / "clean"
+    seeds.generate(clean, SHIM)
+    assert seeds.folder_sha256(out) == seeds.folder_sha256(clean)
+
+
+def test_pruning_never_reaches_outside_the_product_folders(tmp_path):
+    """Only folders this run writes are pruned, and only their `*.json`.
+
+    Deleting by glob over `out_dir` would take a neighbouring folder's files with
+    it -- `wb monarch conform` keeps its report beside the products.
+    """
+    out = tmp_path / "scoped"
+    seeds.generate(out, SHIM)
+    (out / "conformance.json").write_text('{"totals": {}}', encoding="utf-8")
+    keepsake = out / "notes"
+    keepsake.mkdir()
+    (keepsake / "mine.json").write_text("{}", encoding="utf-8")
+
+    seeds.generate(out, SHIM)
+    assert (out / "conformance.json").exists(), "the check's report was deleted"
+    assert (keepsake / "mine.json").exists(), "an unrelated folder was pruned"

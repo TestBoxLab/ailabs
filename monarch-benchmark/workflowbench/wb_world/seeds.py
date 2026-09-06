@@ -2434,6 +2434,14 @@ def generate(out_dir, shim_public_url: str) -> Summary:
         for name, doc in sorted(actions.items()):
             (d / name).write_text(_dump(doc), encoding="utf-8")
             written += 1
+        # A file this run did not write is a leftover of an older shape: renaming
+        # a path (the bamboohr base-URL fix) orphaned its old action, which then
+        # counted as a 687th seed and sat in the digest describing nothing.
+        # Scoped to the product folders this run owns -- never the whole out_dir.
+        keep = set(actions) | {"_meta.json"}
+        for old in d.glob("*.json"):
+            if old.name not in keep:
+                old.unlink()
     _write_manifest(out, base, folders)
     return Summary(operations_in_spec=operations, files_written=written,
                    folders=sorted(folders))

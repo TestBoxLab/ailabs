@@ -442,3 +442,53 @@ def test_a_tenant_name_that_addresses_a_record_is_not_treated_as_a_tenant():
     value, from_world = filler.value("company_id", path=True)
     assert value == "li_co_1", f"took {value!r} instead of the company in the world"
     assert from_world
+
+
+# -- a corpus fixture gap is this check's limit, never the seed's fault -------
+
+@pytest.mark.parametrize("state,collection,expected", [
+    # the key is there and holds nothing (zendesk's groups)
+    ({"groups": [], "tickets": [{"id": "t1"}]}, "groups", True),
+    # the key is not in the fixture at all (zoom's recordings)
+    ({"meetings": [{"id": "m1"}]}, "recordings", True),
+    # rows exist: whatever went wrong, it was not a missing fixture
+    ({"groups": [{"id": "g1"}]}, "groups", False),
+])
+def test_an_empty_or_absent_collection_is_a_fixture_gap(state, collection, expected):
+    """The world under test carries no row of this kind, so nothing can be read.
+
+    A read that lands on an empty collection says nothing about the seed: the
+    request ran, the app answered correctly, and the corpus simply seeds no such
+    record. Reported as `not_executable` -- this check's own limit -- so it never
+    gates an import.
+    """
+    assert conformance.fixture_gap(state, collection) is expected
+
+
+def test_a_field_no_record_carries_is_a_fixture_gap():
+    """Slack's fixture users carry no `email`, so a lookup by email cannot run."""
+    state = {"users": [{"id": "U1", "name": "Bot"}, {"id": "U2", "name": "Ann"}]}
+    assert conformance.fixture_gap(state, "users", field="email")
+    # ...but a field some record does carry is not a gap
+    assert not conformance.fixture_gap(state, "users", field="name")
+
+
+@pytest.mark.parametrize("service,collection,field", [
+    ("zendesk", "groups", None),        # key present, empty list
+    ("zoom", "recordings", None),       # key absent from the fixture entirely
+    ("slack", "users", "email"),        # records exist, none carries the field
+])
+def test_the_three_real_fixture_gaps_are_recognised(corpus_dirs, service, collection, field):
+    """The three findings left after v5.2, each verified against the real corpus.
+
+    These are the only reads still stopping `wb monarch setup`, and none of them
+    is a seed defect: the check picks the richest fixture per service and that
+    fixture holds no zendesk group, no zoom recording, and no slack user email.
+    """
+    tasks = conformance.richest_tasks(corpus_dirs, {service})
+    if service not in tasks:
+        pytest.skip(f"no corpus fixture seeds {service}")
+    from wb_world.episode import load_task_file
+    state = load_task_file(tasks[service])["info"]["initial_state"].get(service, {})
+    assert conformance.fixture_gap(state, collection, field=field), \
+        f"{service}.{collection} is not seen as a fixture gap"

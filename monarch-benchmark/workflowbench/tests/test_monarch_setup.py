@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -245,3 +247,38 @@ def test_validator_path_that_does_not_exist_is_named(workspace, tmp_path):
                           env={"MONARCH_SEED_VALIDATOR": str(tmp_path / "missing.mjs")})
     assert code == 2
     assert "does not name a file" in text
+
+
+# -- v5.2: the gate is satisfied by the seeds actually on disk ----------------
+
+TASK_SET_SERVICES = [
+    "airtable", "asana", "docusign", "freshdesk", "gmail", "google_calendar",
+    "google_drive", "google_sheets", "helpcrunch", "hubspot", "intercom", "jira",
+    "linkedin", "monday", "quickbooks", "reamaze", "salesforce", "slack",
+    "trello", "xero", "zendesk", "zoom",
+]
+
+
+def test_the_generated_seeds_pass_the_gate_for_the_task_set_services():
+    """The 22 services the four frozen task sets seed must not stop an import.
+
+    Read from the report `wb monarch conform` leaves beside the seeds, so this
+    asserts on the set that is really on disk. Skipped where that file is absent
+    (a fresh checkout, or CI without a generated knowledge base).
+    """
+    report = Path("out/monarch-seeds/conformance.json")
+    if not report.is_file():
+        pytest.skip("no out/monarch-seeds/conformance.json; run `wb monarch conform`")
+    rows = json.loads(report.read_text(encoding="utf-8"))["rows"]
+    gating = [r for r in rows
+              if r["service"] in TASK_SET_SERVICES
+              and r["method"] in ("GET", "HEAD")
+              and r["verdict"] in ("schema_mismatch", "extract_empty", "request_rejected")]
+    assert not gating, "reads still stopping the gate: " + "; ".join(
+        f"{r['action_id']} {r['verdict']}: {r['detail'][:60]}" for r in gating[:5])
+
+
+def test_a_corpus_fixture_gap_never_gates():
+    """`not_executable` is benign, so a fixture gap cannot stop an import."""
+    from wb_world import conformance
+    assert "not_executable" in conformance.BENIGN
