@@ -20,39 +20,47 @@ ROOT = Path(__file__).resolve().parents[1]
 CORPUS = sorted((ROOT / "corpus").glob("imported-*"))
 
 
-def _manifest() -> dict:
-    return yaml.safe_load((ROOT / "tasks" / "tiers-manifest.yaml").read_text(encoding="utf-8"))
+def _manifest(root: Path = ROOT) -> dict:
+    return yaml.safe_load((root / "tasks" / "tiers-manifest.yaml").read_text(encoding="utf-8"))
 
 
-def test_refreeze_keeps_every_task_id():
-    before = {name: [t["task"] for t in _manifest()["sets"][name]["tasks"]]
+@pytest.fixture
+def frozen(tmp_path):
+    """A copy of the frozen sets: refreezing must never rewrite the committed ones."""
+    import shutil
+    shutil.copytree(ROOT / "tasks", tmp_path / "tasks")
+    return tmp_path
+
+
+def test_refreeze_keeps_every_task_id(frozen):
+    before = {name: [t["task"] for t in _manifest(frozen)["sets"][name]["tasks"]]
               for name in tiers.SET_NAMES}
-    result = tiers.refreeze(CORPUS, out=ROOT / "tasks")
+    result = tiers.refreeze(CORPUS, out=frozen / "tasks")
     for name in tiers.SET_NAMES:
         assert result.sets[name] == before[name], name
 
 
-def test_refreeze_writes_the_corpus_hash_each_task_now_carries():
-    tiers.refreeze(CORPUS, out=ROOT / "tasks")
+def test_refreeze_writes_the_corpus_hash_each_task_now_carries(frozen):
+    tiers.refreeze(CORPUS, out=frozen / "tasks")
     corpus = {}
     for d in CORPUS:
         for p in d.glob("*.json"):
             task = json.loads(p.read_text(encoding="utf-8"))
             corpus[task["task"]] = task["contract_sha256"]
     for name in tiers.SET_NAMES:
-        for p in (ROOT / "tasks" / name).glob("*.json"):
+        for p in (frozen / "tasks" / name).glob("*.json"):
             task = json.loads(p.read_text(encoding="utf-8"))
             assert task["contract_sha256"] == corpus[task["task"]], task["task"]
 
 
-def test_refreeze_manifest_records_the_same_seed_and_the_new_hashes():
-    tiers.refreeze(CORPUS, out=ROOT / "tasks")
-    manifest = _manifest()
+def test_refreeze_manifest_records_the_same_seed_and_the_new_hashes(frozen):
+    tiers.refreeze(CORPUS, out=frozen / "tasks")
+    manifest = _manifest(frozen)
     assert manifest["seed"] == 20260904
     assert manifest["refrozen_at"], "a refreeze must say when it happened"
     for name in tiers.SET_NAMES:
         for row in manifest["sets"][name]["tasks"]:
-            path = ROOT / "tasks" / name / f"{row['task']}.json"
+            path = frozen / "tasks" / name / f"{row['task']}.json"
             task = json.loads(path.read_text(encoding="utf-8"))
             assert row["contract_sha256"] == task["contract_sha256"], row["task"]
 
