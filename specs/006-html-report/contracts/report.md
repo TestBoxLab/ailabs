@@ -62,7 +62,7 @@ success, cost and time tables per round.
 | 2 | Success (`success`) | strict pass rate per competitor as a bar chart with error bars, the same table, the task x competitor matrix with its details table, and the paired comparison with its plain-words verdict |
 | 3 | Cost (`cost`) | total / per attempt / per passed attempt, a bar chart of cost per passed attempt, the four token counts and the cache hit rate; for Monarch, cost by phase (builder, dispatch) and by model of its team |
 | 4 | Time (`time`) | wall-clock mean and median with a bar chart of the median, turns and tool calls; for Monarch, builder and dispatch wall-clock separately |
-| 5 | Monarch phases (`monarch-phases`) | one row per Monarch attempt; rendered only when a Monarch competitor is on the page |
+| 5 | Monarch phases (`monarch-phases`) | one row per Monarch attempt, plus an "attempts by outcome" summary; rendered only when a Monarch competitor is on the page |
 | 6 | Failures (`failures`) | every attempt that did not pass |
 | 7 | Provenance (`provenance`) | what produced the numbers |
 
@@ -91,7 +91,7 @@ an engine that timed out running a workflow that was written correctly.
 |---|---|
 | task | `task_id` |
 | repetition | `trial` |
-| builder | `declined` when `no_workflow` is flagged; `timeout` when the attempt timed out with no `execution` phase; `error` on `agent_error`; else `done` |
+| builder | `declined` when `no_workflow` is flagged; `needs_input` when `error` starts `needs_input:` (the attempt ended before the run, asking for the named inputs; `inputs_required=<n>` names how many); `timeout` when the attempt timed out with no `execution` phase; `error` on `agent_error`; else `done` |
 | questions | the `questions_asked=N` flag, summed |
 | builder s | `phases.authoring.wall_clock_s` |
 | builder cost | `phases.authoring.cost_usd` |
@@ -99,6 +99,28 @@ an engine that timed out running a workflow that was written correctly.
 | dispatch s | `phases.execution.wall_clock_s` |
 | checker | `pass` / `fail`, from `passed` |
 | reason | `error`, first 200 characters |
+
+## 5b. Monarch attempts by outcome - one row per outcome
+
+Rendered wherever section 5a is (same gate: at least one Monarch competitor on
+the page). `monarch_attempts(rows)` from section 5a is bucketed into exactly one
+of seven plain-words outcomes, checked in this order:
+
+| Outcome | Chosen when |
+|---|---|
+| passed | `checker == "pass"` |
+| asked for user input | builder is `needs_input` |
+| declined to build | builder is `declined` |
+| builder error or timeout | builder is `timeout` or `error`, or dispatch is `parked-timeout` / `error` |
+| dispatch error | dispatch is `infrastructure` or `refused` |
+| ran but the change was not made | dispatch is `success` and the checker still failed |
+| checker failed for another reason | none of the above |
+
+| Column | Formula |
+|---|---|
+| outcome | the plain-words label above |
+| count | attempts of this round's Monarch rows falling into that outcome |
+| share | `count / len(monarch_attempts(rows))`; `n/a` when there are no Monarch attempts |
 
 ## Notation
 
@@ -272,10 +294,11 @@ One row per task of the round's task set, one column per competitor.
 
   | Category | Chosen when |
   |---|---|
+  | `infra` | `infra(r)`; the termination is the detail (checked first) |
   | `unexpected change` | `r["unexpected_changes"]` is non-empty; the paths are the detail |
   | `assertion failed` | `r["assertions_passed"]` is false |
+  | `needs_input` | `r["error"]` starts `needs_input:`; the string is the detail - "asked for user input", distinct from a plain `error` |
   | `error` | `r["error"]` is set; the string is the detail |
-  | `infra` | `infra(r)`; the termination is the detail |
   | `passed` | none of the above |
 
   Rendered as the cell's `title` attribute **and** repeated in a details table
