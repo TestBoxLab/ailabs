@@ -125,8 +125,41 @@ def resolve(path: str, body: Any) -> Any:
     return cur
 
 
+def present(path: str, body: Any) -> bool:
+    """Does every step of `path` exist in `body`, whatever its value?
+
+    `{"summary": null}` HAS a summary key: the handler wrote it, the record just
+    carries no value for it. `resolve` cannot tell that from an absent key, and
+    treating the two alike blamed the seed for an optional the fixture left
+    blank.
+    """
+    if not path.startswith("$"):
+        return False
+    cur = body
+    for m in _STEP.finditer(path[1:]):
+        key, index = m.group(1), m.group(2)
+        if key is not None:
+            if not isinstance(cur, dict) or key not in cur:
+                return False
+            cur = cur[key]
+        else:
+            if not isinstance(cur, list) or int(index) >= len(cur):
+                return False
+            cur = cur[int(index)]
+    return True
+
+
 def _empty(value: Any) -> bool:
-    return value is None or value == "" or value == [] or value == {}
+    """Did the extract path resolve to nothing at all?
+
+    A PRESENT but empty collection is not nothing: `{"Accounts": []}` is the
+    right answer from a world that seeds no accounts, the engine binds a real
+    array, and the step that iterates it simply runs zero times. Counting `[]`
+    and `{}` as empty blamed the catalogue for the fixture -- 29 of the read
+    findings of 4 Sep 2026 were Xero, Zendesk and LinkedIn collections the
+    corpus never seeded, every one of them a correct seed.
+    """
+    return value is None or value == ""
 
 
 # -- the small stdlib schema validator ---------------------------------------
@@ -174,6 +207,38 @@ def schema_diffs(schema: dict, value: Any, path: str = "$", limit: int = 3) -> l
     return out
 
 
+def is_error_body(body: Any) -> bool:
+    """Did the app refuse this request, in any of the shapes it uses?
+
+    Only `{"error": {"code": ...}}` was recognised, so three other spellings were
+    schema-checked as successes and the seed was blamed for a record the app
+    never returned: Zendesk answers `{"error": "RecordNotFound", ...}`, LinkedIn
+    `{"success": false, "error": ...}` and Twitter `{"errors": [...]}`.
+
+    `success: false` alone is enough; `success: true` beside an `error` key is
+    not an error at all (a field legitimately NAMED "error" would be typed).
+    """
+    if not isinstance(body, dict):
+        return False
+    if body.get("success") is False:
+        return True
+    if isinstance(body.get("errors"), list) and body["errors"]:
+        return True
+    err = body.get("error")
+    if isinstance(err, str) and err:
+        return True
+    if isinstance(err, dict) and err:
+        return True
+    # Zoom refuses with a bare `{"code": 404, "message": ...}` and no `error`
+    # key at all. A failing HTTP status beside a message is a refusal; a `code`
+    # that is not an integer status (a coupon code) is an ordinary field.
+    code = body.get("code")
+    if isinstance(code, int) and not isinstance(code, bool) and code >= 300 \
+            and "message" in body:
+        return True
+    return False
+
+
 def _kind(v: Any) -> str:
     if isinstance(v, bool):
         return "boolean"
@@ -213,7 +278,12 @@ def _entity_ids(state: Any, entity_type: str) -> list[str]:
     so match the key on the singular/plural of the entity type and take the
     `id` of each record under it.
     """
-    wanted = {entity_type, entity_type + "s", entity_type.rstrip("s")}
+    # `company` lives under `companies`: an -ies plural was unreachable when the
+    # only candidates were the word itself plus an "s".
+    wanted = {entity_type, entity_type + "s", entity_type.rstrip("s"),
+              entity_type + "es"}
+    if entity_type.endswith("y"):
+        wanted.add(entity_type[:-1] + "ies")
     found: list[str] = []
 
     def walk(node: Any, key: str | None) -> None:
@@ -230,7 +300,9 @@ def _entity_ids(state: Any, entity_type: str) -> list[str]:
                 walk(item, key)
 
     walk(state, None)
-    return found
+    # A record is reached both as a list item and by the recursive descent, so
+    # the same id lands twice; order is kept because the first one wins.
+    return list(dict.fromkeys(found))
 
 
 def _any_id(state: Any) -> str | None:
@@ -336,21 +408,29 @@ class _Filler:
         self.fields = _record_fields(state)
         self.names = _named_values(state)
 
+    def _entity_id(self, name: str, param: dict) -> Any:
+        """An id of the RIGHT entity from this world, or None.
+
+        Falling through to a generic `id` field hands a draft route a message id
+        and earns a 404 that would read as a false seed. The parameter's own name
+        is a second legitimate clue ("employeeId" -> the employees collection).
+        """
+        for hint in (str(param.get("entity_type") or ""),
+                     re.sub(r"(_?id|Id)$", "", name)):
+            ids = _entity_ids(self.state, hint) if hint else []
+            if ids:
+                return ids[0]
+        return None
+
     def _from_world(self, name: str, param: dict) -> Any:
         """A value this world really carries for `name`, or None."""
-        if name.lower() in TENANT_IDS:
+        if name.lower() in TENANT_IDS and not self._entity_id(name, param):
+            # ...unless the world really holds the record it names. LinkedIn's
+            # `company_id` addresses a COMPANY; the same spelling scopes the whole
+            # baseUrl for Recruitee. A real id is always the better answer.
             return "001401"                  # ignored by the router; any value routes
         if param.get("classification") == "entity_reference":
-            # Only an id of the RIGHT entity will do: falling through to a
-            # generic `id` field hands a draft route a message id and earns a
-            # 404 that would read as a false seed. The parameter's own name is a
-            # second legitimate clue ("employeeId" -> the employees collection).
-            for hint in (str(param.get("entity_type") or ""),
-                         re.sub(r"(_?id|Id)$", "", name)):
-                ids = _entity_ids(self.state, hint) if hint else []
-                if ids:
-                    return ids[0]
-            return None
+            return self._entity_id(name, param)
         # A parameter named like a collection in the world (`sobject`, `type`)
         # takes that collection's name; one named like a record field takes the
         # field's value (`title`, `range` -> a real worksheet title).
@@ -469,9 +549,9 @@ def front_door_to_world(url: str, schemas: dict) -> tuple[str, str] | None:
     service = parts[0]
     if service not in schemas:
         return None
-    base = schemas[service].get("baseUrl", "").rstrip("/")
+    from wb_world.openapi import world_url
     rest = parts[1] if len(parts) > 1 else ""
-    return service, f"{base}/{rest}" + (f"?{sp.query}" if sp.query else "")
+    return service, world_url(service, rest, schemas) + (f"?{sp.query}" if sp.query else "")
 
 
 def _required_in_schema(schema: Any, path: str | None) -> bool:
@@ -568,8 +648,16 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     row.url = mapped[1]
     body = _render_body(step.get("body_template"), filler)
 
+    # AutomationBench's `api_fetch` does NOT parse a URL's query string: the
+    # front door (`wb_arms/http_shim.py::_rest`) splits it off and passes it as
+    # `params`. Inlining it made the Sheets read ask for a spreadsheet named
+    # `ss_parking?ranges=...`, a "not found" that read as a broken seed.
+    from urllib.parse import parse_qs, urlsplit
+    split = urlsplit(row.url)
+    params = {k: v[-1] for k, v in parse_qs(split.query, keep_blank_values=True).items()}
     try:
-        raw = ep.api_fetch(method, row.url,
+        raw = ep.api_fetch(method, split._replace(query="").geturl(),
+                           params=json.dumps(params) if params else None,
                            body=json.dumps(body) if body not in (None, {}) else None)
     except Exception as e:                       # AB routers raise on malformed input
         # A router that blew up on a body this check invented says nothing about
@@ -597,6 +685,14 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
         row.verdict = "request_rejected"
         row.detail = f"{err.get('code')}: {err.get('message') or ''}"[:200]
         return row
+    if is_error_body(response):
+        # The same rule for the shapes that carry no code: a refusal is a refusal
+        # whether the app spells it `{"error": "RecordNotFound"}`, `{"success":
+        # false}` or `{"errors": [...]}`. Schema-checking these blamed the seed
+        # for a record the request never asked for successfully.
+        row.verdict = "request_rejected"
+        row.detail = json.dumps(response)[:200]
+        return row
 
     extracts = (step.get("response_template") or {}).get("extract") or {}
     row.thin = method in READ_METHODS and bool(extracts) and all(
@@ -613,8 +709,11 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
     # An optional field that this particular record leaves blank (a mail with no
     # cc) is not a false seed. Only a *required* empty extract, or an action
     # whose every extract is empty, says the declared outputs are not real.
+    # A key the response CARRIES, even holding null, is not an empty extract:
+    # the engine binds it and the value is the record's own "none here".
     empty = [name for name, path in extracts.items()
-             if not isinstance(path, str) or _empty(resolve(path, response))]
+             if not isinstance(path, str)
+             or (_empty(resolve(path, response)) and not present(path, response))]
     if empty:
         required = {name for name in empty
                     if _required_in_schema(schema, extracts.get(name))}

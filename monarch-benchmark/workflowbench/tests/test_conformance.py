@@ -303,3 +303,142 @@ def test_an_unsubstituted_baseurl_variable_is_not_a_seed_defect(tmp_path, corpus
     if report.rows:                            # bamboohr is in the corpus
         assert report.rows[0].verdict == "not_executable"
         assert report.failed_services() == []
+
+
+def test_a_present_but_empty_collection_is_not_extract_empty():
+    """`{"Accounts": []}` is a correct answer from a world with no accounts.
+
+    The extract resolved: the key is there and the engine binds a real (empty)
+    array, which a later step iterates zero times. Calling that a false seed
+    blamed the catalogue for the FIXTURE being empty -- 29 of the read findings
+    of 4 Sep 2026 were Xero, Zendesk and LinkedIn collections the corpus simply
+    never seeded. Only a path that resolves to nothing at all is a finding.
+    """
+    assert conformance.resolve("$.Accounts", {"Accounts": []}) == []
+    assert conformance.resolve("$.Accounts", {}) is None
+    # present-but-empty is distinguishable from absent, and only absent is empty
+    assert not conformance._empty(conformance.resolve("$.Accounts", {"Accounts": []}))
+    assert conformance._empty(conformance.resolve("$.Accounts", {}))
+
+
+def test_an_empty_list_response_reads_as_ok(tmp_path, corpus_dirs):
+    """End to end: a list whose collection is empty in this world is `ok`."""
+    action = _sheets_read(
+        {"type": "object", "properties": {"values": {"type": "array"}},
+         "required": ["values"]},
+        extract={"values": "$.values"})
+    _write_seed(tmp_path / "bench-google-sheets", "read_values", action)
+    report = conformance.check(tmp_path, corpus_dirs)
+    row = report.rows[0]
+    assert row.verdict != "extract_empty", row.detail
+
+
+@pytest.mark.parametrize("body", [
+    {"error": "RecordNotFound", "description": "Group with ID grp_x not found"},
+    {"success": False, "error": "Company '001401' not found"},
+    {"errors": [{"detail": "Authenticated user not found"}]},
+])
+def test_an_error_body_is_never_schema_checked(body):
+    """A failed request is not the success contract, whatever shape it takes.
+
+    v5.1's check recognised only `{"error": {"code": ...}}`, so Zendesk's string
+    error, LinkedIn's `{success: false, error}` and Twitter's `{errors: [...]}`
+    were schema-checked as if they had succeeded, and the seed was blamed for a
+    record the app never returned (five read findings of 4 Sep 2026).
+    """
+    assert conformance.is_error_body(body), body
+
+
+@pytest.mark.parametrize("body", [
+    {"CompanyInfo": {"CompanyName": "AutomationBench Company"}},
+    {"Accounts": []},
+    {"ok": True, "members": []},
+    {"success": True, "calendars": []},
+])
+def test_a_success_body_is_not_mistaken_for_an_error(body):
+    assert not conformance.is_error_body(body), body
+
+
+def test_a_key_present_but_null_is_not_an_empty_extract():
+    """`"summary": null` is the record saying this person wrote none.
+
+    The handler writes the key unconditionally, so the envelope rightly declares
+    it required and the extract rightly names it -- the response simply carries
+    no value for THIS record. Reading that as a false seed blamed the catalogue
+    for the fixture again, the same mistake as the empty collection.
+    """
+    body = {"id": "prof_1", "summary": None, "phone": None}
+    assert conformance.resolve("$.summary", body) is None
+    assert conformance.present("$.summary", body)      # the key IS there
+    assert not conformance.present("$.nothere", body)
+
+
+@pytest.mark.parametrize("body", [
+    {"code": 404, "message": "Recording for meeting 'mtg_h1' not found"},
+    {"code": 300, "message": "moved"},
+])
+def test_a_bare_status_code_body_is_an_error(body):
+    """Zoom refuses with `{"code": 404, "message": ...}` and no `error` key.
+
+    Schema-checking that as a success blamed the seed for a recording the world
+    does not hold.
+    """
+    assert conformance.is_error_body(body), body
+
+
+@pytest.mark.parametrize("body", [
+    {"code": "ABC123", "message": "a coupon code, not a status"},
+    {"code": 200, "message": "ok"},
+])
+def test_a_code_that_is_not_a_failing_status_is_not_an_error(body):
+    assert not conformance.is_error_body(body), body
+
+
+def test_the_query_string_is_passed_as_params_like_the_shim_does(tmp_path, corpus_dirs):
+    """AutomationBench's `api_fetch` never parses a URL's query string.
+
+    `wb_arms/http_shim.py::_rest` splits it and passes `params=`; this check
+    inlined it, so the Sheets read asked for a spreadsheet literally named
+    `ss_parking?ranges=Parking Spots!A1:Z100` and got a "not found" that read as
+    a broken seed. The check must call the world exactly as the front door does.
+    """
+    action = _sheets_read(
+        {"type": "object", "properties": {"spreadsheetId": {"type": "string"}}},
+        extract={"spreadsheetId": "$.spreadsheetId"})
+    step = action["implementations"][0]["http_template"]["steps"][0]
+    step["url_template"] = step["url_template"].split("?")[0]
+    _write_seed(tmp_path / "bench-google-sheets", "read_values", action)
+    report = conformance.check(tmp_path, corpus_dirs)
+    assert "?" not in report.rows[0].url.split("/")[-1] or \
+        report.rows[0].verdict != "request_rejected", report.rows[0].detail
+
+
+def test_an_entity_whose_plural_changes_spelling_is_still_found():
+    """`company` lives under `companies`, not `companys`.
+
+    `_entity_ids` built its candidate keys by adding an "s", so every entity with
+    an -ies plural fell through to no id at all and the action was reported as a
+    refusal the seed had nothing to do with.
+    """
+    state = {"companies": [{"id": "li_co_1"}, {"id": "li_co_2"}]}
+    assert conformance._entity_ids(state, "company") == ["li_co_1", "li_co_2"]
+    # the plain plural still works
+    assert conformance._entity_ids({"groups": [{"id": "g1"}]}, "group") == ["g1"]
+
+
+def test_a_tenant_name_that_addresses_a_record_is_not_treated_as_a_tenant():
+    """LinkedIn's `company_id` names a COMPANY, not the workspace.
+
+    `company_id` sits in the tenant list -- right for Recruitee, whose whole
+    baseUrl is scoped by it -- so the check short-circuited to the stock filler
+    and asked for company "001401", a "not found" that read as a broken seed.
+    An entity reference the world can actually satisfy wins over that shortcut.
+    """
+    state = {"companies": [{"id": "li_co_1"}]}
+    param = {"name": "company_id", "location": "path",
+             "classification": "entity_reference", "entity_type": "organization",
+             "example_value": "001401"}
+    filler = conformance._Filler([param], state)
+    value, from_world = filler.value("company_id", path=True)
+    assert value == "li_co_1", f"took {value!r} instead of the company in the world"
+    assert from_world

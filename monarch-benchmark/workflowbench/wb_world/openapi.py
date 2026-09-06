@@ -21,14 +21,77 @@ from ingester.graph_ingest import _load_jsonc
 _PATH_VAR = re.compile(r"\{(\w+)\}")
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
+# Five services carry a `{var}` in their own baseUrl -- the tenant segment
+# BambooHR spells `{companyDomain}` and Recruitee `{company_id}`. The front door
+# is one flat `{host}/{service}/{rest}`, so that segment has nowhere to live
+# unless the published path carries it: v5.1 left it in the baseUrl only, and
+# the shim rebuilt `baseUrl + rest` with the placeholder still literal, so no AB
+# router ever matched (132 bamboohr + recruitee actions `not_executable`).
+# It becomes the FIRST segment of the published path, an ordinary path
+# parameter, and `world_url` puts it back where the baseUrl wants it.
+_BASE_VARS: dict[str, str] = {}
+
+
+def base_var(service: str, schemas: dict[str, dict[str, Any]] | None = None) -> str:
+    """The placeholder the service's baseUrl leaves for the caller, or ""."""
+    if service not in _BASE_VARS:
+        docs = schemas if schemas is not None else load_schemas()
+        found = _PATH_VAR.findall((docs.get(service) or {}).get("baseUrl", ""))
+        _BASE_VARS[service] = found[0] if found else ""
+    return _BASE_VARS[service]
+
 
 def load_schemas(schema_dir: Path = SCHEMAS_DIR) -> dict[str, dict[str, Any]]:
     return {p.stem: _load_jsonc(p) for p in sorted(Path(schema_dir).glob("*.jsonc"))}
 
 
+def _ab_prefix(service: str) -> str:
+    """AB's routing prefix. The five placeholder services have no `_INTERNAL_PREFIX`
+    entry, yet their jsonc paths still start with `<service>/`; leaving it on
+    published `/bamboohr/bamboohr/v1/...`, which routes nowhere."""
+    declared = _INTERNAL_PREFIX.get(service, "")
+    return declared or (service + "/")
+
+
 def real_path(service: str, internal_path: str) -> str:
-    """The path Monarch calls: the jsonc path minus AB's routing prefix."""
-    return "/" + internal_path.removeprefix(_INTERNAL_PREFIX.get(service, "")).lstrip("/")
+    """The path Monarch calls: the jsonc path minus AB's routing prefix.
+
+    For a service whose baseUrl carries a placeholder, that placeholder leads the
+    path instead, so the front-door URL names every segment the world needs.
+    """
+    rest = internal_path.removeprefix(_ab_prefix(service)).lstrip("/")
+    var = base_var(service)
+    if not var:
+        return "/" + rest
+    # Recruitee's own paths already spell the segment (`v1/c/{company_id}/...`);
+    # BambooHR's do not. Either way it appears exactly once, at the front.
+    marker = "{%s}" % var
+    if marker in rest:
+        # Recruitee spells the tenant inside its own path
+        # (`v1/c/{company_id}/offers`) AND in its baseUrl (`.../c/{company_id}`).
+        # The baseUrl already supplies everything up to and including the tenant,
+        # so only what follows it belongs on the path -- publishing both would
+        # send the segment twice and route nowhere.
+        rest = rest.partition(marker)[2].strip("/")
+    return f"/{marker}/{rest}" if rest else f"/{marker}"
+
+
+def world_url(service: str, rest: str, schemas: dict[str, dict[str, Any]]) -> str:
+    """The world URL for a front-door path, substituting the baseUrl placeholder.
+
+    `bamboohr/acme/v1/employees` -> `https://api.bamboohr.com/api/gateway.php/acme/v1/employees`.
+    The AB router matches the tenant segment as `[^/]+`, so any value routes; what
+    it cannot do is match a literal `{companyDomain}`.
+    """
+    base = (schemas.get(service) or {}).get("baseUrl", "").rstrip("/")
+    var = base_var(service, schemas)
+    if var:
+        # The first published segment IS the tenant: it fills the baseUrl's slot
+        # (wherever in the baseUrl that sits) and the rest follows.
+        tenant, _, tail = rest.partition("/")
+        if tenant:
+            base, rest = base.replace("{%s}" % var, tenant), tail
+    return f"{base}/{rest}" if rest else base
 
 
 def _param_schema(p: dict[str, Any]) -> dict[str, Any]:

@@ -552,7 +552,7 @@ def test_bodyless_methods_carry_an_explicit_null_body(generated):
 def test_manifest_records_the_version_and_a_stable_digest(generated, tmp_path):
     out, summary = generated
     manifest = json.loads((out / "ok.txt").read_text(encoding="utf-8"))
-    assert manifest["version"] == seeds.VERSION == "v5.1"
+    assert manifest["version"] == seeds.VERSION == "v5.2"
     assert manifest["canonical"] is True
     assert manifest["products"] == len(summary.folders)
     assert manifest["actions"] == summary.files_written
@@ -749,3 +749,398 @@ def test_an_opaque_body_field_says_how_to_build_one(generated):
     raw = next(p for p in impl["parameters"] if p["name"] == "raw")
     helper = raw["constraints"]["helper_text"].lower()
     assert "base64" in helper and "rfc 2822" in helper
+
+
+# -- v5.2: the rows of a list are the records the world really serves ---------
+
+def test_soql_records_carry_the_wire_field_spelling(generated):
+    """`SELECT Id, Name FROM Account` answers `records[].Id`, never `records[].id`.
+
+    Monarch's builder wrote `records[0].id` off v5.1's open-map row schema and the
+    step resolved to nothing: the mock's `_salesforce_record_dict` serialises the
+    model's `to_display_dict`, whose identifier is `Id`. A row schema with no
+    properties could not catch it, so the sObject fields are named here.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-salesforce" / "bench-salesforce_list_query.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    row = step["response_template"]["schema"]["properties"]["records"]["items"]
+    props = row["properties"]
+    assert "Id" in props, "the SOQL row must name the identifier the wire carries"
+    assert "id" not in props, "`id` is not a field of a Salesforce record"
+    assert "Name" in props and "StageName" in props, "per-object fields must be named"
+    assert row.get("additionalProperties") is True, "a SELECT chooses its own columns"
+    assert row.get("required") == ["Id"]
+
+
+def test_an_open_row_is_replaced_by_the_fields_the_model_declares(generated):
+    """A list whose rows were an open map now names the service's own fields."""
+    out, _ = generated
+    for seed_file, key, wanted in [
+        ("bench-salesforce/bench-salesforce_list_query.json", "results", "Id"),
+        ("bench-xero/bench-xero_list_invoices.json", "Invoices", "InvoiceID"),
+    ]:
+        path = out / seed_file
+        if not path.exists():
+            continue
+        step = (json.loads(path.read_text(encoding="utf-8"))
+                ["implementations"][0]["http_template"]["steps"][0])
+        row = step["response_template"]["schema"]["properties"][key]["items"]
+        assert wanted in (row.get("properties") or {}), f"{seed_file}: {key} rows are open"
+
+
+def test_a_base_url_placeholder_becomes_a_path_parameter(generated):
+    """BambooHR's {companyDomain} and Recruitee's {company_id} live in the baseUrl.
+
+    v5.1 published the front-door URL without them, so the shim rebuilt a world
+    URL that still carried the raw `{companyDomain}` and no router ever matched:
+    ~169 actions were unreachable. The placeholder belongs on the front door as a
+    path token, declared like any other path parameter.
+    """
+    out, _ = generated
+    for folder, token in [("bench-bamboohr", "companyDomain"),
+                          ("bench-recruitee", "company_id")]:
+        files = [p for p in sorted((out / folder).glob("*.json"))
+                 if p.name != "_meta.json"]
+        assert files, f"{folder} has no actions"
+        impl = json.loads(files[0].read_text(encoding="utf-8"))["implementations"][0]
+        url = impl["http_template"]["steps"][0]["url_template"]
+        assert "{{%s}}" % token in url, f"{folder}: {token} is not on the front door"
+        assert "{%s}" % token not in url.replace("{{%s}}" % token, ""), \
+            f"{folder}: a bare {{{token}}} survives in the URL"
+        assert any(p["name"] == token and p["location"] == "path"
+                   for p in impl["parameters"]), \
+            f"{folder}: {token} is not declared as a path parameter"
+
+
+@pytest.mark.parametrize("seed_file,key", [
+    ("bench-gmail/bench-gmail_list_messages.json", "resultSizeEstimate"),
+    ("bench-gmail/bench-gmail_list_threads.json", "resultSizeEstimate"),
+    ("bench-jira/bench-jira_list_search.json", "total"),
+    ("bench-mailchimp/bench-mailchimp_list_lists.json", "total_items"),
+    ("bench-google-calendar/bench-google-calendar_list_calendarlist.json", "resultCount"),
+])
+def test_a_counted_scalar_is_typed_as_a_number_not_a_record(generated, seed_file, key):
+    """`"resultSizeEstimate": len(messages)` is an integer on the wire.
+
+    v5.1 read the handler's literal but did not know what `len(...)` evaluates
+    to, so the key stayed untyped, `_action`'s "one open object is the record"
+    rule promoted it, and the seed advertised a whole Message record where the
+    response carries a count. Sixteen read findings shared this one cause.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    prop = step["response_template"]["schema"]["properties"][key]
+    assert prop["type"] == "integer", f"{seed_file}: {key} is {prop['type']}, not a count"
+    assert "properties" not in prop, f"{seed_file}: {key} still carries record fields"
+
+
+@pytest.mark.parametrize("seed_file", [
+    "bench-zoho-desk/bench-zoho-desk_list_tickets.json",
+    "bench-freshdesk/bench-freshdesk_list_v2-tickets.json",
+])
+def test_a_handler_that_returns_a_bare_array_is_declared_as_one(generated, seed_file):
+    """Some lists answer `[{...}]`, with no wrapper key at all.
+
+    `json.dumps([t.to_display_dict() for t in ...])` is the whole body. v5.1
+    wrapped every list under a collection key, so the seed promised `$.tickets`
+    where the response is the array itself: the extract resolved to nothing and
+    the planner could not read a single row.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    schema = step["response_template"]["schema"]
+    assert schema["type"] == "array", f"{seed_file}: declared {schema['type']}, wire is an array"
+    # `$` is the whole body: the only path that reaches a bare array.
+    assert list(step["response_template"]["extract"].values()) == ["$"]
+
+
+@pytest.mark.parametrize("seed_file", [
+    "bench-hubspot/bench-hubspot_list_contacts.json",
+    "bench-hubspot/bench-hubspot_list_companies.json",
+    "bench-hubspot/bench-hubspot_list_deals.json",
+    "bench-hubspot/bench-hubspot_list_tickets.json",
+])
+def test_a_paging_cursor_beside_a_collection_is_not_the_record(generated, seed_file):
+    """HubSpot answers `{results: [...], paging: {next: {after}}}`.
+
+    `paging` is a cursor, not a contact. v5.1's "an envelope holding one open
+    object is holding the record" rule -- right for Asana's `{data: {...}}` --
+    fired here too and published every contact field under `paging`, so the
+    builder was told `paging.email` exists.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert props["results"]["type"] == "array"
+    assert not (props["paging"].get("properties") or {}), \
+        "paging carries record fields it does not have"
+
+
+@pytest.mark.parametrize("seed_file,field,type_", [
+    ("bench-freshdesk/bench-freshdesk_read_tickets.json", "subject", "string"),
+    ("bench-freshdesk/bench-freshdesk_read_tickets.json", "description", "string"),
+    ("bench-freshdesk/bench-freshdesk_read_contacts.json", "email", "string"),
+])
+def test_a_flat_record_built_by_a_helper_keeps_its_field_types(
+        generated, seed_file, field, type_):
+    """`return json.dumps(_ticket_to_resource(t))` answers the RECORD, flat.
+
+    Its keys were read correctly but every value is `ticket.<attr>` -- an
+    attribute the envelope reader cannot type -- so all fourteen were published
+    as untyped objects and the builder was told `subject` is a nested object.
+    The model behind the attribute says what each one is.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    prop = step["response_template"]["schema"]["properties"][field]
+    assert prop["type"] == type_, f"{seed_file}: {field} is {prop['type']}, not {type_}"
+
+
+def test_a_record_promises_no_field_the_wire_can_prune(generated):
+    """`to_display_dict` drops empty values, so a record guarantees nothing.
+
+    v5.1 promised the identifier on every record schema. But QuickBooks answers
+    `{"CompanyInfo": {"CompanyName": ..., "Country": ...}}` -- a hardcoded literal
+    with no `Id` at all -- and Zoom's recordings omit theirs, so `required` was a
+    promise the response broke. Only a MODEL that states which keys survive may
+    say so; a derived record says nothing.
+    """
+    out, _ = generated
+    for seed_file, key in [
+        ("bench-quickbooks/bench-quickbooks_read_companyinfo.json", "CompanyInfo"),
+        ("bench-quickbooks/bench-quickbooks_list_preferences.json", "Preferences"),
+    ]:
+        path = out / seed_file
+        if not path.exists():
+            continue
+        step = (json.loads(path.read_text(encoding="utf-8"))
+                ["implementations"][0]["http_template"]["steps"][0])
+        inner = step["response_template"]["schema"]["properties"][key]
+        assert not inner.get("required"), \
+            f"{seed_file}: {key} promises {inner.get('required')}, which the wire prunes"
+
+
+@pytest.mark.parametrize("seed_file,key,field,type_", [
+    ("bench-quickbooks/bench-quickbooks_read_customer.json", "Customer", "Active", "string"),
+    ("bench-quickbooks/bench-quickbooks_read_customer.json", "Customer", "Balance", "string"),
+])
+def test_an_abbreviated_model_name_still_describes_its_resource(
+        generated, seed_file, key, field, type_):
+    """QuickBooks names its models `QBCustomer`, not `QuickbooksCustomer`.
+
+    `_record_schema` tried the service's own name as the prefix, missed every
+    model, and fell through to the jsonc schema -- which describes the REAL Intuit
+    API. The mock serialises `"Active": str(self.active).lower()`, a string, so
+    the seed promised a boolean the wire never sends.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"][key]["properties"]
+    assert props[field]["type"] == type_, \
+        f"{field} is {props[field]['type']}, the wire sends {type_}"
+
+
+@pytest.mark.parametrize("seed_file,path_to_array", [
+    ("bench-helpcrunch/bench-helpcrunch_list_customers.json", ("data", "events")),
+    ("bench-intercom/bench-intercom_list_conversations.json",
+     ("conversations", "conversation_parts")),
+])
+def test_an_array_of_records_does_not_claim_its_rows_are_strings(
+        generated, seed_file, path_to_array):
+    """`events: list[HelpCrunchCustomerEvent]` holds objects, not strings.
+
+    Every array field was declared `items: {type: string}` regardless of what it
+    holds, so the builder was told a list of event RECORDS was a list of words.
+    An array whose element type is a model says so instead.
+    """
+    out, _ = generated
+    path = out / seed_file
+    if not path.exists():
+        pytest.skip(f"{seed_file} is not part of this catalogue")
+    step = (json.loads(path.read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    node = step["response_template"]["schema"]["properties"][path_to_array[0]]
+    node = (node.get("items") or node)
+    field = (node.get("properties") or {})[path_to_array[1]]
+    assert field["type"] == "array"
+    assert (field.get("items") or {}).get("type") != "string", \
+        f"{seed_file}: {path_to_array[1]} rows are records, not strings"
+
+
+def test_a_status_code_guard_is_not_the_success_body(generated):
+    """`return json.dumps({"code": 404, "message": ...})` is the NOT-FOUND guard.
+
+    Zoom writes its refusal without an `error` key, so the reader took those two
+    keys for the response and published `{code, message}` as the meeting -- the
+    success return is `_meeting_to_resource(m)`, one line above.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-zoom" / "bench-zoom_read_meetings.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"].get("properties") or {}
+    assert set(props) != {"code", "message"}, "the 404 guard was published as the body"
+    assert "topic" in props or "id" in props, "the meeting's own fields are missing"
+
+
+def test_a_key_type_is_read_from_this_endpoint_not_a_namesake(generated):
+    """Zoom's meeting `id` is a string; some other Zoom handler writes an int one.
+
+    `_KEY_TYPES` is keyed by (service, key) and first-writer-wins, so the unrelated
+    literal typed the meeting read's `id` as an integer and the seed promised a
+    number where the wire sends `"mtg_h1"`.
+    """
+    out, _ = generated
+    for seed_file in ("bench-zoom/bench-zoom_read_meetings.json",
+                      "bench-zoom/bench-zoom_list_meeting-summary.json"):
+        path = out / seed_file
+        if not path.exists():
+            continue
+        step = (json.loads(path.read_text(encoding="utf-8"))
+                ["implementations"][0]["http_template"]["steps"][0])
+        prop = (step["response_template"]["schema"].get("properties") or {}).get("id")
+        if prop:
+            assert prop["type"] == "string", f"{seed_file}: id is {prop['type']}"
+
+
+def test_a_key_whose_value_may_be_none_is_not_promised(generated):
+    """`"createdDateTime": x.isoformat() if x else None` may not be there.
+
+    DocuSign's envelope builder writes three date keys that way and the response
+    prunes them when null, yet every key of the literal was declared `required`,
+    so the seed promised fields the wire had already dropped.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-docusign" / "bench-docusign_read_envelopes.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    required = set(step["response_template"]["schema"].get("required") or [])
+    for key in ("createdDateTime", "statusChangedDateTime", "lastModifiedDateTime"):
+        assert key not in required, f"{key} is promised but may be pruned"
+    # the keys the builder always writes are still promised
+    assert "envelopeId" in required and "status" in required
+
+
+def test_a_collection_row_is_not_filled_with_a_neighbouring_record(generated):
+    """DocuSign's `signers` are recipients; nothing models them.
+
+    Asking `_record_schema` for `<path>/signers` found no signer, walked back up
+    the path and answered the ENVELOPE -- so the seed said every signer carries
+    `emailSubject` and `envelopeId`, and the builder wired fields no row has.
+    An unmodelled row is an open row.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-docusign" / "bench-docusign_list_recipients.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    row = step["response_template"]["schema"]["properties"]["signers"]["items"]
+    props = row.get("properties") or {}
+    for alien in ("emailSubject", "envelopeId", "emailBlurb"):
+        assert alien not in props, f"a signer does not carry {alien}"
+
+
+def test_a_literal_annotation_keeps_the_type_of_its_values(generated):
+    """`priority: Literal[1, 2, 3, 4]` is an integer on the wire.
+
+    `_annotation_type` fell through every `Literal[...]` to its "string" default,
+    so Freshdesk's ticket promised strings where the API serves 1-4.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-freshdesk" / "bench-freshdesk_read_tickets.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert props["priority"]["type"] == "integer", props["priority"]
+    assert props["status"]["type"] == "integer", props["status"]
+
+
+def test_the_sheets_values_read_declares_rows_of_cells(generated):
+    """`values` is an array of ARRAYS -- one inner list per row of cells.
+
+    This is the read the whole conformance check exists for: v5 described the AB
+    `Spreadsheet` record here and Monarch's planner refused every Sheets task.
+    The rows are lists of scalars, and `majorDimension` is the handler's own
+    string parameter, not a nested object.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-google-sheets" / "bench-google-sheets_read_values.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    props = step["response_template"]["schema"]["properties"]
+    assert props["majorDimension"]["type"] == "string", props["majorDimension"]
+    assert props["values"]["type"] == "array"
+    assert props["values"]["items"]["type"] == "array", "a row is a list of cells"
+
+
+def test_a_bare_array_row_is_what_its_own_builder_makes(generated):
+    """Freshdesk's list is `[_ticket_to_resource(t) for t in ...]`.
+
+    The row is exactly what that helper writes -- the same fourteen keys the READ
+    serves. Falling back to the display-dict record added `priority_code` and
+    `status_code`, which this endpoint does not carry, and re-typed `priority`.
+    """
+    out, _ = generated
+    step = (json.loads((out / "bench-freshdesk" / "bench-freshdesk_list_v2-tickets.json")
+                       .read_text(encoding="utf-8"))
+            ["implementations"][0]["http_template"]["steps"][0])
+    row = step["response_template"]["schema"]["items"]
+    props = row.get("properties") or {}
+    assert "priority_code" not in props and "status_code" not in props
+    assert props["priority"]["type"] == "integer", props.get("priority")
+
+
+def test_the_manifest_carries_the_conformance_totals(generated):
+    """v5.2 records what the check made of the seeds it just wrote.
+
+    The digest says WHICH knowledge base this is; the conformance block says how
+    true it was against the simulated apps when it was written, so a later round
+    can be compared without re-running anything.
+    """
+    out, _ = generated
+    manifest = json.loads((out / "ok.txt").read_text(encoding="utf-8"))
+    block = manifest["conformance"]
+    assert isinstance(block, dict) and block
+    # every action is accounted for: a verdict, or counted as unrunnable here
+    assert sum(block.values()) == manifest["actions"]
+    assert block["ok"] > 0
+    # and the field the commit adds later is NOT written by the generator
+    assert "commit" not in manifest
+
+
+def test_the_digest_ignores_the_conformance_report(generated):
+    """`wb monarch conform` writes `conformance.json` INTO the seed folder.
+
+    `folder_sha256` globbed every `*.json`, so running the check changed the
+    knowledge base's own fingerprint -- two rounds with identical seeds would
+    have compared as different. Only the action files identify the set.
+    """
+    out, _ = generated
+    before = seeds.folder_sha256(out)
+    (out / "conformance.json").write_text('{"totals": {"ok": 1}}', encoding="utf-8")
+    try:
+        assert seeds.folder_sha256(out) == before, \
+            "the check's own report changed the knowledge-base digest"
+    finally:
+        (out / "conformance.json").unlink()

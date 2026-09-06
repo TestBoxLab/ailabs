@@ -325,10 +325,30 @@ def _display_records() -> dict[str, dict[str, dict[str, Any]]]:
                     or not hasattr(cls, "to_display_dict")
                     or not hasattr(cls, "model_fields")):
                 continue
+            # An abstract base is not a wire record. `SalesforceRecord` says so
+            # itself ("Subclasses should override this") and answers a bare
+            # snake_case `{"id": ...}`, while every real sObject serves `Id`.
+            # Kept, it matched `records` through the service-prefix rule and the
+            # SOQL row was published as `{id}` -- the field Monarch then wrote
+            # (`records[0].id`) and the engine could not resolve (4 Sep 2026).
+            if _is_abstract_base(cls):
+                continue
             fields = _display_fields(cls, ast, inspect, textwrap)
             if fields:
                 out.setdefault(service, {}).setdefault(name.lower(), fields)
     return out
+
+
+def _is_abstract_base(cls: Any) -> bool:
+    """True when a model only carries the placeholder `to_display_dict`.
+
+    A subclass overrides it; the base's own is the one whose body says so.
+    Detected structurally -- some other class inherits it -- rather than by name.
+    """
+    own = cls.__dict__.get("to_display_dict")
+    return own is not None and any(
+        sub.__dict__.get("to_display_dict") not in (None, own)
+        for sub in type.__subclasses__(cls))
 
 
 def _display_fields(cls: Any, ast: Any, inspect: Any, textwrap: Any) -> dict[str, Any]:
@@ -350,9 +370,65 @@ def _display_fields(cls: Any, ast: Any, inspect: Any, textwrap: Any) -> dict[str
             attr = value.attr if isinstance(value, ast.Attribute) else None
             field = model_fields.get(attr) if attr else None
             annotation = getattr(field, "annotation", None)
+            if field is None:
+                # Not a model attribute: a local the method built, or an
+                # expression. The code still says what type it is -- Slack's
+                # `profile` is a `dict[str, str]` assembled in the body, and
+                # defaulting it to `string` published a string where the wire
+                # carries an object.
+                literal = _expr_type(value, ast) or (
+                    _local_types(tree, ast).get(value.id, "")
+                    if isinstance(value, ast.Name) else "")
+                if literal:
+                    spec = {"type": literal, "required": False}
+                    # `[e.to_display_dict() for e in self.events]` builds rows of
+                    # RECORDS. Left as a bare array its rows defaulted to strings,
+                    # so the builder was told a list of events was a list of words.
+                    if literal == "array" and _comprehends_records(value, ast):
+                        spec["items"] = "object"
+                    out.setdefault(key.value, spec)
+                    continue
             type_, optional = _annotation_type(annotation)
-            out.setdefault(key.value, {"type": type_, "required": not optional})
+            spec: dict[str, Any] = {"type": type_, "required": not optional}
+            if type_ == "array":
+                # `events: list[HelpCrunchCustomerEvent]` holds RECORDS. Declaring
+                # every array's rows as strings told the builder a list of events
+                # was a list of words.
+                spec["items"] = _element_type(annotation)
+            out.setdefault(key.value, spec)
     return out
+
+
+def _comprehends_records(value: Any, ast: Any) -> bool:
+    """Does this list build rows that are themselves records?
+
+    `[e.to_display_dict() for e in self.events]` and `[{...} for x in y]` alike.
+    """
+    element = getattr(value, "elt", None)
+    if isinstance(value, ast.List) and value.elts:
+        element = value.elts[0]
+    if isinstance(element, ast.Dict):
+        return True
+    return (isinstance(element, ast.Call) and isinstance(element.func, ast.Attribute)
+            and element.func.attr in ("to_display_dict", "model_dump", "dict"))
+
+
+def _element_type(annotation: Any) -> str:
+    """The JSON type of a list annotation's element, defaulting to string."""
+    import typing
+    args = typing.get_args(annotation)
+    if args and type(None) in args:                 # unwrap Optional[list[X]]
+        annotation = next((a for a in args if a is not type(None)), None)
+        args = typing.get_args(annotation)
+    if not args:
+        return "string"
+    element = args[0]
+    # A Pydantic model as the element type means rows of RECORDS. `_annotation_type`
+    # answers "string" for any class it does not recognise, which is exactly the
+    # wrong answer here.
+    if isinstance(element, type) and hasattr(element, "model_fields"):
+        return "object"
+    return _annotation_type(element)[0]
 
 
 def _annotation_type(annotation: Any) -> tuple[str, bool]:
@@ -366,6 +442,11 @@ def _annotation_type(annotation: Any) -> tuple[str, bool]:
         optional = True
         annotation = next((a for a in args if a is not type(None)), str)
         args = typing.get_args(annotation)
+    # `Literal[1, 2, 3, 4]` is an integer: the values say so. Falling through to
+    # the "string" default made Freshdesk promise strings for a 1-4 priority.
+    if typing.get_origin(annotation) is typing.Literal:
+        kinds = {_json_type(v) for v in typing.get_args(annotation)}
+        return (kinds.pop() if len(kinds) == 1 else "string"), optional
     origin = typing.get_origin(annotation) or annotation
     if origin in (list, set, tuple):
         return "array", optional
@@ -691,7 +772,12 @@ def _record_schema(service: str, path: str) -> dict[str, Any]:
     for segment in reversed(segments):
         for candidate in (segment, _singular(segment)):
             fields = (models.get(candidate.lower())
-                      or models.get(prefix + candidate.lower()))
+                      or models.get(prefix + candidate.lower())
+                      # QuickBooks abbreviates its own name (`QBCustomer`), so a
+                      # fixed prefix missed every model and the jsonc schema --
+                      # which describes the REAL Intuit API -- won instead. Any
+                      # model whose name ENDS with the resource describes it.
+                      or _suffixed_model(models, candidate.lower()))
             if fields:
                 return _model_schema(fields)
     for segment in reversed(segments):
@@ -770,6 +856,156 @@ def _service_identifier(service: str) -> str:
     return best if count * 2 > sum(names.values()) else ""
 
 
+def _suffixed_model(models: dict[str, Any], resource: str) -> dict[str, Any]:
+    """The model whose name ends with `resource`, when exactly one does.
+
+    `QBCustomer` for `customer`. Only an unambiguous match counts: two models
+    ending the same way name no single record, and guessing between them would
+    publish the wrong one's fields.
+    """
+    if not resource:
+        return {}
+    hits = [fields for name, fields in models.items()
+            if name.endswith(resource) and name != resource]
+    if len(hits) == 1:
+        return hits[0]
+    # ...and the other way round: DocuSign's collection is `envelopeTemplates`
+    # and the model behind a row is plain `Template`. Longest model name wins, so
+    # `envelope` never stands in for `envelopeTemplate`.
+    ends = sorted((name for name in models if resource.endswith(name) and name != resource),
+                  key=len, reverse=True)
+    return models[ends[0]] if ends else {}
+
+
+def _field_type_from_models(service: str, field: str) -> str:
+    """The type this service's own models give `field`, when they agree, else "".
+
+    Used where the handler's code names a key but cannot type it
+    (`"subject": ticket.subject`). Disagreement means silence: promising one of
+    two types would be wrong half the time.
+    """
+    types = {spec["type"]
+             for fields in (_display_records().get(service) or {}).values()
+             for name, spec in fields.items() if name == field}
+    if len(types) == 1:
+        return types.pop()
+    return _annotated_field_type(service, field) if not types else ""
+
+
+def _row_field(service: str, key: str, from_record: dict[str, Any]) -> dict[str, Any]:
+    """One field of a bare-array row.
+
+    A type the sweep RESOLVED from the builder's own code outranks the record's:
+    Freshdesk's `_ticket_to_resource` passes `priority` through raw, an integer,
+    while the display dict maps the same name to "low"/"high".
+    """
+    if (service, key) in _RESOLVED_KEYS:
+        resolved = _KEY_TYPES.get((service, key))
+        if resolved:
+            return {"type": resolved}
+    return from_record.get(key) or {
+        "type": _KEY_TYPES.get((service, key))
+        or _field_type_from_models(service, key) or "string"}
+
+
+def _element_type_from_models(service: str, field: str) -> str:
+    """What this service's models say an array field HOLDS, or "".
+
+    `tags: List[str]` holds strings; `events: list[Event]` holds records.
+    """
+    kinds = {spec.get("items")
+             for fields in (_display_records().get(service) or {}).values()
+             for name, spec in fields.items()
+             if name == field and spec.get("type") == "array" and spec.get("items")}
+    return kinds.pop() if len(kinds) == 1 else ""
+
+
+@lru_cache(maxsize=None)
+def _annotated_field_type(service: str, field: str) -> str:
+    """The type any Pydantic model of this service annotates `field` with.
+
+    A model with no `to_display_dict` never reaches `_display_records`, yet the
+    handler still reads its attributes: LinkedIn's `/v2/me` answers
+    `"headline": profile.headline` off a `LinkedInProfile`, and with no model to
+    consult every key was published as an untyped object. The annotations are
+    still the truth. Only an unambiguous answer counts.
+    """
+    import importlib
+    import pkgutil
+    import automationbench.schema as schema_pkg
+
+    types: set[str] = set()
+    for module in pkgutil.walk_packages(schema_pkg.__path__, schema_pkg.__name__ + "."):
+        parts = module.name.split(".")
+        if len(parts) <= 2 or parts[2] != service:
+            continue
+        try:
+            mod = importlib.import_module(module.name)
+        except Exception:
+            continue
+        for cls in vars(mod).values():
+            if not (isinstance(cls, type) and getattr(cls, "__module__", "") == mod.__name__):
+                continue
+            spec = getattr(cls, "model_fields", {}).get(field)
+            if spec is not None:
+                types.add(_annotation_type(spec.annotation)[0])
+    return types.pop() if len(types) == 1 else ""
+
+
+def _union_record(service: str) -> dict[str, Any]:
+    """An open row naming every field the service's own models serve, or {}.
+
+    A caller-shaped response has no single record behind it: a SOQL `SELECT`
+    chooses its own columns, so `records[]` carries exactly what was asked for
+    and nothing fixed describes it. v5.1 declared the row an open map with no
+    properties -- valid, but it told the builder nothing, and Monarch wrote
+    `records[0].id` where the wire carries `Id` (the mock serialises each model's
+    `to_display_dict`, whose identifier is `Id`). Nothing could catch it.
+
+    So the row names the UNION of the service's sObject fields and stays open:
+    `additionalProperties: true` keeps a SELECTed field the models do not list
+    legal, while the named ones give the builder the real spelling to chain on.
+    Only the identifier is `required` -- it is the one field every model carries.
+
+    ponytail: a union, so it also offers fields the chosen object lacks. Upgrade:
+    branch the row per sObject once the planner tells us which it queried.
+    """
+    models = {name: fields for name, fields in (_display_records().get(service) or {}).items()
+              # the abstract base contributes no wire field of its own
+              if fields and name != _singular(service) + "record" and name != service + "record"}
+    if not models:
+        return {}
+    seen: dict[str, set[str]] = {}
+    for fields in models.values():
+        for name, spec in fields.items():
+            if re.fullmatch(r"\w+", name):
+                seen.setdefault(name, set()).add(spec["type"])
+    # A name two models type differently (Slack's `profile` is an object on the
+    # member and a string elsewhere) is declared by neither: promising one of the
+    # two would be wrong half the time, and `additionalProperties` already keeps
+    # it legal. Only the names the models agree on are named.
+    props: dict[str, Any] = {}
+    for name, types in seen.items():
+        if len(types) != 1:
+            continue
+        type_, = types
+        props[name] = {"type": type_}
+        if type_ == "array":
+            props[name]["items"] = {"type": "string"}
+    if not props:
+        return {}
+    row: dict[str, Any] = {"type": "object", "properties": props,
+                           "additionalProperties": True}
+    # Only a field EVERY model carries may be promised. Salesforce's 16 sObjects
+    # all serve `Id`, so a SOQL row always has one; Xero's models do not share an
+    # identifier, and promising the union's would be false on every Organisation
+    # (which carries no `AccountID` at all).
+    identifier = _identifier_field(props)
+    if identifier and all(identifier in fields for fields in models.values()):
+        row["required"] = [identifier]
+    return row
+
+
 def _model_schema(fields: dict[str, Any]) -> dict[str, Any]:
     """A record schema from a model's wire fields, `required` included.
 
@@ -780,7 +1016,10 @@ def _model_schema(fields: dict[str, Any]) -> dict[str, Any]:
     for name, spec in sorted(fields.items()):
         prop: dict[str, Any] = {"type": spec["type"]}
         if spec["type"] == "array":
-            prop["items"] = {"type": "string"}
+            # the element type the annotation states, not a blanket `string`
+            item = spec.get("items") or "string"
+            prop["items"] = ({"type": "object", "additionalProperties": True}
+                             if item == "object" else {"type": item})
         props[name] = prop
     required = sorted(n for n, s in fields.items() if s.get("required"))
     out: dict[str, Any] = {"type": "object", "properties": props}
@@ -1028,8 +1267,18 @@ def _success_keys(fn: Any, ast: Any, helpers: dict[str, Any] | None = None,
                 continue
             keys = [k.value for k in literal.keys
                     if isinstance(k, ast.Constant) and isinstance(k.value, str)]
-            if keys and "error" not in keys and len(keys) > len(best) and not _under_error(fn, literal, ast):
+            if (keys and not _is_error_literal(keys, literal, ast)
+                    and len(keys) > len(best)
+                    and not _under_error(fn, literal, ast)):
                 best = keys
+                # the same rules as the outermost path: record what the literal
+                # says each key IS, and mark the ones that can land on None --
+                # the response prunes those, so they are not always there.
+                svc = _READING[-1] if _READING else ""
+                for name, type_ in _literal_types(literal, ast, fn).items():
+                    _KEY_TYPES.setdefault((svc, name), type_)
+                for name in _nullable_keys(literal, ast):
+                    _CONDITIONAL.add((svc, name))
         # ...plus every key the builder appends afterwards (`d["envelopeUri"] =
         # ...`), which is where six of the DocuSign envelope's eleven wire fields
         # live. Order-stable: source order, appended after the literal's own.
@@ -1071,6 +1320,112 @@ def _subscript_keys(fn: Any, ast: Any) -> dict[str, str]:
 _RECORD_CALL = ("to_display_dict", "model_dump", "dict")
 
 
+def _dumped(node: Any, ast: Any) -> Any:
+    """What a `return json.dumps(X)` actually serialises, or None."""
+    value = getattr(node, "value", None)
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) \
+            and value.func.attr == "dumps" and value.args:
+        return value.args[0]
+    return None
+
+
+@lru_cache(maxsize=1)
+def _bare_array_routes() -> set[tuple[str, str, str]]:
+    """(service, AB path pattern, METHOD) for handlers whose body IS an array.
+
+    `return json.dumps([t.to_display_dict() for t in world.zoho_desk.tickets])`
+    has no wrapper key at all. v5.1 wrapped every list under a collection key, so
+    the seed promised `$.tickets` where the wire is the array itself: the extract
+    resolved to nothing and no row was ever readable.
+    """
+    import ast
+    import importlib
+    import inspect
+    import textwrap
+
+    out: set[tuple[str, str, str]] = set()
+    for service in sorted(_raw_schemas()):
+        try:
+            routes_mod = importlib.import_module(
+                f"automationbench.tools.api.routes.{service}")
+            impl_mod = importlib.import_module(
+                f"automationbench.tools.api.impl.{service}")
+            source = ast.parse(textwrap.dedent(inspect.getsource(impl_mod)))
+            routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
+        except Exception:
+            continue
+        arrays: set[str] = set()
+        helpers_by_name = {n.name: n for n in source.body if isinstance(n, ast.FunctionDef)}
+        for fn in source.body:
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+            dumped = [_dumped(n, ast) for n in returns]
+            dumped = [d for d in dumped if d is not None]
+            # EVERY success return must be an array: a handler whose error path
+            # answers `{"error": ...}` still serves an array on success, but one
+            # that sometimes answers an object is an envelope, not a bare list.
+            if not dumped:
+                continue
+            listy = [d for d in dumped
+                     if isinstance(d, (ast.List, ast.ListComp))
+                     or (isinstance(d, ast.Name) and _local_types(fn, ast).get(d.id) == "array")]
+            # The ROW is what the comprehension's own builder makes:
+            # `[_ticket_to_resource(t) for t in ...]`. Without following it the
+            # row fell back to the display-dict record, which carries keys this
+            # endpoint does not serve.
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.ListComp)
+                        and isinstance(node.elt, ast.Call)
+                        and isinstance(node.elt.func, ast.Name)):
+                    continue
+                builder = helpers_by_name.get(node.elt.func.id)
+                if builder is not None:
+                    keys = _success_keys(builder, ast, helpers_by_name)
+                    if keys:
+                        _ROW_BUILDERS[(service, fn.name)] = keys
+            objects = [d for d in dumped if isinstance(d, ast.Dict)
+                       and not _under_error(fn, d, ast)]
+            if listy and not objects:
+                arrays.add(fn.name)
+        handlers = _handler_names(routes_src, ast)
+        for method, pattern, key in getattr(routes_mod, "_ROUTES", ()) or ():
+            name = handlers.get(key, "") or f"{service}_{key}"
+            if name in arrays:
+                out.add((service, pattern, method.upper()))
+                rows = _ROW_BUILDERS.get((service, name))
+                if rows:
+                    _ARRAY_ROWS[(service, pattern, method.upper())] = rows
+    return out
+
+
+def _bare_array_row_keys(service: str, path: str, method: str) -> list[str]:
+    """The keys the row builder of this bare-array list writes, or []."""
+    _bare_array_routes()
+    internal = _ab_path(service, path)
+    for (svc, pattern, verb), keys in _ARRAY_ROWS.items():
+        if svc == service and verb == method.upper():
+            try:
+                if re.search(pattern, internal):
+                    return keys
+            except re.error:
+                continue
+    return []
+
+
+def _returns_bare_array(service: str, path: str, method: str) -> bool:
+    """Does the handler serving this endpoint answer a bare JSON array?"""
+    internal = _ab_path(service, path)
+    for svc, pattern, verb in _bare_array_routes():
+        if svc == service and verb == method.upper():
+            try:
+                if re.search(pattern, internal):
+                    return True
+            except re.error:
+                continue
+    return False
+
+
 def _returns_bare_record(node: Any, ast: Any) -> bool:
     """True for `return json.dumps(x.to_display_dict())` and nothing around it."""
     value = node.value
@@ -1085,6 +1440,42 @@ def _returns_bare_record(node: Any, ast: Any) -> bool:
     return False
 
 
+def _nullable_keys(node: Any, ast: Any) -> list[str]:
+    """Keys of this dict literal whose value can land on None.
+
+    `x.isoformat() if x else None` -- the mock prunes an empty value before it
+    reaches the wire, so such a key is present only sometimes.
+    """
+    out: list[str] = []
+    for key, value in zip(node.keys, node.values):
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            continue
+        if isinstance(value, ast.IfExp) and any(
+                isinstance(arm, ast.Constant) and arm.value is None
+                for arm in (value.body, value.orelse)):
+            out.append(key.value)
+        elif isinstance(value, ast.Constant) and value.value is None:
+            out.append(key.value)
+    return out
+
+
+def _is_error_literal(keys: list[str], node: Any, ast: Any) -> bool:
+    """Is this dict literal a refusal rather than the success body?
+
+    `{"error": ...}` is the usual spelling; Zoom writes `{"code": 404, "message":
+    ...}` with no `error` key, and taking that for the body published the 404
+    guard as the meeting.
+    """
+    if "error" in keys:
+        return True
+    if set(keys) <= {"code", "message"} and "code" in keys:
+        for key, value in zip(node.keys, node.values):
+            if getattr(key, "value", None) == "code" and isinstance(value, ast.Constant):
+                code = value.value
+                return isinstance(code, int) and not isinstance(code, bool) and code >= 300
+    return False
+
+
 def _outermost_keys(root: Any, ast: Any, scope: Any = None) -> list[str]:
     """The keys of the shallowest error-free dict literal under `root`, or []."""
     frontier = [root]
@@ -1095,8 +1486,13 @@ def _outermost_keys(root: Any, ast: Any, scope: Any = None) -> list[str]:
                 if isinstance(child, ast.Dict):
                     keys = [k.value for k in child.keys
                             if isinstance(k, ast.Constant) and isinstance(k.value, str)]
-                    if keys and "error" not in keys:
+                    if keys and not _is_error_literal(keys, child, ast):
                         service = _READING[-1] if _READING else ""
+                        # `"createdDateTime": x.isoformat() if x else None` is
+                        # pruned from the response when it lands on None, so it
+                        # is not a key this endpoint always carries.
+                        for name in _nullable_keys(child, ast):
+                            _CONDITIONAL.add((service, name))
                         for name, type_ in _literal_types(child, ast, scope).items():
                             # first writer wins, and the sweep is over sorted
                             # services: the map is the same on every run
@@ -1122,6 +1518,19 @@ _READING: list[str] = []            # the service `_handler_envelopes` is on
 # Keys a builder appends behind a guard (`if envelope.sender: d["sender"] = ...`):
 # typed like the rest, but never promised in `required`.
 _CONDITIONAL: set[tuple[str, str]] = set()
+# (service, key) whose type the code RESOLVED through the attribute it reads,
+# rather than guessed. Such a type outranks the display dict's for that key.
+_RESOLVED_KEYS: set[tuple[str, str]] = set()
+# (service, key) whose value is a GRID -- `values.append([...])` builds rows of
+# cells, not records. The Sheets values read is the whole reason this file exists.
+_GRID_KEYS: set[tuple[str, str]] = set()
+# (service, handler) -> the keys the row builder of a bare-array list writes.
+_ROW_BUILDERS: dict[tuple[str, str], list[str]] = {}
+# (service, route pattern, METHOD) -> those keys, once the route is known.
+_ARRAY_ROWS: dict[tuple[str, str, str], list[str]] = {}
+# (service, key) the handler's code states is an OBJECT outright
+# (`company.to_display_dict()`), as opposed to one it simply could not type.
+_OBJECT_KEYS: set[tuple[str, str]] = set()
 
 
 def _literal_types(node: Any, ast: Any, scope: Any = None) -> dict[str, str]:
@@ -1134,16 +1543,51 @@ def _literal_types(node: Any, ast: Any, scope: Any = None) -> dict[str, str]:
     there are no rows.
     """
     locals_ = _local_types(scope, ast) if scope is not None else {}
+    # A key whose value is one of the handler's own PARAMETERS is typed by that
+    # parameter: Sheets echoes `majorDimension: str = "ROWS"` straight back, and
+    # with no local assignment to follow it read as an untyped object.
+    params = _param_types(scope, ast) if scope is not None else {}
     out: dict[str, str] = {}
     for key, value in zip(node.keys, node.values):
         if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
             continue
         type_ = _expr_type(value, ast)
         if not type_ and isinstance(value, ast.Name):
-            type_ = locals_.get(value.id, "")
+            type_ = locals_.get(value.id, "") or params.get(value.id, "")
+        if (isinstance(value, ast.Name) and scope is not None
+                and _builds_rows_of_lists(scope, ast, value.id)):
+            service = _READING[-1] if _READING else ""
+            _GRID_KEYS.add((service, key.value))
+        if type_ == "object" and isinstance(value, ast.Call):
+            # stated outright by the code, not a fallback
+            service = _READING[-1] if _READING else ""
+            _OBJECT_KEYS.add((service, key.value))
+        if not type_ and isinstance(value, ast.Attribute):
+            # `"localizedFirstName": profile.first_name` -- the KEY is the wire
+            # name, the ATTRIBUTE is the model field that types it. Without this
+            # every camelCase alias was published as an untyped object.
+            #
+            # The attribute is read RAW here, so its annotation is the answer even
+            # when `to_display_dict` maps the same name to something else:
+            # Freshdesk's display dict turns `priority` into "low"/"high", while
+            # this endpoint serves the underlying `Literal[1, 2, 3, 4]`.
+            service = _READING[-1] if _READING else ""
+            type_ = _annotated_field_type(service, value.attr) if service else ""
+            if type_:
+                _RESOLVED_KEYS.add((service, key.value))
         if type_:
             out[key.value] = type_
     return out
+
+
+# Builtins whose return type is certain. `len()` is the one that matters:
+# every paging count in the catalogue is written `"total": len(values)`, and
+# without it the key stayed untyped, `_action` promoted the lone open object to
+# the service's record, and the seed advertised a whole Message where the wire
+# carries an integer (16 of the 64 gating read findings, 4 Sep 2026).
+_BUILTIN_TYPE = {"len": "integer", "int": "integer", "float": "number",
+                 "str": "string", "bool": "boolean", "sorted": "array",
+                 "list": "array", "dict": "object"}
 
 
 def _expr_type(value: Any, ast: Any) -> str:
@@ -1156,19 +1600,96 @@ def _expr_type(value: Any, ast: Any) -> str:
         return "string"
     if isinstance(value, ast.Constant):
         return _json_type(value.value)
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        return _BUILTIN_TYPE.get(value.func.id, "")
+    # `channel.to_display_dict()` IS the record: an object, whatever some other
+    # model happens to call a field of the same name.
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+        if value.func.attr in ("to_display_dict", "model_dump", "dict"):
+            return "object"
+        if value.func.attr in ("isoformat", "lower", "upper", "strip", "join"):
+            return "string"
+    # `len(x) or 0`, `a if c else b`: both arms agree or it says nothing.
+    # `x.isoformat() if x else None` is a string whenever it is there at all --
+    # the None arm says the key may be absent (see `_nullable_keys`), not that
+    # its type is unknown, so the other arm is the answer.
+    if isinstance(value, ast.IfExp):
+        arms = [a for a in (value.body, value.orelse)
+                if not (isinstance(a, ast.Constant) and a.value is None)]
+        types = {_expr_type(a, ast) for a in arms}
+        return types.pop() if len(types) == 1 else ""
+    if isinstance(value, ast.BoolOp):
+        types = {_expr_type(v, ast) for v in value.values}
+        return types.pop() if len(types) == 1 else ""
+    # `len(a) + len(b)` is still a number; string concatenation still a string.
+    if isinstance(value, ast.BinOp):
+        left, right = _expr_type(value.left, ast), _expr_type(value.right, ast)
+        return left if left == right and left in (
+            "integer", "number", "string", "array") else ""
+    if isinstance(value, ast.Compare) or (
+            isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not)):
+        return "boolean"
+    # `page = results[start:start + limit]` -- a SLICE of a list is a list.
+    # DocuSign pages its templates that way, so the key read as an untyped
+    # object and the seed declared an object where the wire sends an array.
+    if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Slice):
+        return "array"
     return ""
+
+
+def _builds_rows_of_lists(scope: Any, ast: Any, name: str) -> bool:
+    """Is this local a list whose ELEMENTS are lists? (`values.append([...])`)"""
+    for node in ast.walk(scope):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append"
+                and getattr(node.func.value, "id", None) == name
+                and node.args
+                and isinstance(node.args[0], (ast.List, ast.ListComp))):
+            return True
+    return False
+
+
+def _param_types(scope: Any, ast: Any) -> dict[str, str]:
+    """{parameter: JSON type} for a handler's own arguments, from the annotation
+    or, failing that, the default it carries."""
+    out: dict[str, str] = {}
+    args = getattr(scope, "args", None)
+    if args is None:
+        return out
+    every = list(getattr(args, "posonlyargs", [])) + list(args.args) + list(args.kwonlyargs)
+    defaults = ([None] * (len(every) - len(args.defaults)) + list(args.defaults)
+                if len(args.defaults) <= len(every) else [])
+    simple = {"str": "string", "int": "integer", "float": "number", "bool": "boolean",
+              "list": "array", "dict": "object"}
+    for i, arg in enumerate(every):
+        name = arg.arg
+        annotation = arg.annotation
+        if isinstance(annotation, ast.Name) and annotation.id in simple:
+            out[name] = simple[annotation.id]
+            continue
+        default = defaults[i] if i < len(defaults) else None
+        type_ = _expr_type(default, ast) if default is not None else ""
+        if type_:
+            out[name] = type_
+    return out
 
 
 def _local_types(scope: Any, ast: Any) -> dict[str, str]:
     """{name: JSON type} for the locals a function assigns a self-describing value."""
     out: dict[str, str] = {}
     for node in ast.walk(scope):
-        if not isinstance(node, ast.Assign):
+        # `profile: dict[str, str] = {...}` is an AnnAssign, not an Assign, and
+        # skipping it left Slack's `profile` typed from nothing.
+        if isinstance(node, ast.AnnAssign):
+            targets = [node.target] if node.value is not None else []
+        elif isinstance(node, ast.Assign):
+            targets = node.targets
+        else:
             continue
         type_ = _expr_type(node.value, ast)
         if not type_:
             continue
-        for target in node.targets:
+        for target in targets:
             if isinstance(target, ast.Name):
                 # first assignment wins: `values = []` then `values = [h] + values`
                 out.setdefault(target.id, type_)
@@ -1269,14 +1790,51 @@ def _envelope_schema(service: str, path: str, method: str) -> dict[str, Any]:
             props[key] = ({"type": "array", "items": row}
                           if key != _singular(key) or literal == "array" else row)
         elif literal == "array":
-            # a row shape the code does not state: an open row, so the builder is
-            # told to use what it gets and never to invent names under it
-            props[key] = {"type": "array",
-                          "items": {"type": "object", "additionalProperties": True}}
+            # A grid: `values.append([...])` builds ROWS OF CELLS, not records.
+            # This is the Sheets read the conformance check exists for, and a
+            # record row there is what made the planner refuse every Sheets task.
+            if (service, key) in _GRID_KEYS:
+                props[key] = {"type": "array",
+                              "items": {"type": "array", "items": {"type": "string"}}}
+                continue
+            # Not every array holds records: Freshdesk's `tags` is a `list[str]`,
+            # and handing it the union told the builder each tag is an object.
+            element = _element_type_from_models(service, key)
+            if element and element != "object":
+                props[key] = {"type": "array", "items": {"type": element}}
+            else:
+                # A row shape the code does not state. The service's own models
+                # still know how it spells its fields, so name their union and
+                # keep the row open: the builder gets `Id`/`InvoiceID` to chain
+                # on and is still free to read a column they do not list.
+                props[key] = {"type": "array",
+                              "items": _union_record(service) or
+                              {"type": "object", "additionalProperties": True}}
         elif literal in ("string", "integer", "number", "boolean"):
-            props[key] = {"type": literal}
+            # `_KEY_TYPES` is keyed by (service, key) and first-writer-wins, so a
+            # namesake in an unrelated handler can type this one: an integer `id`
+            # elsewhere in Zoom made the meeting read promise a number where the
+            # wire sends "mtg_h1". A model that names the field outranks a guess
+            # -- but not a type the code RESOLVED through the attribute it reads
+            # (Freshdesk's raw `Literal[1,2,3,4]` priority, which the display
+            # dict maps to "low"/"high" for a different endpoint entirely).
+            named = ("" if (service, key) in _RESOLVED_KEYS
+                     else _field_type_from_models(service, key))
+            props[key] = {"type": named or literal}
         else:
-            props[key] = {"type": "object", "additionalProperties": True}
+            # The code did not type this key -- `"subject": ticket.subject` is an
+            # attribute the reader cannot evaluate. The MODEL behind it can:
+            # a helper that flattens a record (`_ticket_to_resource`) answers the
+            # record's own fields, and typing all fourteen as open objects told
+            # the builder `subject` is a nested object rather than a string.
+            # ...but only where the code said NOTHING. `"company":
+            # company.to_display_dict()` states an object outright, and a
+            # namesake `company: str` field on another model must not override
+            # it. A key the sweep merely failed to type still asks the models.
+            named = ("" if (service, key) in _OBJECT_KEYS
+                     else _field_type_from_models(service, key))
+            props[key] = ({"type": named} if named
+                          else {"type": "object", "additionalProperties": True})
     return {"type": "object", "properties": props} if props else {}
 
 
@@ -1329,8 +1887,13 @@ def _with_required(schema: dict[str, Any]) -> dict[str, Any]:
         return schema
     if isinstance(schema.get("required"), list):
         return schema          # a model already said exactly which keys survive
-    identifier = _identifier_field(props)
-    return {**schema, "required": [identifier]} if identifier else schema
+    # Nothing else may promise a key. `to_display_dict` prunes every empty value,
+    # a generic-path union spans records that share no field, and a hardcoded
+    # literal may carry neither: QuickBooks answers `{"CompanyInfo":
+    # {"CompanyName", "Country"}}` with no `Id` at all, so promising the
+    # identifier was a promise the response broke on seven reads (4 Sep 2026).
+    # A schema with no `required` reads as "presence unknown", which is honest.
+    return schema
 
 
 @lru_cache(maxsize=1)
@@ -1591,8 +2154,23 @@ def _action(base: str, service: str, path: str, method: str,
         for key, prop in (schema.get("properties") or {}).items():
             if prop.get("type") != "array":
                 continue
-            row = _record_schema(service, path if _singular(key) == key
-                                 else f"{path}/{key}")
+            # An array the models already typed as holding SCALARS keeps that:
+            # Freshdesk's `tags` is a `list[str]`, and replacing its rows with a
+            # record told the builder each tag is an object.
+            if (prop.get("items") or {}).get("type") in (
+                    "string", "integer", "number", "boolean"):
+                continue
+            if _singular(key) == key:
+                row = _record_schema(service, path)
+            else:
+                # The ROW is the key's own resource. `_record_schema` walks back
+                # up the path when it cannot find one, so asking it for
+                # `<path>/signers` answered the ENVELOPE and every signer was
+                # published carrying `emailSubject` and `envelopeId`.
+                row = _record_schema(service, f"/{key}")
+                if not (row.get("properties") or {}):
+                    row = _union_record(service) or {"type": "object",
+                                                     "additionalProperties": True}
             stub = _STUB_LIST_FIELDS.get((service, key))
             if stub:
                 # the handler projects a stub, not the record: Gmail's list
@@ -1609,7 +2187,13 @@ def _action(base: str, service: str, path: str, method: str,
         # at all (Asana answers `{data: {gid, name, ...}}`).
         objects = [k for k, p in (schema.get("properties") or {}).items()
                    if p.get("type") == "object" and not p.get("properties")]
-        if len(objects) == 1:
+        # ...but an envelope that ALREADY carries its collection is a list, and
+        # the lone open object beside it is the paging cursor, not the record.
+        # HubSpot answers `{results: [...], paging: {next: {after}}}`, and typing
+        # `paging` as a contact told the builder `paging.email` exists.
+        holds_a_collection = any(p.get("type") == "array"
+                                 for p in (schema.get("properties") or {}).values())
+        if len(objects) == 1 and not holds_a_collection:
             record = _record_schema(service, path)
             if record.get("properties"):
                 schema["properties"][objects[0]] = _with_required(record)
@@ -1629,6 +2213,27 @@ def _action(base: str, service: str, path: str, method: str,
         # grammar has no `[*]`), a scalar or nested object by its own name.
         extract = {n: f"$.{n}" for n in (schema.get("properties") or {})
                    if re.fullmatch(r"\w+", n)}
+    elif _returns_bare_array(service, path, method):
+        # The whole body is the array: no wrapper key exists, so `$` is the only
+        # path that reaches it. Extracting `$.tickets` here resolved to nothing.
+        #
+        # The ROW is what the handler's own builder makes -- Freshdesk's list and
+        # read share `_ticket_to_resource`, which omits the display dict's
+        # `priority_code`/`status_code` and keeps `priority` an integer.
+        row = _envelope_schema(service, path, method) or _record_schema(service, path)
+        row_keys = _bare_array_row_keys(service, path, method)
+        if row_keys:
+            # exactly the builder's keys, typed the way the sweep resolved them
+            props_of = row.get("properties") or {}
+            row = {"type": "object",
+                   "properties": {k: _row_field(service, k, props_of)
+                                  for k in row_keys if re.fullmatch(r"\w+", k)}}
+        if not (row.get("properties") or {}):
+            row = _union_record(service) or {"type": "object",
+                                             "additionalProperties": True}
+        schema = {"$schema": JSON_SCHEMA, "type": "array",
+                  "items": _with_required(row)}
+        extract = {_collection_key(service, path, method): "$"}
     elif verb == "list":
         # The front door wraps a collection under its key -- {"messages": [...]},
         # never a bare array. The ARRAY ITSELF is the output: the engine's path
@@ -1643,14 +2248,16 @@ def _action(base: str, service: str, path: str, method: str,
                       "properties": {f: props.get(f, {"type": "string"}) for f in stub}}
         if not (record.get("properties") or {}):
             # A row whose shape the caller chooses: a SOQL/SOSL record carries
-            # exactly the SELECTed fields, so no fixed record describes it. Mark
-            # the row an open map -- the builder is then told to use the row it
-            # actually gets and never to invent names under it -- and declare the
-            # identifier the service spells its records with, when it has one.
-            record = {"type": "object", "additionalProperties": True}
-            identifier = _service_identifier(service)
-            if identifier:
-                record["properties"] = {identifier: {"type": "string"}}
+            # exactly the SELECTed fields, so no fixed record describes it. Name
+            # the union of the service's own models and keep the row open, so
+            # the builder gets the real field spellings (`Id`, not `id`) without
+            # being told a SELECTed column it did not ask for is illegal.
+            record = _union_record(service) or {"type": "object",
+                                                "additionalProperties": True}
+            if not record.get("properties"):
+                identifier = _service_identifier(service)
+                if identifier:
+                    record["properties"] = {identifier: {"type": "string"}}
         props: dict[str, Any] = {key: {"type": "array", "items": _with_required(record)}}
         # the paging/count scalars the same prose declares beside the collection
         props.update(_declared_scalars(service, path, method, skip=key))
@@ -1832,11 +2439,11 @@ def generate(out_dir, shim_public_url: str) -> Summary:
                    folders=sorted(folders))
 
 
-VERSION = "v5.1"
+VERSION = "v5.2"
 
 
 def folder_sha256(folder) -> str:
-    """sha256 over sorted relative paths and bytes of every *.json under `folder`.
+    """sha256 over sorted relative paths and bytes of every action file.
 
     The knowledge base's fingerprint: the same inputs must produce the same
     digest, so a rerun of `wb monarch setup` is a no-op and two rounds' seeds are
@@ -1845,7 +2452,12 @@ def folder_sha256(folder) -> str:
     import hashlib
     h = hashlib.sha256()
     root = Path(folder)
-    for f in sorted(root.rglob("*.json"), key=lambda p: p.relative_to(root).as_posix()):
+    # Only the per-product action files identify the set. `wb monarch conform`
+    # writes its own `conformance.json` at the root, and hashing that made a
+    # mere CHECK change the knowledge base's fingerprint -- two rounds with
+    # identical seeds would then have compared as different.
+    for f in sorted((p for p in root.rglob("*.json") if p.parent != root),
+                    key=lambda p: p.relative_to(root).as_posix()):
         h.update(f.relative_to(root).as_posix().encode("utf-8"))
         h.update(f.read_bytes())
     return h.hexdigest()
@@ -1864,7 +2476,8 @@ def _write_manifest(out: Path, base: str, folders: dict[str, dict[str, Any]]) ->
             1 for s in steps if (s["response_template"].get("schema") or {}).get("properties")),
         "front_door": base,
         "generated_from": "wb monarch setup",
-        "sha_rule": "sha256 over sorted relative paths and bytes of every *.json under the folder",
+        "sha_rule": "sha256 over sorted relative paths and bytes of every *.json "
+                    "inside the product folders (the root's own files excluded)",
         "sha256": folder_sha256(out),
         # the canonical rules this set was written to, each checkable in the bytes
         "bodyless_body_null": all(s["body_template"] is None for s in steps
@@ -1876,8 +2489,35 @@ def _write_manifest(out: Path, base: str, folders: dict[str, dict[str, Any]]) ->
             for d in actions for p in d["implementations"][0]["parameters"]
             for o in (p.get("constraints") or {}).get("enum_options") or ()),
         "hyphen_slugs": all(re.fullmatch(r"bench-[a-z0-9-]+", f) for f in folders),
+        # v5.2: how true this set was against the simulated apps when written.
+        # The digest says WHICH knowledge base this is; these say how well it
+        # matched, so a later round compares without re-running the check.
+        "conformance": _conformance_totals(out),
     }
     (out / "ok.txt").write_text(_dump(manifest), encoding="utf-8")
+
+
+def _conformance_totals(out: Path) -> dict[str, int]:
+    """Verdict counts from executing every action, plus what could not be run.
+
+    Never fatal: the manifest still describes the seeds when no corpus is
+    present (a checkout without `corpus/`), it just reports nothing.
+    """
+    try:
+        from wb_world import conformance
+        corpus = conformance.default_corpus_dirs()
+        if not corpus:
+            return {}
+        report = conformance.check(out, corpus)
+    except Exception:
+        return {}
+    totals = report.totals()
+    written = sum(len(list(p.glob("*.json"))) - 1 for p in out.iterdir() if p.is_dir())
+    skipped = written - sum(totals.values())
+    if skipped > 0:
+        # services no corpus task carries a world for: counted, never verdicted
+        totals["skipped_actions"] = skipped
+    return totals
 
 
 # ---------------------------------------------------------------- validation
