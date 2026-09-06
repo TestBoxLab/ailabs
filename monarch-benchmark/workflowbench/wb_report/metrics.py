@@ -349,11 +349,16 @@ def _builder_outcome(row: dict, phase: dict | None) -> str:
     """What the builder did, in the words the round sheet uses.
 
     `declined` is a real Monarch answer, not a failure: it decided the request
-    could not become a workflow. It is distinguished from an error and from a
-    timeout because the three mean different things to a reader.
+    could not become a workflow. `needs_input` is likewise its own outcome, not
+    an error: the attempt ended before the run because the builder needed more
+    from the user than the request gave it. Both are distinguished from an
+    error and from a timeout because these mean different things to a reader.
     """
     if "no_workflow" in (row.get("flags") or []):
         return "declined"
+    error = str(row.get("error") or "")
+    if error.startswith("needs_input:"):
+        return "needs_input"
     if phase is None:
         return "n/a"
     termination = str(row.get("termination") or "")
@@ -408,6 +413,61 @@ def monarch_attempts(rows: list[dict]) -> list[dict]:
             "reason": (row.get("error") or "")[:200] or None,
         })
     return out
+
+
+# One row per outcome, in this fixed order and these plain words, for the
+# "Monarch attempts by outcome" summary table. `_outcome_of` below is the only
+# place that decides which bucket an attempt falls in.
+_OUTCOME_WORDS = [
+    ("passed", "passed"),
+    ("needs_input", "asked for user input"),
+    ("declined", "declined to build"),
+    ("builder_or_dispatch_failed", "builder error or timeout"),
+    ("dispatch_error", "dispatch error"),
+    ("ran_not_made", "ran but the change was not made"),
+    ("checker_failed_other", "checker failed for another reason"),
+]
+
+
+def _outcome_of(attempt: dict) -> str:
+    """Which of the seven buckets one `monarch_attempts` entry falls in.
+
+    Order matters: an attempt that never reached dispatch is read off the
+    builder outcome first, because "the builder asked a question" and "dispatch
+    failed" cannot both be true of the same attempt.
+    """
+    if attempt["checker"] == "pass":
+        return "passed"
+    builder = attempt["builder_outcome"]
+    if builder == "needs_input":
+        return "needs_input"
+    if builder == "declined":
+        return "declined"
+    if builder in ("timeout", "error"):
+        return "builder_or_dispatch_failed"
+    dispatch = attempt["dispatch_outcome"]
+    if dispatch in ("parked-timeout", "error"):
+        return "builder_or_dispatch_failed"
+    if dispatch in ("infrastructure", "refused"):
+        return "dispatch_error"
+    if dispatch == "success":
+        # the workflow ran, the checker still says no: the change was not made
+        return "ran_not_made"
+    return "checker_failed_other"
+
+
+def monarch_outcomes(rows: list[dict]) -> list[dict]:
+    """The "Monarch attempts by outcome" summary: one row per outcome bucket,
+    count and share, in the fixed order `_OUTCOME_WORDS` defines. Gated the
+    same way the rest of the Monarch section is - callers render it only when
+    a Monarch competitor is on the page."""
+    attempts = monarch_attempts(rows)
+    total = len(attempts)
+    counts = {key: 0 for key, _ in _OUTCOME_WORDS}
+    for a in attempts:
+        counts[_outcome_of(a)] += 1
+    return [{"outcome": label, "count": counts[key], "share": _div(counts[key], total)}
+            for key, label in _OUTCOME_WORDS]
 
 
 def round_totals(metrics: list[dict]) -> dict[str, Any]:

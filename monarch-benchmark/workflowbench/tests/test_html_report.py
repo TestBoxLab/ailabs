@@ -1136,6 +1136,46 @@ def test_monarch_attempt_timeout_in_dispatch(tmp_path):
     assert "deadline passed" in a["reason"]
 
 
+def test_monarch_attempt_needs_input(tmp_path):
+    """An attempt that ends before the run with `agent_error` and an
+    `error` starting `needs_input:` is its own outcome - "asked for user
+    input" - distinct from a decline, a builder error, or a timeout."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, False, termination="agent_error",
+               assertions=False, error="needs_input: crm_domain, contact_email",
+               flags=["inputs_required=2"],
+               phases={"authoring": PhaseMetrics(turns=1, cost_usd=0.05,
+                                                 wall_clock_s=4.0)}).model_dump()
+    a = monarch_attempts([row])[0]
+    assert a["builder_outcome"] == "needs_input"
+    assert a["checker"] == "fail"
+    assert "needs_input" in a["reason"]
+
+
+def test_monarch_outcomes_summary(phase_store):
+    """`monarch_outcomes` buckets every attempt into exactly one of the seven
+    plain-words outcomes, with a count and a share that sums to 1."""
+    from wb_report.metrics import monarch_outcomes
+
+    rows = _rows(phase_store, "run-p", "monarch")
+    # add a needs_input attempt on top of phase_store's done+declined pair
+    rows = rows + [_row("t3", "monarch", 0, False, termination="agent_error",
+                        assertions=False, error="needs_input: goal",
+                        run="run-p").model_dump()]
+    outcomes = monarch_outcomes(rows)
+    by_label = {o["outcome"]: o for o in outcomes}
+    assert set(by_label) == {
+        "passed", "asked for user input", "declined to build",
+        "builder error or timeout", "dispatch error",
+        "ran but the change was not made", "checker failed for another reason"}
+    assert by_label["passed"]["count"] == 1                 # t1
+    assert by_label["asked for user input"]["count"] == 1   # the added row
+    assert by_label["declined to build"]["count"] == 1      # t2
+    assert sum(o["count"] for o in outcomes) == 3
+    assert sum(o["share"] for o in outcomes) == pytest.approx(1.0)
+
+
 def test_bar_chart_labels_are_the_formatted_values():
     """The bar chart is inline SVG with no external resource, and every label is
     the same formatted string the table shows - a chart that disagreed with the
@@ -1255,6 +1295,9 @@ def test_monarch_phases_section(phase_store, four_arm_store):
         assert f'<th title="{header}">' in section, header
     assert "declined" in section          # t2's builder declined
     assert "success" in section           # t1's dispatch succeeded
+    assert "attempts by outcome" in section
+    assert "asked for user input" in section
+    assert "declined to build" in section
 
     # cost by phase and by model, in the cost section, using Carlos's words
     cost = page[page.index('id="cost"'):page.index('id="time"')]
@@ -1687,6 +1730,49 @@ def test_task_row_says_pass_on_retry(tmp_path):
     assert m["first_try_pass"]["mean"] == pytest.approx(0.5)   # only t1
     assert m["pass_after_retry"]["mean"] == pytest.approx(1.0)  # both, with retry
     assert m["retries"]["count"] == 1
+
+
+def test_task_row_says_asked_for_input(tmp_path):
+    """A task whose Monarch attempt ended with `needs_input:` reads
+    `fail · asked for input` in the executive task rows - distinct from a
+    decline, a builder error, or a dispatch failure."""
+    from wb_report.report import build_report, render_executive
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-i", "cfgi", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch"], "k": 1, "n_tasks": 1})
+    store.record_episode(_row(
+        "t1", "monarch", 0, False, run="run-i", termination="agent_error",
+        assertions=False, error="needs_input: crm_domain",
+        flags=["inputs_required=1"],
+        phases={"authoring": PhaseMetrics(turns=1, cost_usd=0.05, wall_clock_s=2.0)}))
+    store.finish_run("run-i")
+
+    rep = build_report(store, "run-i", audience="internal")
+    page = render_executive(rep, tasks_dir=tmp_path)
+    assert "fail &middot; asked for input" in page
+
+
+def test_executive_with_monarch_sentence_counts_needs_input(tmp_path):
+    """The "With Monarch" sentence names how many attempts asked for input."""
+    from wb_report.report import build_report, render_executive
+
+    store = Store(tmp_path / "wb.sqlite3")
+    store.create_run("run-ai", "cfgai", "workflowbench-synthetic@0.1",
+                     {"suite_dir": "tasks", "arms": ["monarch", "alpha"], "k": 1,
+                      "n_tasks": 2})
+    store.record_episode(_row("t1", "monarch", 0, True, run="run-ai"))
+    store.record_episode(_row(
+        "t2", "monarch", 0, False, run="run-ai", termination="agent_error",
+        assertions=False, error="needs_input: crm_domain",
+        phases={"authoring": PhaseMetrics(turns=1, cost_usd=0.05, wall_clock_s=2.0)}))
+    store.record_episode(_row("t1", "alpha", 0, True, run="run-ai"))
+    store.record_episode(_row("t2", "alpha", 0, True, run="run-ai"))
+    store.finish_run("run-ai")
+
+    page = render_executive(build_report(store, "run-ai", audience="internal",
+                                         baseline_arm="alpha"), tasks_dir=tmp_path)
+    assert "1 asked for user input." in page
 
 
 # -- the answer key where it cannot act ---------------------------------------

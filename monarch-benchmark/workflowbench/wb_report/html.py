@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from wb_report.metrics import (NOT_APPLICABLE_REASON, PHASE_WORDS, is_monarch,
-                               is_not_applicable)
+                               is_not_applicable, monarch_outcomes)
 
 
 def _esc(value: Any) -> str:
@@ -908,7 +908,10 @@ def _task_rows(report: dict, tasks_dir: str | Path = "tasks") -> str:
             verdict = '<span class="badge good">pass</span>'
         else:
             attempt = reasons.get(row["task_id"], {})
-            why = attempt.get("dispatch_outcome") or cell["category"]
+            if attempt.get("builder_outcome") == "needs_input":
+                why = "asked for input"
+            else:
+                why = attempt.get("dispatch_outcome") or cell["category"]
             verdict = f'<span class="badge crit">fail &middot; {_esc(why)}</span>'
         rows.append(
             f'<div class="taskrow"><div class="body">'
@@ -1010,6 +1013,7 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
         built = sum(1 for a in rows if a["builder_outcome"] == "done")
         passed = sum(1 for a in rows if a["checker"] == "pass")
         ran = sum(1 for a in rows if a["dispatch_outcome"] == "success")
+        asked = sum(1 for a in rows if a["builder_outcome"] == "needs_input")
         failed = [a for a in rows if a["checker"] != "pass"]
         reason = ""
         if failed:
@@ -1018,10 +1022,11 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
                      else f"dispatch ({f0['dispatch_outcome']})" if f0["dispatch_outcome"] != "success"
                      else "the checker")
             reason = f" The first failure was at {stage}: {f0['reason'] or 'no detail'}."
+        asked_text = f" {asked} asked for user input." if asked else ""
         with_text = (
             f"{len(rows)} attempt{'s' if len(rows) != 1 else ''}, {passed} passed. The builder "
             f"produced a workflow in {built} of {len(rows)}; dispatch finished in {ran} of "
-            f"{len(rows)}.{reason}")
+            f"{len(rows)}.{asked_text}{reason}")
     else:
         with_text = "No Monarch attempt was recorded in this round."
 
@@ -1263,6 +1268,11 @@ def _monarch_section(report: dict) -> str:
         return ""
     body = ""
     for arm, rows in sorted(attempts.items()):
+        outcome_rows = [[o["outcome"], _fmt(o["count"]), _fmt(o["share"], "rate")]
+                        for o in monarch_outcomes(rows)]
+        body += _table(["outcome", "count", "share"], outcome_rows,
+                       _source_line_for(report, "monarch"),
+                       f"{arm}, attempts by outcome", numeric_from=1)
         table_rows = [[a["task_id"], _fmt(a["trial"]), a["builder_outcome"],
                        _fmt(a["questions_asked"]),
                        _fmt(a["builder_seconds"], "seconds"),

@@ -97,6 +97,8 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
             detail = ", ".join(c.get("path", "") for c in first["unexpected_changes"])
         elif not first.get("assertions_passed"):
             category = "assertion failed"
+        elif str(first.get("error") or "").startswith("needs_input:"):
+            category, detail = "needs_input", first["error"]
         elif first.get("error"):
             category, detail = "error", first["error"]
         else:
