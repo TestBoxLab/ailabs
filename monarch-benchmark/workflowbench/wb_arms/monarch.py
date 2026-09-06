@@ -74,10 +74,6 @@ RETRY_REPLY = ("No further information is available beyond the original request,
 # ids carry `/`, `@` and `+` (run/task/monarch@sha+branch/t0), so they are mapped
 # into the charset first. Verified on Railway, 4 Sep 2026.
 HEADER_SAFE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
-# The run route's limits on `inputs` (Monarch team, 5 Sep 2026): scalars only,
-# at most 32 keys, at most 4,000 characters per string.
-MAX_INPUTS = 32
-MAX_INPUT_CHARS = 4000
 _UNSAFE = re.compile(r"[^A-Za-z0-9._:-]+")
 
 
@@ -380,6 +376,9 @@ class MonarchArm:
         # bench_episode_id is recorded so a human can find the attempt's traces.
         ids: dict = {"bench_episode_id": self._bench_id}
         res.turn_log.append({"monarch": ids})
+        if self.harness.authoring_mode == "unattended":
+            # Only the non-default is flagged, so today's rows keep their flags.
+            res.flags.append("authoring=unattended")
         if self.mode == "run-only":
             # The recipe is the bench's frozen artefact, reused by every attempt of
             # this run: nothing is authored, and nothing is deleted on any outcome
@@ -468,7 +467,8 @@ class MonarchArm:
     def _author(self, client, ep, goal, deadline, res, ids) -> str | None:
         """Stream the authoring run; return the workflow id, or fill `res` and return None."""
         t0 = time.monotonic()
-        recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline)
+        recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline,
+                                            authoring_mode=self.harness.authoring_mode)
         ids["recipeRunId"] = recipe_run
         workflow_id, questions = None, 0
         answered: set[str] = set()     # a reconnected stream replays the prompt
@@ -553,8 +553,7 @@ class MonarchArm:
             res.flags.append(f"questions_asked={questions}")
         return workflow_id
 
-    def _start_run(self, client, ep, workflow_id, deadline, res,
-                   inputs: dict | None = None) -> dict | None:
+    def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
         """Start the workflow, waiting out a run already in flight on it (FR-018).
 
         Create + run authors a fresh workflow every attempt, so it can never meet
@@ -565,8 +564,7 @@ class MonarchArm:
         started_waiting = None
         while True:
             try:
-                return client.run_workflow(workflow_id, self._bench_id, deadline=deadline,
-                                           inputs=inputs)
+                return client.run_workflow(workflow_id, self._bench_id, deadline=deadline)
             except MonarchRefused as e:
                 if e.code != "RUN_ALREADY_ACTIVE" or self.mode != "run-only":
                     raise
@@ -624,25 +622,16 @@ class MonarchArm:
             recipe = (client.get_workflow(workflow_id, deadline=deadline) or {}).get("recipe")
         return [d for d in ((recipe or {}).get("inputs") or []) if d.get("name")]
 
-    def _run_inputs(self, declared: list[dict]) -> dict:
-        """Fill every required input that has no default, with nothing beyond the request.
+    @staticmethod
+    def _needs_input(declared: list[dict]) -> list[str]:
+        """The required inputs with no default: what a person would have to type.
 
-        A `null` or a missing key means "not provided", so an optional input and
-        one with a default are simply left out; a required one without a default
-        has no way to be skipped, and gets a value of its declared type.
+        Nothing may be invented for them (rule 1: the same request text for every
+        competitor), so an attempt that declares any of these cannot be run
+        unattended and ends before the run (Carlos, 6 Sep 2026). An optional input
+        and one with a default are simply left out of the run body.
         """
-        values: dict = {}
-        for d in declared:
-            if not d.get("required") or "default" in d or len(values) >= MAX_INPUTS:
-                continue
-            kind = d.get("type", "string")
-            if kind == "boolean":
-                values[d["name"]] = False
-            elif kind in ("number", "integer"):
-                values[d["name"]] = 0
-            else:
-                values[d["name"]] = self._reply_text[:MAX_INPUT_CHARS]
-        return values
+        return [d["name"] for d in declared if d.get("required") and "default" not in d]
 
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
@@ -653,16 +642,20 @@ class MonarchArm:
                 raise EpisodeTimeout(
                     "deadline passed in the execution phase, before the run started")
             declared = self._declared_inputs(client, workflow_id, deadline)
-            inputs = self._run_inputs(declared)
-            if declared or inputs:
-                res.turn_log.append({"inputs": {"declared": declared, "sent": inputs}})
-            if inputs:
-                res.flags.append(f"inputs_filled={len(inputs)}")
+            needed = self._needs_input(declared)
+            if declared:
+                res.turn_log.append({"inputs": {"declared": declared, "needed": needed}})
+            if needed:
+                # A workflow that asks a person for data is not a workflow the
+                # bench can run; the row says so instead of guessing values.
+                res.flags.append(f"inputs_required={len(needed)}")
+                res.termination = "agent_error"
+                res.error = "needs_input:" + ",".join(needed)
+                return
             try:
                 if self._llm_ack(client, workflow_id, ids.get("recipeVersion"), deadline):
                     res.flags.append("llm_loop_acked=1")
-                started = self._start_run(client, ep, workflow_id, deadline, res,
-                                          inputs=inputs)
+                started = self._start_run(client, ep, workflow_id, deadline, res)
             except MonarchRefused as e:
                 self._infra = _classify_refusal(e.code)
                 res.termination = "agent_error"

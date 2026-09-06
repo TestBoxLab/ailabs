@@ -43,6 +43,22 @@ Monarch MUST:
 - ignore the header when absent: no metadata, no other change;
 - never echo the header into workflow content, prompts, or model input.
 
+## 1a. Unattended authoring
+
+The authoring request MAY carry one extra field:
+
+```
+POST /api/workflows/recipe/runs
+{"goal": "<the task's request text>", "authoring": "unattended"}
+```
+
+`"authoring": "unattended"` asks the builder to make its own assumptions and
+finish without asking the user anything, instead of emitting `awaiting_input`
+frames. Monarch MUST treat any other value, and an absent field, as today's
+interactive behaviour. The benchmark sends it only when the harness file sets
+`authoring_mode: unattended`; the field is absent in every other run, so the
+body is byte-for-byte what it is today.
+
 **The trace id in the frames is the primary join.** Every authoring SSE frame
 carries `traceId`, so the benchmark collects the ids it saw and fetches those
 traces by id (`GET /api/public/traces/<id>`), which is exact and needs no
@@ -222,21 +238,21 @@ the row as `run_refused:<code>`, exactly like a refused run.
 `saved_recipe_version`, which the done frame carries as `workflowId` and
 `recipeVersion`. In run-only mode they are the recipe the bench froze.
 
-### 8.3 What the benchmark fills in
+### 8.3 A recipe that needs input is never run
 
 The declaration is read from the done frame's `recipe.inputs`, and from
 `GET /api/workflows/:id` (`recipe.inputs`) when there is no frame -- run-only
-mode. For each input that is `required` and has **no** `default`, and for no
-other input, the benchmark sends a value of the declared type carrying **no
-information beyond the request** (rule 1: the same request text for every
-competitor):
+mode. Nothing may be invented for an input (rule 1: the same request text for
+every competitor), so **if any input is `required` and has no `default`, the
+attempt does not start the run** (Carlos, 6 Sep 2026). It ends with
+`termination = "agent_error"`, `error = "needs_input:<name1>,<name2>"` and the
+flag `inputs_required=<n>`, and the workflow is cleaned up as on any other
+ending. A workflow that stops for a person is a workflow the bench cannot run.
 
-| declared `type` | value sent |
-|---|---|
-| `string` (or anything else) | the attempt's own sentence -- `FIXED_REPLY`, or `RETRY_REPLY` with the goal on a retry -- truncated to 4,000 characters |
-| `number`, `integer` | `0` |
-| `boolean` | `false` |
+An optional input, and one with a default, is simply left out: `null` or a
+missing key means "not provided". The run body is therefore always
+`{"mode": "live"}` and never carries `inputs`.
 
-The row records `inputs_filled=<n>` when n > 0 and `llm_loop_acked=1` when the
-stamp returned 200; the declaration and the values sent go into the attempt's
-turn log as one `{"inputs": {"declared": [...], "sent": {...}}}` entry.
+The row records `llm_loop_acked=1` when the stamp returned 200; the declaration
+goes into the attempt's turn log as one
+`{"inputs": {"declared": [...], "needed": [...]}}` entry.

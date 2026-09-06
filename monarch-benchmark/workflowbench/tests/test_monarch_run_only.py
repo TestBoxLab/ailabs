@@ -400,13 +400,11 @@ def test_workflow_gone_is_infra(site, repo):
 
 # -- the run contract in run-only mode: the stamp and the inputs ---------------
 
-def test_run_only_acks_and_fills_from_the_stored_recipe(site, repo):
+def test_run_only_acks_and_runs_from_the_stored_recipe(site, repo):
     """No frames here, so the declaration comes from GET /api/workflows/wf-1."""
-    from wb_arms.monarch import FIXED_REPLY
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF, has_llm_loop=True,
-                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True},
-                                 {"name": "n", "type": "number", "required": False}],
+                  recipe_inputs=[{"name": "n", "type": "number", "required": False}],
                   engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
     with FakeMonarch(sc) as fake:
         arm = run_only_arm(site, fake, port, repo)
@@ -414,5 +412,22 @@ def test_run_only_acks_and_fills_from_the_stored_recipe(site, repo):
 
     assert result.termination == "completed", result.error
     assert fake.llm_acks == [("wf-1", "3")]        # the recorded recipe version
-    assert fake.run_bodies[-1] == {"mode": "live", "inputs": {"sheet": FIXED_REPLY}}
-    assert "llm_loop_acked=1" in result.flags and "inputs_filled=1" in result.flags
+    assert fake.run_bodies[-1] == {"mode": "live"}
+    assert "llm_loop_acked=1" in result.flags
+
+
+def test_run_only_stops_on_a_recipe_that_needs_input(site, repo):
+    """A stored recipe that asks a person for data ends the same way, and nothing
+    is deleted: run-only never touches the frozen workflow (FR-016)."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", workflows=LIVE_WF,
+                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True}],
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = run_only_arm(site, fake, port, repo)
+        result = arm.run(episode(), deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error == "needs_input:sheet"
+    assert "inputs_required=1" in result.flags
+    assert fake.run_bodies == [] and fake.deleted_workflows == []

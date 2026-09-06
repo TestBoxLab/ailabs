@@ -16,6 +16,7 @@ import socket
 import subprocess
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -914,9 +915,8 @@ REQUIRED_INPUTS = [
 ]
 
 
-def test_required_inputs_are_filled_with_the_attempt_s_sentence(site, repo):
-    """Every required input with no default is filled by declared type; nothing else is sent."""
-    from wb_arms.monarch import FIXED_REPLY
+def test_required_inputs_end_the_attempt_before_the_run(site, repo):
+    """Nothing may be invented for a required input, so the attempt stops (6 Sep 2026)."""
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", recipe_inputs=REQUIRED_INPUTS,
                   engine_calls=DENVER)
@@ -925,29 +925,32 @@ def test_required_inputs_are_filled_with_the_attempt_s_sentence(site, repo):
         result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
                          deadline=time.monotonic() + 60)
 
-    assert result.termination == "completed", result.error
-    assert run_body(fake) == {"mode": "live", "inputs": {
-        "spreadsheet_id": FIXED_REPLY, "row_count": 0, "notify": False}}
-    assert "inputs_filled=3" in result.flags
+    assert result.termination == "agent_error"
+    assert result.error == "needs_input:spreadsheet_id,row_count,notify"
+    assert "inputs_required=3" in result.flags
+    assert fake.run_bodies == [] and fake.llm_acks == []
+    # the workflow is still cleaned up, as on any other ending
+    assert fake.deleted_workflows == ["wf-1"]
     logged = next(t["inputs"] for t in result.turn_log if "inputs" in t)
     assert logged["declared"] == REQUIRED_INPUTS
-    assert logged["sent"]["spreadsheet_id"] == FIXED_REPLY
     free(port)
 
 
-def test_a_retry_fills_a_string_input_with_the_retry_sentence(site, repo):
-    from wb_arms.monarch import RETRY_REPLY
+def test_optional_inputs_and_defaults_still_run(site, repo):
+    """Only a required input with no default stops the attempt; the body stays bare."""
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER,
-                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True}])
+                  recipe_inputs=[{"name": "folder", "type": "string", "required": False},
+                                 {"name": "region", "type": "string", "required": True,
+                                  "default": "us-east"}])
     with FakeMonarch(sc) as fake:
         arm = arm_against(site, fake, port, repo)
-        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t1"),
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
                          deadline=time.monotonic() + 60)
 
     assert result.termination == "completed", result.error
-    assert run_body(fake)["inputs"]["sheet"] == RETRY_REPLY.format(
-        goal=task()["prompt"][1]["content"])[:4000]
+    assert run_body(fake) == {"mode": "live"}
+    assert not [f for f in result.flags if f.startswith("inputs_required")]
     free(port)
 
 
@@ -961,27 +964,61 @@ def test_no_declared_inputs_sends_mode_only(site, repo):
 
     assert result.termination == "completed"
     assert run_body(fake) == {"mode": "live"}
-    assert not [f for f in result.flags if f.startswith("inputs_filled")]
+    assert not [t for t in result.turn_log if "inputs" in t]
     free(port)
 
 
 def test_an_undeclared_key_is_still_a_run_refusal(site, repo):
     """The backend's INPUT_INVALID reaches the row exactly as it does today."""
+    from wb_arms.monarch_client import MonarchClient
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
-                  recipe_inputs=[{"name": "sheet", "type": "string", "required": True}])
+                  recipe_inputs=[{"name": "sheet", "type": "string", "required": False}])
     with FakeMonarch(sc) as fake:
         arm = arm_against(site, fake, port, repo)
-        # the arm's filler is bypassed: the recipe it read declares another name
-        monkey = {"other": "x"}
-        original = MonarchArm._run_inputs
-        MonarchArm._run_inputs = lambda self, decl: monkey
+        # a body the arm never builds: the run route must still refuse it
+        original = MonarchClient.run_workflow
+        MonarchClient.run_workflow = lambda self, wf, ep, mode="live", deadline=None: (
+            self._call("POST", f"/api/workflows/{wf}/run", {"mode": mode, "inputs": {"other": "x"}},
+                       headers={"x-bench-episode-id": ep}, deadline=deadline))
         try:
             result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
                              deadline=time.monotonic() + 60)
         finally:
-            MonarchArm._run_inputs = original
+            MonarchClient.run_workflow = original
 
     assert result.termination == "agent_error"
     assert result.error == "run_refused:INPUT_INVALID"
+    free(port)
+
+
+# -- the unattended builder (harness key authoring_mode) -----------------------
+
+def test_interactive_sends_no_authoring_field(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert fake.authoring_bodies == [{"goal": task()["prompt"][1]["content"]}]
+    assert "authoring=unattended" not in result.flags
+    free(port)
+
+
+def test_unattended_sends_the_authoring_field(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.harness = replace(arm.harness, authoring_mode="unattended")
+        result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert fake.authoring_bodies == [{"goal": task()["prompt"][1]["content"],
+                                      "authoring": "unattended"}]
+    assert "authoring=unattended" in result.flags
     free(port)

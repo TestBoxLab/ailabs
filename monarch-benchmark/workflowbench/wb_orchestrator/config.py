@@ -23,6 +23,7 @@ from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
 MODES = ("full-flow", "create-run", "run-only")
+AUTHORING_MODES = ("interactive", "unattended")   # how Monarch is asked to build (002)
 PROVIDERS = ("anthropic", "openai", "google", "zai", "moonshot", "fireworks")
 EFFORTS = ("xhigh", "high", "medium", "low", "none")
 ADAPTERS = ("openai", "openai_responses", "gemini", "anthropic")
@@ -130,6 +131,7 @@ class Harness:
     price_table: str | None = None
     monarch_repo: str | None = None
     modes: list[str] = field(default_factory=list)
+    authoring_mode: str = "interactive"   # "unattended": the builder does not stop to ask
 
 
 @dataclass(frozen=True)
@@ -331,7 +333,7 @@ _HARNESS_KEYS = {
     "monarch": (("base_url", "credential_env", "login_email", "login_password_env", "fd_url",
                  "shim_port", "langfuse_url", "langfuse_public_key_env", "langfuse_secret_key_env",
                  "price_table", "monarch_repo", "modes"),
-                ("shim_public_host", "shim_public_url", "fd_api_key_env")),
+                ("shim_public_host", "shim_public_url", "fd_api_key_env", "authoring_mode")),
 }
 
 
@@ -416,6 +418,8 @@ def load_harness(path) -> Harness:
         price_table=c.get("price_table", str),
         monarch_repo=c.get("monarch_repo", str),
         modes=c.str_list("modes", enum=MODES, default=[]),
+        authoring_mode=c.get("authoring_mode", str, default=Harness.authoring_mode,
+                             enum=AUTHORING_MODES),
     )
 
 
@@ -580,6 +584,10 @@ def _hashed_harness(h: Harness) -> dict:
         for k in _MONARCH_ONLY:
             del d[k]
         d["release"] = None
+    elif d["authoring_mode"] == Harness.authoring_mode:
+        # ponytail: the default is dropped so runs frozen before this key stay
+        # regradable; only asking for the unattended builder moves the hash.
+        del d["authoring_mode"]
     return d
 
 

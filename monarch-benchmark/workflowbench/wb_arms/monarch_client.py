@@ -107,8 +107,14 @@ class MonarchClient:
 
     # -- authoring -------------------------------------------------------------
 
-    def start_authoring(self, goal: str, episode_id: str, deadline: float | None = None) -> str:
-        out = self._call("POST", "/api/workflows/recipe/runs", {"goal": goal},
+    def start_authoring(self, goal: str, episode_id: str, deadline: float | None = None,
+                        authoring_mode: str | None = None) -> str:
+        """Start an authoring job. `authoring_mode="unattended"` asks the builder not
+        to stop for questions; anything else sends today's body, with no such field."""
+        body = {"goal": goal}
+        if authoring_mode == "unattended":
+            body["authoring"] = "unattended"
+        out = self._call("POST", "/api/workflows/recipe/runs", body,
                          headers={"x-bench-episode-id": episode_id}, deadline=deadline)
         return out["runId"]
 
@@ -159,8 +165,8 @@ class MonarchClient:
     # -- running and cleanup ---------------------------------------------------
 
     def run_workflow(self, workflow_id: str, episode_id: str, mode: str = "live",
-                     deadline: float | None = None, inputs: dict | None = None) -> dict:
-        body = {"mode": mode} if not inputs else {"mode": mode, "inputs": inputs}
+                     deadline: float | None = None) -> dict:
+        body = {"mode": mode}
         return self._call("POST", f"/api/workflows/{workflow_id}/run", body,
                           headers={"x-bench-episode-id": episode_id}, deadline=deadline)
 

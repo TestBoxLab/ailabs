@@ -120,6 +120,7 @@ class FakeMonarch:
         self.run_started_at: list[float] = []
         self.llm_acks: list[tuple[str, str]] = []   # (workflow id, version) acked
         self.run_bodies: list[dict] = []            # every POST .../run body, in order
+        self.authoring_bodies: list[dict] = []      # every POST recipe/runs body, in order
         self._acked: set[tuple[str, str]] = set()
         self.token = "sess-1"
         self._reply_events: dict[str, threading.Event] = {}
@@ -320,6 +321,7 @@ class FakeMonarch:
                     time.sleep(sc.delay_s.get("authoring", 0))
                     with outer._lock:
                         outer.authoring_started_at.append(time.monotonic())
+                        outer.authoring_bodies.append(body or {})
                         outer._authoring_jobs += 1
                         # A new job replays its frames from the start, even though
                         # the fake reuses the run id across attempts.

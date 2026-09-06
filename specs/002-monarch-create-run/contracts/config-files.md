@@ -24,6 +24,7 @@ langfuse_public_key_env: LANGFUSE_PUBLIC_KEY
 langfuse_secret_key_env: LANGFUSE_SECRET_KEY
 price_table: monarch-team-bedrock
 monarch_repo: ../../../monarch           # relative to workflowbench/, or absolute
+authoring_mode: interactive              # optional; `unattended` asks the builder not to stop for questions
 modes: [create-run]                      # full-flow and run-only return in 003/004
 description: The product under comparison, driven through its own API. Version read from the checkout.
 ```
@@ -39,6 +40,14 @@ a variable that is set, every `/v1/*` call to the discovery service carries
 4 Sep 2026). `shim_public_url` overrides `shim_public_host:shim_port` when the
 front door is reached through a tunnel, and its host is what the generated
 seeds name as their domain.
+
+`authoring_mode` is optional and is either `interactive` (the default) or
+`unattended`. `interactive` sends today's authoring body, and the attempt answers
+every question with the fixed sentence. `unattended` adds `"authoring":
+"unattended"` to `POST /api/workflows/recipe/runs`, which asks Monarch's builder
+to make its own assumptions instead of stopping to ask; the row then carries the
+flag `authoring=unattended`. The key is part of the run's config hash **only when
+it is `unattended`**, so runs frozen before it existed stay regradable.
 
 ## models/monarch-team-bedrock.yaml (new, kind price-table)
 
