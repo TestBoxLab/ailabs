@@ -296,6 +296,31 @@ def _corpus_tiers(args) -> int:
         print(f"corpus folder missing or empty: {missing or 'corpus/imported-*'}",
               file=sys.stderr)
         return 3
+    if args.refreeze:
+        if args.seed is not None:
+            print("--refreeze keeps the seed the manifest already records; "
+                  "pass one or the other, not both", file=sys.stderr)
+            return 1
+        try:
+            r = tiers.refreeze(dirs, out=args.out,
+                               because=args.because or tiers.DEFAULT_REFREEZE_REASON)
+        except FileNotFoundError as e:
+            print(str(e), file=sys.stderr)
+            return 3
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(f"corpus: {len(dirs)} folders, {r.total} tasks, {r.usable} usable")
+        print(f"refroze the four sets from the manifest's own task ids "
+              f"(seed unchanged); {len(r.written)} files written")
+        for name in tiers.SET_NAMES:
+            print(f"  {name:<13} {len(r.sets[name])} prompts - "
+                  + ", ".join(f"{d} {n}" for d, n in r.by_domain[name].items()))
+        return 0
+    if args.seed is None:
+        print("wb corpus tiers needs --seed to draw, or --refreeze to rewrite "
+              "the sets the manifest already records", file=sys.stderr)
+        return 1
     try:
         r = tiers.draw(dirs, seed=args.seed, per_tier=args.per_tier, out=args.out)
     except FileNotFoundError as e:
@@ -468,8 +493,14 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("--product", default="simulated-apps",
                     help="product whose side-effect list to use (name or path)")
     ct = csub.add_parser("tiers", help="draw four frozen task sets by difficulty")
-    ct.add_argument("--seed", type=int, required=True,
+    ct.add_argument("--seed", type=int,
                     help="recorded in the manifest; the same seed redraws the same bytes")
+    ct.add_argument("--refreeze", action="store_true",
+                    help="rewrite the four sets from the corpus keeping the task ids "
+                         "the manifest already records; use after an approval-rule "
+                         "change, when redrawing would pick a different ten")
+    ct.add_argument("--because", default=None,
+                    help="with --refreeze: why, recorded in the manifest")
     ct.add_argument("--per-tier", type=int, default=10, help="prompts per drawn set")
     ct.add_argument("--corpus", action="append", default=None,
                     help="repeatable; default: every corpus/imported-* folder")

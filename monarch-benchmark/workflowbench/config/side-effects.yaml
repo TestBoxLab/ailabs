@@ -21,3 +21,11 @@
   allowed:
     - {service: slack, op: changed, path: "slack.channels*"}
     - {service: slack, op: changed, path: "slack.dms*"}
+# Voiding a QuickBooks invoice zeroes its balance in the same call
+# (tools/api/impl/quickbooks.py: quickbooks_invoice_void sets voided and
+# balance together), so a competitor that voids exactly what was asked is not
+# charged with a collateral write.
+- service: quickbooks
+  when: ".voided"
+  allowed:
+    - {service: quickbooks, op: "*", path: "quickbooks.invoices[*].balance"}

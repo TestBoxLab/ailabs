@@ -69,6 +69,12 @@ OLD_SIDE_EFFECTS = [
         {"service": "slack", "op": "changed", "path": "slack.channels*"},
         {"service": "slack", "op": "changed", "path": "slack.dms*"},
     ]),
+    # Added 6 Sep 2026 with the scored-domain rules: the vendor's void endpoint
+    # sets voided and balance in the same call, so zeroing the balance is the
+    # platform's own doing, not a collateral write by the competitor.
+    ("quickbooks", ".voided", [
+        {"service": "quickbooks", "op": "*", "path": "quickbooks.invoices[*].balance"},
+    ]),
 ]
 SIDE_EFFECTS_FILE = ROOT / "config" / "side-effects.yaml"
 

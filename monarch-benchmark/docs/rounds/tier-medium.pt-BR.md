@@ -21,8 +21,8 @@ aleatório confere a média combinada.
   aprovação derivadas por `wb corpus declare`.
 - Pontuação de dificuldade, calculada só do arquivo da tarefa: número de
   serviços que a tarefa usa + número de mudanças esperadas + número de
-  ferramentas necessárias. Os níveis são os tercis do corpus utilizável (hoje 9 e
-  12); tarefa exatamente no corte cai no nível de baixo.
+  ferramentas necessárias. Os níveis são os tercis do corpus utilizável (hoje 10 e
+  15); tarefa exatamente no corte cai no nível de baixo.
 - Sorteio: `wb corpus tiers --seed <N>` escolhe dez por nível, estratificado
   entre os sete domínios (rodízio), e mais dez ao acaso do corpus utilizável
   excluindo os trinta dos níveis. Mesma semente, mesmos conjuntos, byte a byte.
@@ -32,6 +32,17 @@ aleatório confere a média combinada.
   cada tarefa, pontuação, nível, domínio e hash.
 - Tarefa sem regra de aprovação, ou com hash diferente do conteúdo, sai do pool
   antes do sorteio.
+- **Recongelado em 6 set 2026, as mesmas dez tarefas.** As regras de aprovação
+  derivadas para os seis domínios pontuados estavam erradas na metade "nada
+  mais mudou": 218 das 600 tarefas pontuadas não recebiam regra nenhuma, e um
+  competidor que fazia exatamente o que as verificações pediam ainda era
+  reprovado pelas mudanças que lhe foram pedidas. Corrigir a derivação mudou o
+  hash de toda tarefa pontuada, então os quatro conjuntos foram reescritos a
+  partir do corpus com `wb corpus tiers --refreeze`, que mantém os ids
+  sorteados em 4 set e só atualiza conteúdo e hashes. Mesma semente (20260904),
+  as mesmas dez tarefas, hashes novos; o corpus inteiro agora é utilizável (800
+  de 800, contra 582 antes), e por isso os cortes de nível mudaram.
+  **O Lucas precisa aprovar antes desta rodada rodar.**
 
 ## Competidores (idênticos nas quatro rodadas)
 

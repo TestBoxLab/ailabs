@@ -261,13 +261,77 @@ def draw(dirs: Iterable[str | Path], seed: int, per_tier: int = 10,
                       by_domain=by_domain, written=written)
 
 
+DEFAULT_REFREEZE_REASON = (
+    "an approval-rule change rewrote every task's hash; the drawn ids are unchanged")
+
+
+def refreeze(dirs: Iterable[str | Path], out: str | Path = "tasks",
+             because: str = DEFAULT_REFREEZE_REASON) -> DrawResult:
+    """Rewrite the four sets from the corpus without drawing again.
+
+    An approval-rule change rewrites every corpus task's hash, which leaves the
+    frozen copies under `tasks/` stale. Redrawing is the wrong repair: a rule
+    fix also changes which tasks are usable, so the same seed over a different
+    pool picks a different ten and the round sheets stop describing the sets
+    that ran. Refreezing keeps the ids the draw chose and refreshes only their
+    content, their hashes and the manifest.
+    """
+    out = Path(out)
+    manifest_path = out / "tiers-manifest.yaml"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"no manifest at {manifest_path}; there is nothing "
+                                f"to refreeze - run `wb corpus tiers --seed N` first")
+    old = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+    pool = load_corpus(dirs)
+    by_id = {e.task_id: e for e in pool.entries}
+    cuts = tier_cuts(e.score for e in pool.entries)
+
+    drawn: dict[str, list[Entry]] = {}
+    for name in SET_NAMES:
+        picked = []
+        for row in old["sets"][name]["tasks"]:
+            entry = by_id.get(row["task"])
+            if entry is None:
+                raise ValueError(
+                    f"{row['task']} is in the manifest's {name} but no longer "
+                    f"usable in the corpus; refusing to refreeze a set whose "
+                    f"membership would change")
+            picked.append(Entry(entry.task_id, entry.domain, entry.score,
+                                entry.contract_sha256, entry.path,
+                                tier_of(entry.score, cuts)))
+        drawn[name] = picked
+
+    written: list[Path] = []
+    by_domain: dict[str, dict[str, int]] = {}
+    for set_name, picked in drawn.items():
+        label = "random" if set_name == "random-10" else set_name.split("-", 1)[1]
+        counts: dict[str, int] = {}
+        for e in sorted(picked, key=lambda e: e.task_id):
+            written.append(_write_task(e, label, out / set_name))
+            counts[e.domain] = counts.get(e.domain, 0) + 1
+        by_domain[set_name] = dict(sorted(counts.items()))
+
+    written.append(_write_manifest(out, pool, cuts, old["seed"], old["per_tier"],
+                                   drawn, by_domain, refrozen=because))
+    return DrawResult(cuts=cuts, total=pool.total, usable=len(pool.entries),
+                      excluded=pool.excluded, folders=pool.folders,
+                      sets={k: [e.task_id for e in sorted(v, key=lambda e: e.task_id)]
+                            for k, v in drawn.items()},
+                      by_domain=by_domain, written=written)
+
+
 def _write_manifest(out: Path, pool: Pool, cuts: dict[str, int], seed: int,
                     per_tier: int, drawn: dict[str, list[Entry]],
-                    by_domain: dict[str, dict[str, int]]) -> Path:
+                    by_domain: dict[str, dict[str, int]],
+                    refrozen: str = "") -> Path:
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     manifest = {
         "measure": MEASURE,
-        "generated_at": datetime.datetime.now(datetime.UTC)
-                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": now,
+        # A refreeze keeps the draw and refreshes the content, so the reader
+        # can tell a re-run of the same seed from a rewrite of the same ids.
+        **({"refrozen_at": now, "refrozen_because": refrozen} if refrozen else {}),
         "seed": seed,
         "per_tier": per_tier,
         "cuts": cuts,

@@ -22,7 +22,7 @@ blended average.
   `wb corpus declare`.
 - Difficulty score, computed from the task file alone: number of services the
   task seeds + number of expected changes + number of tools it needs. Tiers are
-  the terciles of the whole usable corpus (today 9 and 12); a task on a cut
+  the terciles of the whole usable corpus (today 10 and 15); a task on a cut
   point falls in the lower tier.
 - Draw: `wb corpus tiers --seed <N>` picks ten per tier, stratified across the
   seven domains (round-robin), and ten more at random from the usable corpus
@@ -33,6 +33,16 @@ blended average.
   every drawn task's score, tier, domain and hash.
 - A task with no approval rule, or whose hash does not match its content, is
   excluded from the pool before the draw.
+- **Refrozen 6 Sep 2026, same ten tasks.** The approval rules derived for the
+  six scored domains were wrong in their "nothing else changed" half: 218 of
+  the 600 scored tasks got no rule at all, and a competitor that did exactly
+  what the assertions asked was still failed for the changes it was asked to
+  make. Correcting the derivation changed every scored task's hash, so the four
+  sets were rewritten from the corpus with `wb corpus tiers --refreeze`, which
+  keeps the task ids the 4 Sep draw chose and refreshes only their content and
+  hashes. Same seed (20260904), same ten prompts, new hashes; the whole corpus
+  is now usable (800 of 800, against 582 before), which is why the tier cut
+  points moved. **Lucas must sign off before this round runs.**
 
 ## Competitors (identical in all four rounds)
 
