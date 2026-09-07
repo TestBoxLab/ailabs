@@ -108,15 +108,65 @@ class MonarchClient:
     # -- authoring -------------------------------------------------------------
 
     def start_authoring(self, goal: str, episode_id: str, deadline: float | None = None,
-                        authoring_mode: str | None = None) -> str:
+                        authoring_mode: str | None = None, experiment: str | None = None) -> str:
         """Start an authoring job. `authoring_mode="unattended"` asks the builder not
         to stop for questions; anything else sends today's body, with no such field."""
         body = {"goal": goal}
+        if experiment is not None:
+            body["experiment"] = experiment
         if authoring_mode == "unattended":
             body["authoring"] = "unattended"
         out = self._call("POST", "/api/workflows/recipe/runs", body,
                          headers={"x-bench-episode-id": episode_id}, deadline=deadline)
         return out["runId"]
+
+    def get_authoring(self, run_id: str, deadline: float | None = None) -> dict:
+        return self._call("GET", f"/api/workflows/recipe/runs/{run_id}", deadline=deadline)
+
+    def authoring_snapshots(self, run_id: str, deadline: float, poll_interval_s: float = 2.0) -> Iterator[dict]:
+        while True:
+            if time.monotonic() >= deadline:
+                raise EpisodeTimeout(f"deadline polling authoring run {run_id}")
+            snapshot = self.get_authoring(run_id, deadline)
+            yield snapshot
+            if snapshot.get("status") in {"done", "error"}:
+                return
+            time.sleep(min(poll_interval_s, max(0, deadline - time.monotonic())))
+
+    def authoring_event_pages(self, run_id: str, deadline: float, poll_interval_s: float = 2.0) -> Iterator[dict]:
+        """Yield raw pages until the durable terminal ledger is fully downloaded.
+
+        410 remains MonarchRefused with its original response. Existing payload
+        truncation markers are retained. No incomplete export becomes success.
+        """
+        cursor = 0
+        while True:
+            if time.monotonic() >= deadline:
+                raise EpisodeTimeout(f"deadline exporting authoring events for {run_id}")
+            page = self._call("GET", f"/api/workflows/recipe/runs/{run_id}/events?afterSeq={cursor}&limit=1000", deadline=deadline)
+            events, next_cursor = page.get("events"), page.get("nextAfterSeq")
+            more, complete = page.get("hasMore"), page.get("complete")
+            valid = (page.get("runId") == run_id and isinstance(events, list)
+                     and type(next_cursor) is int and next_cursor >= cursor
+                     and type(more) is bool and type(complete) is bool
+                     and not (more and complete) and (not more or next_cursor > cursor))
+            previous = cursor
+            if valid:
+                for event in events:
+                    seq = event.get("seq") if isinstance(event, dict) else None
+                    if type(seq) is not int or seq <= previous or seq > next_cursor:
+                        valid = False
+                        break
+                    previous = seq
+                valid = valid and next_cursor == previous
+            if not valid:
+                raise InfraError("infra:harness_crash", f"Invalid authoring event page: {page!r}", retryable=False)
+            yield page
+            cursor = next_cursor
+            if complete:
+                return
+            if not more:
+                time.sleep(min(poll_interval_s, max(0, deadline - time.monotonic())))
 
     def stream(self, run_id: str, deadline: float | None = None) -> Iterator[dict]:
         """Yield the parsed `data:` frames of the authoring stream until it closes.
@@ -189,6 +239,9 @@ class MonarchClient:
         """The workflow's runs, newest first; `[]` when it has never run."""
         out = self._call("GET", f"/api/workflows/{workflow_id}/runs", deadline=deadline)
         return out.get("items") or []
+
+    def cancel_execution(self, run_id: str, deadline: float | None = None) -> dict:
+        return self._call("POST", f"/api/engine/runs/{run_id}/cancel", {}, deadline=deadline)
 
     def get_run(self, run_id: str, deadline: float | None = None) -> dict:
         return self._call("GET", f"/api/workflows/runs/{run_id}", deadline=deadline)

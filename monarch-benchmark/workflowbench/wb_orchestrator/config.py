@@ -131,6 +131,7 @@ class Harness:
     price_table: str | None = None
     monarch_repo: str | None = None
     modes: list[str] = field(default_factory=list)
+    builder_experiment: str | None = None
     authoring_mode: str = "interactive"   # "unattended": the builder does not stop to ask
 
 
@@ -333,7 +334,7 @@ _HARNESS_KEYS = {
     "monarch": (("base_url", "credential_env", "login_email", "login_password_env", "fd_url",
                  "shim_port", "langfuse_url", "langfuse_public_key_env", "langfuse_secret_key_env",
                  "price_table", "monarch_repo", "modes"),
-                ("shim_public_host", "shim_public_url", "fd_api_key_env", "authoring_mode")),
+                ("shim_public_host", "shim_public_url", "fd_api_key_env", "authoring_mode", "builder_experiment")),
 }
 
 
@@ -418,6 +419,7 @@ def load_harness(path) -> Harness:
         price_table=c.get("price_table", str),
         monarch_repo=c.get("monarch_repo", str),
         modes=c.str_list("modes", enum=MODES, default=[]),
+        builder_experiment=c.get("builder_experiment", str, enum={"current", "compiled", "sections-serial", "sections-parallel", "sections-parallel-current"}),
         authoring_mode=c.get("authoring_mode", str, default=Harness.authoring_mode,
                              enum=AUTHORING_MODES),
     )
@@ -588,6 +590,8 @@ def _hashed_harness(h: Harness) -> dict:
         # ponytail: the default is dropped so runs frozen before this key stay
         # regradable; only asking for the unattended builder moves the hash.
         del d["authoring_mode"]
+    if d.get("builder_experiment") is None:
+        d.pop("builder_experiment", None)
     return d
 
 
