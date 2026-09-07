@@ -191,6 +191,7 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
         self._spent = 0.0            # cumulative cost_usd, carried over on resume
         self._stop_reason: str | None = None
+        self.arm_wrapper = None
 
     def _config(self) -> dict:
         if self.run_config:
@@ -265,6 +266,8 @@ class Orchestrator:
         arms = ([build_arm_for(c, self.run_config) for c in self.run_config.competitors]
                 if self.run_config
                 else [build_arm(k) for k in self.arm_keys])
+        if self.arm_wrapper is not None:
+            arms = [self.arm_wrapper(arm) for arm in arms]
         threads = []
         for arm in arms:
             work = [(task, trial) for task in self.tasks for trial in range(self.k)
