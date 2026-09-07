@@ -6,13 +6,14 @@ import hashlib
 import json
 import os
 import re
+import random
 import shutil
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from grader.grade import grade
-from runner.arms import OracleArm, SloppyArm
+from wb_orchestrator.prototype_controls import qualify
 from wb_arms.api_loop import InfraError
 from wb_orchestrator.campaign_budget import CampaignBudget, BudgetBlocked
 from wb_world.episode import Episode, contract_hash, load_task_file
@@ -53,6 +54,23 @@ def _control(task, action=None) -> dict:
     return {**grade(task, episode.snapshot0, final), 'snapshot_sha256': digest(final)}
 
 
+def paired_schedule(tasks, phases, seed=20260907):
+    rng = random.Random(seed)
+    order = []
+    for phase in phases:
+        blocks = [(task['id'], repetition) for task in tasks if task['split'] == phase['name']
+                  for repetition in range(1, phase['repetitions'] + 1)]
+        rng.shuffle(blocks)
+        arms = list(phase['configurations'])
+        rng.shuffle(arms)
+        for block, (task_id, repetition) in enumerate(blocks):
+            rotated = arms[block % len(arms):] + arms[:block % len(arms)]
+            for position, setting in enumerate(rotated):
+                order.append({'phase': phase['name'], 'task_id': task_id, 'repetition': repetition,
+                              'configuration': setting, 'position': position})
+    return order
+
+
 def build_manifest(root: Path = ROOT) -> dict:
     tasks = []
     for split, selection in SELECTION.items():
@@ -70,13 +88,7 @@ def build_manifest(root: Path = ROOT) -> dict:
             }
             try:
                 readiness['negative_control'] = 'accepted' if _control(task)['passed'] else 'rejected'
-                positive = _control(task, OracleArm())
-                readiness['positive_control'] = 'passed' if positive['passed'] else 'pending_supported_answer_key'
-                if positive['passed']:
-                    collateral = _control(task, SloppyArm())
-                    readiness['collateral_control'] = (
-                        'pending_applicable_collateral_fixture' if collateral['snapshot_sha256'] == positive['snapshot_sha256']
-                        else 'accepted' if collateral['passed'] else 'rejected')
+                readiness.update({key: value for key, value in qualify(task).items() if key != 'evidence'})
             except Exception as error:
                 readiness['error'] = f'{type(error).__name__}: {error}'
             tasks.append({
@@ -89,7 +101,7 @@ def build_manifest(root: Path = ROOT) -> dict:
         {'name': 'holdout', 'configurations': ['current', 'sections-serial', 'sections-parallel'], 'tasks': 4, 'repetitions': 3, 'attempts': 36},
     ]
     sources = ['grader/grade.py', 'grader/invariant.py', 'wb_world/episode.py',
-               'runner/arms.py', 'wb_orchestrator/prototype_campaign.py',
+               'runner/arms.py', 'wb_orchestrator/prototype_controls.py', 'wb_orchestrator/prototype_campaign.py',
                'wb_orchestrator/campaign_budget.py', 'wb_orchestrator/orchestrator.py',
                'wb_orchestrator/config.py', 'wb_arms/monarch.py', 'wb_arms/monarch_client.py']
     source_hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources}
@@ -100,10 +112,11 @@ def build_manifest(root: Path = ROOT) -> dict:
     manifest = {
         'source_sha256': source_hashes, 'automationbench_revision': vendor_revision,
         'version': 1, 'tasks': tasks, 'phases': phases, 'attempts': 66,
+        'schedule_seed': 20260907, 'schedule': paired_schedule(tasks, phases),
         'reservation_estimate_usd': 792, 'development_allowance_usd': 200,
         'maximum_combined_allocation_usd': 992, 'campaign_limit_usd': 1000,
         'attempt_limit_usd': 12, 'automatic_retries': 0, 'missing': ['personal_30_node_workflow'],
-        'qualification': 'Candidate fixtures, not evidence of 30-node authoring or representative pilot coverage. Complex cases need positive and collateral grader controls.',
+        'qualification': 'Candidate fixtures, not evidence of 30-node authoring or representative pilot coverage. Readiness records distinguish qualified, rejected, and pending independent controls; all must qualify before paid dispatch.',
         'paid_prerequisites': ['approved_manifest', 'exact_model_inventory', 'server_dollar_enforcement',
                                'settled_cancellation', 'dedicated_world', 'per_task_grader_evidence'],
     }
@@ -172,6 +185,8 @@ def validate_preflight(path: str | Path | None, manifest: dict) -> dict:
     if world.get('per_attempt_reset') is not True or world.get('shared_accounts') is not False:
         raise PreflightError('A dedicated resettable world is required')
     for task in manifest['tasks']:
+        if task['readiness'].get('status') != 'qualified':
+            raise PreflightError(f"Local independent grader controls are not qualified: {task['id']}")
         if not task['readiness']['source_contract_matches'] or not task['readiness']['assertions'] or not task['readiness']['expected_changes']:
             raise PreflightError(f"Task source/approval contract is not ready: {task['id']}")
         review = _evidence(path, (proof.get('graders') or {}).get(task['id']), 'task_grader_controls', sha)
@@ -236,6 +251,9 @@ def execute(manifest: dict, proof_path: Path, *, product: Path, plan: Path, budg
     competitor = monarch[0]
     if expand(competitor.harness.base_url, os.environ, 'base_url') != proof['preview_url']:
         raise PreflightError('Configured Monarch URL differs from approved preview')
+    models = _evidence(proof_path, proof['models'], 'exact_model_inventory', proof['preview_sha'])
+    if models.get('resolved_competitor_sha256') != digest(asdict(competitor)):
+        raise PreflightError('Model evidence differs from resolved competitor model/effort/harness settings')
     world = _evidence(proof_path, proof['world'], 'dedicated_synthetic_world', proof['preview_sha'])
     if public_front_door_url(competitor.harness, os.environ) != world.get('front_door_url'):
         raise PreflightError('Configured fixture front door differs from isolation evidence')
@@ -261,23 +279,26 @@ def execute(manifest: dict, proof_path: Path, *, product: Path, plan: Path, budg
         if subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip() != proof['preview_sha']:
             raise PreflightError('Configured Monarch checkout changed during the campaign')
     try:
-        for phase in manifest['phases']:
-            selected = [t for t in manifest['tasks'] if t['split'] == phase['name']]
-            frozen_dir = (output / 'tasks' / phase['name']).resolve()
-            frozen_dir.mkdir(parents=True, exist_ok=True)
-            for task in selected:
-                shutil.copyfile(ROOT / task['path'], frozen_dir / Path(task['path']).name)
-            tasks = [load_task_file(frozen_dir / Path(t['path']).name) for t in selected]
-            for setting in phase['configurations']:
-                configured = replace(competitor, harness=replace(competitor.harness, builder_experiment=setting))
-                run_plan = replace(base.plan, name=f"prototype-{phase['name']}-{setting}", tasks=str(frozen_dir), repetitions=phase['repetitions'],
-                                   retry_on_fail=0, concurrency=1, timeout_s=1200,
-                                   approved_by=proof['approved_by'], cost_ceiling_usd=1000)
-                run_config = replace(base, plan=run_plan, competitors=[configured], tasks=tasks, tasks_dir=str(frozen_dir),
-                                     harnesses={configured.harness.name: configured.harness}, excluded_tasks={})
-                orchestrator = Orchestrator.from_config(store, run_config, output)
-                orchestrator.arm_wrapper = lambda inner: BudgetedCompetitor(inner, budget, authorize=authorize, stop=orchestrator._abort.set)
-                orchestrator.run(f"{proof['campaign_id']}-{phase['name']}-{setting}")
+        frozen_tasks = {}
+        frozen_dir = (output / 'tasks').resolve()
+        frozen_dir.mkdir(parents=True, exist_ok=True)
+        for task in manifest['tasks']:
+            destination = frozen_dir / Path(task['path']).name
+            shutil.copyfile(ROOT / task['path'], destination)
+            frozen_tasks[task['id']] = load_task_file(destination)
+        for index, entry in enumerate(manifest['schedule']):
+            setting = entry['configuration']
+            configured = replace(competitor, harness=replace(competitor.harness, builder_experiment=setting))
+            run_plan = replace(base.plan, name=f"prototype-{index:03d}-{setting}", tasks=str(frozen_dir), repetitions=1,
+                               retry_on_fail=0, concurrency=1, timeout_s=1200,
+                               approved_by=proof['approved_by'], cost_ceiling_usd=1000)
+            run_config = replace(base, plan=run_plan, competitors=[configured], tasks=[frozen_tasks[entry['task_id']]], tasks_dir=str(frozen_dir),
+                                 harnesses={configured.harness.name: configured.harness}, excluded_tasks={})
+            orchestrator = Orchestrator.from_config(store, run_config, output)
+            orchestrator.arm_wrapper = lambda inner: BudgetedCompetitor(inner, budget, authorize=authorize, stop=orchestrator._abort.set)
+            orchestrator.run(f"{proof['campaign_id']}-{index:03d}-{entry['phase']}-{setting}")
+            if orchestrator._abort.is_set():
+                raise PreflightError('Campaign stopped after an unsettled or over-budget attempt')
     finally:
         store.close()
 

@@ -28,7 +28,7 @@ Held-out candidates:
 - `support.reamaze_cross_platform_dedup`: cross-product deduplication.
 - `hr.comp_adjustment_batch`: batch eligibility and notifications.
 
-All ten currently have matching recorded contract hashes, nonempty assertions and expected changes, and reject a no-op. The existing scripted answer key passes only the two simple Salesforce cases. The other eight need supported positive controls and collateral checks. The existing sloppy competitor makes no additional change on the closed-won fixture, so that fixture needs an applicable collateral control. Only the city-update fixture currently passes all three local controls. These are candidate fixtures, not a certified campaign. Assertion counts and task difficulty do not establish authored node counts or section independence.
+All ten have matching recorded contract hashes, nonempty assertions and expected changes, and reject a no-op. Independent reference actions qualify the two simple Salesforce cases. The invoice case is rejected by demonstrated false positives; seven policy/batch cases remain pending independent references and falsification controls. These are candidate fixtures, not a certified campaign. Assertion counts and task difficulty do not establish authored node counts or section independence.
 
 Deyton's own 30-node workflow has not been identified/exported. It is explicitly missing from this proposal; these fixtures do not substitute evidence about that workflow. The approval record must acknowledge that limitation before an exploratory campaign can proceed.
 
@@ -50,10 +50,63 @@ These records are reviewed evidence attestations, not something the runner can m
 
 ## Dispatch, accounting, and results
 
-Once verified evidence exists, the runner uses the existing `Orchestrator.from_config`, `MonarchArm`, `Episode` world reset, grader, and result store. It freezes selected task bytes into the result directory for later regrading and saves the approved manifest/proof. Each configuration runs separately, with configuration identity preserved in its run ID and configuration hash. Execution is serial because the existing Monarch front door and fixture routing use a shared fixed port.
+Once verified evidence exists, the runner uses the existing `Orchestrator.from_config`, `MonarchArm`, `Episode` world reset, grader, and result store. It freezes selected task bytes into the result directory for later regrading and saves the approved manifest/proof. Each scheduled task/repetition/configuration entry runs separately, with configuration identity preserved in its run ID and configuration hash. Execution is serial because the existing Monarch front door and fixture routing use a shared fixed port.
 
 An optional orchestrator wrapper checks proof again, reserves the unique attempt ID before each dispatch, and reconciles actual cost afterward. A repeated reservation never dispatches again. Missing cost, any raised failure/timeout with potentially unsettled work, or failed cancellation becomes unknown liability and stops the campaign. Infrastructure errors do not get automatic paid retries. Recovery requires inspecting outstanding calls and reconciling final usage; restarting a script is not authority to rerun an already reserved attempt.
 
 The SQLite guard is not a provider-side spend limiter. It therefore cannot substitute for the separate server dollar enforcement proof. Use the same `--budget` file as all other paid work in this campaign.
 
 The existing HTTP integration suite has macOS socket-reuse failures after closing its fixed fixture port. The first failure reproduces with unchanged baseline competitor code. Resolve or validate that platform issue before treating the local environment as ready for a sustained campaign.
+
+### Independent qualification and execution order
+
+The dry plan now records a seeded paired schedule (`20260907`): each task and
+repetition is a contiguous block containing every compared configuration once.
+Task blocks and the initial configuration order are shuffled; rotations balance
+configuration positions to within one appearance per phase. The existing
+orchestrator runs one attempt per schedule entry, with a unique run ID. This
+keeps the 30 development and 36 holdout comparisons without completing an entire
+configuration before another starts. Warm-cache effects still need measurement;
+order balancing does not make caches identical.
+
+Paid proof must include `resolved_competitor_sha256` in model inventory evidence,
+computed as the campaign's canonical digest of `dataclasses.asdict(competitor)`
+after resolving the product and plan. This binds any local model/effort and
+harness settings; deployed server model roles still require the full inventory.
+The configured Monarch checkout must match the actual deployed revision. For a
+GitHub PR environment that may be the synthetic merge SHA, not branch HEAD:
+check out that exact revision intentionally before collecting evidence.
+
+Run independent, grader-only controls without any model or credentials:
+
+```sh
+uv run python -m wb_orchestrator.prototype_controls --output /tmp/workflow-grader-controls.json
+```
+
+The raw report retains API request bodies, responses, grader results, before/after snapshots, final
+snapshot hashes and task hashes. Runtime-generated timestamps and IDs make this
+report run-specific; the campaign manifest includes stable readiness conclusions
+and hashes the control implementation. Neither the report nor reference answers
+are supplied to workflow authoring. Frozen task contracts and vendor code remain
+unchanged.
+
+Actual keyless findings:
+
+- City update: source email implies Denver; the reference changes Lisa's city.
+  Correct result passes, while also changing her phone fails.
+- Closed Won: the named opportunity changes stage. Correct result passes, while
+  also changing its amount fails. This qualifies the simulated task's requested
+  stage change, not real Salesforce's coupled `is_closed`/`is_won` behavior.
+- Invoice to Airtable and Slack: reject this candidate. The correct CloudHost
+  invoice for $4,500 passes, but so does an invoice with the wrong vendor and
+  amount, and an added record in an unrequested table. Stronger business-result
+  and collateral assertions require the task owner's approval and a new hash.
+- Seven batch/policy cases remain pending, with task-specific reference and
+  falsification work listed in manifest readiness. No suitable replacement has
+  been silently substituted. In particular, the personal 30-node workflow is
+  still missing.
+
+All selected tasks must have local qualified status as well as external approved
+grader evidence before paid dispatch. An attestation cannot override a locally
+rejected or pending candidate. Consequently the currently proposed 66-attempt
+selection remains blocked until qualification and approved reselection are done.

@@ -96,6 +96,9 @@ def test_preflight_is_rechecked_before_every_dispatch(tmp_path):
 
 def proof_fixture(tmp_path, manifest):
     import hashlib
+    # Synthetic qualified manifest is only for proof-validator unit tests.
+    for task in manifest['tasks']:
+        task['readiness']['status'] = 'qualified'
     sha = 'a' * 40
     proof = {'manifest_sha256': manifest['manifest_sha256'], 'preview_sha': sha,
              'preview_url': 'https://pr-123.monarch-dev.testbox.com', 'approved_by': 'unit-test-only',
@@ -155,3 +158,11 @@ def test_existing_orchestrator_applies_wrapper_before_any_competitor_prepare(tmp
     orchestrator.run('wrapper-test')
     assert seen == [fake, ('dispatched', fake)]
     store.close()
+
+
+def test_external_attestation_cannot_override_a_locally_rejected_grader(tmp_path):
+    manifest = build_manifest()
+    path, proof = proof_fixture(tmp_path, manifest)
+    manifest['tasks'][0]['readiness']['status'] = 'rejected'
+    with pytest.raises(PreflightError, match='Local independent'):
+        validate_preflight(path, manifest)
