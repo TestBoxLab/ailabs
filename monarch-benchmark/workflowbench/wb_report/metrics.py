@@ -148,6 +148,37 @@ def _turn_log_entries(row: dict, needle: str) -> list[dict]:
 RETRY_FLAG = "retry=1"
 
 
+def _front_door(row: dict) -> dict[str, Any]:
+    """What the attempt's front door saw, from `front-door.jsonl` beside the
+    turn log: how many requests arrived, how many failed, and the last failure
+    written out as `<method> <path> -> <status>`.
+
+    Every value is None when the attempt has no readable log - a competitor that
+    never used the front door, or a run whose artifacts are gone.
+    """
+    uri = row.get("artifacts_uri")
+    if not uri:
+        return {"front_door_calls": None, "front_door_errors": None,
+                "front_door_last_error": None}
+    try:
+        text = (Path(uri) / "front-door.jsonl").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"front_door_calls": None, "front_door_errors": None,
+                "front_door_last_error": None}
+    calls, errors, last = 0, 0, None
+    for line in text.splitlines():
+        try:
+            call = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        calls += 1
+        if (call.get("status") or 0) >= 400:
+            errors += 1
+            last = f"{call.get('method')} {call.get('path')} -> {call.get('status')}"
+    return {"front_door_calls": calls, "front_door_errors": errors,
+            "front_door_last_error": last}
+
+
 def _is_retry(row: dict) -> bool:
     return RETRY_FLAG in (row.get("flags") or [])
 
@@ -457,6 +488,7 @@ def monarch_attempts(rows: list[dict]) -> list[dict]:
             "checker": "pass" if row.get("passed") else "fail",
             # the reason, abbreviated the same way the failures table does it
             "reason": (row.get("error") or "")[:200] or None,
+            **_front_door(row),
         })
     return out
 

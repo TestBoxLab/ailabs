@@ -95,3 +95,64 @@ def test_default_host_stays_loopback():
         assert s.url == f"http://127.0.0.1:{s.port}"
     finally:
         s.httpd.server_close()
+
+
+# -- the front-door access log (one JSON line per request) --------------------
+
+def _log_lines(path: Path) -> list[dict]:
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def test_access_log_records_every_request(tmp_path):
+    log = tmp_path / "front-door.jsonl"
+    ep = Episode(load_task_file(TASK), episode_id="shim-log")
+    s = EpisodeHTTPShim(ep, access_log=log).start()
+    try:
+        _http("GET", f"{s.url}/salesforce/services/data/v61.0/query?q=SELECT+Id")
+        _http("PATCH", f"{s.url}/salesforce/services/data/v61.0/sobjects/Contact/003004",
+              {"MailingCity": "Denver"})
+        _http("GET", f"{s.url}/not-a-service/x")
+    finally:
+        s.stop()
+    lines = _log_lines(log)
+    assert len(lines) == 3
+    get, patch, missing = lines
+    assert get["method"] == "GET" and get["path"].endswith("query?q=SELECT+Id")
+    assert get["ts"].endswith("+00:00") and isinstance(get["elapsed_ms"], (int, float))
+    assert get["response_bytes"] > 0 and get["request_bytes"] == 0
+    assert patch["method"] == "PATCH" and "Denver" in patch["request_body"]
+    assert patch["request_bytes"] > 0
+    assert missing["status"] == 404 and "not-a-service" in missing["response_body"]
+
+
+def test_access_log_truncates_at_500_characters_and_keeps_the_header(tmp_path):
+    log = tmp_path / "front-door.jsonl"
+    ep = Episode(load_task_file(TASK), episode_id="shim-trunc")
+    s = EpisodeHTTPShim(ep, access_log=log).start()
+    try:
+        big = {"MailingCity": "x" * 2000}
+        data = json.dumps(big).encode()
+        req = urllib.request.Request(
+            f"{s.url}/salesforce/services/data/v61.0/sobjects/Contact/003004",
+            data=data, method="PATCH",
+            headers={"Content-Type": "application/json", "x-bench-episode-id": "ep-42"})
+        try:
+            urllib.request.urlopen(req).read()
+        except urllib.error.HTTPError as e:
+            e.read()
+    finally:
+        s.stop()
+    line = _log_lines(log)[0]
+    assert len(line["request_body"]) == 500 and line["request_bytes"] > 500
+    assert len(line["response_body"]) <= 500
+    assert line["episode_id"] == "ep-42"
+
+
+def test_no_access_log_by_default(tmp_path):
+    ep = Episode(load_task_file(TASK), episode_id="shim-nolog")
+    s = EpisodeHTTPShim(ep).start()
+    try:
+        _http("GET", f"{s.url}/openapi/index.json")
+    finally:
+        s.stop()
+    assert list(tmp_path.iterdir()) == []

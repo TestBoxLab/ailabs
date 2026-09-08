@@ -1228,3 +1228,20 @@ def test_an_empty_default_counts_as_no_default():
                 {"name": "note", "required": False},
                 {"name": "sheet", "required": True, "default": None}]
     assert MonarchArm._needs_input(declared) == ["spreadsheet_id", "sheet"]
+
+
+def test_attempt_writes_the_front_door_access_log(site, repo, tmp_path):
+    """The arm points the front door at the attempt's artifacts directory, so a
+    failed step can be traced to the request that actually arrived."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  engine_calls=[("PATCH", f"{SF}/Contact/003004", {"MailingCity": "Denver"})])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        ep = Episode(task(), episode_id="run-log/simple.email_sf_contact_city_update/monarch/t0")
+        ep.artifacts_dir = tmp_path
+        arm.run(ep, deadline=time.monotonic() + 60)
+    log = tmp_path / "front-door.jsonl"
+    assert log.exists()
+    calls = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert any(c["method"] == "PATCH" and c["status"] < 400 for c in calls)

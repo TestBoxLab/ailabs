@@ -541,9 +541,17 @@ def _failures_table(report: dict) -> str:
     failures = report["failures"]
     if not failures:
         return '<p class="note">no attempt failed</p>'
+    # task+repetition -> the attempt's last front-door error, for the Monarch
+    # rows: "expected 200, got 404" says nothing about which request got it.
+    last_error = {(a["task_id"], a["trial"], arm): a.get("front_door_last_error")
+                  for arm, attempts in (report.get("monarch_attempts") or {}).items()
+                  for a in attempts}
     rows = []
     for f in failures:
         error = f["error"] or ""
+        fd = last_error.get((f["task_id"], f["trial"], f["arm"]))
+        if fd:
+            error += f" · last front-door error: {fd}"
         # The cell shows the first 200 characters; the whole thing stays in the
         # title, so a long stack trace is abbreviated rather than lost.
         cell = (error[:200] + "...", error) if len(error) > 200 else error
@@ -1295,10 +1303,13 @@ def _monarch_section(report: dict) -> str:
                        _fmt(a["builder_seconds"], "seconds"),
                        _fmt(a["builder_cost"], "money"), a["dispatch_outcome"],
                        _fmt(a["dispatch_seconds"], "seconds"), a["checker"],
+                       _fmt(a.get("front_door_calls")),
+                       _fmt(a.get("front_door_errors")),
                        (a["reason"] or "")]
                       for a in rows]
         body += _table(["task", "repetition", "builder", "questions", "builder s",
-                        "builder cost", "dispatch", "dispatch s", "checker", "reason"],
+                        "builder cost", "dispatch", "dispatch s", "checker",
+                        "front door", "front door errors", "reason"],
                        table_rows,
                        _source_line_for(report, "monarch"), f"{arm}, attempt by attempt",
                        numeric_from=1)

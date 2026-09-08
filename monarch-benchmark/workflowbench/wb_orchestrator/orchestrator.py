@@ -375,6 +375,8 @@ class Orchestrator:
             # PROVISION + SNAPSHOT0: fresh world per attempt (a retried episode
             # must not see the aborted attempt's writes).
             ep = Episode(task, episode_id=eid)
+            # Where an arm may drop its own artifacts (the front door's access log).
+            ep.artifacts_dir = ep_dir
             (ep_dir / "snapshot0.json").write_text(json.dumps(ep.snapshot0))
             deadline = time.monotonic() + self.timeout_s
             try:

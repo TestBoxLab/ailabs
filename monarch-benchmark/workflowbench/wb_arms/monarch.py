@@ -274,8 +274,14 @@ class MonarchArm:
             attempt_deadline = time.monotonic() + self.timeout_s
             port = h.shim_port
             try:
+                # The orchestrator hangs the attempt's artifacts directory on the
+                # episode; the front door writes its access log beside
+                # turns.jsonl there. Absent (a bare Episode in a test), no log.
+                ep_dir = getattr(ep, "artifacts_dir", None)
+                access_log = Path(ep_dir) / "front-door.jsonl" if ep_dir else None
                 shim = EpisodeHTTPShim(ep, port=port, host="0.0.0.0",
-                                       public_url=public_front_door_url(h, self.env)).start()
+                                       public_url=public_front_door_url(h, self.env),
+                                       access_log=access_log).start()
             except OSError as e:
                 raise InfraError("infra:harness_crash",
                                  f"front door port {port} busy: {e}", retryable=True) from e

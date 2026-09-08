@@ -2012,3 +2012,52 @@ def test_monarch_section_shows_the_assumptions_as_a_tooltip(phase_store):
     assert "assumed &lt;Denver&gt;" in section          # escaped, in a title
     assert "used the first contact" in section
     assert "ignored the note" not in section            # only the first three
+
+
+# -- the front-door access log ------------------------------------------------
+
+def _front_door(art: Path, *calls) -> None:
+    art.mkdir(parents=True, exist_ok=True)
+    (art / "front-door.jsonl").write_text(
+        "\n".join(json.dumps({"ts": "2026-09-08T00:00:00+00:00", "method": m,
+                              "path": p, "status": s, "request_bytes": 0,
+                              "response_bytes": 2, "request_body": "",
+                              "response_body": "{}", "episode_id": "e",
+                              "elapsed_ms": 1.0})
+                  for m, p, s in calls) + "\n", encoding="utf-8")
+
+
+def test_front_door_counts_come_from_the_access_log(tmp_path):
+    from wb_report.metrics import monarch_attempts
+
+    art = tmp_path / "t0"
+    _front_door(art, ("GET", "/airtable/v0/app1/Tasks?filterByFormula=x", 200),
+                ("GET", "/bench-airtable/v0/app1", 404),
+                ("PATCH", "/airtable/v0/app1/Tasks/rec1", 422))
+    row = _row("t1", "monarch", 0, False, error="expected 200, got 404").model_dump()
+    row["artifacts_uri"] = str(art)
+
+    a = monarch_attempts([row])[0]
+    assert a["front_door_calls"] == 3 and a["front_door_errors"] == 2
+    assert a["front_door_last_error"] == "PATCH /airtable/v0/app1/Tasks/rec1 -> 422"
+
+    # no log at all: nothing to show, and no crash
+    bare = _row("t1", "monarch", 0, False).model_dump()
+    bare["artifacts_uri"] = str(tmp_path / "gone")
+    b = monarch_attempts([bare])[0]
+    assert b["front_door_calls"] is None and b["front_door_last_error"] is None
+
+
+def test_front_door_columns_and_failure_detail(phase_store, tmp_path):
+    from wb_report.report import build_report, render_html
+
+    report = build_report(phase_store, "run-p", audience="internal", baseline_arm="alpha")
+    for attempts in report["monarch_attempts"].values():
+        for a in attempts:
+            a["front_door_calls"], a["front_door_errors"] = 7, 1
+            a["front_door_last_error"] = "GET /bench-airtable/read/root -> 404"
+    page = render_html(report)
+    section = page[page.index('id="monarch-phases"'):page.index('id="failures"')]
+    assert "front door" in section and "front door errors" in section
+    failures = page[page.index('id="failures"'):]
+    assert "last front-door error: GET /bench-airtable/read/root -&gt; 404" in failures
