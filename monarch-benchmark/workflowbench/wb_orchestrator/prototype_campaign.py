@@ -42,6 +42,49 @@ class PreflightError(RuntimeError):
     pass
 
 
+def durable_section_usage_complete(turn_log: list[dict]) -> bool:
+    pages = [record['authoring_events'] for record in turn_log
+             if isinstance(record, dict) and isinstance(record.get('authoring_events'), dict)]
+    if not pages or pages[-1].get('complete') is not True:
+        return False
+    launches, receipts, call_ids = set(), set(), set()
+    for page in pages:
+        events = page.get('events')
+        if not isinstance(events, list):
+            return False
+        for event in events:
+            data = event.get('data') if isinstance(event, dict) else None
+            if not isinstance(data, dict) or data.get('truncated') is True:
+                return False
+            kind = data.get('kind')
+            if kind not in ('section_authoring', 'section_model_usage'):
+                continue
+            key = (data.get('buildAttempt'), data.get('phase'),
+                   data.get('sectionId'), data.get('attempt'))
+            valid_key = (type(key[0]) is int and key[0] > 0
+                         and key[1] in ('plan', 'author')
+                         and (key[1] == 'plan' and key[2] is None
+                              or key[1] == 'author' and isinstance(key[2], str) and bool(key[2]))
+                         and type(key[3]) is int and key[3] >= 0)
+            if not valid_key:
+                return False
+            if kind == 'section_authoring':
+                if data.get('status') != 'started':
+                    continue
+                if key in launches:
+                    return False
+                launches.add(key)
+                continue
+            call_id = data.get('callId')
+            if (not isinstance(call_id, str) or not call_id or call_id in call_ids
+                    or key in receipts or data.get('usageComplete') is not True
+                    or data.get('costKnown') is not True):
+                return False
+            call_ids.add(call_id)
+            receipts.add(key)
+    return launches == receipts
+
+
 def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
@@ -226,18 +269,8 @@ class BudgetedCompetitor:
             if isinstance(error, InfraError):
                 error.retryable = False
             raise
-        pages = [record['authoring_events'] for record in result.turn_log
-                 if isinstance(record, dict) and isinstance(record.get('authoring_events'), dict)]
-        usage = [event['data'] for page in pages for event in page.get('events', [])
-                 if isinstance(event, dict) and isinstance(event.get('data'), dict)
-                 and event['data'].get('kind') == 'section_model_usage']
-        durable_usage_complete = (bool(pages) and pages[-1].get('complete') is True
-                                  and all(item.get('callId')
-                                          and item.get('usageComplete') is True
-                                          and item.get('costKnown') is True
-                                          for item in usage))
         unknown = ('cost_missing' in result.flags or result.termination == 'timeout'
-                   or not durable_usage_complete
+                   or not durable_section_usage_complete(result.turn_log)
                    or any('execution_cancel_error' in record
                           or 'authoring_cancel_error' in record
                           for record in result.turn_log))

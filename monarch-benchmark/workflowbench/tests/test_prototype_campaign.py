@@ -8,7 +8,8 @@ import pytest
 from wb_arms.api_loop import ArmResult, EpisodeTimeout, InfraError
 from wb_orchestrator.campaign_budget import CampaignBudget
 from wb_orchestrator.prototype_campaign import (BudgetedCompetitor, PreflightError, build_manifest,
-                                               main, validate_preflight, ROOT)
+                                               durable_section_usage_complete, main,
+                                               validate_preflight, ROOT)
 
 
 def test_manifest_is_keyless_deterministic_and_has_exact_approved_attempt_counts():
@@ -101,9 +102,15 @@ def test_timeout_cost_is_unknown_until_cancellation_and_billing_are_settled(tmp_
 def test_incomplete_child_usage_with_partial_cost_remains_unknown(tmp_path):
     result = ArmResult(cost_usd=3, turn_log=[
         {'authoring_events': {'complete': True, 'events': [
-            {'seq': 1, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+            {'seq': 1, 'data': {'kind': 'section_authoring', 'status': 'started',
+                                'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+            {'seq': 2, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+                                'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
                                 'usageComplete': True, 'costKnown': True}},
-            {'seq': 2, 'data': {'kind': 'section_model_usage', 'callId': 'child-2',
+            {'seq': 3, 'data': {'kind': 'section_authoring', 'status': 'started',
+                                'buildAttempt': 1, 'phase': 'author', 'sectionId': 'write', 'attempt': 0}},
+            {'seq': 4, 'data': {'kind': 'section_model_usage', 'callId': 'child-2',
+                                'buildAttempt': 1, 'phase': 'author', 'sectionId': 'write', 'attempt': 0,
                                 'usageComplete': False, 'costKnown': False}},
         ]}},
         {'cost': {'authoring': {'model': {'cost_usd': 3}}}},
@@ -117,7 +124,10 @@ def test_incomplete_child_usage_with_partial_cost_remains_unknown(tmp_path):
 def test_complete_child_usage_allows_exactly_one_settlement(tmp_path):
     result = ArmResult(cost_usd=3, turn_log=[
         {'authoring_events': {'complete': True, 'events': [
-            {'seq': 1, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+            {'seq': 1, 'data': {'kind': 'section_authoring', 'status': 'started',
+                                'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+            {'seq': 2, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+                                'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
                                 'usageComplete': True, 'costKnown': True}},
         ]}},
         {'cost': {'authoring': {'model': {'cost_usd': 3}}}},
@@ -128,6 +138,51 @@ def test_complete_child_usage_allows_exactly_one_settlement(tmp_path):
     with pytest.raises(InfraError):
         wrapped.run(SimpleNamespace(episode_id='complete'), time.monotonic()+1)
     assert inner.run.call_count == 1
+
+
+def test_durable_usage_matches_every_launch_and_allows_zero_child_current_mode():
+    assert durable_section_usage_complete([
+        {'authoring_events': {'complete': True, 'events': []}},
+    ])
+    paired = [
+        {'seq': 1, 'data': {'kind': 'section_authoring', 'status': 'started',
+                            'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+        {'seq': 2, 'data': {'kind': 'section_model_usage', 'callId': 'one',
+                            'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                            'usageComplete': True, 'costKnown': True}},
+        {'seq': 3, 'data': {'kind': 'section_authoring', 'status': 'started',
+                            'buildAttempt': 2, 'phase': 'plan', 'attempt': 0}},
+        {'seq': 4, 'data': {'kind': 'section_model_usage', 'callId': 'two',
+                            'buildAttempt': 2, 'phase': 'plan', 'attempt': 0,
+                            'usageComplete': True, 'costKnown': True}},
+    ]
+    assert durable_section_usage_complete([
+        {'authoring_events': {'complete': True, 'events': paired}},
+    ])
+
+
+@pytest.mark.parametrize('events', [
+    [{'data': {'kind': 'section_authoring', 'status': 'started',
+               'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}}],
+    [{'data': {'truncated': True}}],
+    [
+        {'data': {'kind': 'section_authoring', 'status': 'started',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+        {'data': {'kind': 'section_model_usage', 'callId': 'same',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+        {'data': {'kind': 'section_model_usage', 'callId': 'same',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+    ],
+    [{'data': {'kind': 'section_model_usage', 'callId': 'orphan',
+               'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+               'usageComplete': True, 'costKnown': True}}],
+])
+def test_durable_usage_rejects_missing_truncated_duplicate_and_unmatched_evidence(events):
+    assert not durable_section_usage_complete([
+        {'authoring_events': {'complete': True, 'events': events}},
+    ])
 
 
 def test_preflight_is_rechecked_before_every_dispatch(tmp_path):

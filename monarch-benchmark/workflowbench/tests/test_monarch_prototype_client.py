@@ -136,6 +136,26 @@ def test_prototype_authoring_transport_failure_attempts_cancel_and_records_failu
     assert any('authoring_cancel_error' in row for row in result.turn_log)
 
 
+@pytest.mark.parametrize('response, confirmed', [
+    ({'ok': True, 'status': 'cancelled'}, True),
+    ({'ok': False, 'status': 'running'}, False),
+    ({'status': 'cancelled'}, False),
+])
+def test_prototype_authoring_cancel_requires_explicit_confirmation(response, confirmed):
+    from types import SimpleNamespace
+    from wb_arms.monarch import MonarchArm
+    from wb_arms.api_loop import ArmResult
+    c = client()
+    c.cancel = Mock(return_value=response)
+    competitor = MonarchArm(SimpleNamespace(builder_experiment='compiled'), 10,
+                            None, None, {}, 'prototype')
+    result = ArmResult()
+    competitor._cancel_authoring_prototype(c, 'r', result)
+    assert ('authoring_cancel' in result.turn_log[0]) is confirmed
+    assert ('authoring_cancel_error' in result.turn_log[0]) is not confirmed
+    assert response in result.turn_log[0].values()
+
+
 def test_prototype_execution_transport_failure_cancels_known_run_and_records_failure():
     from types import SimpleNamespace
     from wb_arms.monarch import MonarchArm

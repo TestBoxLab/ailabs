@@ -431,20 +431,20 @@ class MonarchArm:
                      deadline=deadline)
         return len(questions)
 
-    def _cancel(self, client, recipe_run: str) -> str | None:
+    def _cancel(self, client, recipe_run: str):
         """Best effort: a cancel that fails must not hide why the attempt ended."""
         try:
-            client.cancel(recipe_run, deadline=time.monotonic() + 30)
+            return client.cancel(recipe_run, deadline=time.monotonic() + 30)
         except (InfraError, MonarchRefused) as error:
-            return str(error)
-        return None
+            return error
 
     def _cancel_authoring_prototype(self, client, recipe_run: str, res: ArmResult) -> None:
-        error = self._cancel(client, recipe_run)
-        if error is None:
-            res.turn_log.append({'authoring_cancel': recipe_run})
+        response = self._cancel(client, recipe_run)
+        if isinstance(response, dict) and response.get('ok') is True:
+            res.turn_log.append({'authoring_cancel': response})
         else:
-            res.turn_log.append({'authoring_cancel_error': error})
+            raw = str(response) if isinstance(response, BaseException) else response
+            res.turn_log.append({'authoring_cancel_error': raw})
 
     def _delete(self, client, workflow_id: str) -> bool:
         """Delete one workflow; remember it for the next attempt if it will not go."""

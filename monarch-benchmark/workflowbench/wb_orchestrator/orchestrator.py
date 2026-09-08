@@ -399,6 +399,8 @@ class Orchestrator:
                               "cost_usd", "turns", "tool_calls"):
                         setattr(acc, f, getattr(acc, f) + getattr(partial, f))
                     acc.turn_log.extend(partial.turn_log)
+                    acc.flags.extend(partial.flags)
+                    acc.phases.update(partial.phases)
                 if not e.retryable or attempt >= MAX_INFRA_RETRIES:
                     break
                 attempt += 1
@@ -413,12 +415,15 @@ class Orchestrator:
                 termination, error = "agent_error", str(e)
                 break
 
-        if acc.tokens_prompt or acc.cost_usd:
+        if (acc.tokens_prompt or acc.cost_usd or acc.turn_log or acc.flags or acc.phases):
             for f in ("tokens_prompt", "tokens_cached", "tokens_cache_write", "tokens_output",
                       "cost_usd", "turns", "tool_calls"):
                 setattr(result, f, getattr(result, f) + getattr(acc, f))
             result.turn_log = acc.turn_log + result.turn_log
-            result.flags.append("spend_includes_failed_attempts")
+            result.flags = acc.flags + result.flags
+            result.phases = {**acc.phases, **result.phases}
+            if acc.tokens_prompt or acc.cost_usd:
+                result.flags.append("spend_includes_failed_attempts")
 
         # SNAPSHOT1 + GRADE + RECORD always run, whatever ARM_RUN did. A crash
         # in this stage records an infra:harness_crash row rather than losing
