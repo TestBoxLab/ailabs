@@ -160,7 +160,7 @@ def test_banner_matches_contract(site):
         "prompts: 2; attempts per prompt and competitor: 2; "
         "attempts per competitor: 4 = 2 x 2",
         "competitors: 1; attempts in the round: 4",
-        "ceiling   US$ 5.00   approved_by: —"]
+        "ceiling   US$ 5.00   attempt cap US$ 3.00"]
 
 
 # -- T037: cli harness env reaches the subprocess ------------------------------

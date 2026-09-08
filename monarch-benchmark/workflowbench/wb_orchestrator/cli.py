@@ -1,28 +1,45 @@
-"""wb: run / resume / status / doctor / grade."""
+"""wb: run / resume / status / doctor / grade / budget / approvals."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from wb_arms.monarch import monarch_version
+from wb_orchestrator import approvals
 from wb_orchestrator import config
 from wb_orchestrator import doctor as doctor_mod
 from wb_orchestrator import monarch_setup
+from wb_orchestrator.approvals import ApprovalError
 from wb_orchestrator.config import ConfigError
-from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RunKilled, regrade
+from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RoundAdmissionError, RunKilled, regrade
 from wb_results.store import Store
 
 DEFAULT_DB = "out/wb.sqlite3"
 DEFAULT_OUT = "out"
+# The one shared weekly ledger every paid launcher (CLI and Studio) reserves in.
+DEFAULT_LEDGER = str(Path(__file__).resolve().parents[3] / "research" / "budget.sqlite3")
 
 
 def _store(args) -> Store:
     return Store(args.db)
+
+
+def _ledger(args):
+    from wb_orchestrator.budget import BudgetLedger
+    return BudgetLedger(args.ledger)
+
+
+def _refuse(reasons: list[str]) -> int:
+    """A paid launch that may not happen today: every reason, exit 2, nothing created."""
+    for reason in reasons:
+        print(f"paid launch refused: {reason}", file=sys.stderr)
+    return 2
 
 
 def _print_run_report(store: Store, run_id: str) -> None:
@@ -60,7 +77,7 @@ def _monarch_line(rc) -> str | None:
     if h is None:
         return None
     try:
-        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir))
+        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir), os.environ.get("MONARCH_BUILD"))
     except ValueError:
         name = "version unreadable"
     table = rc.price_tables.get(h.price_table)
@@ -107,20 +124,15 @@ def _banner(rc) -> str:
         f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/",
         _size_line(rc),
         f"competitors: {len(rc.competitors)}; attempts in the round: {rc.attempts_total}",
-        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   approved_by: {plan.approved_by or '—'}",
+        f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   attempt cap US$ {plan.attempt_cap_usd:.2f}",
         *monarch])
 
 
-def _paid_launch_blocked() -> int:
-    print("Benchmark foundation is not ready for paid dispatch: verified provider liability "
-          "bounds, shared reservations, historical billing reconciliation and native isolation "
-          "must be connected and verified. Bounded Gemini API controls are available through `wb studio`; unsupported native launch paths remain blocked.",
-          file=sys.stderr)
-    return 2
-
-
-def _has_paid_competitor(rc) -> bool:
-    return any(c.harness.kind != "scripted" for c in rc.competitors)
+def _approved_by_notice(rc, plan_path) -> None:
+    """`approved_by` in a plan file approves nothing since decision D5; say so once."""
+    if rc.plan.approved_by:
+        print(f"note: approved_by: {rc.plan.approved_by!r} in {plan_path} is ignored; an approval is a "
+              "record in the results store now (wb approvals)")
 
 
 def cmd_studio(args) -> int:
@@ -130,29 +142,64 @@ def cmd_studio(args) -> int:
 
 
 def cmd_budget_status(args) -> int:
+    from wb_orchestrator import reconcile
     from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
+    path = args.status_ledger or args.ledger
     try:
-        status = BudgetLedger(args.ledger).status()
+        ledger = BudgetLedger(path)
+        status = ledger.status()
     except (BudgetConfigurationError, ValueError) as exc:
         print(f"budget: {exc}", file=sys.stderr)
         return 2
+    weeks = reconcile.summaries(reconcile.default_dir(ledger))
+    capabilities = approvals.capabilities()
     print(json.dumps({
-        "ledger": str(Path(args.ledger).resolve()), "week_start": status.week_start,
+        "ledger": str(Path(path).resolve()), "week_start": status.week_start,
         "timezone": "America/Sao_Paulo",
         **{name + "_usd": str(getattr(status, name + "_usd"))
            for name in ("weekly_limit", "actual", "held", "carried_held", "committed", "available")},
         "blocked": status.blocked, "overrun_ids": status.overrun_ids,
-        "historical_billing_verified": False, "paid_launch_enabled": False,
-        "note": "Only recorded liabilities are shown. Weekly actual_usd conservatively occupies capacity across dispatch-to-settlement weeks; it is not invoice attribution. Historical provider billing has not been imported."
+        "historical_billing_verified": weeks.get(status.week_start, {}).get("historical_billing_verified", False),
+        "reconciliation": weeks,
+        "paid_launch_enabled": {kind: reason is None for kind, reason in capabilities.items()},
+        "paid_launch_reasons": {kind: reason for kind, reason in capabilities.items() if reason},
+        "note": "Only recorded liabilities are shown. Weekly actual_usd conservatively occupies capacity across dispatch-to-settlement weeks; it is not invoice attribution. historical_billing_verified is per week, set by `wb budget reconcile` from the providers' own usage exports."
     }, indent=2))
     return 0
+
+
+def cmd_budget_reconcile(args) -> int:
+    from wb_orchestrator import reconcile
+    from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
+    try:
+        ledger = BudgetLedger(args.ledger)
+        state = reconcile.reconcile(ledger, args.week, args.provider, args.csv, out_dir=args.reconcile_out)
+    except (BudgetConfigurationError, ValueError, OSError) as e:
+        print(f"wb budget reconcile: {e}", file=sys.stderr)
+        return 2
+    print(reconcile.format_result(state))
+    return 0
+
+
+def _paid_gate(rc, args):
+    """The ledger a paid run config reserves in, or an exit code when it may not launch today."""
+    reasons = approvals.launch_readiness(rc, os.environ)
+    if reasons:
+        return _refuse(reasons)
+    from wb_orchestrator.budget import BudgetConfigurationError
+    try:
+        return _ledger(args)
+    except (BudgetConfigurationError, ValueError) as e:
+        print(f"budget: {e}", file=sys.stderr)
+        return 2
 
 
 def cmd_run(args) -> int:
     # Two error formats per contracts/cli.md: `wb run: ...` for picker and
     # name errors, `config error in <file>: <field>: <why>` for file errors.
-    # Order matters: resolve (all guards) -> banner -> orchestrator; no arm is
-    # built, and nothing is spent, before the config is fully validated.
+    # Order matters: resolve (all guards) -> readiness and ledger -> banner ->
+    # approval record -> orchestrator; no arm is built, and nothing is spent,
+    # before the config is fully validated and the launch admitted.
     try:
         product_path = _pick_or_flag(args.product, "product")
         plan_path = _pick_or_flag(args.plan, "plan")
@@ -164,18 +211,44 @@ def cmd_run(args) -> int:
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
-    if _has_paid_competitor(rc):
-        return _paid_launch_blocked()
+    ledger = launch = None
+    if approvals.is_paid(rc):
+        ledger = _paid_gate(rc, args)
+        if isinstance(ledger, int):
+            return ledger
+    _approved_by_notice(rc, plan_path)
     print(_banner(rc))
     store = _store(args)
-    orch = Orchestrator.from_config(store, rc, args.out)
+    if ledger is not None:
+        try:
+            launch = approvals.admit_launch(store, rc, os.environ, request_id=args.request)
+        except ApprovalError as e:
+            print(e, file=sys.stderr)
+            return 2
+        print(launch.message)
+        if not launch.run:
+            return 0
+    orch = Orchestrator.from_config(store, rc, args.out, ledger=ledger,
+                                    operator=approvals.operator(os.environ))
+    orch.approval_request_id = launch.request_id if launch else None
+    run_id = args.run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
     try:
-        run_id = orch.run(args.run_id)
+        orch.run(run_id)
+    except RoundAdmissionError as e:
+        print(e, file=sys.stderr)
+        return 2
     except RunKilled as e:
+        _bind_request(store, launch, run_id)   # the run exists and resumes under this request
         print(e, file=sys.stderr)
         return 1
+    _bind_request(store, launch, run_id)
     _print_run_report(store, run_id)
     return 0
+
+
+def _bind_request(store, launch, run_id: str) -> None:
+    if launch is not None and launch.request_id:
+        store.bind_approval_run(launch.request_id, run_id)
 
 
 def cmd_resume(args) -> int:
@@ -188,23 +261,69 @@ def cmd_resume(args) -> int:
     try:
         if "plan_path" in cfg:
             rc = config.resolve(cfg["product_path"], cfg["plan_path"])
-            if _has_paid_competitor(rc):
-                return _paid_launch_blocked()
-            orch = Orchestrator.from_config(store, rc, args.out, provider_concurrency=args.concurrency)
+            ledger = None
+            if approvals.is_paid(rc):
+                ledger = _paid_gate(rc, args)
+                if isinstance(ledger, int):
+                    return ledger
+            orch = Orchestrator.from_config(store, rc, args.out, provider_concurrency=args.concurrency,
+                                            ledger=ledger, operator=approvals.operator(os.environ))
         else:  # a run from before product/plan files
             if any(key not in ("oracle", "sloppy", "null") for key in cfg["arms"]):
-                return _paid_launch_blocked()
+                return _refuse([f"run {args.run_id} was recorded before product and plan files; a paid "
+                                "competitor cannot resume without a plan, an operator and the weekly "
+                                "ledger. Start it again with wb run --product ... --plan ..."])
             orch = Orchestrator(store, cfg["suite_dir"], cfg["arms"], cfg["k"],
                                 out_dir=args.out, timeout_s=cfg["timeout_s"],
                                 provider_concurrency=args.concurrency or 4)
         orch.resume(args.run_id)
-    except (ConfigError, ConfigDrift) as e:
+    except (ConfigError, ConfigDrift, RoundAdmissionError) as e:
         print(e, file=sys.stderr)
         return 2
     except RunKilled as e:
         print(e, file=sys.stderr)
         return 1
     _print_run_report(store, args.run_id)
+    return 0
+
+
+def cmd_approve(args) -> int:
+    return _decide(args, "approved")
+
+
+def cmd_deny(args) -> int:
+    return _decide(args, "denied")
+
+
+def _decide(args, decision: str) -> int:
+    store = _store(args)
+    try:
+        record = approvals.decide(store, args.request_id, decision, os.environ)
+    except ApprovalError as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(f"{record['id']} {record['status']} by {record['decided_by']} at {record['decided_at']}: "
+          f"plan {record['plan_name']}, {record['attempts_total']} attempts, ceiling US$ "
+          f"{record['ceiling_usd']:.2f}, config {record['config_hash']}, requested by {record['requested_by']}")
+    if decision == "approved":
+        print(f"run it with: wb run --product {record['product_path']} --plan {record['plan_path']} "
+              f"--request {record['id']}")
+    return 0
+
+
+def cmd_approvals(args) -> int:
+    rows = _store(args).approval_requests()
+    if not rows:
+        print("no approval requests")
+        return 0
+    header = (f"{'id':<14} {'status':<9} {'plan':<26} {'attempts':>8} {'ceiling':>10}  "
+              f"{'requested by':<13} {'requested at':<20} {'decided by':<11} run")
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        print(f"{r['id']:<14} {r['status']:<9} {r['plan_name']:<26} {r['attempts_total']:>8} "
+              f"US$ {r['ceiling_usd']:>6.2f}  {r['requested_by']:<13} {r['requested_at'][:19]:<20} "
+              f"{r['decided_by'] or '-':<11} {r['run_id'] or '-'}")
     return 0
 
 
@@ -220,10 +339,23 @@ def cmd_status(args) -> int:
 
 def cmd_doctor(args) -> int:
     keys = args.arms.split(",") if args.arms else None
-    # Default provider checks and the optional Monarch authoring check spend money.
-    if args.monarch_probe or keys != ["monarch"]:
-        return _paid_launch_blocked()
-    reports = doctor_mod.run_doctor(keys, monarch_probe=False)
+    # The Monarch authoring probe is a paid Monarch launch: refused until M5.
+    if args.monarch_probe:
+        return _refuse([f"--monarch-probe: {approvals.MONARCH_REASON}"])
+    # Provider probes spend cents: they need the operator and go through the
+    # ledger, one reservation per request. `--arms monarch` alone is free.
+    ledger = operator = None
+    if keys != ["monarch"]:
+        operator = approvals.operator(os.environ)
+        if operator is None:
+            return _refuse([approvals.NO_OPERATOR])
+        from wb_orchestrator.budget import BudgetConfigurationError
+        try:
+            ledger = _ledger(args)
+        except (BudgetConfigurationError, ValueError) as e:
+            print(f"budget: {e}", file=sys.stderr)
+            return 2
+    reports = doctor_mod.run_doctor(keys, monarch_probe=False, ledger=ledger, operator=operator)
     print(doctor_mod.format_report(reports))
     return 0 if all(r.get("ok") for r in reports) else 1
 
@@ -449,7 +581,8 @@ def cmd_monarch_recipes(args) -> int:
     if bool(args.plan) == bool(args.tasks):
         print("wb monarch recipes: give exactly one of --plan and --tasks", file=sys.stderr)
         return 2
-    return _paid_launch_blocked()
+    # Authoring recipes is a paid Monarch launch: refused until M5 verifies an instance.
+    return _refuse([f"wb monarch recipes: {approvals.MONARCH_REASON}"])
 
 
 
@@ -459,20 +592,48 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="wb", description="WorkflowBench runner")
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--ledger", default=DEFAULT_LEDGER,
+                    help="the shared weekly ledger every paid request is reserved in "
+                         "(default: research/budget.sqlite3 at the repo root)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("budget", help="inspect the shared weekly experiment ledger")
+    p = sub.add_parser("budget", help="inspect and reconcile the shared weekly experiment ledger")
     bsub = p.add_subparsers(dest="budget_cmd", required=True)
     bs = bsub.add_parser("status")
-    bs.add_argument("--ledger", default=str(Path(__file__).resolve().parents[3] / "research" / "budget.sqlite3"),
-                    help="ledger to inspect; all paid launchers must share the canonical ledger")
+    bs.add_argument("--ledger", dest="status_ledger", default=None,
+                    help="ledger to inspect; default: the top-level --ledger")
     bs.set_defaults(fn=cmd_budget_status)
+    br = bsub.add_parser("reconcile",
+                         help="compare one week's provider usage export with the ledger's settled total")
+    br.add_argument("--week", required=True, help="the week's Monday, YYYY-MM-DD (America/Sao_Paulo)")
+    br.add_argument("--provider", action="append", required=True,
+                    help="repeatable: a billing account named in the rows (anthropic, openai, "
+                         "fireworks, google, moonshot, zai, monarch)")
+    br.add_argument("--csv", action="append", required=True,
+                    help="repeatable: normalized usage rows `date,provider,usd` (see config/README.md)")
+    br.add_argument("--out", dest="reconcile_out", default=None,
+                    help="folder for <week>.md and <week>.json; default: research/reconciliation/ "
+                         "next to the ledger")
+    br.set_defaults(fn=cmd_budget_reconcile)
 
     p = sub.add_parser("run")
     p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
     p.add_argument("--plan", default=None, help="name in config/plans or a path; asked if omitted")
     p.add_argument("--run-id", default=None)
+    p.add_argument("--request", default=None,
+                   help="run an approved approval request (wb approvals); the config hash must still match")
     p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("approve", help="approve a pending launch request (approvers only)")
+    p.add_argument("request_id")
+    p.set_defaults(fn=cmd_approve)
+
+    p = sub.add_parser("deny", help="deny a pending launch request (approvers only)")
+    p.add_argument("request_id")
+    p.set_defaults(fn=cmd_deny)
+
+    p = sub.add_parser("approvals", help="list the launch requests and their state")
+    p.set_defaults(fn=cmd_approvals)
 
     p = sub.add_parser("resume")
     p.add_argument("run_id")

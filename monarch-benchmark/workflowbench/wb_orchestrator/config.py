@@ -156,7 +156,9 @@ class Plan:
     baseline: str
     audience: str
     cost_ceiling_usd: float
-    approved_by: str | None
+    # Kept so older plan files load; ignored since decision D5 (8 Sep 2026): an
+    # approval is a record in the results store (`wb approvals`), not a word in a file.
+    approved_by: str | None = None
     description: str | None = None
     retry_on_fail: int = 0   # extra attempts a failed prompt gets, on top of `repetitions`
     track: str = "create-run"  # TRACKS; the default keeps the hash of plans written before the key
@@ -435,8 +437,8 @@ def load_harness(path) -> Harness:
 def load_plan(path) -> Plan:
     c = _read(path, "plan")
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
-            "baseline", "audience", "cost_ceiling_usd", "approved_by"),
-           ("description", "retry_on_fail", "track", "attempt_cap_usd"))
+            "baseline", "audience", "cost_ceiling_usd"),
+           ("approved_by", "description", "retry_on_fail", "track", "attempt_cap_usd"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -444,7 +446,7 @@ def load_plan(path) -> Plan:
         s = _Checker(c.path, item, f"competitors[{i}].")
         s.keys(("harness",), ("model",))
         competitors.append(CompetitorSpec(model=s.get("model", str), harness=s.get("harness", str)))
-    approved = c.data["approved_by"]
+    approved = c.data.get("approved_by")
     if approved is not None and not isinstance(approved, str):
         c.fail("approved_by", f"expected str or null; got {type(approved).__name__}")
     num = (int, float)
@@ -836,13 +838,9 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
                               "every task of the set is missing a known-correct recipe, so there "
                               "is nothing to compare; run `wb monarch recipes` first")
 
-    # The gate counts the most a competitor can attempt, retries included: the
-    # approval is for what the round could cost, not for its best case.
-    per_competitor = len(tasks) * (plan.repetitions + plan.retry_on_fail)
-    if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
-        c.fail("approved_by", f"{per_competitor} attempts per competitor exceed smoke scale "
-                              f"({SMOKE_SCALE_ATTEMPTS}); set approved_by")
-
+    # Smoke scale (SMOKE_SCALE_ATTEMPTS per competitor, retries included) is judged
+    # at launch, not here: above it, `wb run` needs an approval record (decision
+    # D5, wb_orchestrator.approvals); resolving the config never spends anything.
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),

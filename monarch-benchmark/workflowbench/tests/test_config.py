@@ -238,7 +238,7 @@ def test_unknown_key_rejected(tmp_path, kind):
     ("model", "provider"), ("model", "key_env"), ("model", "usd_per_million"),
     ("harness_api", "accepts"), ("harness_cli", "command"), ("harness_scripted", "script"),
     ("harness_monarch", "credential_env"),
-    ("plan", "tasks"), ("plan", "competitors"), ("plan", "approved_by"), ("plan", "baseline"),
+    ("plan", "tasks"), ("plan", "competitors"), ("plan", "cost_ceiling_usd"), ("plan", "baseline"),
 ])
 def test_missing_required_key(tmp_path, kind, key):
     load, text = EXAMPLES[kind]

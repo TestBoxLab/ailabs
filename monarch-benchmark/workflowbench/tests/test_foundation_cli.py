@@ -1,45 +1,74 @@
-"""Public paid entry points cannot outrun unfinished foundation controls."""
+"""Public paid entry points stay behind the capability checks and the ledger (milestone M3).
+
+API-loop competitors launch once an operator and the ledger are in place;
+Monarch and native competitors are refused with the milestone that unblocks
+them; `wb budget status` says which is which. The approval flow itself is
+tested in tests/test_approvals.py.
+"""
 import json
 from types import SimpleNamespace
 
-from wb_orchestrator import cli
+import pytest
+
+from wb_orchestrator import approvals, cli
 from wb_results.store import Store
 
 
-def test_paid_run_refuses_before_creating_result_store(tmp_path, monkeypatch, capsys):
-    config = SimpleNamespace(competitors=[SimpleNamespace(harness=SimpleNamespace(kind="api"))])
+@pytest.fixture(autouse=True)
+def hermetic(monkeypatch):
+    monkeypatch.setattr(cli, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.delenv("WB_OPERATOR", raising=False)
+
+
+def test_paid_run_without_an_operator_refuses_before_creating_result_store(tmp_path, monkeypatch, capsys):
+    config = SimpleNamespace(competitors=[SimpleNamespace(harness=SimpleNamespace(kind="api"), name="x/api")],
+                             plan=SimpleNamespace(approved_by=None))
     monkeypatch.setattr(cli.config, "resolve", lambda *args: config)
     database = tmp_path / "results.sqlite3"
-    result = cli.main(["--db", str(database), "run", "--product", "simulated-apps", "--plan", "smoke-frontier"])
+    result = cli.main(["--db", str(database), "--ledger", str(tmp_path / "budget.sqlite3"),
+                       "run", "--product", "simulated-apps", "--plan", "smoke-frontier"])
     assert result == 2
-    assert not database.exists()
-    assert "foundation" in capsys.readouterr().err.lower()
+    assert not database.exists() and not (tmp_path / "budget.sqlite3").exists()
+    assert approvals.NO_OPERATOR in capsys.readouterr().err
 
 
-def test_legacy_paid_resume_refuses_without_dispatch(tmp_path, capsys):
+def test_legacy_paid_resume_refuses_without_dispatch(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WB_OPERATOR", "lucas")
     database = tmp_path / "results.sqlite3"
     store = Store(database)
     store.create_run("legacy", "h", "legacy", {"arms": ["claude-code"], "suite_dir": "absent",
                                                "k": 1, "timeout_s": 60})
     store.close()
-    result = cli.main(["--db", str(database), "resume", "legacy"])
+    result = cli.main(["--db", str(database), "--ledger", str(tmp_path / "budget.sqlite3"), "resume", "legacy"])
     assert result == 2
-    assert "foundation" in capsys.readouterr().err.lower()
+    err = capsys.readouterr().err
+    assert "paid launch refused" in err and "recorded before product and plan files" in err
 
 
-def test_doctor_paid_probes_are_gated(capsys):
-    result = cli.main(["doctor", "--arms", "unknown-provider"])
+def test_doctor_paid_probes_need_an_operator(tmp_path, capsys):
+    result = cli.main(["--ledger", str(tmp_path / "budget.sqlite3"), "doctor", "--arms", "unknown-provider"])
     assert result == 2
-    assert "foundation" in capsys.readouterr().err.lower()
+    assert approvals.NO_OPERATOR in capsys.readouterr().err
+    assert not (tmp_path / "budget.sqlite3").exists()
 
 
-def test_recipe_authoring_is_gated_even_with_yes(capsys):
-    result = cli.main(["monarch", "recipes", "--tasks", "absent", "--yes"])
+def test_doctor_unknown_provider_with_an_operator_fails_that_probe_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WB_OPERATOR", "lucas")
+    result = cli.main(["--ledger", str(tmp_path / "budget.sqlite3"), "doctor", "--arms", "unknown-provider"])
+    assert result == 1
+    out = capsys.readouterr().out
+    assert "[FAIL] unknown-provider" in out and "unknown provider" in out
+
+
+def test_recipe_authoring_is_refused_until_m5_even_with_yes(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WB_OPERATOR", "lucas")
+    result = cli.main(["--ledger", str(tmp_path / "budget.sqlite3"),
+                       "monarch", "recipes", "--tasks", "absent", "--yes"])
     assert result == 2
-    assert "foundation" in capsys.readouterr().err.lower()
+    assert approvals.MONARCH_REASON in capsys.readouterr().err
 
 
-def test_budget_status_uses_durable_ledger_and_discloses_unknown_history(tmp_path, capsys):
+def test_budget_status_uses_durable_ledger_and_discloses_the_capabilities(tmp_path, capsys):
     from wb_orchestrator.budget import BudgetLedger
     ledger = tmp_path / "budget.sqlite3"
     BudgetLedger(ledger).reserve("held", "75", scope_id="exp-1")
@@ -49,5 +78,14 @@ def test_budget_status_uses_durable_ledger_and_discloses_unknown_history(tmp_pat
     assert report["weekly_limit_usd"] == "300.000000"
     assert report["held_usd"] == "75.000000"
     assert report["available_usd"] == "225.000000"
-    assert report["historical_billing_verified"] is False
-    assert report["paid_launch_enabled"] is False
+    assert report["historical_billing_verified"] is False and report["reconciliation"] == {}
+    assert report["paid_launch_enabled"] == {"api": True, "monarch": False, "native": False}
+    assert report["paid_launch_reasons"] == {"monarch": approvals.MONARCH_REASON, "native": approvals.NATIVE_REASON}
+
+
+def test_budget_status_takes_the_top_level_ledger_too(tmp_path, capsys):
+    from wb_orchestrator.budget import BudgetLedger
+    ledger = tmp_path / "budget.sqlite3"
+    BudgetLedger(ledger).reserve("held", "5", scope_id="exp-1")
+    assert cli.main(["--ledger", str(ledger), "budget", "status"]) == 0
+    assert json.loads(capsys.readouterr().out)["held_usd"] == "5.000000"

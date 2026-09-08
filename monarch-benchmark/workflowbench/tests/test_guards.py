@@ -29,24 +29,27 @@ def _pilot_plan(tmp_path, **changes):
     return write(tmp_path, text)
 
 
-def test_repetitions_over_smoke_scale_need_approval(tmp_path):
+def test_repetitions_over_smoke_scale_resolve_and_are_judged_at_launch(tmp_path):
+    """Since decision D5 (8 Sep 2026) the gate is an approval record at `wb run`
+    (tests/test_approvals.py), not a word in the plan file: resolving spends
+    nothing, so it refuses nothing on scale."""
     plan = _pilot_plan(tmp_path, repetitions=3)
-    with pytest.raises(ConfigError) as exc:
-        config.resolve(ROOT / "config/products/simulated-apps.yaml", plan,
-                       config_dir=ROOT / "config", env=ENV)
-    msg = str(exc.value)
-    assert exc.value.field == "approved_by"
-    assert "30" in msg and "20" in msg and "approved_by" in msg
+    rc = config.resolve(ROOT / "config/products/simulated-apps.yaml", plan,
+                        config_dir=ROOT / "config", env=ENV)
+    assert rc.attempts_per_competitor == 30 > config.SMOKE_SCALE_ATTEMPTS
 
 
-def test_approved_plan_over_smoke_scale_resolves(tmp_path):
+def test_approved_by_in_the_file_still_loads_but_approves_nothing(tmp_path):
     plan = _pilot_plan(tmp_path, repetitions=3, approved_by='"Carlos"')
     rc = config.resolve(ROOT / "config/products/simulated-apps.yaml", plan,
-                       config_dir=ROOT / "config", env=ENV)
+                        config_dir=ROOT / "config", env=ENV)
     assert rc.attempts_per_competitor == 30 and rc.plan.approved_by == "Carlos"
+    plan = _pilot_plan(tmp_path, repetitions=3, approved_by=None)      # the key may be absent
+    assert config.resolve(ROOT / "config/products/simulated-apps.yaml", plan,
+                          config_dir=ROOT / "config", env=ENV).plan.approved_by is None
 
 
-def test_exactly_smoke_scale_passes_without_approval(tmp_path):
+def test_exactly_smoke_scale_is_the_constant_the_launch_uses(tmp_path):
     plan = _pilot_plan(tmp_path)  # 10 tasks x 2 repetitions = 20
     rc = config.resolve(ROOT / "config/products/simulated-apps.yaml", plan,
                        config_dir=ROOT / "config", env=ENV)
