@@ -255,3 +255,57 @@ def test_production_uses_one_ledger_even_with_custom_output(tmp_path, monkeypatc
     assert first.ledger.path == second.ledger.path == (tmp_path / "repository" / "research" / "budget.sqlite3").resolve()
     first.ledger.reserve("shared-hold", "290", scope_id="one")
     assert second.budget()["available"] == "10.000000"
+
+
+# -- hosted Studio: basic auth, public host names, data folder (unblock plan D4) -----------
+
+def test_basic_auth_challenges_until_the_credentials_match(studio, monkeypatch):
+    import base64
+    monkeypatch.setenv("STUDIO_AUTH_USER", "admin")
+    monkeypatch.setenv("STUDIO_AUTH_PASSWORD", "pw")
+    with server_for(studio) as port:
+        status, headers, body = request(port, "GET", "/api/state")
+        assert status == 401 and headers["WWW-Authenticate"].startswith("Basic") and studio.token not in body
+        wrong = base64.b64encode(b"admin:nope").decode()
+        assert request(port, "GET", "/api/state", headers={"Authorization": f"Basic {wrong}"})[0] == 401
+        assert request(port, "GET", "/api/state", headers={"Authorization": "Basic not-base64!"})[0] == 401
+        right = base64.b64encode(b"admin:pw").decode()
+        status, _, body = request(port, "GET", "/api/state", headers={"Authorization": f"Basic {right}"})
+        assert status == 200 and studio.token in body
+        status, _, _ = request(port, "POST", "/api/jobs/nope/cancel", "{}", {"Authorization": f"Basic {right}"})
+        assert status == 403, "the session token is still required for writes"
+        assert request(port, "POST", "/api/jobs/nope/cancel", "{}")[0] == 401
+
+
+def test_without_the_auth_pair_the_studio_stays_open_on_localhost(studio, monkeypatch):
+    monkeypatch.delenv("STUDIO_AUTH_USER", raising=False)
+    monkeypatch.delenv("STUDIO_AUTH_PASSWORD", raising=False)
+    with server_for(studio) as port:
+        assert request(port, "GET", "/")[0] == 200
+
+
+def test_public_host_allowlist_accepts_the_hosted_name_over_https(studio, monkeypatch):
+    monkeypatch.setenv("STUDIO_PUBLIC_HOSTS", "studio.example.app, Other.Example.App")
+    with server_for(studio) as port:
+        assert request(port, "GET", "/", headers={"Host": "studio.example.app"})[0] == 200
+        assert request(port, "GET", "/", headers={"Host": "studio.example.app",
+                                                   "Origin": "https://studio.example.app"})[0] == 200
+        assert request(port, "GET", "/", headers={"Host": "other.example.app"})[0] == 200
+        assert request(port, "GET", "/", headers={"Host": "evil.example.app"})[0] == 403
+        assert request(port, "GET", "/", headers={"Host": "studio.example.app",
+                                                   "Origin": "https://evil.example.app"})[0] == 403
+
+
+def test_data_dir_moves_the_jobs_folder_and_the_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDIO_DATA_DIR", str(tmp_path / "data"))
+    hosted = Studio(tasks=[])
+    assert hosted.directory == tmp_path / "data" / "studio"
+    assert hosted.ledger.path == (tmp_path / "data" / "research" / "budget.sqlite3").resolve()
+
+
+def test_main_refuses_a_public_bind_without_the_auth_pair(monkeypatch):
+    from wb_studio.app import main
+    monkeypatch.delenv("STUDIO_AUTH_USER", raising=False)
+    monkeypatch.delenv("STUDIO_AUTH_PASSWORD", raising=False)
+    with pytest.raises(SystemExit):
+        main(["--host", "0.0.0.0", "--port", "0"])

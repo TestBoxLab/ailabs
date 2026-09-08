@@ -1,6 +1,7 @@
 """Private local comparison workspace. Job events are durable, reconnectable SSE."""
 from __future__ import annotations
 import argparse
+import base64
 from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +35,17 @@ from wb_studio.runtime_registry import (api_controls, capability_matrix, check_l
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 STATIC = Path(__file__).parent / "static"
+
+
+def data_dir() -> Path | None:
+    """Where a hosted Studio keeps its state (STUDIO_DATA_DIR, a mounted volume); None = the repo."""
+    value = os.environ.get("STUDIO_DATA_DIR")
+    return Path(value) if value else None
+
+
+def public_hosts() -> set[str]:
+    """Host names the hosted Studio answers to (STUDIO_PUBLIC_HOSTS, comma separated), besides localhost."""
+    return {h.strip().lower() for h in os.environ.get("STUDIO_PUBLIC_HOSTS", "").split(",") if h.strip()}
 MODEL_NAMES = {"oracle": "Scripted reference", "sloppy": "Near-miss control", "claude-code": "Claude Code", "codex": "Codex"}
 ID = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
 
@@ -44,10 +56,13 @@ def now():
 
 class Studio:
     def __init__(self, directory=None, tasks=None, gateway_factory=None, adapter_factory=None):
-        self.directory = Path(directory or ROOT / "out" / "studio")
+        self.directory = Path(directory or ((data_dir() / "studio") if data_dir() else ROOT / "out" / "studio"))
         self.directory.mkdir(parents=True, exist_ok=True)
         self.tasks = {task["task"]: task for task in (tasks if tasks is not None else [load_task_file(p) for p in sorted((ROOT / "corpus").rglob("*.json"))])}
-        self.ledger = BudgetLedger(self.directory / "budget.sqlite3" if gateway_factory is not None else REPO / "research" / "budget.sqlite3")
+        ledger_path = REPO / "research" / "budget.sqlite3"
+        if data_dir():
+            ledger_path = data_dir() / "research" / "budget.sqlite3"
+        self.ledger = BudgetLedger(self.directory / "budget.sqlite3" if gateway_factory is not None else ledger_path)
         self.gateway_factory = gateway_factory      # test hook for the Gemini control
         self.adapter_factory = adapter_factory      # test hook for every other provider
         self.lock = threading.RLock()
@@ -406,14 +421,38 @@ def handler(studio):
             self.wfile.write(data)
 
         def trusted(self, write=False):
-            allowed = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
-            host = self.headers.get("Host", "")
+            allowed = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"} | public_hosts()
+            host = self.headers.get("Host", "").lower()
             origin = self.headers.get("Origin")
-            return host in allowed and (not origin or origin == "http://" + host) and (
+            return host in allowed and (not origin or origin in ("http://" + host, "https://" + host)) and (
                 not write or self.headers.get("X-Studio-Token") == studio.token)
+
+        def authorised(self) -> bool:
+            """HTTP Basic Auth, on when STUDIO_AUTH_USER and STUDIO_AUTH_PASSWORD are both set (the hosted Studio)."""
+            user, password = os.environ.get("STUDIO_AUTH_USER"), os.environ.get("STUDIO_AUTH_PASSWORD")
+            if not user or not password:
+                return True
+            header = self.headers.get("Authorization", "")
+            if not header.startswith("Basic "):
+                return False
+            try:
+                given = base64.b64decode(header[6:].strip(), validate=True)
+            except (ValueError, TypeError):
+                return False
+            return secrets.compare_digest(given, f"{user}:{password}".encode("utf-8"))
+
+        def challenge(self):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="AI Labs Studio", charset="UTF-8"')
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
 
         def do_GET(self):
             from urllib.parse import urlsplit, parse_qs
+            if not self.authorised():
+                return self.challenge()
             if not self.trusted():
                 return self.send_json({"error": "Origin refused"}, 403)
             url = urlsplit(self.path)
@@ -509,6 +548,8 @@ def handler(studio):
                 self.send_json({"error": "Unknown comparison or invalid cursor"}, 404)
 
         def do_POST(self):
+            if not self.authorised():
+                return self.challenge()
             if not self.trusted(write=True):
                 return self.send_json({"error": "Origin or session refused"}, 403)
             try:
@@ -579,13 +620,17 @@ def handler(studio):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8765))
+    parser.add_argument("--host", default=os.environ.get("STUDIO_HOST") or "127.0.0.1",
+                        help="bind address; 0.0.0.0 when hosted (then set STUDIO_PUBLIC_HOSTS and the STUDIO_AUTH_* pair)")
     args = parser.parse_args(argv)
     load_dotenv(REPO / ".env", override=False)
     load_dotenv(ROOT / ".env", override=False)
+    if args.host != "127.0.0.1" and not (os.environ.get("STUDIO_AUTH_USER") and os.environ.get("STUDIO_AUTH_PASSWORD")):
+        parser.error("binding to a non-local address needs STUDIO_AUTH_USER and STUDIO_AUTH_PASSWORD")
     app = Studio()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(app))
-    print(f"AI Labs Studio: http://127.0.0.1:{server.server_port}", flush=True)
+    server = ThreadingHTTPServer((args.host, args.port), handler(app))
+    print(f"AI Labs Studio: http://{args.host}:{server.server_port}", flush=True)
     server.serve_forever()
 
 
