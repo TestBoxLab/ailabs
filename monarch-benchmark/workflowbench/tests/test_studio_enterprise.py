@@ -246,3 +246,28 @@ def test_a_moved_checkout_refuses_the_attempt_it_was_not_created_for(tmp_path, s
     assert done["status"] == "failed" and "Execution stopped" in done["error"]
     assert (app.directory / job["id"] / "execution.error.log").read_text(encoding="utf-8").count("changed since this run was created")
     assert not [r for r in fake.requests if r["path"] == "/api/workflows/recipe/runs"]
+
+
+# -- hosted Studio: no git binary, no checkout; the operator declares the build ---------
+
+def test_checkout_identity_without_git_says_so_instead_of_crashing(tmp_path, monkeypatch):
+    import subprocess as sp
+    from wb_studio.enterprise import checkout_identity
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "git")
+    monkeypatch.setattr(sp, "run", no_git)
+    with pytest.raises(ValueError, match="git is not available here"):
+        checkout_identity(tmp_path)
+
+
+def test_monarch_version_falls_back_to_the_declared_build(tmp_path, monkeypatch):
+    import subprocess as sp
+    from wb_arms.monarch import monarch_version
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "git")
+    monkeypatch.setattr(sp, "run", no_git)
+    assert monarch_version(tmp_path, "monarch@2ede4b3e+feat/railway-dev-deploy") == "monarch@2ede4b3e+feat/railway-dev-deploy"
+    with pytest.raises(ValueError):
+        monarch_version(tmp_path, None)
