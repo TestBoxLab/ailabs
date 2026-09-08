@@ -2,8 +2,9 @@
 
 Stdlib only. Session auth: either a token handed in (MONARCH_TOKEN) or a login
 that reads the `monarch_session` cookie; every later call sends it as
-`x-monarch-session`. The authoring stream is server-sent events read line by
-line so a deadline can interrupt it.
+`x-monarch-session`. The authoring stream is server-sent events read on a fixed
+beat so a deadline can interrupt it, and `get_authoring_run` is the backstop
+that says where a job stands when the stream loses its terminal frame.
 
 Errors follow the arm contract: anything the backend cannot answer for
 (connection refused, 5xx, a refused login) is `InfraError("infra:harness_crash")`
@@ -13,6 +14,7 @@ refuses is `MonarchRefused`, which the attempt flow reads as a gate refusal.
 from __future__ import annotations
 
 import json
+import select
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +24,10 @@ from typing import Iterator
 from wb_arms.api_loop import EpisodeTimeout, InfraError
 
 DEFAULT_TIMEOUT_S = 30.0
+# The SSE reader waits at most this long for the socket to have something, so a
+# silent server cannot park it past its deadline (live run-20260908-145828: a
+# 1800 s deadline, cut at 2369 s).
+SOCKET_TIMEOUT_S = 20.0
 
 
 class MonarchRefused(Exception):
@@ -33,9 +39,15 @@ class MonarchRefused(Exception):
 
 
 class MonarchClient:
-    def __init__(self, base_url: str, token: str | None = None):
+    def __init__(self, base_url: str, token: str | None = None,
+                 socket_timeout_s: float = SOCKET_TIMEOUT_S):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        # The authoring stream's beat: how long the reader waits for the socket
+        # to have something before reporting back. It bounds how late the
+        # deadline can be noticed when the server goes silent, so it is a
+        # constructor argument the tests turn down.
+        self.socket_timeout_s = socket_timeout_s
 
     # -- plumbing --------------------------------------------------------------
 
@@ -118,12 +130,14 @@ class MonarchClient:
                          headers={"x-bench-episode-id": episode_id}, deadline=deadline)
         return out["runId"]
 
-    def stream(self, run_id: str, deadline: float | None = None) -> Iterator[dict]:
+    def stream(self, run_id: str, deadline: float | None = None) -> Iterator[dict | None]:
         """Yield the parsed `data:` frames of the authoring stream until it closes.
 
-        Comment lines (`: ping`) and blank separators are dropped. The socket
-        timeout is the remaining budget, so a stalled stream raises rather than
-        hanging; the deadline is also checked between frames.
+        Comment lines (`: ping`) and blank separators are dropped. The reader
+        waits at most `socket_timeout_s` for the socket to have something, and a
+        wait that finds nothing yields `None` -- "still open, nothing said" -- so
+        the caller wakes on a fixed beat: that is what lets it observe its
+        deadline and poll the run view even when the server has gone quiet.
         """
         yield from self._sse(f"/api/workflows/recipe/runs/{run_id}/stream",
                              f"authoring run {run_id}", deadline)
@@ -145,29 +159,72 @@ class MonarchClient:
         req = self._request("GET", path, accept="text/event-stream")
         try:
             resp = urllib.request.urlopen(req, timeout=self._budget(deadline))
+            # The timeout above bounds the connect and the response headers only.
+            # Reads are paced by `select` below, so the socket goes back to
+            # blocking: a socket timeout on top of the beat would read "timed
+            # out" as a crash when the stream is merely quiet.
+            sock = _socket_of(resp)
+            if sock is not None:
+                sock.settimeout(None)
         except urllib.error.HTTPError as e:
             raise InfraError("infra:harness_crash",
                              f"Monarch stream {label}: HTTP {e.code}") from e
         except OSError as e:
             raise InfraError("infra:harness_crash", f"Monarch stream {label}: {e}") from e
         timeout = EpisodeTimeout(f"deadline hit while streaming {label}")
-        with resp:
+        # Read the socket directly, paced by `select`, rather than through the
+        # response object. Two reasons, both learned the hard way: a socket
+        # timeout poisons the socket on Windows ("cannot read from timed out
+        # object"), and `http.client`'s chunked decoder blocks on a chunk header
+        # whatever `select` says -- so neither gives a reliable beat. Raw bytes
+        # cost only that chunk-size lines arrive between the SSE lines, and those
+        # are dropped by the same rule that drops `: ping`: they are not `data:`.
+        sock = _socket_of(resp)
+        if sock is None:                # no way in: fall back to blocking reads
+            raise InfraError("infra:harness_crash",
+                             f"Monarch stream {label}: no socket to read")
+        # Whatever `urlopen` already buffered while reading the headers: the
+        # socket no longer holds it, so it is taken first.
+        pending = _buffered(resp)
+        try:
             while True:
+                while b"\n" in pending:
+                    raw, pending = pending.split(b"\n", 1)
+                    line = raw.decode("utf-8", "replace").strip()
+                    if line.startswith("data:"):
+                        frame = _json_or_none(line[len("data:"):].strip())
+                        if frame is not None:
+                            yield frame
                 if deadline is not None and time.monotonic() >= deadline:
                     raise timeout
+                if not select.select([sock], [], [], self.socket_timeout_s)[0]:
+                    yield None          # the beat: the caller decides what to do
+                    continue
                 try:
-                    line = resp.readline()
-                except TimeoutError as e:
-                    # The socket timeout is the remaining budget, so a stalled
-                    # read means the deadline passed mid-frame, not a crash.
-                    raise timeout from e
-                if not line:
-                    return
-                line = line.decode("utf-8", "replace").strip()
-                if line.startswith("data:"):
-                    frame = _json_or_none(line[len("data:"):].strip())
-                    if frame is not None:
-                        yield frame
+                    chunk = sock.recv(65536)
+                except OSError as e:
+                    raise InfraError("infra:harness_crash",
+                                     f"Monarch stream {label}: {e}") from e
+                if not chunk:
+                    return              # the server closed, or cut, the stream
+                pending += chunk
+        finally:
+            # The socket has no timeout, so closing a chunked response the caller
+            # walked away from would block until the server finished the body.
+            # Drop the connection instead: nothing here is reused.
+            sock = _socket_of(resp)
+            if sock is not None:
+                sock.close()
+            resp.close()
+
+    def get_authoring_run(self, run_id: str, deadline: float | None = None) -> dict:
+        """The authoring run's view: the same fields as an SSE frame.
+
+        The backstop for a terminal frame the stream never delivered (live
+        session 25ade669, 8 Sep 2026): `status` is `running`, `awaiting_input`,
+        `done` or `error`, and a `done` view carries `workflowId`/`recipeVersion`.
+        """
+        return self._call("GET", f"/api/workflows/recipe/runs/{run_id}", deadline=deadline)
 
     def reply(self, run_id: str, request_id: str, answers: list[dict],
               deadline: float | None = None) -> dict:
@@ -220,6 +277,30 @@ class MonarchClient:
         # Already gone is the state we wanted, so 404 is success.
         return self._call("DELETE", f"/api/workflows/{workflow_id}", deadline=deadline,
                           ok_status=(404,))
+
+
+def _buffered(resp) -> bytes:
+    """Body bytes `urlopen` already pulled off the socket while reading headers.
+
+    The reader takes the socket over, so anything the response buffer holds would
+    otherwise be lost. `read1` on a `BufferedReader` hands back what the buffer
+    has and only goes to the socket when the buffer is empty -- so it is called
+    only while the socket is readable, which makes even that case return at once.
+    Nothing readable and nothing buffered is the same answer either way: nothing.
+    """
+    fp, sock = getattr(resp, "fp", None), _socket_of(resp)
+    if fp is None or sock is None or not select.select([sock], [], [], 0.2)[0]:
+        return b""
+    try:
+        return fp.read1(65536)
+    except (OSError, ValueError):
+        return b""
+
+
+def _socket_of(resp):
+    """The response's underlying socket, or None. Best effort: the only way in is
+    a private attribute, and a build that hides it simply keeps today's behaviour."""
+    return getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
 
 
 def _json_or_none(raw: str | bytes):

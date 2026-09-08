@@ -246,8 +246,10 @@ def test_a_missing_parameter_is_a_gap(generated, tmp_path):
     doc["implementations"][0]["parameters"].pop()
     (folder / victim.name).write_text(json.dumps(doc), encoding="utf-8")
     gaps = seeds.validate(tmp_path)
-    assert [g.file for g in gaps] == [victim.name]
-    assert "parameters_incomplete" in gaps[0].gap
+    assert {g.file for g in gaps} == {victim.name}
+    # dropping a BODY parameter also orphans its `{{token}}`, so one file may
+    # trip two gaps; the one this test is about must be among them.
+    assert any("parameters_incomplete" in g.gap for g in gaps), [g.gap for g in gaps]
 
 
 @pytest.mark.parametrize("break_it, gap", [
@@ -552,7 +554,7 @@ def test_bodyless_methods_carry_an_explicit_null_body(generated):
 def test_manifest_records_the_version_and_a_stable_digest(generated, tmp_path):
     out, summary = generated
     manifest = json.loads((out / "ok.txt").read_text(encoding="utf-8"))
-    assert manifest["version"] == seeds.VERSION == "v5.2"
+    assert manifest["version"] == seeds.VERSION == "v5.3"
     assert manifest["canonical"] is True
     assert manifest["products"] == len(summary.folders)
     assert manifest["actions"] == summary.files_written
@@ -1183,3 +1185,78 @@ def test_pruning_never_reaches_outside_the_product_folders(tmp_path):
     seeds.generate(out, SHIM)
     assert (out / "conformance.json").exists(), "the check's report was deleted"
     assert (keepsake / "mine.json").exists(), "an unrelated folder was pruned"
+
+
+# -- v5.3: body parameters from router lambdas that pick keys out of the body --
+
+
+def test_lambda_parser_reads_the_keys_airtable_picks_out_of_the_body():
+    """`b.get("fields")` is a body parameter, exactly like `**b` is a whole body.
+
+    AutomationBench's airtable router never forwards `**b`; it lifts named keys
+    (`fields=b.get("fields", b)`, `text=b.get("text", "")`). v5.2 read that as
+    "no request body", so `bench-airtable:create:root` exposed only its two path
+    ids and Monarch's builder refused to create a record.
+    """
+    picked = seeds._lambda_body_keys("airtable")
+    # every read here carries a default (`b.get("fields", b)`, `b.get("text", "")`),
+    # so the key is named but not required
+    assert picked["records_create"] == {"fields": False}, picked
+    assert picked["records_update"] == {"fields": False}
+    assert picked["records_comment"] == {"text": False}
+    # the whole endpoint's request contract, typed from the handler's own
+    # `fields: Optional[dict]`
+    fields = seeds._picked_body_fields("airtable", "/{baseId}/{tableId}", "POST")
+    assert fields["fields"]["type"] == "object"
+    assert fields["fields"]["additionalProperties"] is True
+
+
+def test_lambda_parser_reads_every_key_of_a_chained_get():
+    """`b.get("body", b.get("comment", b.get("text", "")))` names three keys."""
+    assert set(seeds._lambda_body_keys("jira")["issues_comment"]) == {
+        "body", "comment", "text"}
+
+
+def test_airtable_create_declares_the_record_fields_the_handler_reads(generated):
+    out, _ = generated
+    doc = json.loads((out / "bench-airtable" / "bench-airtable_create_root.json")
+                     .read_text(encoding="utf-8"))
+    step = doc["implementations"][0]["http_template"]["steps"][0]
+    assert step["body_template"] == {"fields": "{{fields}}"}, step["body_template"]
+    param = next(p for p in doc["implementations"][0]["parameters"]
+                 if p["name"] == "fields")
+    assert param["location"] == "body"
+    assert param["json_path"] == "$.steps[0].body.fields"
+    assert param["type"] == "object"
+    # an object parameter the builder cannot see into is one it cannot fill
+    assert param["constraints"]["helper_text"], param
+
+
+def test_airtable_comment_declares_its_text(generated):
+    out, _ = generated
+    doc = json.loads((out / "bench-airtable" / "bench-airtable_create_comments.json")
+                     .read_text(encoding="utf-8"))
+    step = doc["implementations"][0]["http_template"]["steps"][0]
+    assert step["body_template"] == {"text": "{{text}}"}
+    param = next(p for p in doc["implementations"][0]["parameters"] if p["name"] == "text")
+    assert param["type"] == "string"
+    # `b.get("text", "")` defaults, and the handler's own `text: str = ""` too
+    assert param["required"] is False
+
+
+def test_an_alias_chain_is_one_field_not_two(generated):
+    """`b.get("From", b.get("from_number", ""))` is one field spelled two ways.
+
+    Publishing both doubled Twilio's send to six parameters, each of which the
+    builder would have to choose between. The outermost spelling -- the one the
+    real API sends -- is the one published, and the conformance check asks for
+    exactly that same set.
+    """
+    out, _ = generated
+    doc = json.loads((out / "bench-twilio" / "bench-twilio_create_messages-json.json")
+                     .read_text(encoding="utf-8"))
+    step = doc["implementations"][0]["http_template"]["steps"][0]
+    assert set(step["body_template"]) == {"Body", "From", "To"}, step["body_template"]
+    assert seeds.picked_keys_for(
+        "twilio", "twilio/2010-04-01/Accounts/AC1/Messages.json", "POST") == [
+        "Body", "From", "To"]

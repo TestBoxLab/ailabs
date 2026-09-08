@@ -1933,3 +1933,131 @@ def test_real_round_renders_the_answer_key_as_na():
     assert oracle["not_applicable"] is True
     assert oracle["strict_pass"]["mean"] is None
     assert NA_REASON in render_html(rep)
+
+
+# -- the unattended builder: assumptions, budget, triage and no-write runs -----
+
+def test_monarch_attempt_records_the_builders_assumptions():
+    """`assumptions` counts what the builder decided for itself, from the turn
+    log the arm wrote; an attempt with no assumptions counts zero."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, True,
+               phases={"authoring": PhaseMetrics(turns=0, wall_clock_s=4.0),
+                       "execution": PhaseMetrics(turns=0, wall_clock_s=1.0)}).model_dump()
+    row["turn_log"] = [{"monarch": {"bench_episode_id": "e"}},
+                       {"assumptions": ["used the first contact", "assumed Denver"]}]
+    a = monarch_attempts([row])[0]
+    assert a["assumptions"] == ["used the first contact", "assumed Denver"]
+
+    row["turn_log"] = [{"monarch": {}}]
+    assert monarch_attempts([row])[0]["assumptions"] == []
+
+
+def test_monarch_attempt_run_with_no_writes():
+    """A run that finished without writing anything is its own dispatch outcome,
+    "ran, no writes" - not a success, and not an engine error."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, False, termination="agent_error", assertions=False,
+               error="run_no_writes",
+               phases={"authoring": PhaseMetrics(turns=0, wall_clock_s=9.0),
+                       "execution": PhaseMetrics(turns=0, wall_clock_s=2.0)}).model_dump()
+    a = monarch_attempts([row])[0]
+    assert a["builder_outcome"] == "done"
+    assert a["dispatch_outcome"] == "ran, no writes"
+    assert a["checker"] == "fail"
+
+    # and it buckets with the other attempts that ran without making the change
+    from wb_report.metrics import monarch_outcomes
+    by_label = {o["outcome"]: o["count"] for o in monarch_outcomes([row])}
+    assert by_label["ran but the change was not made"] == 1
+
+
+def test_monarch_attempt_budget_exhausted_is_a_builder_error():
+    """The unattended builder's budget ran out: a builder error, on the row."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, False, termination="agent_error", assertions=False,
+               error="authoring_budget_exhausted",
+               phases={"authoring": PhaseMetrics(turns=0, wall_clock_s=1200.0)}).model_dump()
+    a = monarch_attempts([row])[0]
+    assert a["builder_outcome"] == "error"
+    assert a["dispatch_outcome"] == "n/a"
+    assert "authoring_budget_exhausted" in a["reason"]
+
+
+def test_a_triaged_attempt_reads_as_declined():
+    """`no_workflow:` on the error is the builder declining, whether or not the
+    row also carries the flag; the arm writes it as the error."""
+    from wb_report.metrics import monarch_attempts
+
+    row = _row("t1", "monarch", 0, False, termination="agent_error", assertions=False,
+               error="no_workflow: that is a question, not a workflow",
+               phases={"authoring": PhaseMetrics(turns=0, wall_clock_s=3.0)}).model_dump()
+    assert monarch_attempts([row])[0]["builder_outcome"] == "declined"
+
+
+def test_monarch_section_shows_the_assumptions_as_a_tooltip(phase_store):
+    """The builder's decisions ride on the builder cell as a `title`, so the
+    table stays readable and the reader can still see what it assumed."""
+    from wb_report.report import build_report, render_html
+
+    report = build_report(phase_store, "run-p", audience="internal", baseline_arm="alpha")
+    for attempts in report["monarch_attempts"].values():
+        attempts[0]["assumptions"] = ["assumed <Denver>", "used the first contact",
+                                      "kept the owner", "ignored the note"]
+    page = render_html(report)
+    section = page[page.index('id="monarch-phases"'):page.index('id="failures"')]
+    assert "assumed &lt;Denver&gt;" in section          # escaped, in a title
+    assert "used the first contact" in section
+    assert "ignored the note" not in section            # only the first three
+
+
+# -- the front-door access log ------------------------------------------------
+
+def _front_door(art: Path, *calls) -> None:
+    art.mkdir(parents=True, exist_ok=True)
+    (art / "front-door.jsonl").write_text(
+        "\n".join(json.dumps({"ts": "2026-09-08T00:00:00+00:00", "method": m,
+                              "path": p, "status": s, "request_bytes": 0,
+                              "response_bytes": 2, "request_body": "",
+                              "response_body": "{}", "episode_id": "e",
+                              "elapsed_ms": 1.0})
+                  for m, p, s in calls) + "\n", encoding="utf-8")
+
+
+def test_front_door_counts_come_from_the_access_log(tmp_path):
+    from wb_report.metrics import monarch_attempts
+
+    art = tmp_path / "t0"
+    _front_door(art, ("GET", "/airtable/v0/app1/Tasks?filterByFormula=x", 200),
+                ("GET", "/bench-airtable/v0/app1", 404),
+                ("PATCH", "/airtable/v0/app1/Tasks/rec1", 422))
+    row = _row("t1", "monarch", 0, False, error="expected 200, got 404").model_dump()
+    row["artifacts_uri"] = str(art)
+
+    a = monarch_attempts([row])[0]
+    assert a["front_door_calls"] == 3 and a["front_door_errors"] == 2
+    assert a["front_door_last_error"] == "PATCH /airtable/v0/app1/Tasks/rec1 -> 422"
+
+    # no log at all: nothing to show, and no crash
+    bare = _row("t1", "monarch", 0, False).model_dump()
+    bare["artifacts_uri"] = str(tmp_path / "gone")
+    b = monarch_attempts([bare])[0]
+    assert b["front_door_calls"] is None and b["front_door_last_error"] is None
+
+
+def test_front_door_columns_and_failure_detail(phase_store, tmp_path):
+    from wb_report.report import build_report, render_html
+
+    report = build_report(phase_store, "run-p", audience="internal", baseline_arm="alpha")
+    for attempts in report["monarch_attempts"].values():
+        for a in attempts:
+            a["front_door_calls"], a["front_door_errors"] = 7, 1
+            a["front_door_last_error"] = "GET /bench-airtable/read/root -> 404"
+    page = render_html(report)
+    section = page[page.index('id="monarch-phases"'):page.index('id="failures"')]
+    assert "front door" in section and "front door errors" in section
+    failures = page[page.index('id="failures"'):]
+    assert "last front-door error: GET /bench-airtable/read/root -&gt; 404" in failures

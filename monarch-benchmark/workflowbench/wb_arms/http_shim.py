@@ -22,11 +22,18 @@ import json
 import os
 import socketserver
 import threading
+import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from wb_world.episode import Episode
 from wb_world.openapi import build_spec, load_schemas
+
+
+# How much of a request and a response body one log line keeps.
+LOG_BODY_CHARS = 500
 
 
 class _Server(ThreadingHTTPServer):
@@ -45,14 +52,38 @@ class _Server(ThreadingHTTPServer):
 
 class EpisodeHTTPShim:
     def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None,
-                 host: str = "127.0.0.1"):
+                 host: str = "127.0.0.1", access_log: str | Path | None = None):
         self.episode = episode
+        # One JSON line per request, so a failed step can say what actually
+        # arrived instead of only what the engine reported. None = off.
+        self.access_log = Path(access_log) if access_log else None
+        self._log_lock = threading.Lock()
         self.schemas = load_schemas()
         self.httpd = _Server((host, port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://{host}:{self.port}"
         self.public_url = (public_url or os.environ.get("WB_SHIM_PUBLIC_URL") or self.url).rstrip("/")
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def _log(self, method: str, path: str, status: int, req: bytes, resp: bytes,
+             episode_id: str | None, elapsed_ms: float) -> None:
+        if self.access_log is None:
+            return
+        line = json.dumps({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "method": method, "path": path, "status": status,
+            "request_bytes": len(req), "response_bytes": len(resp),
+            "request_body": req.decode("utf-8", "replace")[:LOG_BODY_CHARS],
+            "response_body": resp.decode("utf-8", "replace")[:LOG_BODY_CHARS],
+            "episode_id": episode_id,
+            "elapsed_ms": round(elapsed_ms, 1),
+        })
+        # ponytail: one lock and one append per request; the server is threaded
+        # and an attempt makes tens of calls. A buffered writer is the upgrade
+        # if a run ever makes thousands.
+        with self._log_lock:
+            with open(self.access_log, "a", encoding="utf-8") as fh:
+                print(line, file=fh)
 
     def _handler(self):
         outer = self
@@ -61,9 +92,15 @@ class EpisodeHTTPShim:
             def log_message(self, *a):
                 pass
 
+            def handle_one_request(self):
+                self._t0 = time.monotonic()
+                self._req_body = b""
+                super().handle_one_request()
+
             def _body(self) -> bytes:
                 n = int(self.headers.get("Content-Length") or 0)
-                return self.rfile.read(n) if n else b""
+                self._req_body = self.rfile.read(n) if n else b""
+                return self._req_body
 
             def do_GET(self):
                 sp = urlsplit(self.path)
@@ -127,6 +164,12 @@ class EpisodeHTTPShim:
                     return
                 self._raw(out)
 
+            def _log_reply(self, status: int, payload: bytes):
+                outer._log(self.command or "?", self.path, status,
+                           getattr(self, "_req_body", b""), payload,
+                           self.headers.get("x-bench-episode-id"),
+                           (time.monotonic() - getattr(self, "_t0", time.monotonic())) * 1000)
+
             def _raw(self, text: str):
                 status = 200
                 try:
@@ -142,6 +185,7 @@ class EpisodeHTTPShim:
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                self._log_reply(status, payload)
 
             def _reply(self, code: int, obj: dict):
                 self._raw_status(code, json.dumps(obj))
@@ -153,6 +197,7 @@ class EpisodeHTTPShim:
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                self._log_reply(code, payload)
 
         return Handler
 

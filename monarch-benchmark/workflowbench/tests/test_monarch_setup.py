@@ -266,9 +266,9 @@ def test_the_generated_seeds_pass_the_gate_for_the_task_set_services():
     asserts on the set that is really on disk. Skipped where that file is absent
     (a fresh checkout, or CI without a generated knowledge base).
     """
-    report = Path("out/monarch-seeds/conformance.json")
+    report = Path("out/monarch-conformance.json")
     if not report.is_file():
-        pytest.skip("no out/monarch-seeds/conformance.json; run `wb monarch conform`")
+        pytest.skip("no out/monarch-conformance.json; run `wb monarch conform`")
     rows = json.loads(report.read_text(encoding="utf-8"))["rows"]
     gating = [r for r in rows
               if r["service"] in TASK_SET_SERVICES

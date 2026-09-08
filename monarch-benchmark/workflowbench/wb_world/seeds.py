@@ -63,6 +63,23 @@ task sets use (probed against the real front door, 4 Sep 2026). What changed:
   * Where a body field is opaque -- Gmail's `raw`, a base64url RFC 2822 message
     -- the endpoint's own request prose is appended to `constraints.helper_text`,
     the only prose the builder sees per parameter.
+
+v5.3 closes the other half of that last rule. "A router lambda that never
+forwards the request body declares no body at all" was wrong for the routers
+that PICK named keys out of it instead: `fields=b.get("fields", b)`,
+`text=b.get("text", "")`. Those forward nothing and still read the body, so v5.2
+gave `bench-airtable:create:root` an empty `body_template` and no body
+parameters, and Monarch's builder refused to create a record -- "the catalog's
+only create-record action exposes just baseId and tableId, with no parameter for
+record fields" (live catalogue, 8 Sep 2026). Every `b.get(k)`, `b.get(k, d)`,
+`b[k]` and `b.pop(k)` in a router lambda is now a body parameter, typed from the
+handler argument the lambda passes it to and required only where neither the
+lambda nor the handler has a default. An object-typed one carries the shape in
+its helper text -- an object the builder cannot see into is one it cannot fill,
+so Airtable's `fields` names the columns the app's own tables carry.
+`wb_world.conformance` reads the same parser: a write whose seed declares no
+parameter for a key its handler reads is `body_unusable`, and gates the import
+exactly as a wrong read schema does.
 """
 from __future__ import annotations
 
@@ -650,6 +667,311 @@ def _handler_bindings(routes_src: Any, ast: Any) -> dict[str, tuple[bool, int, s
     return out
 
 
+@lru_cache(maxsize=None)
+def _lambda_body_keys(service: str) -> dict[str, dict[str, bool]]:
+    """route key -> {body key the router lambda lifts by name: is it required}.
+
+    v5.3. `_handler_bindings` only asks whether the lambda forwards `**b`; a
+    router that PICKS named keys out of the body instead
+    (`fields=b.get("fields", b)`, `text=b.get("text", "")`) forwards nothing, so
+    v5.2 read the endpoint as taking no request body at all. Airtable's create
+    then published just `baseId` and `tableId`, and Monarch's builder correctly
+    refused to write a record with no parameter for its fields (probed 4 Sep
+    2026). `b.get(k)`, `b.get(k, default)`, `b[k]` and `b.pop(k)` all name a key
+    the handler reads; only a bare `b.get(k)` with no default is required.
+
+    A lambda that hands the WHOLE body over as one value (`f(w, b)`,
+    `f(w, ids[0], b)`) says nothing about its keys -- the handler behind it takes
+    a bag -- and is left to the record schema, as before.
+    """
+    import ast
+    import importlib
+    import inspect
+    import textwrap
+    try:
+        routes_mod = importlib.import_module(
+            f"automationbench.tools.api.routes.{service}")
+        routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
+    except Exception:
+        return {}
+    out: dict[str, dict[str, bool]] = {}
+    for node in ast.walk(routes_src):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
+                and isinstance(node.value, ast.Dict)):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            picked: dict[str, bool] = {}
+            for call in ast.walk(value):
+                name, required = _picked_key(call, ast)
+                if name and re.fullmatch(r"\w+", name):
+                    # a key read twice is required only where every read is
+                    picked[name] = picked.get(name, True) and required
+            if picked:
+                out[key.value] = picked
+    return out
+
+
+def _picked_key(node: Any, ast: Any) -> tuple[str, bool]:
+    """(the body key this node lifts, is it required), or ("", False).
+
+    `b.get("x")` and `b["x"]` are required, `b.get("x", d)` and `b.pop("x", d)`
+    are not. A chained default (`b.get("body", b.get("comment", ...))`) names
+    every key in the chain; the walk reaches each `Call` on its own.
+    """
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("get", "pop")
+            and getattr(node.func.value, "id", "") == "b"
+            and node.args and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)):
+        return node.args[0].value, len(node.args) < 2 and not node.keywords
+    if (isinstance(node, ast.Subscript) and getattr(node.value, "id", "") == "b"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)):
+        return node.slice.value, True
+    return "", False
+
+
+def _picked_body_fields(service: str, path: str, method: str) -> dict[str, Any]:
+    """The body keys the router lambda for this endpoint lifts, as field schemas.
+
+    Typed from the handler PARAMETER the lambda passes the key to: Airtable's
+    `fields=b.get("fields", ...)` reaches `fields: Optional[dict]`, an object,
+    and its shape is spelled out in the helper text -- an object parameter the
+    builder cannot see into is one it cannot fill.
+    """
+    import ast
+    import importlib
+    import inspect
+    import textwrap
+    try:
+        routes_mod = importlib.import_module(
+            f"automationbench.tools.api.routes.{service}")
+        impl_mod = importlib.import_module(
+            f"automationbench.tools.api.impl.{service}")
+        routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
+    except Exception:
+        return {}
+    picked_by_key = _lambda_body_keys(service)
+    if not picked_by_key:
+        return {}
+    handlers = _handler_names(routes_src, ast)
+    bound = _picked_targets(routes_src, ast)
+    ab_path = _ab_path(service, path)
+    for verb, pattern, key in getattr(routes_mod, "_ROUTES", ()) or ():
+        if verb.upper() != method.upper() or key not in picked_by_key:
+            continue
+        try:
+            if not re.search(pattern, ab_path):
+                continue
+        except re.error:
+            continue
+        fn = getattr(impl_mod, handlers.get(key, ""), None)
+        params: Any = {}
+        if fn is not None:
+            try:
+                params = inspect.signature(fn).parameters
+            except (TypeError, ValueError):
+                params = {}
+        in_url = {n.lower() for n in _PATH_VAR.findall(path)}
+        # A chain of aliases (`b.get("From", b.get("from_number", ""))`) is ONE
+        # field the app spells two ways, not two fields. Publishing both doubled
+        # Twilio's send from three parameters to six, each of which the builder
+        # would have to guess between; the outermost spelling -- the one the real
+        # API uses -- is the one that is published.
+        canonical = _picked_canonical(routes_src, ast).get(key, {})
+        out: dict[str, Any] = {}
+        for name, required in sorted(picked_by_key[key].items()):
+            if name.lower() in in_url or canonical.get(name, name) != name:
+                continue
+            param = params.get(bound.get(key, {}).get(name, name))
+            type_ = (_annotation_type(param.annotation)[0]
+                     if param is not None
+                     and param.annotation is not inspect.Parameter.empty
+                     else "string")
+            # ...and the handler's own default makes the key optional too
+            if param is not None and param.default is not inspect.Parameter.empty:
+                required = False
+            spec: dict[str, Any] = {"type": type_, "required": required}
+            helper = _picked_helper(service, name, type_)
+            if helper:
+                spec["description"] = helper
+            if type_ == "object":
+                spec["additionalProperties"] = True
+            out[name] = spec
+        if out:
+            return out
+    return {}
+
+
+def picked_keys_for(service: str, ab_path: str, method: str) -> list[str]:
+    """The body keys the router lambda serving this AB path lifts by name.
+
+    The conformance check's half of `_picked_body_fields`: it holds a routing
+    path already (the world URL), not the public one the seeds publish, so it
+    matches the `_ROUTES` regexes directly. Sharing the parser is the point --
+    a seed and its check must read the same source or they drift apart.
+    """
+    import ast
+    import importlib
+    import inspect
+    import textwrap
+    picked_by_key = _lambda_body_keys(service)
+    if not picked_by_key:
+        return []
+    try:
+        routes_mod = importlib.import_module(
+            f"automationbench.tools.api.routes.{service}")
+        routes_src = ast.parse(textwrap.dedent(inspect.getsource(routes_mod)))
+    except Exception:
+        return []
+    for verb, pattern, key in getattr(routes_mod, "_ROUTES", ()) or ():
+        if verb.upper() != method.upper() or key not in picked_by_key:
+            continue
+        try:
+            if not re.search(pattern, ab_path.lstrip("/")):
+                continue
+        except re.error:
+            continue
+        # ...only the spelling the generator publishes: an alias chain is ONE
+        # field, and asking for every spelling of it would fail every seed that
+        # correctly sends the canonical one (Twilio's `From`/`from_number`).
+        canonical = _picked_canonical(routes_src, ast).get(key, {})
+        return sorted(k for k in picked_by_key[key] if canonical.get(k, k) == k)
+    return []
+
+
+def _picked_targets(routes_src: Any, ast: Any) -> dict[str, dict[str, str]]:
+    """route key -> {body key: the handler argument the lambda passes it to}.
+
+    `fields=b.get("fields", b)` binds the key `fields` to the argument `fields`;
+    `body=b.get("body", b.get("comment", ...))` binds three keys to `body`, and
+    that argument's annotation is what types all three.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for node in ast.walk(routes_src):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
+                and isinstance(node.value, ast.Dict)):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            bound: dict[str, str] = {}
+            for call in ast.walk(value):
+                if not isinstance(call, ast.Call):
+                    continue
+                for kw in call.keywords:
+                    if not kw.arg:
+                        continue
+                    for inner in ast.walk(kw.value):
+                        name, _ = _picked_key(inner, ast)
+                        if name:
+                            bound.setdefault(name, kw.arg)
+            if bound:
+                out[key.value] = bound
+    return out
+
+
+def _picked_canonical(routes_src: Any, ast: Any) -> dict[str, dict[str, str]]:
+    """route key -> {every alias of a body field: the spelling that is published}.
+
+    `b.get("From", b.get("from_number", ""))` is one field with two spellings:
+    the app reads `From` and falls back to `from_number`. The OUTERMOST is what
+    the real API sends, so it is the alias the seed publishes and the inner ones
+    map to it.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for node in ast.walk(routes_src):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
+                and isinstance(node.value, ast.Dict)):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            aliases: dict[str, str] = {}
+            for call in ast.walk(value):
+                head, _ = _picked_key(call, ast)
+                if not head or not isinstance(call, ast.Call) or len(call.args) < 2:
+                    continue
+                # everything the default of this read names is the same field
+                for inner in ast.walk(call.args[1]):
+                    name, _ = _picked_key(inner, ast)
+                    if name and name != head:
+                        aliases[name] = head
+            if aliases:
+                # collapse a chain (`Body` <- `message` <- ...) onto its head
+                for name in list(aliases):
+                    seen = {name}
+                    while aliases.get(aliases[name]) and aliases[name] not in seen:
+                        seen.add(aliases[name])
+                        aliases[name] = aliases[aliases[name]]
+                out[key.value] = aliases
+    return out
+
+
+def _picked_helper(service: str, name: str, type_: str) -> str:
+    """What an opaque body key holds, in the words the builder needs.
+
+    An object parameter with no description is one the builder cannot fill: it
+    has to be told the shape. For Airtable's `fields` that shape is the table's
+    own columns, so the field names the frozen fixtures actually carry are
+    listed.
+    """
+    if type_ != "object":
+        return ""
+    names = _picked_object_keys(service, name)
+    if not names:
+        return f"An object of {name} keyed by name."
+    return ("The record fields keyed by column name. The columns the app's "
+            f"tables carry: {', '.join(names)}.")
+
+
+@lru_cache(maxsize=None)
+def _picked_object_keys(service: str, name: str) -> tuple[str, ...]:
+    """The keys an object body field is seen holding, from the corpus fixtures.
+
+    Airtable's records carry a `fields` dict keyed by the table's own columns;
+    the corpus tasks' starting worlds are the only place those column names are
+    written down.
+    """
+    seen: set[str] = set()
+    root = Path(__file__).resolve().parents[1] / "corpus"
+    for f in sorted(root.glob("imported-*/*.json")) if root.is_dir() else ():
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        state = ((doc.get("info") or {}).get("initial_state") or {}).get(service)
+        # the fixtures nest (`bases[].tables[].records[].fields`), so the key is
+        # looked for at any depth of this service's own starting world
+        for value in _walk_values(state, name):
+            if isinstance(value, dict):
+                seen.update(str(k) for k in value
+                            if re.fullmatch(r"[\w .&-]{1,60}", str(k)))
+    return tuple(sorted(seen))
+
+
+def _walk_values(node: Any, key: str) -> list[Any]:
+    """Every value stored under `key`, at any depth of a fixture."""
+    out: list[Any] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key:
+                out.append(v)
+            out.extend(_walk_values(v, key))
+    elif isinstance(node, list):
+        for item in node:
+            out.extend(_walk_values(item, key))
+    return out
+
+
 # A top-level `name: <type>` of a stated request body. `?` marks it optional,
 # and the value may be an array (`[[cell, ...], ...]`), an object, or a word.
 _REQUEST_FIELD = re.compile(r"(?:^\{|,)\s*(\w+)\??\s*:\s*(\[|\{|\w+)")
@@ -693,6 +1015,11 @@ def _handler_body_fields(service: str, path: str, method: str) -> dict[str, Any]
     stated = _stated_body_fields(service, path)
     if stated:
         return stated
+    picked = _picked_body_fields(service, path, method)
+    if picked:
+        # The lambda NAMES the keys it lifts out of the body; nothing else
+        # describes this endpoint's request as precisely, prose included.
+        return picked
     if _ab_requests().get((service, path), "").strip():
         # Prose that names a shape rather than listing fields ("Message with raw
         # (base64url-encoded RFC 2822) or payload...") still says the signature
@@ -2447,7 +2774,7 @@ def generate(out_dir, shim_public_url: str) -> Summary:
                    folders=sorted(folders))
 
 
-VERSION = "v5.2"
+VERSION = "v5.3"
 
 
 def folder_sha256(folder) -> str:

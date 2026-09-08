@@ -541,9 +541,17 @@ def _failures_table(report: dict) -> str:
     failures = report["failures"]
     if not failures:
         return '<p class="note">no attempt failed</p>'
+    # task+repetition -> the attempt's last front-door error, for the Monarch
+    # rows: "expected 200, got 404" says nothing about which request got it.
+    last_error = {(a["task_id"], a["trial"], arm): a.get("front_door_last_error")
+                  for arm, attempts in (report.get("monarch_attempts") or {}).items()
+                  for a in attempts}
     rows = []
     for f in failures:
         error = f["error"] or ""
+        fd = last_error.get((f["task_id"], f["trial"], f["arm"]))
+        if fd:
+            error += f" · last front-door error: {fd}"
         # The cell shows the first 200 characters; the whole thing stays in the
         # title, so a long stack trace is abbreviated rather than lost.
         cell = (error[:200] + "...", error) if len(error) > 200 else error
@@ -1255,6 +1263,22 @@ def _time_section(report: dict) -> str:
     return _bar_chart(series, kind="seconds") + _time_section_table(report)
 
 
+def _builder_cell(attempt: dict):
+    """The builder outcome, carrying the builder's own assumptions as a tooltip.
+
+    The unattended builder decides for itself what the request left open, and
+    those decisions explain a great many verdicts. The first three ride on the
+    cell as a `title` (`_table` escapes it); the full list is in the turn log.
+    """
+    assumptions = attempt.get("assumptions") or []
+    if not assumptions:
+        return attempt["builder_outcome"]
+    shown = "; ".join(assumptions[:3])
+    if len(assumptions) > 3:
+        shown += f" (+{len(assumptions) - 3} more)"
+    return (attempt["builder_outcome"], f"assumed: {shown}")
+
+
 def _monarch_section(report: dict) -> str:
     """Section 5: one row per Monarch attempt, builder and dispatch apart.
 
@@ -1273,15 +1297,19 @@ def _monarch_section(report: dict) -> str:
         body += _table(["outcome", "count", "share"], outcome_rows,
                        _source_line_for(report, "monarch"),
                        f"{arm}, attempts by outcome", numeric_from=1)
-        table_rows = [[a["task_id"], _fmt(a["trial"]), a["builder_outcome"],
+        table_rows = [[a["task_id"], _fmt(a["trial"]),
+                       _builder_cell(a),
                        _fmt(a["questions_asked"]),
                        _fmt(a["builder_seconds"], "seconds"),
                        _fmt(a["builder_cost"], "money"), a["dispatch_outcome"],
                        _fmt(a["dispatch_seconds"], "seconds"), a["checker"],
+                       _fmt(a.get("front_door_calls")),
+                       _fmt(a.get("front_door_errors")),
                        (a["reason"] or "")]
                       for a in rows]
         body += _table(["task", "repetition", "builder", "questions", "builder s",
-                        "builder cost", "dispatch", "dispatch s", "checker", "reason"],
+                        "builder cost", "dispatch", "dispatch s", "checker",
+                        "front door", "front door errors", "reason"],
                        table_rows,
                        _source_line_for(report, "monarch"), f"{arm}, attempt by attempt",
                        numeric_from=1)

@@ -492,3 +492,72 @@ def test_the_three_real_fixture_gaps_are_recognised(corpus_dirs, service, collec
     state = load_task_file(tasks[service])["info"]["initial_state"].get(service, {})
     assert conformance.fixture_gap(state, collection, field=field), \
         f"{service}.{collection} is not seen as a fixture gap"
+
+
+# -- v5.3: a write whose seed declares none of the keys its handler reads -----
+
+
+def _airtable_create(body: dict, params: list) -> dict:
+    """The write whose router lambda lifts `fields` out of the body by name."""
+    return {
+        "business_action": {
+            "id": "bench-airtable:create:root", "label": "Create a root",
+            "product_id": "bench-airtable", "product_domain": "front.door",
+            "area": "roots", "verb": "create", "state": "active",
+            "source_url": "https://front.door/openapi/airtable.json",
+            "first_seen_at": "2026-09-03T00:00:00.000Z",
+            "last_seen_at": "2026-09-03T00:00:00.000Z",
+        },
+        "implementations": [{
+            "id": "impl_create_root", "source": "public", "idempotent": False,
+            "discovered_at": "2026-09-03T00:00:00.000Z", "creates_entities": [],
+            "http_template": {
+                "call_type": "rest", "transport_mode": "header_only",
+                "auth_scheme": "none", "auth_captured": False,
+                "steps": [{
+                    "method": "POST",
+                    "url_template": "https://front.door/airtable/{{baseId}}/{{tableId}}",
+                    "headers_template": {"content-type": "application/json"},
+                    "body_template": body,
+                    "response_template": {"status": 200, "extract": {"id": "$.id"},
+                                          "schema": {"type": "object",
+                                                     "properties": {"id": {"type": "string"}}}},
+                }],
+            },
+            "parameters": [
+                {"name": "baseId", "classification": "entity_reference",
+                 "entity_type": "base", "location": "path", "type": "string",
+                 "required": True, "example_value": "app1",
+                 "json_path": "$.steps[0].url.baseId", "constraints": {}},
+                {"name": "tableId", "classification": "entity_reference",
+                 "entity_type": "table", "location": "path", "type": "string",
+                 "required": True, "example_value": "tbl1",
+                 "json_path": "$.steps[0].url.tableId", "constraints": {}},
+            ] + params,
+        }],
+    }
+
+
+def test_write_that_declares_nothing_its_handler_reads_is_body_unusable(tmp_path, corpus_dirs):
+    """v5.2's `bench-airtable:create:root`: two path ids, an empty body.
+
+    The request runs and answers 200, so every dynamic check passes -- and the
+    action is still useless, because no parameter reaches `fields`, the one key
+    the router lambda lifts out of the body.
+    """
+    _write_seed(tmp_path / "bench-airtable", "create_root", _airtable_create({}, []))
+    report = conformance.check(tmp_path, corpus_dirs)
+    row = report.rows[0]
+    assert row.verdict == "body_unusable", row.detail
+    assert "fields" in row.detail
+
+
+def test_the_fixed_write_is_not_body_unusable(tmp_path, corpus_dirs):
+    action = _airtable_create(
+        {"fields": "{{fields}}"},
+        [{"name": "fields", "classification": "typed", "location": "body",
+          "type": "object", "required": True, "example_value": {},
+          "json_path": "$.steps[0].body.fields", "constraints": {}}])
+    _write_seed(tmp_path / "bench-airtable", "create_root", action)
+    report = conformance.check(tmp_path, corpus_dirs)
+    assert report.rows[0].verdict != "body_unusable", report.rows[0].detail

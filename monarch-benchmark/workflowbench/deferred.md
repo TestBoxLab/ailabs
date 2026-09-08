@@ -82,6 +82,7 @@ than 30 days (warning, never a gate).
 - The 47 simulated apps' OpenAPI documents carry no request or response
   schemas; the seeds derive body fields from the AutomationBench data model
   and the corpus. When the documents gain schemas, prefer them.
+- The conformance gate stops on any product service; buffer, canva and twitter (outside the four task sets) block a 47-app import. Gate should take the plan's services or an allowlist. Imported with --no-conform on 8 Sep.
 
 ## Stock Monarch Enterprise in the Studio: what the adapter cannot verify (8 Sep 2026)
 

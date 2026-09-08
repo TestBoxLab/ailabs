@@ -46,6 +46,16 @@ class Scenario:
     # frames without a terminal one, and the next resumes where it left off.
     stream_cut_after: int | None = None
     stream_404_after: int | None = None       # connection N+1 onwards answers 404
+    # The stream never sends the terminal frame, on any connection: the job
+    # finished server-side but the client never heard (live session 25ade669,
+    # 8 Sep 2026). Only the run view says so.
+    drop_terminal_frame: bool = False
+    # With `drop_terminal_frame`, the connection also stays open after the job
+    # ended, so nothing at all tells the client to go and look at the view.
+    hold_open_after_terminal: bool = False
+    # The stream sends nothing at all and never closes, so only the reader's own
+    # beat wakes it.
+    stream_silent: bool = False
     delete_fails_once: bool = False
     preset_token: str | None = None           # accept this session token without a login
     server_error: bool = False                # every route answers 500
@@ -66,6 +76,9 @@ class Scenario:
     # The recipe's declared inputs: [{name, label, type, required, default?}, ...].
     # Served on the done frame's `recipe` and on the workflow detail.
     recipe_inputs: list[dict] = field(default_factory=list)
+    # The builder's own decisions, served on the done frame's `recipe`
+    # (unattended authoring; backend 2ede4b3ee).
+    recipe_assumptions: list[str] = field(default_factory=list)
     # The recipe version has an LLM loop, so it must be acked before it may run.
     has_llm_loop: bool = False
     # -- the live run view (011) ----------------------------------------------
@@ -108,6 +121,10 @@ def _input_errors(declared: list[dict], sent: dict) -> list[dict]:
 # ponytail: a cap so a test that never replies still ends; lower it in a test if needed
 REPLY_GATE_TIMEOUT_S = 30.0
 
+# A stream that says nothing holds its connection this long, or until the server
+# stops -- long enough for any test's deadline, short enough not to hang one.
+HOLD_OPEN_S = 120.0
+
 # Generous on purpose: a loaded CI box can take many seconds to answer a
 # localhost request, and a timeout here used to surface as a confusing
 # "hits == []" failure in the caller rather than as an engine error.
@@ -149,6 +166,7 @@ class FakeMonarch:
         self.run_stream_connections = 0            # GET /api/engine/runs/:id/stream opens
         self._workflow_for_job: dict[int, str] = {}
         self._lock = threading.Lock()
+        self._stopping = threading.Event()   # released so held-open streams end
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}"
@@ -276,6 +294,8 @@ class FakeMonarch:
                         self._stream()
                     except _ClientGone:
                         self.close_connection = True
+                elif path.startswith("/api/workflows/recipe/runs/"):
+                    self._authoring_view(path.rsplit("/", 1)[-1])
                 elif path.startswith("/api/workflows/") and path.endswith("/runs"):
                     wfid = path[len("/api/workflows/"):-len("/runs")]
                     with outer._lock:
@@ -470,6 +490,35 @@ class FakeMonarch:
                                  daemon=True).start()
                 self._reply(201, {"id": run_id, "engine": {"runId": run_id, "status": "running"}})
 
+            def _hold_open(self):
+                """Keep the connection open, saying nothing, until the server stops."""
+                outer._stopping.wait(timeout=HOLD_OPEN_S)
+
+            def _authoring_view(self, run_id: str):
+                """GET the run view: the last frame emitted, plus the terminal one
+                when the scenario said the stream would drop it."""
+                sc = outer.scenario
+                with outer._lock:
+                    sent = outer._frames_sent.get(run_id, 0)
+                if not sent:
+                    self._reply(200, {"status": "running"})
+                    return
+                frame = self._decorate(sc.frames[sent - 1], run_id)
+                self._reply(200, {"runId": run_id, **frame})
+
+            def _decorate(self, frame: dict, run_id: str) -> dict:
+                """The scenario's per-run additions to a frame: unique workflow id,
+                declared inputs, the builder's assumptions."""
+                sc = outer.scenario
+                if sc.unique_workflow_ids and frame.get("workflowId"):
+                    frame = {**frame, "workflowId": outer._workflow_of(run_id)}
+                if (sc.recipe_inputs or sc.recipe_assumptions) and frame.get("status") == "done":
+                    recipe = {**(frame.get("recipe") or {}), "inputs": sc.recipe_inputs}
+                    if sc.recipe_assumptions:
+                        recipe["assumptions"] = sc.recipe_assumptions
+                    frame = {**frame, "recipe": recipe}
+                return frame
+
             def _stream(self):
                 sc = outer.scenario
                 run_id = urlsplit(self.path).path[
@@ -492,15 +541,26 @@ class FakeMonarch:
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
                 self._chunk(b": ping\n\n")
+                if sc.stream_silent:
+                    # No frames, no close: the reader only wakes on its own beat.
+                    self._hold_open()
+                    return
                 for i, frame in enumerate(sc.frames[start:], start=start):
+                    if sc.drop_terminal_frame and frame.get("status") in ("done", "error"):
+                        # The job reached its ending; the client never hears it.
+                        # The view is the only place that says so.
+                        with outer._lock:
+                            outer._frames_sent[run_id] = i + 1
+                        if sc.hold_open_after_terminal:
+                            # ...and the connection stays open too, so not even a
+                            # closed stream tells the client to go and look.
+                            self._hold_open()
+                        break
                     if (sc.stream_cut_after is not None and connection == 1
                             and i - start >= sc.stream_cut_after):
                         break                      # the edge cut the response
                     time.sleep(sc.delay_s.get("frame", 0))
-                    if sc.unique_workflow_ids and frame.get("workflowId"):
-                        frame = {**frame, "workflowId": outer._workflow_of(run_id)}
-                    if sc.recipe_inputs and frame.get("status") == "done":
-                        frame = {**frame, "recipe": {"inputs": sc.recipe_inputs}}
+                    frame = self._decorate(frame, run_id)
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     with outer._lock:
                         outer._frames_sent[run_id] = i + 1
@@ -560,6 +620,7 @@ class FakeMonarch:
         return self
 
     def stop(self) -> None:
+        self._stopping.set()
         self.httpd.shutdown()
         self.httpd.server_close()
 
