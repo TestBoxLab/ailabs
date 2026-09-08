@@ -52,11 +52,35 @@ against US$ 299.60 available). Command, from `monarch-benchmark/workflowbench`:
 WB_OPERATOR=lucas uv run --frozen wb run --product simulated-apps --plan achievable-50-bare-request
 ```
 
-Not ready: the two Monarch arms (M5 T5.0 waits on Carlos's fork tree; the seeds pin his
-front door) and Claude Code (M7). The hosted Studio at
-https://ailabs-studio-production.up.railway.app runs the merged tree behind its login; it does
-not hold the Monarch connection secrets (set them as Railway variables when the instances
-are ready).
+**Monarch arms, state at 23:30.** The fork tree is not only on Carlos's machine after all:
+`origin/ailabs/unattended-authoring` in `TestBoxLab/monarch` carries the deployed commit
+`2ede4b3e` (plus one), the Railway Dockerfiles, the direct-Anthropic provider and the FD
+migrations; it is checked out as branch `ailabs-deploy` in `C:/Users/Lucas Wakigawa/Documents/monarch`.
+The hosted Studio now serves the bench's world at
+`https://ailabs-studio-production.up.railway.app/front-door` (relay to the attempt's shim,
+no login on that path), and stock seeds naming that front door are generated and validated
+(`out/monarch-seeds-studio`, 47 products, 686 actions, 0 errors). Three steps remain, and the
+first two are Lucas's because they change Carlos's shared instance and carry its secrets
+(the auto-mode classifier refused them here):
+
+1. Ship the seeds: copy `out/monarch-seeds-studio/bench-*` into
+   `Documents/monarch/feature-discovery/api/src/seeds/fixtures/public-api-seeds/`, then from
+   `Documents/monarch` on branch `ailabs-deploy`: `railway up --service fdapi --detach`
+   (Carlos's runbook step; rollback = the same with seeds regenerated for his ngrok host).
+   Then, from the bench with `FRONT_DOOR_URL=https://ailabs-studio-production.up.railway.app/front-door`
+   in `.env`: `uv run --frozen wb monarch setup --product simulated-apps` (imports by slug, writes
+   the knowledge file), and the org grant (`bench-seeds.sh` step 4 or `grants-only.sh`).
+2. Wire the hosted Studio to the instance with Railway variable references, no values typed:
+   `railway variables --service ailabs-studio --set 'MONARCH_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}' --set 'MONARCH_FD_URL=https://${{fdapi.RAILWAY_PUBLIC_DOMAIN}}' --set 'FD_API_SHARED_SECRET=${{fdapi.FD_API_SHARED_SECRET}}' --set 'MONARCH_PASSWORD=${{backend.SEED_ADMIN_PASSWORD}}' --set 'LANGFUSE_OTLP_AUTH=${{backend.LANGFUSE_OTLP_AUTH}}' --set 'LANGFUSE_URL=https://us.cloud.langfuse.com' --set 'FRONT_DOOR_URL=https://ailabs-studio-production.up.railway.app/front-door' --set 'BENCH_ORG_ID=<from railway.env>'`
+   (run under `MSYS_NO_PATHCONV=1` in Git Bash). The bench derives the Langfuse key pair from
+   the OTLP header. `MONARCH_BUILD` and `MONARCH_ATTEMPT_CEILING_USD=3.00` are already set.
+3. Flip the Monarch competitor readiness once the Studio's Enterprise probe passes against
+   the instance (`/api/architectures/enterprise/verify`), and launch Monarch rounds from the
+   web app; CLI rounds with Monarch from a laptop still need a tunnel, which this machine
+   does not have (no ngrok).
+
+The lab instance (second Railway instance from `ailabs-deploy` with the lab seeds from
+`wb monarch knowledge`) and Claude Code in a container (M7) remain open.
 
 ## 3. Where we are on 8 September
 
