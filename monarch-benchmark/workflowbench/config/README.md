@@ -128,6 +128,46 @@ from the tiers) and writes them plus the manifest above. Same seed over the
 same corpus reproduces the same bytes. Full flags, exit codes and output:
 `specs/005-task-tiers/contracts/cli.md`.
 
+## plans/achievable-50-request.yaml, achievable-50-workflow.yaml
+
+The two gauntlet plans of the unblock plan of 8 Sep 2026 (milestone M2), one
+per evaluation track: `track: agentic-request` (the competitor gets the request
+once and acts on it) and `track: create-run` (it builds a workflow and runs
+it). Everything else is identical: `tasks: tasks/achievable-50`, `create-run`
+mode, one attempt per prompt plus one retry on failure, four competitors
+(answer key, `claude-opus-5/api` as the baseline, `monarch-stock`,
+`monarch-lab`), internal audience, a US$ 220 ceiling, `approved_by` left empty
+(Lucas approves, decision D5). The two Monarch harness files arrive with
+milestone M5, so until then the plans load but do not resolve; the Claude Code
+competitor joins with M7. Results are never pooled across the two tracks.
+
+## tasks/<name>-ids.txt, tasks/<name>/, tasks/<name>-manifest.yaml
+
+A slate: a frozen task set whose members were listed by hand (one id per line,
+`#` comment lines holding the rule and its source) rather than drawn by a
+seed. `wb corpus slate --ids tasks/<name>-ids.txt --out tasks/<name> --because
+"<why>"` copies each corpus file unchanged into the folder and writes the
+manifest beside it: when, the selection rule, why the set exists, the suite
+revision, the difficulty measure and cut points reused from
+`tasks/tiers-manifest.yaml`, the corpus folders, the count per domain, and one
+row per task with its domain, score, tier and hash. The first slate is the
+50-task gauntlet, `tasks/achievable-50-ids.txt`.
+
+## `wb corpus slate --ids FILE --out DIR --because TEXT`
+
+Free, offline. Refuses, naming every offender and writing nothing, when an id
+is not in the corpus, has no approval rule (`expected_changes` or
+`allowed_changes` absent, or no expected change), does not match its own hash,
+or already sits in a frozen set (`tier-*`, `random-10`, or any folder with a
+manifest beside it); `--allow-frozen-overlap` lets the last case through and
+records the overlap in the manifest. A folder that already holds a set needs
+`--refreeze`, which keeps the ids the manifest records and refreshes the
+copies, the hashes and the manifest (`refrozen_at`, `refrozen_because`) after
+an approval-rule change or a corpus re-import. Exit codes: 0 written; 1 the
+corpus cannot be read as one pool (two folders with the same domain); 2 a
+refusal, or `--ids` missing on a fresh freeze; 3 the id list or a corpus
+folder is missing.
+
 ## `wb monarch recipes`
 
 Makes the recipes file above. **Spends model money** (Monarch authors each task

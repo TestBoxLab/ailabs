@@ -75,3 +75,27 @@ rather than improvising a draw.
 
 Never draw a set by copying files by hand: a set without a recorded seed cannot
 be redrawn, and the round loses its source line.
+
+## A set listed by id is a slate
+
+When the members are chosen by a rule outside the bench (the first is
+`tasks/achievable-50-ids.txt`, the 50-task gauntlet of the unblock plan of
+8 Sep 2026), the set is frozen by the bench from that list, not by hand:
+
+```bash
+uv run wb corpus slate --ids tasks/<name>-ids.txt --out tasks/<name> --because "<why>"
+```
+
+The list holds one task id per line; its `#` comment lines become the
+manifest's selection rule, so write the rule and its source there. The
+command copies each corpus file unchanged into the folder and writes
+`tasks/<name>-manifest.yaml` beside it: when, the rule, why the set exists,
+the suite revision, the difficulty cut points it reused from
+`tasks/tiers-manifest.yaml`, the count per domain, and one row per task with
+its domain, hash, difficulty score and tier label. It refuses, naming every
+offender, when an id is not in the corpus, has no approval rule, does not
+match its own hash, or already sits in a frozen set (`tier-*`, `random-10`,
+or any folder with a manifest beside it); nothing is written before every id
+passes. A folder that already holds a set needs `--refreeze`, which keeps the
+ids the manifest records and refreshes the copies and hashes after an
+approval-rule change or a corpus re-import. Free and offline.
