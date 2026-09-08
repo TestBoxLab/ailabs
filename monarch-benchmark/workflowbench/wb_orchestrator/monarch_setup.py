@@ -220,7 +220,7 @@ def _conform_gate(out: Path, services: list[str], stdout) -> None:
     if not corpus:
         return                                   # no corpus, no worlds to check against
     report = conformance.check(out, corpus, list(services))
-    report.write_json(out / "conformance.json")
+    report.write_json(out.parent / "monarch-conformance.json")   # outside the seed folder: the deploy script scans it
     bad_reads = [r for r in report.rows if r.is_read and r.verdict in
                  ("schema_mismatch", "extract_empty", "request_rejected")]
     no_handler = [r for r in report.rows if r.verdict == "no_handler"]
@@ -237,7 +237,7 @@ def _conform_gate(out: Path, services: list[str], stdout) -> None:
             print(f"      {r.action_id}: {r.verdict}: {r.detail[:110]}", file=stdout)
         raise Stop(2, "conform",
                    f"{len(bad_reads)} read action(s) do not match the simulated apps; "
-                   f"nothing imported (see {out / 'conformance.json'})")
+                   f"nothing imported (see {out.parent / 'monarch-conformance.json'})")
     print(f"[ok] conform: {len(report.rows)} actions true against the simulated apps",
           file=stdout)
 

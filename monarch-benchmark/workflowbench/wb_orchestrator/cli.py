@@ -389,7 +389,7 @@ def cmd_monarch_conform(args) -> int:
     services = [s.strip() for s in args.services.split(",") if s.strip()] if args.services else None
     report = conformance.check(seeds_dir, corpus, services)
     report.print_table(sys.stdout)
-    out = seeds_dir / "conformance.json"
+    out = seeds_dir.parent / "monarch-conformance.json"   # outside the seed folder: the deploy script scans every *.json in it
     report.write_json(out)
     print(f"report: {out}")
     failed = report.failed_services()
