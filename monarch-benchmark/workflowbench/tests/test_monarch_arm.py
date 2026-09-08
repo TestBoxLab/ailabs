@@ -999,6 +999,7 @@ def test_interactive_sends_no_authoring_field(site, repo):
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER)
     with FakeMonarch(sc) as fake:
         arm = arm_against(site, fake, port, repo)
+        arm.harness = replace(arm.harness, authoring_mode="interactive")
         result = arm.run(Episode(task(), episode_id="run-x/t/monarch/t0"),
                          deadline=time.monotonic() + 60)
 
@@ -1021,4 +1022,100 @@ def test_unattended_sends_the_authoring_field(site, repo):
     assert fake.authoring_bodies == [{"goal": task()["prompt"][1]["content"],
                                       "authoring": "unattended"}]
     assert "authoring=unattended" in result.flags
+    free(port)
+
+
+# -- unattended budget, triage and no-write runs (backend 2ede4b3ee) -----------
+# The unattended builder has a fixed budget of 30 turns and 20 minutes. Three
+# endings the bench must record as failed attempts of the competitor, never as
+# infrastructure: the budget ran out, the request was triaged as not a workflow,
+# and a run that finished without performing any write.
+
+def test_authoring_budget_exhausted_is_the_competitors_failure(site, repo):
+    """The terminal frame carries no recipe: a failed attempt, and never a retry."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, {"status": "error",
+                                    "error": "authoring_budget_exhausted"}])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.harness = replace(arm.harness, authoring_mode="unattended")
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error == "authoring_budget_exhausted"
+    assert arm._infra is None                  # not infrastructure, so never retried
+    assert fake.deleted_workflows == []        # nothing was authored
+    free(port)
+
+
+def test_a_triaged_request_ends_as_no_workflow(site, repo):
+    """Not-a-workflow ends `done` with no recipe and an `assistantText` saying why."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, {"status": "done", "workflowId": None,
+                                    "assistantText": "That is a question about the "
+                                                     "product, not a workflow."}])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.harness = replace(arm.harness, authoring_mode="unattended")
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error == ("no_workflow: That is a question about the product, "
+                            "not a workflow.")
+    assert arm._infra is None
+    free(port)
+
+
+def test_a_run_that_performed_no_writes_is_a_failed_attempt(site, repo):
+    """A live run can end `done` having written nothing; the summary says so, and
+    the bench reads that as a failed attempt rather than a normal finish."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER,
+                  run_outcome={"status": "succeeded",
+                               "summary": "Ran 3 nodes, no writes performed"})
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error == "run_no_writes"
+    assert arm._infra is None
+    free(port)
+
+
+def test_a_run_that_wrote_is_still_a_normal_finish(site, repo):
+    """The guard reads the summary, not the status: a run that wrote passes."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER,
+                  run_outcome={"status": "succeeded", "summary": "Ran 3 nodes, 1 write"})
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed" and result.error is None
+    free(port)
+
+
+def test_the_builders_assumptions_are_recorded(site, repo):
+    """`recipe.assumptions` on the done frame is what the builder decided for
+    itself; the row's turn log carries it so the report can show it."""
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", engine_calls=DENVER,
+                  recipe_assumptions=["Used the first matching contact",
+                                      "Assumed the city is Denver"])
+    with FakeMonarch(sc) as fake:
+        arm = arm_against(site, fake, port, repo)
+        arm.harness = replace(arm.harness, authoring_mode="unattended")
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "completed", result.error
+    assert {"assumptions": ["Used the first matching contact",
+                            "Assumed the city is Denver"]} in result.turn_log
     free(port)

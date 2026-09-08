@@ -104,6 +104,44 @@ def _questions_from_log(row: dict) -> int | None:
     return sum(seen.values()) or None
 
 
+def _assumptions(row: dict) -> list[str]:
+    """What the unattended builder decided for itself, from the attempt's turn
+    log: the `{"assumptions": [...]}` entry the arm wrote on the done frame.
+
+    An attempt whose builder assumed nothing, and one whose log is gone, both
+    read as an empty list; the page shows nothing either way.
+    """
+    log = row.get("turn_log")
+    if log is None:
+        log = _turn_log_entries(row, "assumptions")
+    for entry in log or []:
+        if isinstance(entry, dict) and entry.get("assumptions"):
+            return [str(a) for a in entry["assumptions"]]
+    return []
+
+
+def _turn_log_entries(row: dict, needle: str) -> list[dict]:
+    """The attempt's stored turn log, filtered to the lines naming `needle`."""
+    uri = row.get("artifacts_uri")
+    if not uri:
+        return []
+    try:
+        text = (Path(uri) / "turns.jsonl").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        if needle not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+
 # The retry a plan asks for with `retry_on_fail`: one extra attempt at a prompt
 # whose first attempt failed. The orchestrator writes it as trial 1 carrying
 # this flag, so the report can tell a retry apart from a second repetition.
@@ -354,9 +392,10 @@ def _builder_outcome(row: dict, phase: dict | None) -> str:
     from the user than the request gave it. Both are distinguished from an
     error and from a timeout because these mean different things to a reader.
     """
-    if "no_workflow" in (row.get("flags") or []):
-        return "declined"
     error = str(row.get("error") or "")
+    # The arm writes the decline as the error; the flag is the older shape.
+    if "no_workflow" in (row.get("flags") or []) or error.startswith("no_workflow:"):
+        return "declined"
     if error.startswith("needs_input:"):
         return "needs_input"
     if phase is None:
@@ -366,7 +405,9 @@ def _builder_outcome(row: dict, phase: dict | None) -> str:
     if termination == "timeout" and not row.get("phases", {}).get(DISPATCH_PHASE):
         return "timeout"
     if termination == "agent_error":
-        return "error"
+        # A run that wrote nothing is dispatch's failure, not the builder's: the
+        # builder produced a workflow, and the engine ran it to the end.
+        return "done" if error == "run_no_writes" else "error"
     return "done"
 
 
@@ -384,6 +425,10 @@ def _dispatch_outcome(row: dict, phase: dict | None) -> str:
     if row.get("gate_refusals"):
         return "refused"
     if termination == "agent_error":
+        # A run that finished having written nothing is not an engine error: the
+        # workflow ran to the end and changed nothing (backend 2ede4b3ee).
+        if str(row.get("error") or "") == "run_no_writes":
+            return "ran, no writes"
         return "error"
     return "success" if row.get("passed") else "failed"
 
@@ -404,6 +449,7 @@ def monarch_attempts(rows: list[dict]) -> list[dict]:
             "task_id": row["task_id"], "trial": row["trial"],
             "builder_outcome": _builder_outcome(row, builder),
             "questions_asked": _questions_asked(row),
+            "assumptions": _assumptions(row),
             "builder_seconds": (builder or {}).get("wall_clock_s"),
             "builder_cost": (builder or {}).get("cost_usd"),
             "dispatch_outcome": _dispatch_outcome(row, dispatch),
@@ -450,8 +496,9 @@ def _outcome_of(attempt: dict) -> str:
         return "builder_or_dispatch_failed"
     if dispatch in ("infrastructure", "refused"):
         return "dispatch_error"
-    if dispatch == "success":
-        # the workflow ran, the checker still says no: the change was not made
+    if dispatch in ("success", "ran, no writes"):
+        # the workflow ran, the checker still says no: the change was not made.
+        # A run that wrote nothing is the same story, said by the engine itself.
         return "ran_not_made"
     return "checker_failed_other"
 

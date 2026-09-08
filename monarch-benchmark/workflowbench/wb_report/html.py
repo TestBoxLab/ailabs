@@ -1255,6 +1255,22 @@ def _time_section(report: dict) -> str:
     return _bar_chart(series, kind="seconds") + _time_section_table(report)
 
 
+def _builder_cell(attempt: dict):
+    """The builder outcome, carrying the builder's own assumptions as a tooltip.
+
+    The unattended builder decides for itself what the request left open, and
+    those decisions explain a great many verdicts. The first three ride on the
+    cell as a `title` (`_table` escapes it); the full list is in the turn log.
+    """
+    assumptions = attempt.get("assumptions") or []
+    if not assumptions:
+        return attempt["builder_outcome"]
+    shown = "; ".join(assumptions[:3])
+    if len(assumptions) > 3:
+        shown += f" (+{len(assumptions) - 3} more)"
+    return (attempt["builder_outcome"], f"assumed: {shown}")
+
+
 def _monarch_section(report: dict) -> str:
     """Section 5: one row per Monarch attempt, builder and dispatch apart.
 
@@ -1273,7 +1289,8 @@ def _monarch_section(report: dict) -> str:
         body += _table(["outcome", "count", "share"], outcome_rows,
                        _source_line_for(report, "monarch"),
                        f"{arm}, attempts by outcome", numeric_from=1)
-        table_rows = [[a["task_id"], _fmt(a["trial"]), a["builder_outcome"],
+        table_rows = [[a["task_id"], _fmt(a["trial"]),
+                       _builder_cell(a),
                        _fmt(a["questions_asked"]),
                        _fmt(a["builder_seconds"], "seconds"),
                        _fmt(a["builder_cost"], "money"), a["dispatch_outcome"],

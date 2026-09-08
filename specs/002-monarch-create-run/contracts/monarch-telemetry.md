@@ -59,6 +59,42 @@ interactive behaviour. The benchmark sends it only when the harness file sets
 `authoring_mode: unattended`; the field is absent in every other run, so the
 body is byte-for-byte what it is today.
 
+Shipped by the Monarch team on 8 Sep 2026 (backend `2ede4b3ee`); the benchmark's
+harness file sets `authoring_mode: unattended` from that date. What the mode
+changes, and how the benchmark reads each ending:
+
+- **No questions.** The stream never emits `awaiting_input`. The benchmark keeps
+  its fixed-reply logic and its `requestId` dedupe; both are harmless.
+- **No inputs.** A recipe with a required input and no default is refused by
+  Monarch's lint and re-emitted, so `INPUT_INVALID` should not occur. §8.3 stays
+  as the benchmark's safety net.
+- **A budget.** The builder gets 30 turns and 20 minutes of wall clock from its
+  first turn. Exhausting it ends the stream with
+  `{"status": "error", "error": "authoring_budget_exhausted"}` and no recipe.
+  The benchmark records it as a failed attempt of the competitor -
+  `termination = "agent_error"`, `error = "authoring_budget_exhausted"` - and
+  never as infrastructure, so the episode's infrastructure retry does not see it.
+- **`authoring_account_choice_required`** cannot occur in the bench catalogue; if
+  it ever does, the benchmark reads it like today's account prompt
+  (`account_requested`).
+- **Triage.** A request classified as not a workflow ends `done` with no
+  `recipe`, and `assistantText` says why. The benchmark records
+  `termination = "agent_error"`, `error = "no_workflow: <assistantText, first
+  200 characters>"` - the same ending as a decline.
+- **Assumptions.** The builder's own decisions arrive as `recipe.assumptions`, a
+  list of strings on the done frame. The benchmark writes them to the attempt's
+  turn log as one `{"assumptions": [...]}` entry and shows the first three on the
+  report's per-attempt Monarch table, as a tooltip on the builder cell.
+
+## 1b. A run that performed no writes
+
+A live run can end `done` having completed none of its write nodes. Monarch says
+so in the run's `summary`, which ends with `, no writes performed`, and the run's
+`result` carries a `## Effect` section. A workflow that changed nothing did not
+do the task, so the benchmark reads such a run as a failed attempt:
+`termination = "agent_error"`, `error = "run_no_writes"`, and the report's
+dispatch outcome reads "ran, no writes" rather than "success".
+
 **The trace id in the frames is the primary join.** Every authoring SSE frame
 carries `traceId`, so the benchmark collects the ids it saw and fetches those
 traces by id (`GET /api/public/traces/<id>`), which is exact and needs no

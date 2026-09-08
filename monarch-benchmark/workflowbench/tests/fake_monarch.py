@@ -66,6 +66,9 @@ class Scenario:
     # The recipe's declared inputs: [{name, label, type, required, default?}, ...].
     # Served on the done frame's `recipe` and on the workflow detail.
     recipe_inputs: list[dict] = field(default_factory=list)
+    # The builder's own decisions, served on the done frame's `recipe`
+    # (unattended authoring; backend 2ede4b3ee).
+    recipe_assumptions: list[str] = field(default_factory=list)
     # The recipe version has an LLM loop, so it must be acked before it may run.
     has_llm_loop: bool = False
 
@@ -468,8 +471,13 @@ class FakeMonarch:
                     time.sleep(sc.delay_s.get("frame", 0))
                     if sc.unique_workflow_ids and frame.get("workflowId"):
                         frame = {**frame, "workflowId": outer._workflow_of(run_id)}
-                    if sc.recipe_inputs and frame.get("status") == "done":
-                        frame = {**frame, "recipe": {"inputs": sc.recipe_inputs}}
+                    if ((sc.recipe_inputs or sc.recipe_assumptions)
+                            and frame.get("status") == "done"):
+                        recipe = {**(frame.get("recipe") or {}),
+                                  "inputs": sc.recipe_inputs}
+                        if sc.recipe_assumptions:
+                            recipe["assumptions"] = sc.recipe_assumptions
+                        frame = {**frame, "recipe": recipe}
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     with outer._lock:
                         outer._frames_sent[run_id] = i + 1

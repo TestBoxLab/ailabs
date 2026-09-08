@@ -47,6 +47,17 @@ RECIPE_CHECK_BUDGET_S = 60.0
 # the only cure for the leftover of a timed-out attempt.
 ACTIVE_RUN_WAIT_S = 60.0
 
+# The unattended builder runs on a fixed budget (30 turns, 20 minutes of wall
+# clock from its first turn; backend 2ede4b3ee). Exhausting it is the
+# competitor's own failure: the row records it bare, and the episode's
+# infrastructure retry never sees it.
+BUDGET_EXHAUSTED = "authoring_budget_exhausted"
+
+# A live run can finish `done` having completed no write node. The engine says
+# so in the run's `summary`; the bench reads such a run as a failed attempt,
+# because a workflow that changed nothing did not do the task.
+NO_WRITES = "no writes performed"
+
 # A refusal the bench's own setup caused, not the workflow's: retried, and out of
 # the pass-rate denominator (FR-010, FR-011). Anything else is the workflow's fault.
 SETUP_REFUSALS = {"RUN_HOST_BLOCKED", "ENGINE_UNAVAILABLE", "RUN_ALREADY_ACTIVE"}
@@ -495,12 +506,21 @@ class MonarchArm:
                                 # The declaration the run must satisfy; the
                                 # workflow detail is the fallback (_declared_inputs).
                                 self._done_recipe = frame.get("recipe")
+                                assumptions = (self._done_recipe or {}).get("assumptions")
+                                if assumptions:
+                                    # What the unattended builder decided for
+                                    # itself; the report shows it beside the row.
+                                    res.turn_log.append({"assumptions": assumptions})
                                 if not workflow_id:
-                                    # Monarch finished by declining to build one.
+                                    # Monarch finished by declining to build one:
+                                    # either it declined, or triage read the
+                                    # request as not a workflow (unattended, and
+                                    # `assistantText` is where it says why).
                                     # There is nothing to run, and reading it as
                                     # success recorded `completed` for an attempt
                                     # that did nothing (live, 4 Sep 2026).
-                                    message = frame.get("message") or ""
+                                    message = (frame.get("message")
+                                               or frame.get("assistantText") or "")
                                     res.termination = "agent_error"
                                     res.error = f"no_workflow: {message[:200]}"
                                 done = True
@@ -509,7 +529,12 @@ class MonarchArm:
                                 message = frame.get("error")
                                 self._infra = _classify_authoring_error(message)
                                 res.termination = "agent_error"
-                                res.error = f"authoring_error: {message}"
+                                # The unattended builder's fixed budget (30 turns,
+                                # 20 minutes) is the competitor's own failure, so
+                                # it is recorded bare and never retried as infra.
+                                res.error = (BUDGET_EXHAUSTED
+                                             if message == BUDGET_EXHAUSTED
+                                             else f"authoring_error: {message}")
                                 done = True
                                 break
                             if status == "awaiting_input":
@@ -679,6 +704,9 @@ class MonarchArm:
                         res.termination = "agent_error"
                         res.error = (f"run_error:{out.get('errorCode')} "
                                      f"node={out.get('errorNodeId')}")
+                    elif NO_WRITES in (out.get("summary") or ""):
+                        res.termination = "agent_error"
+                        res.error = "run_no_writes"
                     return
                 time.sleep(self.POLL_INTERVAL_S)
         finally:
