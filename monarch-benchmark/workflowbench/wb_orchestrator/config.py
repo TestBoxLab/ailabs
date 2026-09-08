@@ -23,6 +23,9 @@ from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
 MODES = ("full-flow", "create-run", "run-only")
+# Evaluation track (direction of 7 Sep 2026): a one-off agentic request, or workflow
+# creation plus execution. Results are never pooled across tracks.
+TRACKS = ("agentic-request", "create-run")
 AUTHORING_MODES = ("interactive", "unattended")   # how Monarch is asked to build (002)
 PROVIDERS = ("anthropic", "openai", "google", "zai", "moonshot", "fireworks")
 EFFORTS = ("xhigh", "high", "medium", "low", "none")
@@ -155,6 +158,7 @@ class Plan:
     approved_by: str | None
     description: str | None = None
     retry_on_fail: int = 0   # extra attempts a failed prompt gets, on top of `repetitions`
+    track: str = "create-run"  # TRACKS; the default keeps the hash of plans written before the key
 
 
 # ---------------------------------------------------------------- checks
@@ -427,7 +431,7 @@ def load_plan(path) -> Plan:
     c = _read(path, "plan")
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
             "baseline", "audience", "cost_ceiling_usd", "approved_by"),
-           ("description", "retry_on_fail"))
+           ("description", "retry_on_fail", "track"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -453,6 +457,7 @@ def load_plan(path) -> Plan:
         approved_by=approved,
         description=c.get("description", str),
         retry_on_fail=c.get("retry_on_fail", int, minimum=0, default=0),
+        track=c.get("track", str, enum=TRACKS, default="create-run"),
     )
 
 
@@ -633,6 +638,10 @@ class RunConfig:
             # A plan that asks for no retry is the plan it was before the key
             # existed, and keeps the hash its stored runs were recorded under.
             del plan["retry_on_fail"]
+        if plan["track"] == "create-run":
+            # Same rule: the default track is what every plan was before the key
+            # existed. Another track is a different measurement and moves the hash.
+            del plan["track"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
              "product": asdict(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},
