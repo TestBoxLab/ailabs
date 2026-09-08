@@ -322,3 +322,55 @@ def test_doctor_offline_monarch_checks_need_nothing(tmp_path, capsys):
     """`--arms monarch` without the probe spends nothing, so it needs no operator."""
     assert wb(tmp_path, "doctor", "--arms", "monarch") in (0, 1)
     assert not (tmp_path / "budget.sqlite3").exists()
+
+
+
+# -- M5: a fresh, passing verification admits the Monarch competitor ----------------------
+
+def _write_probe(tmp_path, monkeypatch, **overrides):
+    import json
+    from datetime import datetime, timezone
+    monkeypatch.setenv("STUDIO_DATA_DIR", str(tmp_path / "data"))
+    folder = tmp_path / "data" / "studio"
+    folder.mkdir(parents=True, exist_ok=True)
+    record = {"checked_at": datetime.now(timezone.utc).isoformat(), "ok": True,
+              "backend_host": "127.0.0.1:4174", "version": "monarch@abc1234",
+              "checks": [{"name": "backend", "ok": True, "detail": "200"}]}
+    record.update(overrides)
+    (folder / "enterprise-probe.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_monarch_competitor_is_admitted_by_a_fresh_passing_verification_of_its_instance(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    monkeypatch.setenv("STUDIO_DATA_DIR", str(tmp_path / "data"))
+    harness = SimpleNamespace(kind="monarch", base_url="${MONARCH_URL}")
+    env = {"MONARCH_URL": "http://127.0.0.1:4174"}
+    missing = approvals.competitor_reason(harness, env)
+    assert missing.startswith(approvals.MONARCH_REASON) and "wb monarch verify" in missing
+    _write_probe(tmp_path, monkeypatch)
+    assert approvals.competitor_reason(harness, env) is None
+    _write_probe(tmp_path, monkeypatch, backend_host="other.example:4174")
+    assert "other.example:4174" in approvals.competitor_reason(harness, env)
+    _write_probe(tmp_path, monkeypatch, ok=False, checks=[{"name": "session", "ok": False, "detail": "401"}])
+    assert "session" in approvals.competitor_reason(harness, env)
+    _write_probe(tmp_path, monkeypatch, checked_at=(datetime.now(timezone.utc) - timedelta(hours=3)).isoformat())
+    assert "older than 2 hours" in approvals.competitor_reason(harness, env)
+    assert approvals.competitor_reason(SimpleNamespace(kind="monarch", base_url="${UNSET_URL}"), {}).startswith(approvals.MONARCH_REASON)
+
+
+def test_wb_monarch_verify_prints_every_check_and_exits_on_the_verdict(tmp_path, monkeypatch, capsys):
+    from wb_orchestrator.cli import main
+    from wb_studio import enterprise
+    monkeypatch.setenv("STUDIO_DATA_DIR", str(tmp_path / "data"))
+    passing = {"ok": True, "version": "monarch@abc1234", "front_door": "https://studio.example/front-door",
+               "checks": [{"name": "backend", "ok": True, "detail": "200"}, {"name": "session", "ok": True, "detail": "logged in"}]}
+    monkeypatch.setattr(enterprise, "verify", lambda studio: passing)
+    assert main(["monarch", "verify"]) == 0
+    out = capsys.readouterr().out
+    assert "[OK ] backend: 200" in out and "monarch@abc1234" in out and "may launch" in out
+    failing = {**passing, "ok": False, "checks": [{"name": "knowledge_base", "ok": False, "detail": "bench-gmail drifted"}]}
+    monkeypatch.setattr(enterprise, "verify", lambda studio: failing)
+    assert main(["monarch", "verify"]) == 1
+    captured = capsys.readouterr()
+    assert "[NO ] knowledge_base: bench-gmail drifted" in captured.out and "stay refused" in captured.err

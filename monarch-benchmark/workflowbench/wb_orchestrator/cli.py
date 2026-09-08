@@ -618,6 +618,23 @@ def cmd_monarch_setup(args) -> int:
         return 2
 
 
+def cmd_monarch_verify(args) -> int:
+    """Check the Monarch instance the harness names and record it for the launchers (M5)."""
+    from wb_studio import enterprise
+    from wb_studio.app import Studio
+    studio = Studio(tasks=[])
+    record = enterprise.verify(studio)
+    for check in record["checks"]:
+        print(f"[{'OK ' if check['ok'] else 'NO '}] {check['name']}: {check['detail']}")
+    print(f"served build: {record.get('version') or 'unknown'}   front door: {record.get('front_door') or 'n/a'}")
+    print(f"record: {enterprise.probe_path(studio)}")
+    if record["ok"]:
+        print("Monarch competitors may launch against this instance for the next two hours.")
+        return 0
+    print("Monarch competitors stay refused until every check passes.", file=sys.stderr)
+    return 1
+
+
 def cmd_monarch_knowledge(args) -> int:
     """The lab seeds: stock seeds plus a knowledge catalog's descriptions; imports nothing."""
     try:
@@ -835,6 +852,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="the catalog-to-action table; default: <product>.knowledge-map.yaml "
                          "next to the product file")
     ms.set_defaults(fn=cmd_monarch_setup)
+    mv = msub.add_parser("verify", help="check the Monarch instance (backend, session, knowledge base, "
+                                        "Langfuse) and record it; a passing record admits Monarch competitors "
+                                        "for two hours")
+    mv.set_defaults(fn=cmd_monarch_verify)
     mk = msub.add_parser("knowledge",
                          help="write the lab seeds: the stock seeds with action descriptions "
                               "from a reviewed knowledge catalog, plus KNOWLEDGE-MAPPING.yaml "

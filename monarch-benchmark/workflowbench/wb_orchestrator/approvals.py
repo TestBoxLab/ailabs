@@ -15,7 +15,12 @@ stay refused with the milestone that unblocks them.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import urlparse
 
 from wb_orchestrator.config import SMOKE_SCALE_ATTEMPTS
 
@@ -27,6 +32,7 @@ NO_OPERATOR = ("WB_OPERATOR is not set: a paid launch names the person launching
                "(set WB_OPERATOR=<name> in the environment)")
 MONARCH_REASON = "Monarch instance not verified: milestone M5"
 NATIVE_REASON = "native runtime not verified: milestone M7"
+VERIFY_HINT = "run `wb monarch verify` (or Verify in the Studio) against the instance"
 
 
 class ApprovalError(Exception):
@@ -53,9 +59,51 @@ def capabilities() -> dict[str, str | None]:
     return {"api": None, "monarch": MONARCH_REASON, "native": NATIVE_REASON}
 
 
-def competitor_reason(harness) -> str | None:
+def _probe_site() -> SimpleNamespace:
+    """Where the verification record lives: the Studio's folder (a hosted bench keeps it on its volume)."""
+    root = Path(__file__).resolve().parents[1]
+    data = os.environ.get("STUDIO_DATA_DIR")
+    return SimpleNamespace(directory=Path(data) / "studio" if data else root / "out" / "studio")
+
+
+def monarch_reason(harness, env) -> str | None:
+    """None when a fresh, passing verification names this harness's instance; else why not.
+
+    The record is the one `wb monarch verify` and the Studio's Verify write
+    (`wb_studio.enterprise.verify`): backend, session, knowledge base and
+    Langfuse checked against the deployment, no model money spent. It admits
+    Monarch competitors for `PROBE_TTL` (two hours), for that backend only.
+    """
+    from wb_studio import enterprise
+    from wb_orchestrator.monarch_setup import Stop, expand
+    probe = enterprise.load_probe(_probe_site())
+    if probe is None:
+        return f"{MONARCH_REASON}; {VERIFY_HINT}"
+    try:
+        checked = datetime.fromisoformat(probe["checked_at"])
+    except (KeyError, TypeError, ValueError):
+        return f"{MONARCH_REASON}; the last record carries no valid time; {VERIFY_HINT}"
+    if checked.tzinfo is None:
+        checked = checked.replace(tzinfo=timezone.utc)
+    hours = int(enterprise.PROBE_TTL.total_seconds() // 3600)
+    if datetime.now(timezone.utc) - checked > enterprise.PROBE_TTL:
+        return f"{MONARCH_REASON}; the last verification is older than {hours} hours; {VERIFY_HINT}"
+    if not probe.get("ok"):
+        failed = ", ".join(c.get("name", "?") for c in probe.get("checks", []) if not c.get("ok")) or "unknown check"
+        return f"{MONARCH_REASON}; the last verification failed ({failed}); {VERIFY_HINT}"
+    try:
+        host = urlparse(expand(harness.base_url, env, "base_url")).netloc
+    except Stop as stop:
+        return f"{MONARCH_REASON}; {stop.message}"
+    if probe.get("backend_host") != host:
+        return (f"{MONARCH_REASON}; the last verification was of {probe.get('backend_host')}, "
+                f"this harness names {host}; {VERIFY_HINT}")
+    return None
+
+
+def competitor_reason(harness, env=None) -> str | None:
     if harness.kind == "monarch":
-        return MONARCH_REASON
+        return monarch_reason(harness, os.environ if env is None else env)
     if harness.kind == "cli":
         return NATIVE_REASON
     return None   # scripted checks are free; the API loop reserves per request
@@ -74,7 +122,7 @@ def launch_readiness(rc, env) -> list[str]:
         reasons.append(NO_OPERATOR)
     named: dict[str, list[str]] = {}
     for c in rc.competitors:
-        reason = competitor_reason(c.harness)
+        reason = competitor_reason(c.harness, env)
         if reason:
             named.setdefault(reason, []).append(c.name)
     for reason, names in named.items():

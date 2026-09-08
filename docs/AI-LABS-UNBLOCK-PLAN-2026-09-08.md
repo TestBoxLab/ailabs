@@ -74,10 +74,12 @@ first two are Lucas's because they change Carlos's shared instance and carry its
    `railway variables --service ailabs-studio --set 'MONARCH_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}' --set 'MONARCH_FD_URL=https://${{fdapi.RAILWAY_PUBLIC_DOMAIN}}' --set 'FD_API_SHARED_SECRET=${{fdapi.FD_API_SHARED_SECRET}}' --set 'MONARCH_PASSWORD=${{backend.SEED_ADMIN_PASSWORD}}' --set 'LANGFUSE_OTLP_AUTH=${{backend.LANGFUSE_OTLP_AUTH}}' --set 'LANGFUSE_URL=https://us.cloud.langfuse.com' --set 'FRONT_DOOR_URL=https://ailabs-studio-production.up.railway.app/front-door' --set 'BENCH_ORG_ID=<from railway.env>'`
    (run under `MSYS_NO_PATHCONV=1` in Git Bash). The bench derives the Langfuse key pair from
    the OTLP header. `MONARCH_BUILD` and `MONARCH_ATTEMPT_CEILING_USD=3.00` are already set.
-3. Flip the Monarch competitor readiness once the Studio's Enterprise probe passes against
-   the instance (`/api/architectures/enterprise/verify`), and launch Monarch rounds from the
-   web app; CLI rounds with Monarch from a laptop still need a tunnel, which this machine
-   does not have (no ngrok).
+3. Verify the instance: `uv run --frozen wb monarch verify` from the bench (or Verify in the
+   Studio). A passing record (backend, session, knowledge base, Langfuse) admits the Monarch
+   competitors in `wb run` and in the Studio for two hours, for that backend only; the refusal
+   otherwise says which check failed. Monarch rounds then launch from the web app (its front
+   door is on Railway); CLI rounds with Monarch from a laptop still need a tunnel, which this
+   machine does not have (no ngrok).
 
 The lab instance (second Railway instance from `ailabs-deploy` with the lab seeds from
 `wb monarch knowledge`) and Claude Code in a container (M7) remain open.
