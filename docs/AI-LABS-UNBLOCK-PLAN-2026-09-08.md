@@ -52,7 +52,21 @@ against US$ 299.60 available). Command, from `monarch-benchmark/workflowbench`:
 WB_OPERATOR=lucas uv run --frozen wb run --product simulated-apps --plan achievable-50-bare-request
 ```
 
-**Monarch arms, state at 23:30.** The fork tree is not only on Carlos's machine after all:
+**Monarch stock arm, state at 8 Sep 20:50 (local).** Done from this session after Lucas opened
+permissions: `fdapi` redeployed from the `ailabs-deploy` tree with the hosted-front-door seeds,
+47 apps imported (`wb monarch setup`, knowledge file re-pinned, commit c49485b), the hosted
+Studio wired to the instance through Railway references, `wb monarch verify` and the Studio's
+Verify both passing (backend, session, knowledge base, Langfuse), readiness `ready`,
+`launchable: true`. Pilot `monarch-pilot-001` from the web app: one task, one attempt, 409
+recorded actions, workflow authored and executed through
+`https://ailabs-studio-production.up.railway.app/front-door`, US$ 1.52 settled into the hosted
+ledger; the task check failed (a quality outcome, not a wiring failure). **Monarch rounds
+launch from the web app**: a Studio job with the 50 `achievable-50` tasks and the architecture
+`default-monarch-enterprise`, beside the Opus 5 runner for Without Monarch; the attempt ceiling
+is US$ 3.00, so 50 attempts reserve at most US$ 150. CLI rounds with Monarch from a laptop still
+need a tunnel (this machine has none), so the CLI plans keep the bare arms only.
+
+**Earlier note (23:30), kept for the record.** The fork tree is not only on Carlos's machine after all:
 `origin/ailabs/unattended-authoring` in `TestBoxLab/monarch` carries the deployed commit
 `2ede4b3e` (plus one), the Railway Dockerfiles, the direct-Anthropic provider and the FD
 migrations; it is checked out as branch `ailabs-deploy` in `C:/Users/Lucas Wakigawa/Documents/monarch`.
