@@ -420,9 +420,19 @@ def test_achievable_50_frozen_set_matches_the_corpus_and_its_manifest():
     ids = slate.read_ids(REPO / "tasks" / "achievable-50-ids.txt").ids
     assert [row["task"] for row in m["tasks"]] == sorted(ids)
     assert m["count"] == 50 and sum(m["count_per_domain"].values()) == 50
+    # The originals live in the corpus folders the manifest records (a re-freeze may
+    # have moved the set to another revision's corpus, e.g. corpus-evalrepair10/).
+    folders = {}
+    for entry in m.get("corpus") or []:
+        folder = Path(entry["dir"])
+        if not folder.is_absolute():
+            folder = REPO / folder
+        elif not folder.is_dir() and "workflowbench" in folder.parts:
+            folder = REPO.joinpath(*folder.parts[folder.parts.index("workflowbench") + 1:])
+        folders[entry["domain"]] = folder
     for row in m["tasks"]:
         copy = out / f"{row['task']}.json"
-        original = REPO / "corpus" / f"imported-{row['domain']}" / copy.name
+        original = folders.get(row["domain"], REPO / "corpus" / f"imported-{row['domain']}") / copy.name
         assert copy.read_bytes() == original.read_bytes(), row["task"]
         task = load_task_file(copy)
         assert row["contract_sha256"] == task["contract_sha256"] == contract_hash(task), row["task"]
