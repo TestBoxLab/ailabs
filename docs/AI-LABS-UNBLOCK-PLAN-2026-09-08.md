@@ -31,17 +31,32 @@ claim about today's state was checked on 8 September on Lucas's machine, branch
 | # | Capability | Today |
 |---|---|---|
 | 1 | A clean checkout reproduces the offline baseline | Done: 1091 tests pass, 3 skipped, 11 min |
-| 2 | A paid round launches from the CLI or the Studio inside the weekly ledger: maximum spend reserved before dispatch, settled from the provider receipt, reconciled against billing | Blocked: `wb run`, `wb resume`, paid `wb doctor` and `wb monarch recipes` refuse every paid competitor; the Studio offers bounded single requests only |
-| 3 | Frozen task sets of any stated size, drawn by rule or listed by id, hashed before any competitor runs, on the chosen suite revision | Partial: ten-task draws only; no command freezes a set from a list of ids; corpus on 1.0.6 `4a8e106` |
-| 4 | Competitors: bare API loop, Claude Code, stock Monarch, Lucas's versioned Monarch experiments | API loop configured but gated; Claude Code refused (fail-closed stub); no Monarch instance reachable; no graph-version import |
-| 5 | Two tracks kept apart | Partial: Studio jobs are one-off only; CLI plans are create + run only; no `track` field |
+| 2 | A paid round launches from the CLI or the Studio inside the weekly ledger: maximum spend reserved before dispatch, settled from the provider receipt, reconciled against billing | **Done for API-loop competitors (8 Sep night):** every provider request is reserved, claimed and settled (`wb_arms/reservations.py`); the round's maximum liability is admitted before the first attempt; `wb budget reconcile` imports usage exports; `wb doctor` probes go through the ledger (bare Opus 5 verified, US$ 0.013). Monarch and native competitors stay refused until M5 and M7 |
+| 3 | Frozen task sets of any stated size, drawn by rule or listed by id, hashed before any competitor runs, on the chosen suite revision | **Done:** `wb corpus slate` freezes a set from an id list with a manifest; `tasks/achievable-50` is frozen on `1.0.6+evalrepair.10` (50 prompts, two ids also in tier sets, recorded); the corpus is re-imported as `corpus-evalrepair10/` (800 usable); a set runs only on the world it was imported under |
+| 4 | Competitors: bare API loop, Claude Code, stock Monarch, Lucas's versioned Monarch experiments | Bare API loop **ready** (doctor passed through the ledger). Claude Code still refused (M7). Stock Monarch: Carlos's Railway instance answers (backend, fdapi), the bench env points at it, but rounds need his ngrok front door or the fork tree (M5 T5.0). Lab version: `wb monarch knowledge` generates the lab seeds from the reconstructed catalog (257 of 273 entries mapped) but the builder does not read seed descriptions yet (Deyton) |
+| 5 | Two tracks kept apart | **Done in plans:** `track` is a plan field in the config hash; two gauntlet plans per set. Studio jobs still one-off only (M4) |
 | 6 | Evidence per attempt: event journal, snapshots, manifests, regrade revisions | Done offline (feature 007) |
 | 7 | Reports: round page, paired comparisons with source lines, cross-round summary, Studio outcomes, evidence drilldowns | Round page, summary and Studio outcomes done; drilldowns and per-domain views partial |
 | 8 | Research loop: experiment registry with duplicate check, pre-registration, Trello status, weekly readout | Scaffolding only (`research/`, empty experiment ledger) |
-| 9 | Approval flow per D5 | Not built: `approved_by` is a string checked at resolve |
+| 9 | Approval flow per D5 | **Done:** `WB_OPERATOR` names the launcher; Lucas's launches run, others create an approval request (`wb approvals`, `wb approve`, `wb deny`, `wb run --request`); `approved_by` in plan files is ignored; constitution §IV and `CLAUDE.md` updated |
 
 The lab is functional when rows 2, 3, 4, 5 and 9 are done and one pre-registered paid round
 has run end to end from each front door with its report.
+
+**Ready to trigger on 8 September, 23:00:** the control-only gauntlet rounds
+`achievable-50-bare-request` and `achievable-50-bare-workflow` (bare Opus 5 beside the answer
+key, 50 prompts, 100 attempts per competitor, ceiling US$ 40 each, liability US$ 40 admitted
+against US$ 299.60 available). Command, from `monarch-benchmark/workflowbench`:
+
+```bash
+WB_OPERATOR=lucas uv run --frozen wb run --product simulated-apps --plan achievable-50-bare-request
+```
+
+Not ready: the two Monarch arms (M5 T5.0 waits on Carlos's fork tree; the seeds pin his
+front door) and Claude Code (M7). The hosted Studio at
+https://ailabs-studio-production.up.railway.app runs the merged tree behind its login; it does
+not hold the Monarch connection secrets (set them as Railway variables when the instances
+are ready).
 
 ## 3. Where we are on 8 September
 
