@@ -74,6 +74,39 @@ changed since. Like the knowledge-base file, it is committed only after the
 command has run against a live Monarch — it is a paid step. Field table and full
 example: `specs/004-monarch-run-only/contracts/config-files.md`.
 
+## products/<name>.knowledge-map.yaml
+
+The explicit table behind the lab seeds (unblock plan of 8 Sep 2026, M6): one
+row per entry of a reviewed knowledge catalog, naming the bench action that
+performs the entry's operation over the simulated app (`zapier:<app>_<tool>`
+on the left, `bench-<app>:<verb>:<object>` on the right), plus `notes` saying
+why a row is what it is and why an entry has none. Hand-written from the data,
+never derived: the catalog's ids are AutomationBench's Zapier tools, the seeds'
+are REST routes, and no rule maps one onto the other. `wb monarch knowledge`
+refuses a row whose action the generator does not produce. The shipped table
+(`simulated-apps.knowledge-map.yaml`) covers 257 of the PG-Waki catalog's 273
+entries; the 16 without a row are listed with their reasons.
+
+## `wb monarch knowledge --knowledge <catalog.json> [--out out/monarch-seeds-lab] [--front-door <url>]`
+
+Free, offline, imports nothing. Writes the lab seeds: the stock seeds
+(`wb monarch setup` step 1) with `business_action.description` enriched from
+the catalog through the table above -- purpose, what the action does not do,
+whether repeating it is safe, where the records sit in the response (only
+where the seed's own schema reaches that path) and what its arguments mean
+(only for parameters the seed has) -- and each product's paragraph prefixed
+"Product:" on its first action. Ids, verbs, url templates, parameters,
+extracts, schemas and `_meta.json` are byte-identical to the stock set, so
+both validate alike and run alike. Also writes `<out>/KNOWLEDGE-MAPPING.yaml`
+(the catalog's sha256, the rule, the counts, every pair, the entries without
+a row, the actions without an entry) and puts `knowledge_sha256` and
+`knowledge_source` into `ok.txt` next to the seed version. Same inputs, same
+bytes. `wb monarch setup --knowledge <catalog.json>` runs the same step
+before validating, checking and importing, and records the two fields in the
+knowledge-base hash file, so a lab instance's file says what it was taught.
+Note: the SPEC stores `description` but does not serve it to the builder
+today; making the builder read it is a Monarch-side change.
+
 ## plans/pilot-monarch-run-only.yaml
 
 The paired pilot plan for feature 004: `run-only` mode, the same 10 tasks, 2
