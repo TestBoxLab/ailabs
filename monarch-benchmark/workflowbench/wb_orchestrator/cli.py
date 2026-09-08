@@ -460,7 +460,46 @@ def cmd_corpus(args) -> int:
         return 0 if not r["unmapped"] else 1
     if args.corpus_cmd == "tiers":
         return _corpus_tiers(args)
+    if args.corpus_cmd == "slate":
+        return _corpus_slate(args)
     return 2
+
+
+def _corpus_slate(args) -> int:
+    """Freeze a task set listed by id (unblock plan M2). Offline: no key, no network, no money."""
+    from pathlib import Path
+
+    from wb_orchestrator import slate
+    dirs = [Path(d) for d in (args.corpus or sorted(Path("corpus").glob("imported-*")))]
+    missing = [str(d) for d in dirs if not d.is_dir()]
+    if missing or not dirs:
+        print(f"corpus folder missing or empty: {missing or 'corpus/imported-*'}",
+              file=sys.stderr)
+        return 3
+    if not args.refreeze and not args.ids:
+        print("wb corpus slate needs --ids FILE to freeze a set, or --refreeze to rewrite "
+              "the set its manifest already records", file=sys.stderr)
+        return 2
+    try:
+        r = slate.freeze(args.ids, args.out, because=args.because, dirs=dirs,
+                         refreeze=args.refreeze,
+                         allow_frozen_overlap=args.allow_frozen_overlap)
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        return 3
+    except slate.Refusal as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    text = slate.summary(r)
+    if r.refrozen:
+        text += f" Refrozen because: {args.because}"
+    print(text)
+    print(f"[ok] write {r.out.as_posix()}/ ({r.count} files)")
+    print(f"[ok] write {r.manifest.as_posix()}")
+    return 0
 
 
 def _corpus_tiers(args) -> int:
@@ -711,6 +750,24 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("--corpus", action="append", default=None,
                     help="repeatable; default: every corpus/imported-* folder")
     ct.add_argument("--out", default="tasks", help="where the four folders and the manifest go")
+    cs = csub.add_parser("slate", help="freeze a task set listed by id, with its manifest")
+    cs.add_argument("--ids", default=None,
+                    help="file with one task id per line; # comments and blank lines allowed; "
+                         "the comment lines become the manifest's selection rule")
+    cs.add_argument("--out", required=True,
+                    help="the set's folder, e.g. tasks/achievable-50; the manifest is written "
+                         "beside it as <name>-manifest.yaml")
+    cs.add_argument("--because", required=True,
+                    help="why the set exists (or, with --refreeze, why it is rewritten); "
+                         "recorded in the manifest")
+    cs.add_argument("--refreeze", action="store_true",
+                    help="rewrite the set from the corpus keeping the ids its manifest "
+                         "records; use after an approval-rule change or a corpus re-import")
+    cs.add_argument("--allow-frozen-overlap", action="store_true",
+                    help="let an id that already sits in another frozen set in; the overlap "
+                         "is recorded in the manifest (a refusal otherwise)")
+    cs.add_argument("--corpus", action="append", default=None,
+                    help="repeatable; default: every corpus/imported-* folder")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("monarch", help="prepare Monarch for a product")

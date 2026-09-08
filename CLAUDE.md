@@ -190,7 +190,7 @@ each stage hands its artifact to the next:
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
-| `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus — including `corpus import-ab --domains all` and `corpus tiers --seed N`, feature 005). |
+| `workflowbench/wb_orchestrator/cli.py` | The `wb` CLI (run, resume, status, doctor, grade, report, corpus — including `corpus import-ab --domains all` and `corpus tiers --seed N`, feature 005, and `corpus slate --ids FILE --out DIR --because TEXT`, which freezes a task set listed by id with its manifest, unblock plan M2; logic in `wb_orchestrator/slate.py`). |
 | `workflowbench/config/` | Benchmark inputs as YAML; a run is one product × one plan (`wb run --product X --plan Y`). See `config/README.md`. |
 | `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`); plus what Monarch was taught (`*.monarch-kb.yaml`) and, for run-only, the known-correct recipe per task (`*.monarch-recipes.yaml`). |
 | `workflowbench/config/models/` | One language model per file: provider, prices, API key name. |
