@@ -68,8 +68,28 @@ has run end to end from each front door with its report.
 - The 50-task gauntlet is the ApplicationBench `achievable50` slate: 50 ids, eight or
   nine per scored domain, no `simple.*` task. All 50 exist in today's corpus and none sits
   in a frozen set. On the new revision they must be re-checked after the import.
-- The PG-Waki graph version behind the 67 % result: being located on Lucas's disk
-  (`Monarch_Main`, `Documents/Codex`); section 4, M6 records the artifact once found.
+- The 67 % result is identified: arm `matrix-v912-opus-max`, Monarch v9.12 with Claude Opus 5
+  at max effort, 403/600 = 67.2 % on suite 1.0.6+evalrepair.10, 26 August 2026, US$ 337.84,
+  paired wins 60 / losses 32 (recovered transcript in `Monarch_Main/_recovery/transcripts/`).
+  The graph file that run consumed is gone with the deleted MonarchBench workspace. The nearest
+  surviving knowledge artifact is the bridge-v8 reviewed catalog
+  `Monarch_Main/ATLAS/backend/config/bridge-v8-zapier-hard50-reviewed-capabilities-enriched-4a8e106-v2.json`
+  (2.2 MB, 273 entries, 43 product contexts, sha256 `7aea3d99…`). The lab version is therefore
+  a **reconstruction** of that lineage, never "the 67 % artifact".
+- Carlos's Railway deployment (`monarch-dev`, workspace "Waki's Projects", Lucas is admin) runs
+  a fork branch `feat/railway-dev-deploy` that exists only on Carlos's machine (deployed
+  commit `2ede4b3e`, 8 September). It carries the direct-Anthropic provider, the Railway
+  Dockerfiles and HTTP transports, the telemetry contract and the seeds. Stock Enterprise on
+  GitHub is Bedrock-only and strips direct keys; the fork is what runs Opus 5 through Anthropic.
+  On 8 September evening: backend, fdapi and the orchestrator answer; the `web` service's last
+  deploy failed.
+- Every seed embeds the front-door host (Carlos's ngrok domain) in its `url_template`, so a
+  round can only run from a machine whose front door answers on that domain. Moving the front
+  door means regenerating the seeds and redeploying `fdapi` from the fork tree.
+- The Studio is hosted: https://ailabs-studio-production.up.railway.app (service `ailabs-studio`
+  in `monarch-dev`, HTTP Basic Auth, volume at `/data` for jobs and the ledger, deployed from the
+  repo root with `railway up --service ailabs-studio --no-gitignore`; see `Dockerfile` and
+  `.railwayignore`).
 
 ## 4. Milestones, in dependency order
 
@@ -165,6 +185,15 @@ Fireworks, Gemini adapters), `_paid_launch_blocked` in `wb_orchestrator/cli.py`.
 
 ### M5. Two Monarch instances on Railway, Opus 5 through Anthropic (3 to 5 days, Lucas; Deyton for the operator API)
 
+Blocker found on 8 September: the served code is the fork branch on Carlos's machine, and the
+seeds pin his ngrok domain as the front door. Until Carlos hands over the fork tree (a git
+bundle is enough), a second instance cannot be built and the seeds cannot be re-pointed; the
+stock instance can be driven only while his tunnel is up. T5.0 below comes first.
+
+- T5.0 Carlos: `git bundle create monarch-railway.bundle feat/railway-dev-deploy` and hand it
+  over; Lucas checks it out beside the repo. Never run `railway-ops.sh up` or `unlock` from a
+  plain `main` checkout: `railway up` uploads the working tree and would replace the fork build.
+
 Exists: `wb_arms/monarch.py`, `monarch_client.py`, `http_shim.py` (create + run, streams,
 front door, Langfuse cost), `wb_studio/enterprise.py` (probe, readiness, frozen manifest),
 `wb monarch setup`, seeds v5.2, `tests/test_monarch_live.py`, the Railway ops script.
@@ -191,13 +220,16 @@ front door, Langfuse cost), `wb_studio/enterprise.py` (probe, readiness, frozen 
 
 ### M6. The PG-Waki graph version in the lab instance (2 to 3 days once the artifact is located)
 
-- T6.1 Locate the artifact behind the 67 % result and its run record; record path, bytes,
-  sha256, schema, counts, suite revision and run ids in
-  `research/architectures/pg-waki/<version>/provenance.md`. If the record cannot be tied to
-  a concrete graph file, the version is labelled "reconstructed" and never as the 67 % run.
-- T6.2 Import path on the Enterprise side: confirm whether Feature Discovery or the
-  product-graph source accepts a graph version import over the API; if not, Deyton adds the
-  endpoint. The bench never writes to Postgres directly.
+- T6.1 Done on 8 September: the run record is identified (section 3) and the consumed graph
+  file is gone. Record the reconstruction in `research/architectures/pg-waki/v1/provenance.md`:
+  source catalog path, bytes, sha256, entry and product counts, the run id it descends from,
+  the label "reconstructed".
+- T6.2 Confirmed on 8 September: no Enterprise or Feature Discovery route accepts a knowledge
+  artifact. Product knowledge is imported from fixture folders shipped in the fdapi image
+  (`POST /v1/seeds/<slug>/import` replays a committed fixture). So "seeding the graph" means:
+  generate lab seeds whose action descriptions, non-effects, record locations and relationships
+  come from the reconstructed catalog, ship them as fixtures of the lab instance's fdapi, import
+  by slug, grant to the lab organisation. The bench never writes to Postgres directly.
 - T6.3 `wb monarch graph import --instance lab --graph <file> --version <name>`: converts the
   artifact to the import format, imports it, reads back the hash, writes it to the lab's
   knowledge file; drift refusal before every round; the hash sits in the competitor name.
