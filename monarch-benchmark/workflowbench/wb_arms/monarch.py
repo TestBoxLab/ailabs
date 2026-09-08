@@ -396,6 +396,8 @@ class MonarchArm:
             self._execute(client, ep, workflow_id, deadline, res, ids)
             return res
         finally:
+            if self.harness.builder_experiment and workflow_id is None:
+                workflow_id = ids.get("workflowId")
             if workflow_id and self.keep_workflows:
                 # `wb monarch recipes` decides keep-or-delete from the checker's
                 # verdict, which needs the snapshot this attempt has not taken yet,
@@ -429,12 +431,20 @@ class MonarchArm:
                      deadline=deadline)
         return len(questions)
 
-    def _cancel(self, client, recipe_run: str) -> None:
+    def _cancel(self, client, recipe_run: str):
         """Best effort: a cancel that fails must not hide why the attempt ended."""
         try:
-            client.cancel(recipe_run, deadline=time.monotonic() + 30)
-        except (InfraError, MonarchRefused):
-            pass
+            return client.cancel(recipe_run, deadline=time.monotonic() + 30)
+        except (InfraError, MonarchRefused) as error:
+            return error
+
+    def _cancel_authoring_prototype(self, client, recipe_run: str, res: ArmResult) -> None:
+        response = self._cancel(client, recipe_run)
+        if isinstance(response, dict) and response.get('ok') is True:
+            res.turn_log.append({'authoring_cancel': response})
+        else:
+            raw = str(response) if isinstance(response, BaseException) else response
+            res.turn_log.append({'authoring_cancel_error': raw})
 
     def _delete(self, client, workflow_id: str) -> bool:
         """Delete one workflow; remember it for the next attempt if it will not go."""
@@ -468,7 +478,9 @@ class MonarchArm:
         """Stream the authoring run; return the workflow id, or fill `res` and return None."""
         t0 = time.monotonic()
         recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline,
-                                            authoring_mode=self.harness.authoring_mode)
+                                            authoring_mode=self.harness.authoring_mode,
+                                            **({"experiment": self.harness.builder_experiment}
+                                               if self.harness.builder_experiment else {}))
         ids["recipeRunId"] = recipe_run
         workflow_id, questions = None, 0
         answered: set[str] = set()     # a reconnected stream replays the prompt
@@ -483,10 +495,13 @@ class MonarchArm:
                 done = False
                 while not done:
                     try:
-                        frames = client.stream(recipe_run, deadline=deadline)
+                        frames = (client.authoring_snapshots(recipe_run, deadline=deadline)
+                                  if self.harness.builder_experiment else client.stream(recipe_run, deadline=deadline))
                         for frame in frames:
                             res.turn_log.append({"frame": frame})
                             self._note_trace(frame)
+                            if self.harness.builder_experiment and (frame.get("experiment") or {}).get("id") != self.harness.builder_experiment:
+                                raise InfraError("infra:harness_crash", "Persisted builder experiment does not match the requested competitor", retryable=False)
                             status = frame.get("status")
                             if status == "done":
                                 workflow_id = frame.get("workflowId")
@@ -507,7 +522,8 @@ class MonarchArm:
                                 break
                             if status == "error":
                                 message = frame.get("error")
-                                self._infra = _classify_authoring_error(message)
+                                self._infra = (None if self.harness.builder_experiment
+                                               else _classify_authoring_error(message))
                                 res.termination = "agent_error"
                                 res.error = f"authoring_error: {message}"
                                 done = True
@@ -522,11 +538,16 @@ class MonarchArm:
                                 if asked is None:   # an account prompt, or nothing to answer
                                     res.termination = "agent_error"
                                     res.error = "account_requested"
-                                    self._cancel(client, recipe_run)
+                                    if self.harness.builder_experiment:
+                                        self._cancel_authoring_prototype(client, recipe_run, res)
+                                    else:
+                                        self._cancel(client, recipe_run)
                                     done = True
                                     break
                                 questions += asked
                     except InfraError as e:
+                        if self.harness.builder_experiment:
+                            raise
                         # A 404 means the job no longer exists; reconnecting to a
                         # backend that is merely unwell is the deadline's problem.
                         if "404" not in str(e):
@@ -543,14 +564,28 @@ class MonarchArm:
                         time.sleep(self.POLL_INTERVAL_S)
             except EpisodeTimeout as e:
                 # FR-012: nothing is left running behind a timed-out attempt.
-                self._cancel(client, recipe_run)
+                if self.harness.builder_experiment:
+                    self._cancel_authoring_prototype(client, recipe_run, res)
+                else:
+                    self._cancel(client, recipe_run)
                 raise EpisodeTimeout(f"deadline passed in the authoring phase: {e}") from e
+        except (InfraError, MonarchRefused):
+            if self.harness.builder_experiment:
+                self._cancel_authoring_prototype(client, recipe_run, res)
+            raise
         finally:
             # Recorded even on a timeout: the phase clock is the FR-010 detail
             # that says where the deadline passed.
             res.phases["authoring"] = PhaseMetrics(turns=questions,
                                                    wall_clock_s=round(time.monotonic() - t0, 4))
             res.flags.append(f"questions_asked={questions}")
+        if self.harness.builder_experiment:
+            try:
+                for page in client.authoring_event_pages(recipe_run, deadline=deadline):
+                    res.turn_log.append({"authoring_events": page})
+            except MonarchRefused as error:
+                res.turn_log.append({"authoring_events_error": {"status": error.status, "body": error.body}})
+                raise InfraError("infra:harness_crash", f"Authoring event export refused with HTTP {error.status}", retryable=False) from error
         return workflow_id
 
     def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
@@ -681,5 +716,13 @@ class MonarchArm:
                                      f"node={out.get('errorNodeId')}")
                     return
                 time.sleep(self.POLL_INTERVAL_S)
+        except (EpisodeTimeout, InfraError, MonarchRefused):
+            if self.harness.builder_experiment and ids.get("runId"):
+                try:
+                    cancelled = client.cancel_execution(ids["runId"], deadline=time.monotonic() + 30)
+                    res.turn_log.append({"execution_cancel": cancelled})
+                except (InfraError, MonarchRefused) as error:
+                    res.turn_log.append({"execution_cancel_error": str(error)})
+            raise
         finally:
             res.phases["execution"] = PhaseMetrics(wall_clock_s=round(time.monotonic() - t0, 4))

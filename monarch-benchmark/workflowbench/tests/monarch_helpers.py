@@ -5,6 +5,7 @@ so neither test module has to import the other.
 """
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 
@@ -66,6 +67,8 @@ def free_port() -> int:
 def free(port: int) -> None:
     """Assert the front door let go of its fixed port."""
     s = socket.socket()
+    if os.name != "nt" and hasattr(socket, "SO_REUSEADDR"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("0.0.0.0", port))
     s.close()
 

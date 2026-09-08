@@ -879,3 +879,12 @@ def test_monarch_kb_keys_are_hyphenated_product_slugs(tmp_path):
     with pytest.raises(ConfigError) as exc:
         config.load_monarch_kb(write(underscored), product)
     assert "no entry" in str(exc.value) and "-" in exc.value.field
+
+
+def test_builder_experiment_is_allowlisted_and_only_explicit_selection_changes_hash(tmp_path):
+    original = config.load_harness(write(tmp_path, HARNESS_MONARCH))
+    assert original.builder_experiment is None
+    assert 'builder_experiment' not in config._hashed_harness(original)
+    selected = config.load_harness(write(tmp_path, HARNESS_MONARCH + '\nbuilder_experiment: sections-parallel\n'))
+    assert config._hashed_harness(selected)['builder_experiment'] == 'sections-parallel'
+    check_error(config.load_harness, write(tmp_path, HARNESS_MONARCH + '\nbuilder_experiment: typo\n'), 'builder_experiment')

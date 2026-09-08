@@ -13,6 +13,7 @@ import pytest
 from tests.test_m1 import make_orch
 from wb_orchestrator.orchestrator import Orchestrator, RunKilled, regrade
 from wb_results.store import Store
+from wb_arms.api_loop import ArmResult, InfraError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,6 +59,24 @@ def test_spend_survives_exhausted_infra(tmp_path, mock_server):
     assert r["termination"] == "infra:rate_limit" and r["retries"] == 2
     assert r["tokens"]["prompt"] == 700         # attempt 1's turn 0
     assert r["cost_usd"] > 0
+
+
+def test_zero_cost_infra_partial_preserves_failure_evidence_in_store(tmp_path, mock_server):
+    store, orch = make_orch(tmp_path, k=1, concurrency=1)
+    orch.tasks = orch.tasks[:1]
+    partial = ArmResult(turn_log=[{'monarch': {'recipeRunId': 'recipe-run'}},
+                                  {'authoring_cancel_error': {'ok': False}}],
+                        flags=['cost_missing'])
+    error = InfraError('infra:harness_crash', 'poll HTTP 500', retryable=False)
+    error.partial = partial
+    arm = type('Arm', (), {'name': 'prototype', 'provider_key': None,
+                           'run': lambda self, ep, deadline: (_ for _ in ()).throw(error)})()
+    orch.arm_wrapper = lambda _: arm
+    run_id = orch.run('run-zero-cost-evidence')
+    row = store.episodes(run=run_id)['rows'][0]
+    assert row['flags'] == ['cost_missing']
+    turns = Path(store.artifacts(row['episode_id'])['turns']).read_text()
+    assert 'recipeRunId' in turns and 'authoring_cancel_error' in turns
 
 
 # -- protocol malformations don't kill episodes -------------------------------

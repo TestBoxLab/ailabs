@@ -191,6 +191,7 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
         self._spent = 0.0            # cumulative cost_usd, carried over on resume
         self._stop_reason: str | None = None
+        self.arm_wrapper = None
 
     def _config(self) -> dict:
         if self.run_config:
@@ -265,6 +266,8 @@ class Orchestrator:
         arms = ([build_arm_for(c, self.run_config) for c in self.run_config.competitors]
                 if self.run_config
                 else [build_arm(k) for k in self.arm_keys])
+        if self.arm_wrapper is not None:
+            arms = [self.arm_wrapper(arm) for arm in arms]
         threads = []
         for arm in arms:
             work = [(task, trial) for task in self.tasks for trial in range(self.k)
@@ -396,6 +399,8 @@ class Orchestrator:
                               "cost_usd", "turns", "tool_calls"):
                         setattr(acc, f, getattr(acc, f) + getattr(partial, f))
                     acc.turn_log.extend(partial.turn_log)
+                    acc.flags.extend(partial.flags)
+                    acc.phases.update(partial.phases)
                 if not e.retryable or attempt >= MAX_INFRA_RETRIES:
                     break
                 attempt += 1
@@ -410,12 +415,15 @@ class Orchestrator:
                 termination, error = "agent_error", str(e)
                 break
 
-        if acc.tokens_prompt or acc.cost_usd:
+        if (acc.tokens_prompt or acc.cost_usd or acc.turn_log or acc.flags or acc.phases):
             for f in ("tokens_prompt", "tokens_cached", "tokens_cache_write", "tokens_output",
                       "cost_usd", "turns", "tool_calls"):
                 setattr(result, f, getattr(result, f) + getattr(acc, f))
             result.turn_log = acc.turn_log + result.turn_log
-            result.flags.append("spend_includes_failed_attempts")
+            result.flags = acc.flags + result.flags
+            result.phases = {**acc.phases, **result.phases}
+            if acc.tokens_prompt or acc.cost_usd:
+                result.flags.append("spend_includes_failed_attempts")
 
         # SNAPSHOT1 + GRADE + RECORD always run, whatever ARM_RUN did. A crash
         # in this stage records an infra:harness_crash row rather than losing
