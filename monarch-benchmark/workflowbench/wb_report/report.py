@@ -488,6 +488,14 @@ def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
                        "stop_reason": rep["stop_reason"],
                        "tier": rep["provenance"].get("tier")})
 
+    # Rounds on different worlds (suite ids) are not the same measurement: the
+    # aggregate below is a mean over rounds, and a mean over two worlds would
+    # be a number about nothing (unblock plan M1, 8 Sep 2026).
+    suites = sorted({r["suite"] for r in rounds})
+    if len(suites) > 1:
+        raise GateError("refusing to pool rounds of different suites into one summary: "
+                        + "; ".join(f"{r['run_id']} is {r['suite']}" for r in rounds))
+
     arms = sorted({m["arm"] for r in rounds for m in r["metrics"]})
     aggregate = []
     for arm in arms:

@@ -16,12 +16,14 @@ from typing import Any, Iterable
 import yaml
 
 from wb_orchestrator import declare
-from wb_world.episode import contract_hash, load_task_file
+from wb_world.episode import (WORLD_PACKAGE, contract_hash, load_task_file,
+                              recorded_world_version, seeded_services)
 
 SET_NAMES = ("tier-simple", "tier-medium", "tier-complex", "random-10")
 TIER_ORDER = ("simple", "medium", "complex")
 MEASURE = (
-    'services seeded (initial_state keys except "meta") + expected changes '
+    "services seeded (initial_state services whose starting data is not the "
+    'world\'s own empty default; "meta" never counts) + expected changes '
     "(info.expected_changes) + tools needed (info.zapier_tools), computed from "
     "the task file; tiers are the terciles of the whole corpus, ties on a cut "
     "point falling in the lower tier. The random set is drawn from the whole "
@@ -33,9 +35,15 @@ MEASURE = (
 # --- the measure --------------------------------------------------------------
 
 def score_task(task: dict[str, Any]) -> int:
-    """services seeded + expected changes + tools needed (data-model.md §2)."""
+    """services seeded + expected changes + tools needed (data-model.md §2).
+
+    Seeded means the task's data says something about the service. Under the
+    repaired world every scored task lists all 48 apps' empty defaults, so
+    counting keys would give every one of them 48 and the measure would say
+    nothing (unblock plan M1, 8 Sep 2026); an empty default is not a seed.
+    """
     info = task.get("info", {})
-    services = [k for k in info.get("initial_state", {}) if k != "meta"]
+    services = seeded_services(info.get("initial_state", {}))
     return (len(services)
             + len(info.get("expected_changes", []))
             + len(info.get("zapier_tools", [])))
@@ -326,12 +334,18 @@ def _write_manifest(out: Path, pool: Pool, cuts: dict[str, int], seed: int,
                     by_domain: dict[str, dict[str, int]],
                     refrozen: str = "") -> Path:
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The world the drawn tasks record (unblock plan M1): a set drawn from a
+    # corpus imported under a revision names it here, and every row it records
+    # carries the matching suite id.
+    world_version = recorded_world_version(
+        [load_task_file(e.path) for picked in drawn.values() for e in picked])
     manifest = {
         "measure": MEASURE,
         "generated_at": now,
         # A refreeze keeps the draw and refreshes the content, so the reader
         # can tell a re-run of the same seed from a rewrite of the same ids.
         **({"refrozen_at": now, "refrozen_because": refrozen} if refrozen else {}),
+        "world": {"package": WORLD_PACKAGE, "version": world_version},
         "seed": seed,
         "per_tier": per_tier,
         "cuts": cuts,

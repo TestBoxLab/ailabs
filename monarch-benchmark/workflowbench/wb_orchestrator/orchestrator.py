@@ -35,10 +35,13 @@ from wb_results.store import Store
 from wb_results import evidence
 from wb_orchestrator import config as config_mod
 from wb_orchestrator.config import ConfigError
-from wb_world.episode import Episode, contract_hash, load_suite  # noqa: F401  (re-exported)
+from wb_world.episode import (  # noqa: F401  (Episode, contract_hash, load_suite re-exported)
+    LEGACY_SUITE, Episode, contract_hash, load_suite, suite_id)
 
 MAX_INFRA_RETRIES = 2
-SUITE = "workflowbench-synthetic@0.1"
+# The label of every set that records no world. A round's real suite id comes
+# from its tasks (wb_world.episode.suite_id): the world's version is in it.
+SUITE = LEGACY_SUITE
 
 
 class RunKilled(Exception):
@@ -189,6 +192,7 @@ class Orchestrator:
         self.run_config: config_mod.RunConfig | None = None
         self.suite_dir = str(suite_dir)
         self.tasks = tasks if tasks is not None else load_suite(suite_dir)
+        self.suite = suite_id(self.tasks)   # refuses a set that mixes worlds
         self.arm_keys = arms
         self.k = k
         self.retry_on_fail = retry_on_fail
@@ -225,7 +229,7 @@ class Orchestrator:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         arms = self._arms()
         self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
-        self.store.create_run(run_id, self._hash(), SUITE, self._config())
+        self.store.create_run(run_id, self._hash(), self.suite, self._config())
         self._execute(run_id, skip=set(), arms=arms)
         return run_id
 
@@ -237,6 +241,10 @@ class Orchestrator:
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
                 "refusing to resume")
+        if run["suite"] != self.suite:
+            raise ConfigDrift(
+                f"suite drift: run {run_id} was recorded under {run['suite']}, the task set "
+                f"now gives {self.suite}; refusing to resume on another world")
         # The ceiling counts the run's cumulative spend, whatever stopped it.
         self._spent = self.store.status(run_id)["spend_usd"]
         if self.run_config and self.run_config.plan.cost_ceiling_usd <= self._spent:
@@ -603,7 +611,7 @@ class Orchestrator:
         test_mode = self.run_config.plan.mode if self.run_config else None
         result.flags.append("evidence_manifest=v1")
         row = EpisodeRow(
-            episode_id=eid, run_id=run_id, task_id=task_id, suite=SUITE,
+            episode_id=eid, run_id=run_id, task_id=task_id, suite=self.suite,
             contract_sha256=contract_hash(task), arm=arm.name, trial=trial,
             model=model, test_mode=test_mode,
             passed=g["passed"] and termination == "completed",
