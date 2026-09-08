@@ -6,6 +6,25 @@ An explicit selection uses the persisted authoring status endpoint, checks that 
 
 `MonarchClient.cancel_execution(run_id)` uses `/api/engine/runs/:id/cancel` and the existing session header. Prototype execution timeouts call it before cleanup. Authoring cancellation continues using its existing route. A failed cancellation is recorded and requires checking that no paid work remains active.
 
+## Use a hosted Monarch environment
+
+The benchmark can call an existing Monarch deployment; it does not need to run
+its own Monarch server. Remote URLs were already supported by the client. This
+change adds experiment selection and durable evidence to that same API path.
+
+Point `MONARCH_URL` at the selected deployment and configure its benchmark
+session, matching `MONARCH_FD_URL` and catalog credentials, and the existing
+Langfuse cost source. `FRONT_DOOR_URL` must make the benchmark's synthetic HTTP
+world reachable from Monarch. A local loopback address is insufficient when
+Monarch is hosted elsewhere. Keep that world separate from real customer data.
+
+The current harness still reads `monarch_repo` to label the tested version;
+that checkout must match the deployed revision, even though it need not run a
+server. For a PR preview, verify the deployed merge revision rather than
+assuming it equals branch HEAD. Moving an existing lab setup to a hosted
+environment still requires configuring these connections and verifying a
+synthetic attempt; this client change does not perform that migration.
+
 ## Reserve the campaign budget before calls
 
 `CampaignBudget(path)` creates a local SQLite ledger with atomic reservations across processes. Its ceiling is $1,000 across the campaign, including at most $200 of development work. An ordinary measured attempt reserves $12. All concurrent in-flight reservations count against the ceilings. Values are rounded upward to integer millionths of a dollar.

@@ -56,7 +56,10 @@ An optional orchestrator wrapper checks proof again, reserves the unique attempt
 
 The SQLite guard is not a provider-side spend limiter. It therefore cannot substitute for the separate server dollar enforcement proof. Use the same `--budget` file as all other paid work in this campaign.
 
-The existing HTTP integration suite has macOS socket-reuse failures after closing its fixed fixture port. The first failure reproduces with unchanged baseline competitor code. Resolve or validate that platform issue before treating the local environment as ready for a sustained campaign.
+The HTTP front door now releases its fixed fixture port between attempts on
+POSIX systems while still refusing to start over an active listener. The
+socket lifecycle regression passes on macOS and the same lifecycle policy
+addresses the failure observed in Linux CI.
 
 ### Independent qualification and execution order
 
