@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from runner.schema import PhaseMetrics
@@ -44,6 +45,25 @@ ENGINE_TERMINAL_STATES = {"done", "error", "blocked", "partial", "cancelled"}
 # How long one read of `prepare()`'s recipe check may take: the login, and then
 # each workflow read.
 RECIPE_CHECK_BUDGET_S = 60.0
+
+# What one Monarch attempt reserves in the shared weekly ledger before Monarch is
+# called, settled afterwards from the Langfuse total (milestone M3). The Studio's
+# Enterprise version reserves the same amount (`wb_studio.enterprise`).
+DEFAULT_CEILING_USD = Decimal("25.00")
+CEILING_ENV = "MONARCH_ATTEMPT_CEILING_USD"
+
+
+def attempt_ceiling_usd(env) -> Decimal:
+    raw = env.get(CEILING_ENV)
+    if not raw:
+        return DEFAULT_CEILING_USD
+    try:
+        value = Decimal(str(raw))
+        if not value.is_finite() or value <= 0 or value > 300:
+            raise ValueError()
+        return value.quantize(Decimal("0.01"))
+    except Exception:
+        raise ValueError(f"{CEILING_ENV} must be a positive amount up to 300, got {raw!r}") from None
 
 # ponytail: a fixed 60 s bound on waiting out a run already in flight, not a
 # configurable one; the upgrade is a harness field if a real workflow ever
@@ -103,18 +123,30 @@ def _classify_refusal(code: str) -> InfraError | None:
     return None
 
 
-def monarch_version(repo_path: str | Path) -> str:
-    """Name the Monarch build in `repo_path`: `monarch@<sha>`, `+<branch>` off main."""
+def monarch_version(repo_path: str | Path, declared: str | None = None) -> str:
+    """Name the Monarch build in `repo_path`: `monarch@<sha>`, `+<branch>` off main.
+
+    Without git or a checkout (a hosted bench), `declared` (the MONARCH_BUILD
+    variable) names the served build instead; a declared name is never stock.
+    """
     def git(*args: str) -> str:
-        out = subprocess.run(["git", "-C", str(repo_path), *args],
-                             capture_output=True, text=True)
+        try:
+            out = subprocess.run(["git", "-C", str(repo_path), *args],
+                                 capture_output=True, text=True)
+        except OSError as exc:
+            raise ValueError(f"git is not available here ({exc})") from exc
         if out.returncode != 0:
             raise ValueError(f"git {' '.join(args)} in {repo_path}: "
                              f"{(out.stderr or out.stdout).strip()}")
         return out.stdout.strip()
 
-    sha = git("rev-parse", "--short", "HEAD")
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    except ValueError:
+        if declared and declared.strip():
+            return declared.strip()
+        raise
     return f"monarch@{sha}" if branch == "main" else f"monarch@{sha}+{branch}"
 
 
@@ -123,13 +155,19 @@ class MonarchArm:
     POLL_INTERVAL_S = 2.0
 
     def __init__(self, harness, timeout_s: float, price_table, kb, env, name: str,
-                 mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None):
+                 mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None,
+                 ledger=None):
         self.harness = harness
         self.timeout_s = timeout_s
         self.price_table = price_table
         self.kb = kb
         self.env = env
         self.name = name
+        # With a ledger, every attempt reserves the ceiling `MONARCH_ATTEMPT_CEILING_USD`
+        # names (default US$ 25.00) before Monarch is called and settles it from the
+        # Langfuse total; a cost that cannot be read keeps the whole hold.
+        self.ledger = ledger
+        self._price_unknown = False      # a PriceLookupError left this attempt's cost unknown
         # run-only: the frozen recipes this competitor may run, and the knowledge-base
         # file they were made against. Both are None in create + run.
         self.mode = mode
@@ -248,6 +286,8 @@ class MonarchArm:
         """
         h = self.harness
         failed = None
+        self._price_unknown = False
+        reservation, ceiling = self._reserve(ep)   # before Monarch is called; None without a ledger
         # The window `_add_cost` asks Langfuse for. A minute of margin covers the
         # clock skew between this machine and the trace timestamps.
         self._started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
@@ -279,6 +319,8 @@ class MonarchArm:
         # Cost is read after the front door is down and the lock is free: it is
         # bookkeeping, and a slow Langfuse must not hold the next attempt.
         self._add_cost(res, self._bench_id)
+        if reservation is not None:
+            self._settle(reservation, ceiling, res)
         # A refusal classified as infrastructure was stored rather than raised,
         # so cleanup could finish first (FR-011); it is raised here, outside the
         # lock and against a free port. `_add_cost` may have stored one of its
@@ -288,6 +330,49 @@ class MonarchArm:
             failed.partial = res
             raise failed
         return res
+
+    def _reserve(self, ep: Episode) -> tuple[str | None, Decimal | None]:
+        """Reserve this attempt's ceiling in the shared ledger, or (None, None) without one.
+
+        An exhausted week is `infra:weekly_budget`: the orchestrator records the
+        attempt and stops the run until the week has room again.
+        """
+        if self.ledger is None:
+            return None, None
+        from wb_arms import reservations
+        from wb_orchestrator.budget import BudgetExceeded
+        ceiling = attempt_ceiling_usd(self.env)
+        token = reservations.invocation_token(ep)
+        reservation = f"{ep.episode_id}#{token}#monarch"
+        try:
+            self.ledger.reserve(reservation, ceiling, scope_id=ep.episode_id,
+                                metadata={"harness": "monarch", "billing_provider": "monarch",
+                                          "version": self.name, "episode_id": ep.episode_id,
+                                          "invocation": token, "ceiling_env": CEILING_ENV,
+                                          "purpose": "one Monarch attempt; settled from Langfuse"})
+            self.ledger.claim(reservation)
+        except BudgetExceeded as e:
+            failed = InfraError("infra:weekly_budget",
+                                f"shared weekly budget exhausted before the attempt: {e}; the run "
+                                "stops and resumes when the week has room", retryable=False)
+            failed.partial = ArmResult()
+            raise failed from e
+        return reservation, ceiling
+
+    def _settle(self, reservation: str, ceiling: Decimal, res: ArmResult) -> None:
+        """Settle the attempt's reservation from what `_add_cost` read; unknown keeps the hold."""
+        from wb_arms import reservations
+        known = ("cost_missing" not in res.flags and not self._price_unknown
+                 and isinstance(res.cost_usd, (int, float)))
+        actual = reservations.money(res.cost_usd) if known else None
+        self.ledger.settle(reservation, actual)
+        if actual is None and "billing=unknown" not in res.flags:
+            res.flags.append("billing=unknown")
+        res.turn_log.append({"billing": {
+            "reservation_id": reservation, "scope_id": reservation.split("#", 1)[0],
+            "maximum_usd": str(ceiling), "actual_usd": None if actual is None else str(actual),
+            "status": "estimated_from_langfuse" if actual is not None else "unknown_hold",
+            "invoice_verified": False, "billing_provider": "monarch"}})
 
     def _add_cost(self, res: ArmResult, episode_id: str) -> None:
         """Price the attempt's traces. Never changes the verdict (contract §4 rule 5).
@@ -315,6 +400,7 @@ class MonarchArm:
             # its place: the run stops on it either way, and it came first.
             self._infra = self._infra or InfraError("infra:harness_crash", str(e),
                                                     retryable=False)
+            self._price_unknown = True   # a reservation must not settle on a cost nobody priced
             return
         if not gens:
             res.flags.append("cost_missing")

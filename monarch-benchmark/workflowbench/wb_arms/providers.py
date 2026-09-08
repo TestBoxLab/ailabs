@@ -30,6 +30,7 @@ class Provider:
     cache_min_prompt_tokens: int = 0  # provider's minimum cacheable prefix
     header_fallbacks: tuple[str, ...] = field(default_factory=tuple)
     effort: str = "xhigh"             # default reasoning effort; WB_*_EFFORT env overrides
+    family: str = ""                  # the billing account: anthropic, openai, google, fireworks, ...
 
 
 REGISTRY: dict[str, Provider] = {}
@@ -54,7 +55,7 @@ def load_models(folder: str | Path) -> dict[str, Provider]:
             price_in=m.usd_per_million.input, price_cached=m.usd_per_million.cached,
             price_out=m.usd_per_million.output, price_cache_write=m.usd_per_million.cache_write,
             base_url=m.base_url, cache_min_prompt_tokens=m.cache_min_prompt_tokens,
-            header_fallbacks=tuple(m.header_fallbacks), effort=m.effort)
+            header_fallbacks=tuple(m.header_fallbacks), effort=m.effort, family=m.provider)
     return out
 
 

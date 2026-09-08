@@ -34,7 +34,8 @@ HARNESS_KINDS = ("api", "cli", "scripted", "monarch")
 LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
 MISSING_REASONS = ("checker_failed", "authoring_error", "run_error", "timeout", "infra")
-SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without approved_by (rule 9)
+SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without an approval record (rule 9)
+DEFAULT_ATTEMPT_CAP_USD = 3.0  # the most one attempt of an API competitor may settle (milestone M3)
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 SideEffects = list[tuple[str, str | None, list[dict]]]
 
@@ -159,6 +160,10 @@ class Plan:
     description: str | None = None
     retry_on_fail: int = 0   # extra attempts a failed prompt gets, on top of `repetitions`
     track: str = "create-run"  # TRACKS; the default keeps the hash of plans written before the key
+    # The most one attempt of an API competitor may spend before its next request
+    # is refused (`infra:attempt_cap`). Same hash rule as `track`: only a
+    # non-default value moves the hash.
+    attempt_cap_usd: float = DEFAULT_ATTEMPT_CAP_USD
 
 
 # ---------------------------------------------------------------- checks
@@ -431,7 +436,7 @@ def load_plan(path) -> Plan:
     c = _read(path, "plan")
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
             "baseline", "audience", "cost_ceiling_usd", "approved_by"),
-           ("description", "retry_on_fail", "track"))
+           ("description", "retry_on_fail", "track", "attempt_cap_usd"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -458,6 +463,8 @@ def load_plan(path) -> Plan:
         description=c.get("description", str),
         retry_on_fail=c.get("retry_on_fail", int, minimum=0, default=0),
         track=c.get("track", str, enum=TRACKS, default="create-run"),
+        attempt_cap_usd=float(c.get("attempt_cap_usd", num, minimum=0, strict=True,
+                                    default=DEFAULT_ATTEMPT_CAP_USD)),
     )
 
 
@@ -642,6 +649,9 @@ class RunConfig:
             # Same rule: the default track is what every plan was before the key
             # existed. Another track is a different measurement and moves the hash.
             del plan["track"]
+        if plan["attempt_cap_usd"] == DEFAULT_ATTEMPT_CAP_USD:
+            # Same rule again: the default cap keeps every stored hash in place.
+            del plan["attempt_cap_usd"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
              "product": asdict(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},

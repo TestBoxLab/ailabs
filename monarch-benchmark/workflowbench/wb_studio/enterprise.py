@@ -40,7 +40,7 @@ from pathlib import Path
 
 from wb_arms import runtime_manifest as rm
 from wb_arms.api_loop import ArmResult, EpisodeTimeout, InfraError
-from wb_arms.monarch import MonarchArm
+from wb_arms.monarch import CEILING_ENV, DEFAULT_CEILING_USD, MonarchArm, attempt_ceiling_usd  # noqa: F401  (re-exported)
 from wb_arms.monarch_client import MonarchClient
 from wb_orchestrator import config
 from wb_orchestrator.monarch_setup import Stop, expand, public_front_door_url
@@ -54,8 +54,8 @@ HARNESS = "monarch"
 PROBE_FILE = "enterprise-probe.json"
 PROBE_TTL = timedelta(hours=2)
 ATTEMPT_TIMEOUT_S = 1800.0            # the tier plans' allowance per attempt
-DEFAULT_CEILING_USD = Decimal("25.00")  # reserved per attempt before Monarch is called
-CEILING_ENV = "MONARCH_ATTEMPT_CEILING_USD"
+# DEFAULT_CEILING_USD, CEILING_ENV and attempt_ceiling_usd live with the arm
+# (wb_arms.monarch) since milestone M3, so the CLI reserves the same amount.
 ENTERPRISE_REPOSITORY = "https://github.com/TestBoxLab/monarch"
 ENTERPRISE_DIRECTORY = "monarch-enterprise"
 
@@ -76,19 +76,6 @@ def environment(studio) -> dict:
     if load is not None:
         load()
     return dict(os.environ)
-
-
-def attempt_ceiling_usd(env: dict) -> Decimal:
-    raw = env.get(CEILING_ENV)
-    if not raw:
-        return DEFAULT_CEILING_USD
-    try:
-        value = Decimal(str(raw))
-        if not value.is_finite() or value <= 0 or value > 300:
-            raise ValueError()
-        return value.quantize(Decimal("0.01"))
-    except Exception:
-        raise ValueError(f"{CEILING_ENV} must be a positive amount up to 300, got {raw!r}") from None
 
 
 class Setup:
@@ -156,7 +143,15 @@ class Setup:
                     self.checkout = checkout_identity(repo)
                     self.version = self.checkout["version"]
                 except ValueError as exc:
-                    self.problems.append(f"Build: cannot name the served build from {repo}: {exc}")
+                    declared = (self.env.get("MONARCH_BUILD") or "").strip()
+                    if declared:
+                        # A hosted Studio has no checkout: the operator declares the served build
+                        # (for example `monarch@2ede4b3e+feat/railway-dev-deploy`). Declared is never stock.
+                        self.checkout = {"commit": None, "branch": None, "dirty": None, "patch_sha256": None,
+                                         "version": declared, "declared": True, "reason": str(exc)}
+                        self.version = declared
+                    else:
+                        self.problems.append(f"Build: cannot name the served build from {repo}: {exc}")
 
     @property
     def ok(self) -> bool:
@@ -164,7 +159,8 @@ class Setup:
 
     @property
     def stock(self) -> bool:
-        return bool(self.checkout) and self.checkout["branch"] == "main" and not self.checkout["dirty"]
+        return (bool(self.checkout) and not self.checkout.get("declared")
+                and self.checkout["branch"] == "main" and not self.checkout["dirty"])
 
     def ceiling(self) -> Decimal:
         return attempt_ceiling_usd(self.env)
@@ -186,8 +182,11 @@ def checkout_identity(repo: Path) -> dict:
     stubs `threading.Thread` cannot serve.
     """
     def git(*args: str) -> str:
-        out = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True)
+        try:
+            out = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+        except OSError as exc:  # no git binary on this host (the hosted Studio), or an unreadable path
+            raise ValueError(f"git is not available here ({exc}); set MONARCH_BUILD to declare the served build") from exc
         if out.returncode != 0:
             raise ValueError(f"git {' '.join(args)}: {out.stdout.strip()}")
         return out.stdout

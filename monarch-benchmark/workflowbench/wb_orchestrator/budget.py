@@ -249,6 +249,29 @@ class BudgetLedger:
         with self._transaction() as connection:
             return self._status(connection, week)
 
+    def week_of(self, instant: datetime) -> str:
+        """The ledger week (Monday, ISO date) an aware instant falls in."""
+        week, _ = self._time(instant)
+        return week
+
+    def reservations(self, *, scope_id: str | None = None) -> list[Reservation]:
+        """Every reservation, oldest first; a read-only view for dispatch checks and reconciliation."""
+        query, args = 'SELECT * FROM budget_reservations', ()
+        if scope_id is not None:
+            _identity(scope_id, 'scope_id')
+            query, args = query + ' WHERE scope_id=?', (scope_id,)
+        with self._transaction() as connection:
+            rows = connection.execute(query + ' ORDER BY created_at, reservation_id', args).fetchall()
+        return [Reservation(**dict(row)) for row in rows]
+
+    def scope_committed(self, scope_id: str) -> Decimal:
+        """What a scope has committed: settled actuals plus the maximum of every open hold."""
+        _identity(scope_id, 'scope_id')
+        with self._transaction() as connection:
+            rows = connection.execute('SELECT maximum_microusd, actual_microusd FROM budget_reservations WHERE scope_id=?',
+                                      (scope_id,)).fetchall()
+        return _usd(sum(row['maximum_microusd'] if row['actual_microusd'] is None else row['actual_microusd'] for row in rows))
+
     def reserve(self, reservation_id: str, maximum_usd: str | Decimal | int, *,
                 scope_id: str, scope_limit_usd: str | Decimal | int | None = None,
                 now: datetime | None = None, metadata: dict[str, Any] | None = None) -> Reservation:

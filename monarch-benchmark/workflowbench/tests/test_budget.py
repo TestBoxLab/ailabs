@@ -396,3 +396,36 @@ def test_claim_readmits_against_current_week_legacy_overlap(tmp_path):
     with pytest.raises(BudgetExceeded, match='weekly'):
         reopened.claim('pending', now=NEXT_MONDAY)
     assert reopened.reserve('pending', '50', scope_id='s', now=NEXT_MONDAY).dispatched_at is None
+
+
+# -- milestone M3: read-only views the dispatch path and reconciliation need ------
+
+def test_reservations_are_readable_with_their_metadata_and_scope(tmp_path):
+    ledger = BudgetLedger(tmp_path / 'budget.sqlite')
+    ledger.reserve('a', '2', scope_id='run-1/task/arm/t0', metadata={'billing_provider': 'anthropic'}, now=MONDAY)
+    ledger.reserve('b', '3', scope_id='run-1/task/arm/t1', metadata={'billing_provider': 'openai'}, now=MONDAY)
+    ledger.claim('a', now=MONDAY)
+    ledger.settle('a', '0.5', now=MONDAY)
+    rows = ledger.reservations()
+    assert [r.reservation_id for r in rows] == ['a', 'b']
+    assert rows[0].metadata == {'billing_provider': 'anthropic'} and rows[0].actual_usd == Decimal('0.5')
+    assert rows[1].actual_usd is None and rows[1].dispatched_at is None
+    assert [r.reservation_id for r in ledger.reservations(scope_id='run-1/task/arm/t1')] == ['b']
+
+
+def test_scope_committed_counts_settled_actuals_and_open_holds(tmp_path):
+    ledger = BudgetLedger(tmp_path / 'budget.sqlite')
+    assert ledger.scope_committed('attempt') == Decimal('0')
+    ledger.reserve('r0', '0.40', scope_id='attempt', now=MONDAY)
+    ledger.settle('r0', '0.05', now=MONDAY)
+    ledger.reserve('r1', '0.40', scope_id='attempt', now=MONDAY)          # still held
+    ledger.reserve('other', '9', scope_id='another-attempt', now=MONDAY)
+    assert ledger.scope_committed('attempt') == Decimal('0.45')
+
+
+def test_week_of_uses_the_ledger_calendar(tmp_path):
+    ledger = BudgetLedger(tmp_path / 'budget.sqlite')
+    assert ledger.week_of(MONDAY) == '2026-09-07'
+    sunday_night_utc = datetime(2026, 9, 14, 2, 59, tzinfo=timezone.utc)   # still Sunday in Sao Paulo
+    assert ledger.week_of(sunday_night_utc) == '2026-09-07'
+    assert ledger.week_of(NEXT_MONDAY) == '2026-09-14'

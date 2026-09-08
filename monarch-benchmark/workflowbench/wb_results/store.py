@@ -87,7 +87,7 @@ class Store:
                                (_now(), run_id))
 
     def set_stop_reason(self, run_id: str, reason: str | None) -> None:
-        """One of cost_ceiling, interrupted, worker_error, or None (data-model.md, State: run)."""
+        """One of cost_ceiling, weekly_budget, interrupted, worker_error, or None (data-model.md, State: run)."""
         with self._lock, self._conn:
             self._conn.execute("UPDATE runs SET stop_reason=? WHERE run_id=?", (reason, run_id))
 
@@ -131,11 +131,13 @@ class Store:
     def completed_identities(self, run_id: str) -> set[tuple[str, str, int]]:
         """Identities resume may skip. Infra-terminated rows are NOT final
         verdicts (the API failed, not the task) — resume re-attempts them and
-        the fresh row replaces the infra one."""
+        the fresh row replaces the infra one. The one exception is the attempt
+        cap: the attempt's own spend hit it, so running it again can only hit
+        it again."""
         with self._lock:
             return {(r["task_id"], r["arm"], r["trial"]) for r in self._conn.execute(
                 "SELECT task_id, arm, trial FROM episodes WHERE run_id=? "
-                "AND termination NOT LIKE 'infra:%'", (run_id,))}
+                "AND (termination NOT LIKE 'infra:%' OR termination = 'infra:attempt_cap')", (run_id,))}
 
     # -- the query view (only read path for stats/report) ---------------------
     def episodes(self, suite: str | None = None, arm: str | None = None,

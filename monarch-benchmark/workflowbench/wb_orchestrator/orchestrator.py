@@ -49,6 +49,10 @@ class ConfigDrift(Exception):
     pass
 
 
+class RoundAdmissionError(Exception):
+    """The week's ledger cannot cover the round's maximum liability; nothing was reserved."""
+
+
 # legacy: runs recorded before product/plan files
 def config_hash(tasks: list[dict], arms: list[str], k: int, timeout_s: float) -> str:
     blob = json.dumps({"tasks": sorted(contract_hash(t) for t in tasks),
@@ -94,16 +98,19 @@ def build_arm(key: str):
     return arm
 
 
-def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.RunConfig | None" = None):
+def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.RunConfig | None" = None,
+                  ledger=None, operator: str | None = None):
     """Build the arm a plan competitor names; the arm reports under the competitor's name (R1).
 
     Monarch is the exception: it reports under the version of the checkout it ran
     from, so `run_config` is required to build one (it carries the plan, the price
-    table and the knowledge base).
+    table and the knowledge base). With a `ledger`, paid arms reserve through it:
+    the API loop per request, Monarch per attempt (milestone M3).
     """
     h = competitor.harness
     if h.kind == "api":
-        arm = ApiLoopArm(competitor.model.name)
+        arm = ApiLoopArm(competitor.model.name, ledger=ledger, operator=operator,
+                         attempt_cap_usd=run_config.plan.attempt_cap_usd if run_config else None)
         arm.provider_key = competitor.model.name
     elif h.kind == "scripted":
         arm = _ScriptedAdapter(h.script)
@@ -127,7 +134,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         config_dir = Path(run_config.config_dir)
         repo = config_mod.from_workflowbench(h.monarch_repo, config_dir)
         try:
-            name = monarch_version(repo)
+            name = monarch_version(repo, os.environ.get("MONARCH_BUILD"))
         except ValueError as e:
             raise ConfigError(config_dir / "harnesses" / f"{h.name}.yaml", "monarch_repo",
                               f"cannot read the Monarch version: {e}") from e
@@ -143,7 +150,8 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
                           kb=run_config.monarch_kb, env=os.environ, name=name, mode=mode,
                           recipes=run_config.monarch_recipes,
                           kb_path=products / f"{run_config.product.name}.monarch-kb.yaml",
-                          recipes_path=products / f"{run_config.product.name}.monarch-recipes.yaml")
+                          recipes_path=products / f"{run_config.product.name}.monarch-recipes.yaml",
+                          ledger=ledger)
     arm.name = competitor.name
     return arm
 
@@ -151,13 +159,15 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
 class Orchestrator:
     @classmethod
     def from_config(cls, store: Store, run_config: config_mod.RunConfig, out_dir: str | Path,
-                    provider_concurrency: int | None = None) -> "Orchestrator":
+                    provider_concurrency: int | None = None, ledger=None,
+                    operator: str | None = None) -> "Orchestrator":
         plan = run_config.plan
         # arms=[] skips the old key validation; competitor names are set below.
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
                    provider_concurrency=provider_concurrency or plan.concurrency,
-                   tasks=run_config.tasks, retry_on_fail=plan.retry_on_fail)
+                   tasks=run_config.tasks, retry_on_fail=plan.retry_on_fail,
+                   ledger=ledger, operator=operator)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
         return self
@@ -165,7 +175,8 @@ class Orchestrator:
     def __init__(self, store: Store, suite_dir: str | Path, arms: list[str], k: int,
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None,
-                 tasks: list[dict] | None = None, retry_on_fail: int = 0):
+                 tasks: list[dict] | None = None, retry_on_fail: int = 0,
+                 ledger=None, operator: str | None = None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         if retry_on_fail < 0:
@@ -192,10 +203,16 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
         self._spent = 0.0            # cumulative cost_usd, carried over on resume
         self._stop_reason: str | None = None
+        # The shared weekly ledger paid arms reserve through, who launched the
+        # run, and the approval record it runs under (milestone M3).
+        self.ledger = ledger
+        self.operator = operator
+        self.approval_request_id: str | None = None
 
     def _config(self) -> dict:
         if self.run_config:
-            return self.run_config.config_json
+            return {**self.run_config.config_json, "launched_by": self.operator,
+                    "approval_request": self.approval_request_id}
         return {"suite_dir": self.suite_dir, "arms": self.arm_keys, "k": self.k,
                 "timeout_s": self.timeout_s, "n_tasks": len(self.tasks)}
 
@@ -206,8 +223,10 @@ class Orchestrator:
 
     def run(self, run_id: str | None = None) -> str:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+        arms = self._arms()
+        self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
         self.store.create_run(run_id, self._hash(), SUITE, self._config())
-        self._execute(run_id, skip=set())
+        self._execute(run_id, skip=set(), arms=arms)
         return run_id
 
     def resume(self, run_id: str) -> str:
@@ -225,9 +244,18 @@ class Orchestrator:
             raise ConfigError(self.run_config.plan_path, "cost_ceiling_usd",
                               f"run {run_id}: spend US$ {self._spent:.2f} already meets ceiling "
                               f"US$ {ceiling:.2f}; raise cost_ceiling_usd in the plan to continue")
+        skip = self.store.completed_identities(run_id)
+        arms = self._arms()
+        self._admit(run_id, arms, skip)     # only what is left to run is counted
         self.store.set_stop_reason(run_id, None)  # the run is going again
-        self._execute(run_id, skip=self.store.completed_identities(run_id))
+        self._execute(run_id, skip=skip, arms=arms)
         return run_id
+
+    def _arms(self) -> list:
+        return ([build_arm_for(c, self.run_config, ledger=self.ledger, operator=self.operator)
+                 for c in self.run_config.competitors]
+                if self.run_config
+                else [build_arm(k) for k in self.arm_keys])
 
     def _pending_retries(self, run_id: str, arm_name: str) -> list[tuple[dict, int]]:
         """Retries a resumed run still owes: a recorded attempt that failed on a
@@ -262,10 +290,63 @@ class Orchestrator:
         extra attempts, laid out as trial + k, + 2k, ... so no two identities clash."""
         return trial // self.k < self.retry_on_fail
 
-    def _execute(self, run_id: str, skip: set[tuple[str, str, int]]) -> None:
-        arms = ([build_arm_for(c, self.run_config) for c in self.run_config.competitors]
-                if self.run_config
-                else [build_arm(k) for k in self.arm_keys])
+    def _admit(self, run_id: str, arms: list, skip: set[tuple[str, str, int]]) -> None:
+        """Refuse a round the week cannot cover, before its first attempt (milestone M3).
+
+        The maximum liability is what every attempt still to run could reserve:
+        API attempts at the plan's attempt cap, Monarch attempts at the Monarch
+        ceiling, the sum capped by what the cost ceiling still allows this run.
+        Nothing is held for the round itself: the per-request reservations are
+        the enforcement while it runs, so a resume only counts what is left.
+        """
+        if self.ledger is None or self.run_config is None:
+            return
+        from decimal import Decimal
+        plan = self.run_config.plan
+        per_competitor = self.run_config.attempts_per_competitor
+        api_attempts = monarch_attempts = 0
+        monarch_ceiling = None
+        for arm in arms:
+            if isinstance(arm, _ScriptedAdapter):
+                continue
+            done = sum(1 for _, name, _ in skip if name == arm.name)
+            remaining = max(0, per_competitor - done)
+            if getattr(arm, "provider_key", None) == "monarch":
+                from wb_arms.monarch import attempt_ceiling_usd
+                monarch_attempts += remaining
+                monarch_ceiling = attempt_ceiling_usd(arm.env)
+            else:
+                api_attempts += remaining
+        parts, asked = [], Decimal("0")
+        if api_attempts:
+            cap = Decimal(str(plan.attempt_cap_usd))
+            parts.append(f"{api_attempts} API attempt{'s' if api_attempts != 1 else ''} x attempt cap US$ {cap:.2f}")
+            asked += api_attempts * cap
+        if monarch_attempts:
+            parts.append(f"{monarch_attempts} Monarch attempt{'s' if monarch_attempts != 1 else ''} "
+                         f"x ceiling US$ {monarch_ceiling:.2f}")
+            asked += monarch_attempts * monarch_ceiling
+        if asked <= 0:
+            return
+        allowance = max(Decimal("0"), Decimal(str(plan.cost_ceiling_usd)) - Decimal(str(self._spent)))
+        liability = min(asked, allowance)
+        detail = " + ".join(parts)
+        if liability < asked:
+            detail += f" = US$ {asked:.2f}, capped by cost_ceiling_usd US$ {plan.cost_ceiling_usd:.2f}"
+            if self._spent:
+                detail += f" less US$ {self._spent:.2f} already spent"
+        status = self.ledger.status()
+        available = status.available_usd
+        if liability > available:
+            raise RoundAdmissionError(
+                f"run {run_id}: the week cannot cover this round: maximum liability US$ {liability:.2f} "
+                f"({detail}); available US$ {available:.2f} of US$ {status.weekly_limit_usd:.2f} this week "
+                f"(US$ {status.actual_usd:.2f} spent, US$ {status.held_usd:.2f} held); "
+                f"short by US$ {liability - available:.2f}. Reduce the plan or wait for the next week "
+                "(Monday 00:00 America/Sao_Paulo); nothing was reserved")
+
+    def _execute(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
+        arms = arms if arms is not None else self._arms()
         threads = []
         for arm in arms:
             work = [(task, trial) for task in self.tasks for trial in range(self.k)
@@ -302,6 +383,13 @@ class Orchestrator:
                 f"run {run_id} stopped: spend US$ {self._spent:.2f} exceeds ceiling "
                 f"US$ {self.run_config.plan.cost_ceiling_usd:.2f} after {self._recorded} attempts; "
                 f"raise cost_ceiling_usd in the plan and run: wb resume {run_id}")
+        if self._stop_reason == "weekly_budget":
+            self.store.set_stop_reason(run_id, "weekly_budget")
+            raise RunKilled(
+                f"run {run_id} stopped: the shared weekly budget is exhausted after {self._recorded} "
+                f"attempts (US$ {self._spent:.2f} spent on this run); the attempts it cut are recorded "
+                "as infra:weekly_budget and run again on resume. When the week has room (Monday 00:00 "
+                f"America/Sao_Paulo, or an earlier hold settles), run: wb resume {run_id}")
         if self._abort.is_set():
             raise RunKilled(f"run {run_id} killed after {self._recorded} episodes")
         self.store.finish_run(run_id)
@@ -567,6 +655,11 @@ class Orchestrator:
             if (self.run_config and self._spent > self.run_config.plan.cost_ceiling_usd
                     and self._stop_reason is None):
                 self._stop_reason = "cost_ceiling"
+                self._abort.set()
+            if termination == "infra:weekly_budget" and self._stop_reason is None:
+                # The ledger refused a request: nothing else can be paid for this
+                # week. Stop scheduling; the cut attempts run again on resume.
+                self._stop_reason = "weekly_budget"
                 self._abort.set()
         return self._earns_a_retry(row.passed, termination)
 
