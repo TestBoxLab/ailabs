@@ -35,12 +35,21 @@ per run; API-key billing only. A spec MAY change what feeds the methodology
 NOT reopen these rules unless Carlos explicitly says so.
 
 ### IV. Money and pre-registration gates
-A full benchmark round costs real money. No `wb run` beyond smoke scale
-(10 tasks, 2 repetitions) without Carlos's explicit approval of that specific
-run; every plan states the number of attempts and a cost band before a run.
-Task prompts, starting data, and approval rules are pre-registered: they are
-not edited after results are seen without Lucas's sign-off, and any edit that
-changes a task hash is called out as making old rows non-regradable.
+A benchmark round costs real money, and the money is shared: US$ 300 per
+calendar week (Monday 00:00 America/Sao_Paulo, no rollover), kept in the weekly
+ledger (`research/budget.sqlite3`). The ledger is the spending gate: every paid
+request is reserved for its maximum before it is sent and settled from the
+provider's receipt; a round is admitted only when the week can cover its maximum
+liability; an attempt stops at its cap; a week's spend is reconciled against the
+providers' own usage exports. Lucas approves paid rounds (decision D5,
+8 September 2026): a launch by Lucas runs at once under an approved record; a
+launch by anyone else, Carlos included, creates an approval request and waits
+for `wb approve`; smoke scale (at most 20 attempts per competitor) needs no
+record. Every paid launch names its operator (`WB_OPERATOR`) and states the
+number of attempts and a cost band before a run. Task prompts, starting data,
+and approval rules are pre-registered: they are not edited after results are
+seen without Lucas's sign-off, and any edit that changes a task hash is called
+out as making old rows non-regradable.
 
 ### V. Plain language, knowledge-graph-grounded
 Every file in the repo is in English; conversation with Carlos is in
@@ -87,4 +96,4 @@ This constitution supersedes ad-hoc practice. Amendments are made through
 recorded here with a version bump. When a spec, plan, or task conflicts with
 Principle III or IV, the constitution wins and the artifact is revised.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-02 | **Last Amended**: 2026-09-02
+**Version**: 1.1.0 | **Ratified**: 2026-09-02 | **Last Amended**: 2026-09-08 (§IV: the weekly ledger is the spending gate; Lucas approves, decision D5)

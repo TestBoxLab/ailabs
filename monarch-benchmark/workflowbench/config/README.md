@@ -55,12 +55,89 @@ range before anything is spent. The cost ceiling counts every attempt, retries
 included, and so does the approval gate — the approval is for what the round
 could cost, not for its best case.
 
+## plans/*.yaml, key `attempt_cap_usd`
+
+Optional, an amount above 0, US$ 3.00 when absent. The most one attempt of an
+API competitor may spend: before every provider request the loop adds the
+request's rate-card maximum to what the attempt already settled or holds, and
+refuses the request when the sum would pass the cap. The attempt ends as
+`infra:attempt_cap`: not a pass, not the model's failure, and final (a resume
+does not run it again). Like `track`, only a non-default value moves the config
+hash. Monarch attempts have their own per-attempt ceiling instead:
+`MONARCH_ATTEMPT_CEILING_USD` in the environment, US$ 25.00 when unset.
+
+## plans/*.yaml, key `approved_by` (ignored since 8 September 2026)
+
+Still allowed so older files load, but it approves nothing: since decision D5
+an approval is a record in the results store, made at launch. `wb run` prints
+a one-line notice when the key is set. See "Approvals and the weekly ledger" below.
+
+## Approvals and the weekly ledger (`wb run`, `wb approve`, `wb deny`, `wb approvals`)
+
+Every paid launch names its operator: `WB_OPERATOR=<name>` in the environment
+(`wb run`, `wb resume` and provider probes of `wb doctor` refuse without it).
+Approvers are `lucas` (override with `WB_APPROVERS=a,b`). Above smoke scale (20
+attempts per competitor, retries included), an approver's `wb run` runs at once
+under an approved record; anyone else's `wb run` writes a pending request,
+prints `<id> awaiting approval` and stops. An approver decides with
+`wb approve <id>` or `wb deny <id>`; then anyone runs the same product and plan
+with `wb run ... --request <id>`, once, while the config hash still matches.
+`wb approvals` lists the records. Smoke scale needs no record.
+
+The weekly ledger (`research/budget.sqlite3`, US$ 300 per calendar week from
+Monday 00:00 America/Sao_Paulo, override the path with `wb --ledger`) is the
+spending gate whatever the approval: every provider request is reserved for its
+maximum before it is sent and settled from the usage receipt; a round is admitted
+only when the week can cover its maximum liability (API attempts x attempt cap +
+Monarch attempts x their ceiling, capped by `cost_ceiling_usd`), and the
+refusal names the shortfall; an exhausted week stops the run with
+`stop_reason: weekly_budget`, resumable with `wb resume` when the week has room.
+`wb budget status` shows what is held, spent and available.
+
+Today only API competitors launch. Monarch competitors, `wb monarch recipes`
+and the doctor's Monarch probe are refused with "Monarch instance not verified:
+milestone M5"; Claude Code and other native competitors with "native runtime
+not verified: milestone M7".
+
+## `wb budget reconcile --week YYYY-MM-DD --provider <name> --csv FILE`
+
+Compares one week's provider usage with what the ledger settled for that
+provider in that week (a reservation belongs to the week it was dispatched in)
+and writes `research/reconciliation/<week>.md` and `.json` with both numbers and
+the difference. `--week` is the week's Monday; `--provider` and `--csv` repeat.
+The week's `historical_billing_verified` (shown by `wb budget status`) is true
+only when every provider with spend, in the ledger or in an export, has been
+reconciled within 5 % of its own total; unsettled holds are listed, never
+released.
+
+The rows are normalized by hand or by a short script into one CSV with the
+header `date,provider,usd`: one row per day (or per export line), the date as
+`YYYY-MM-DD`, the provider as one of `anthropic`, `openai`, `fireworks`,
+`google`, `moonshot`, `zai`, `monarch`, the amount in US dollars. Where they
+come from:
+
+- **Anthropic**: the Console's Usage page (Settings, Usage, or the Cost tab of
+  the organization), filtered to the API key the bench uses, exported as CSV,
+  or the Admin API's usage and cost reports; keep the date and the cost columns.
+- **OpenAI**: the platform's Usage page, per project and per day, exported as
+  CSV, or the costs endpoint of the Usage API; keep the date and the amount.
+- **Fireworks**: the account's Usage or Billing page, per day; export or copy
+  the daily totals.
+- **Google (Gemini API)**: the Google Cloud billing report for the project the
+  API key belongs to, filtered to the Generative Language API, grouped by day.
+- **Monarch**: Monarch bills through its own model accounts, so its rows are
+  built from Langfuse: the sum of the generations' costs per day for the
+  bench's traces (the `bench_episode_id` metadata), priced with the price table
+  the harness names; the same numbers `wb_arms.langfuse_cost` uses.
+
+Rows for other providers or other weeks in the same file are ignored.
+
 ## plans/pilot-monarch-create-run.yaml
 
 The paired pilot plan for feature 002: `create-run` mode, the 10 pilot tasks, 2
 repetitions, competitors {answer key, Claude Opus 4.8 raw, Monarch}, internal
-audience, a cost ceiling, `approved_by` left empty until Carlos approves the
-specific run. Full example: `specs/002-monarch-create-run/contracts/config-files.md`.
+audience, a cost ceiling; approval is a record made at launch (decision D5).
+Full example: `specs/002-monarch-create-run/contracts/config-files.md`.
 
 ## products/<name>.monarch-recipes.yaml
 
@@ -78,8 +155,8 @@ example: `specs/004-monarch-run-only/contracts/config-files.md`.
 
 The paired pilot plan for feature 004: `run-only` mode, the same 10 tasks, 2
 repetitions and competitor set as `pilot-monarch-create-run` so the two modes
-read side by side, internal audience, a cost ceiling, `approved_by` left empty
-until Carlos approves the specific run. Full example:
+read side by side, internal audience, a cost ceiling; approval is a record made
+at launch (decision D5). Full example:
 `specs/004-monarch-run-only/contracts/config-files.md`.
 
 ## plans/tier-simple.yaml, tier-medium.yaml, tier-complex.yaml, random-10.yaml
@@ -87,8 +164,8 @@ until Carlos approves the specific run. Full example:
 Four pilot plans for feature 005: `create-run` mode, the same seven
 competitors and baseline as `pilot-monarch-create-run`, one attempt per prompt
 plus one retry on failure (`repetitions: 1`, `retry_on_fail: 1`), internal
-audience, `approved_by` left empty until Carlos approves each round
-separately. Each `tasks:` points at one of the drawn task sets below. Every
+audience; each round is approved at launch as a record (decision D5). Each
+`tasks:` points at one of the drawn task sets below. Every
 description states the size the same way: "prompts: 10; attempts per prompt: 1
 plus 1 retry on failure; attempts per competitor: 10 to 20". The four move as a
 set: change a competitor, the ceiling or the baseline in one and change it in
@@ -133,7 +210,9 @@ same corpus reproduces the same bytes. Full flags, exit codes and output:
 Makes the recipes file above. **Spends model money** (Monarch authors each task
 off the clock, up to `--attempts` times, default 3). Prints the task count, the
 attempt ceiling and a cost band before touching anything, then refuses with
-exit 5 unless run with `--yes` or against a plan whose `approved_by` is set.
+exit 5 unless run with `--yes` (a plan's `approved_by` no longer counts).
 Idempotent: a task already covered for the current knowledge base costs
-nothing on a rerun. Full flags, exit codes and sample output:
+nothing on a rerun. The `wb` subcommand itself is refused with "Monarch
+instance not verified: milestone M5" until a Monarch instance is verified.
+Full flags, exit codes and sample output:
 `specs/004-monarch-run-only/contracts/cli.md`.

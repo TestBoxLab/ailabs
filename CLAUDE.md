@@ -135,9 +135,20 @@ each stage hands its artifact to the next:
 
 ### Benchmark-specific rules (constitution §III–§V)
 
-- **No full benchmark round without explicit approval of that specific run.**
-  Smoke scale (10 tasks, 2 repetitions) and `wb doctor` are fine. Before any
-  `wb run`, state the number of attempts and a cost band.
+- **Lucas approves paid rounds (decision D5, 8 Sep 2026).** A launch by Lucas
+  runs at once; a launch by Carlos, or anyone else, creates an approval request
+  (`wb approvals`) and waits for `wb approve <id>`, then runs with
+  `wb run ... --request <id>`. Smoke scale (at most 20 attempts per competitor)
+  and `wb doctor` need no record. Every paid launch names its operator
+  (`WB_OPERATOR`). Before any `wb run`, state the number of attempts and a cost band.
+- **The weekly ledger is the spending gate.** US$ 300 per calendar week
+  (`research/budget.sqlite3`, Monday 00:00 America/Sao_Paulo): every paid
+  request is reserved for its maximum before it is sent and settled from the
+  receipt; a round the week cannot cover is refused with the shortfall; an
+  attempt stops at `attempt_cap_usd` (US$ 3.00 unless the plan says otherwise);
+  `wb budget status` shows what is left, `wb budget reconcile` checks a week
+  against the providers' own usage exports. Monarch and Claude Code
+  competitors stay refused until milestones M5 and M7.
 - **Pre-registration.** Do not edit a task's prompt, starting data, or approval
   rule after seeing results without Lucas's sign-off. Hash changes make old
   rows non-regradable; say so.
