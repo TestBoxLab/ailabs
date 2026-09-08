@@ -271,3 +271,27 @@ def test_monarch_version_falls_back_to_the_declared_build(tmp_path, monkeypatch)
     assert monarch_version(tmp_path, "monarch@2ede4b3e+feat/railway-dev-deploy") == "monarch@2ede4b3e+feat/railway-dev-deploy"
     with pytest.raises(ValueError):
         monarch_version(tmp_path, None)
+
+
+def test_a_declared_build_freezes_a_manifest_with_or_without_its_full_commit(tmp_path, site, repo, monkeypatch):
+    """A hosted Studio names the served build from MONARCH_BUILD; the manifest still freezes."""
+    import subprocess as sp
+    from wb_studio.enterprise import Setup, manifest
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "git")
+    monkeypatch.setattr(sp, "run", no_git)
+    port = free_port()
+    app = studio_for(tmp_path, configured(site, repo, port))
+    app.enterprise_env = {**app.enterprise_env, "MONARCH_BUILD": "monarch@2ede4b3e+feat/railway-dev-deploy"}
+    setup = Setup(app)
+    assert setup.ok, setup.problems
+    assert setup.checkout["declared"] is True and setup.stock is False and setup.version.endswith("railway-dev-deploy")
+    frozen = manifest(setup, None)
+    assert frozen["source"]["kind"] == "none" and frozen["source"]["declared_build"] == setup.version
+    app.enterprise_env = {**app.enterprise_env, "MONARCH_BUILD_COMMIT": "2ede4b3ee355da81c253087e8c9583ed677c06fa"}
+    setup = Setup(app)
+    assert setup.ok and setup.checkout["commit"] == "2ede4b3ee355da81c253087e8c9583ed677c06fa"
+    assert manifest(setup, None)["source"]["kind"] == "git"
+    app.enterprise_env = {**app.enterprise_env, "MONARCH_BUILD_COMMIT": "2ede4b3e"}
+    assert any("MONARCH_BUILD_COMMIT" in p for p in Setup(app).problems)

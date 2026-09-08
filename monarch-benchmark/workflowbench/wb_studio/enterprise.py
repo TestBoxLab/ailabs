@@ -27,6 +27,7 @@ manifest records that declaration as a declaration, never as a verified fact.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import os
 import subprocess
@@ -146,8 +147,13 @@ class Setup:
                     declared = (self.env.get("MONARCH_BUILD") or "").strip()
                     if declared:
                         # A hosted Studio has no checkout: the operator declares the served build
-                        # (for example `monarch@2ede4b3e+feat/railway-dev-deploy`). Declared is never stock.
-                        self.checkout = {"commit": None, "branch": None, "dirty": None, "patch_sha256": None,
+                        # (for example `monarch@2ede4b3e+feat/railway-dev-deploy`) and, when known,
+                        # its full commit (MONARCH_BUILD_COMMIT). Declared is never stock.
+                        commit = (self.env.get("MONARCH_BUILD_COMMIT") or "").strip().lower() or None
+                        if commit is not None and not re.fullmatch(r"[0-9a-f]{40}", commit):
+                            self.problems.append(f"Build: MONARCH_BUILD_COMMIT must be a full 40-hex commit, not {commit!r}")
+                            commit = None
+                        self.checkout = {"commit": commit, "branch": None, "dirty": None, "patch_sha256": None,
                                          "version": declared, "declared": True, "reason": str(exc)}
                         self.version = declared
                     else:
@@ -314,10 +320,17 @@ def manifest(setup: Setup, probe: dict | None) -> dict | None:
     if not setup.ok or not setup.checkout:
         return None
     kb_hash = hashlib.sha256(json.dumps(setup.kb.kb, sort_keys=True).encode()).hexdigest()
+    if setup.checkout.get("declared") and not setup.checkout.get("commit"):
+        # Declared by the operator without a commit: an identity, not a frozen git source.
+        source = {"kind": "none", "repository": ENTERPRISE_REPOSITORY, "directory": ENTERPRISE_DIRECTORY,
+                  "ref": None, "commit": None, "patch_sha256": None, "lockfile": None, "image_digest": None,
+                  "declared_build": setup.checkout["version"]}
+    else:
+        source = {"kind": "git", "repository": ENTERPRISE_REPOSITORY, "directory": ENTERPRISE_DIRECTORY,
+                  "ref": setup.checkout["branch"], "commit": setup.checkout["commit"],
+                  "patch_sha256": setup.checkout["patch_sha256"], "lockfile": None, "image_digest": None}
     built = rm.build(IDENTITY,
-                     source={"kind": "git", "repository": ENTERPRISE_REPOSITORY, "directory": ENTERPRISE_DIRECTORY,
-                             "ref": setup.checkout["branch"], "commit": setup.checkout["commit"],
-                             "patch_sha256": setup.checkout["patch_sha256"], "lockfile": None, "image_digest": None},
+                     source=source,
                      runtime={"entrypoint": "wb_arms.monarch.MonarchArm", "dependency_closure": [],
                               "deployment_host": (probe or {}).get("backend_host"),
                               "note": "Served build named from the checkout the harness points at; the deployment is assumed built from it."},
