@@ -1218,3 +1218,13 @@ def test_a_workflow_finished_at_the_deadline_is_deleted_not_orphaned(site, repo)
     assert fake.deleted_workflows == ["wf-1"]
     assert not [r for r in fake.requests if r["path"].endswith("/run")]
     free(port)
+
+
+def test_an_empty_default_counts_as_no_default():
+    """8 Sep: a required input with default "" passed Monarch's lint and dispatched ""."""
+    from wb_arms.monarch import MonarchArm
+    declared = [{"name": "spreadsheet_id", "required": True, "default": ""},
+                {"name": "region", "required": True, "default": "us"},
+                {"name": "note", "required": False},
+                {"name": "sheet", "required": True, "default": None}]
+    assert MonarchArm._needs_input(declared) == ["spreadsheet_id", "sheet"]

@@ -732,7 +732,10 @@ class MonarchArm:
         unattended and ends before the run (Carlos, 6 Sep 2026). An optional input
         and one with a default are simply left out of the run body.
         """
-        return [d["name"] for d in declared if d.get("required") and "default" not in d]
+        # An empty default ("" or null) is no default: the engine dispatches "" and
+        # the first step fails (session 8 Sep, "spreadsheetId is empty").
+        return [d["name"] for d in declared
+                if d.get("required") and d.get("default") in (None, "")]
 
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
