@@ -664,6 +664,7 @@ def cmd_monarch_recipes(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()   # keys live in workflowbench/.env (gitignored), never in code
+    config.derive_langfuse_keys(os.environ)
     ap = argparse.ArgumentParser(prog="wb", description="WorkflowBench runner")
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--out", default=DEFAULT_OUT)

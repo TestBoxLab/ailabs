@@ -309,3 +309,63 @@ def test_main_refuses_a_public_bind_without_the_auth_pair(monkeypatch):
     monkeypatch.delenv("STUDIO_AUTH_PASSWORD", raising=False)
     with pytest.raises(SystemExit):
         main(["--host", "0.0.0.0", "--port", "0"])
+
+
+# -- hosted Studio: the front door path relays to the attempt's shim ------------------------
+
+@contextmanager
+def _echo_server():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _TS
+    seen = []
+
+    class Echo(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _answer(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length).decode() if length else ""
+            seen.append((self.command, self.path, body, self.headers.get("X-Bench-Episode-Id")))
+            data = json.dumps({"echo": self.command, "path": self.path, "body": body}).encode()
+            self.send_response(201 if self.command == "POST" else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _answer
+
+    server = _TS(("127.0.0.1", 0), Echo)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        yield server.server_port, seen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_front_door_path_relays_to_the_shim_without_login(studio, monkeypatch):
+    monkeypatch.setenv("STUDIO_AUTH_USER", "admin")
+    monkeypatch.setenv("STUDIO_AUTH_PASSWORD", "pw")
+    with _echo_server() as (port, seen):
+        monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", str(port))
+        with server_for(studio) as studio_port:
+            status, _, body = request(studio_port, "GET", "/front-door/salesforce/services/data?q=1",
+                                      headers={"Host": "evil.example"})
+            assert status == 200 and json.loads(body)["path"] == "/salesforce/services/data?q=1"
+            status, _, body = request(studio_port, "POST", "/front-door/fetch", "{\"a\": 1}",
+                                      {"Content-Type": "application/json", "X-Bench-Episode-Id": "ep-1"})
+            assert status == 201 and json.loads(body)["body"] == "{\"a\": 1}"
+            assert request(studio_port, "PATCH", "/front-door/x/1", "{}", {"Content-Type": "application/json"})[0] == 200
+            assert request(studio_port, "DELETE", "/front-door/x/1")[0] == 200
+            assert request(studio_port, "GET", "/api/state")[0] == 401, "the Studio itself still needs the login"
+            assert request(studio_port, "PUT", "/api/state", "{}")[0] == 404
+        assert [s[0] for s in seen] == ["GET", "POST", "PATCH", "DELETE"]
+        assert seen[1][3] == "ep-1"
+
+
+def test_front_door_without_a_running_shim_says_so(studio, monkeypatch):
+    monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", "1")   # nothing listens there
+    with server_for(studio) as port:
+        status, _, body = request(port, "GET", "/front-door/salesforce/x")
+        assert status == 502 and "front door is not running" in body

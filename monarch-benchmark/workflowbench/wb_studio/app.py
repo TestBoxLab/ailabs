@@ -13,12 +13,15 @@ import secrets
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 from dotenv import load_dotenv
 from runner.arms import OracleArm, SloppyArm
 from wb_arms.api_loop import ArmResult
 from wb_orchestrator.budget import BudgetLedger
+from wb_orchestrator.config import derive_langfuse_keys
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
 from wb_results.store import Store
@@ -80,6 +83,7 @@ class Studio:
         if self.gateway_factory is None:
             load_dotenv(REPO / ".env", override=True)
             load_dotenv(ROOT / ".env", override=True)
+            derive_langfuse_keys(os.environ)
 
     def models(self):
         self._load_env()
@@ -442,6 +446,56 @@ def handler(studio):
                 return False
             return secrets.compare_digest(given, f"{user}:{password}".encode("utf-8"))
 
+        FRONT_DOOR = "/front-door"
+
+        def is_front_door(self) -> bool:
+            return self.path == self.FRONT_DOOR or self.path.startswith(self.FRONT_DOOR + "/")
+
+        def front_door(self):
+            """Forward one request to the attempt's front door: the shim on this host.
+
+            A hosted Studio is the only address Monarch can reach, so the seeds name
+            `https://<studio>/front-door` and this handler relays to the shim the
+            Monarch attempt started (STUDIO_FRONT_DOOR_PORT, default 9105). Like the
+            tunnel it replaces there is no login and no origin check on this path;
+            the shim itself accepts only its episode's world calls.
+            """
+            port = int(os.environ.get("STUDIO_FRONT_DOOR_PORT") or 9105)
+            rest = self.path[len(self.FRONT_DOOR):] or "/"
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 8 * 1024 * 1024:
+                return self.send_json({"error": "Request too large"}, 413)
+            body = self.rfile.read(length) if length else None
+            request = urllib.request.Request(f"http://127.0.0.1:{port}{rest}", data=body, method=self.command)
+            for name in ("Content-Type", "Accept", "X-Bench-Episode-Id", "Authorization", "If-Match"):
+                value = self.headers.get(name)
+                if value:
+                    request.add_header(name, value)
+            try:
+                with urllib.request.urlopen(request, timeout=120) as resp:
+                    status, data = resp.status, resp.read()
+                    content_type = resp.headers.get("Content-Type") or "application/json"
+            except urllib.error.HTTPError as exc:
+                status, data = exc.code, exc.read()
+                content_type = exc.headers.get("Content-Type") or "application/json"
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                return self.send_json({"error": f"front door is not running on this host: {exc}"}, 502)
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_PUT(self):
+            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+
+        def do_PATCH(self):
+            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+
+        def do_DELETE(self):
+            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+
         def challenge(self):
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="AI Labs Studio", charset="UTF-8"')
@@ -452,6 +506,8 @@ def handler(studio):
 
         def do_GET(self):
             from urllib.parse import urlsplit, parse_qs
+            if self.is_front_door():
+                return self.front_door()
             if not self.authorised():
                 return self.challenge()
             if not self.trusted():
@@ -551,6 +607,8 @@ def handler(studio):
                 self.send_json({"error": "Unknown comparison or invalid cursor"}, 404)
 
         def do_POST(self):
+            if self.is_front_door():
+                return self.front_door()
             if not self.authorised():
                 return self.challenge()
             if not self.trusted(write=True):
@@ -629,6 +687,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     load_dotenv(REPO / ".env", override=False)
     load_dotenv(ROOT / ".env", override=False)
+    derive_langfuse_keys(os.environ)
     if args.host != "127.0.0.1" and not (os.environ.get("STUDIO_AUTH_USER") and os.environ.get("STUDIO_AUTH_PASSWORD")):
         parser.error("binding to a non-local address needs STUDIO_AUTH_USER and STUDIO_AUTH_PASSWORD")
     app = Studio()

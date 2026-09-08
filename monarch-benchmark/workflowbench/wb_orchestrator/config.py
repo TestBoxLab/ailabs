@@ -900,3 +900,30 @@ def pick(kind, folder, stdin=None, stdout=None) -> Path:
         if answer.isdigit() and 1 <= int(answer) <= len(names):
             return Path(folder) / f"{names[int(answer) - 1]}.yaml"
         print(f"not a choice: {answer!r}", file=stdout)
+
+
+def derive_langfuse_keys(env) -> bool:
+    """Fill LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY from LANGFUSE_OTLP_AUTH when they are unset.
+
+    A Monarch deployment carries its Langfuse credentials as the OTLP header
+    `Basic base64(public:secret)`; a hosted bench that references that variable
+    needs the pair the cost reader uses. Returns True when it filled them.
+    """
+    import base64
+    if env.get("LANGFUSE_PUBLIC_KEY") and env.get("LANGFUSE_SECRET_KEY"):
+        return False
+    raw = (env.get("LANGFUSE_OTLP_AUTH") or "").strip()
+    if raw.lower().startswith("basic "):
+        raw = raw[6:].strip()
+    if not raw:
+        return False
+    try:
+        pair = base64.b64decode(raw, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    public, sep, secret = pair.partition(":")
+    if not sep or not public or not secret:
+        return False
+    env.setdefault("LANGFUSE_PUBLIC_KEY", public)
+    env.setdefault("LANGFUSE_SECRET_KEY", secret)
+    return True
