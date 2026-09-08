@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 import threading
 import time
 import uuid
@@ -544,7 +545,9 @@ def handler(studio):
                 self.wfile.write(data)
             except (BrokenPipeError, ConnectionResetError):
                 pass
-            except (ValueError, FileNotFoundError):
+            except (ValueError, FileNotFoundError) as exc:
+                # The message stays generic for the browser; the server log keeps the cause.
+                print(f"studio GET {url.path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
                 self.send_json({"error": "Unknown comparison or invalid cursor"}, 404)
 
         def do_POST(self):
