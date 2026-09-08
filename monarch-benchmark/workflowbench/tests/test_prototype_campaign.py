@@ -45,7 +45,10 @@ def test_preflight_cannot_use_a_manifest_with_different_hashes(tmp_path):
 
 def competitor(tmp_path, result=None):
     budget = CampaignBudget(tmp_path/'budget.sqlite')
-    inner = SimpleNamespace(name='model', provider_key='monarch', run=Mock(return_value=result or ArmResult(cost_usd=2)))
+    complete = ArmResult(cost_usd=2, turn_log=[
+        {'authoring_events': {'complete': True, 'events': []}},
+    ])
+    inner = SimpleNamespace(name='model', provider_key='monarch', run=Mock(return_value=result or complete))
     stop = Mock()
     return BudgetedCompetitor(inner, budget, authorize=lambda: None, stop=stop), inner, budget, stop
 
@@ -54,7 +57,9 @@ def test_reservation_precedes_dispatch_and_duplicate_id_never_dispatches_twice(t
     wrapped, inner, budget, _ = competitor(tmp_path)
     def run(ep, deadline):
         assert budget.snapshot()['reserved_usd'] == 12
-        return ArmResult(cost_usd=2)
+        return ArmResult(cost_usd=2, turn_log=[
+            {'authoring_events': {'complete': True, 'events': []}},
+        ])
     inner.run.side_effect = run
     ep = SimpleNamespace(episode_id='stable-attempt')
     wrapped.run(ep, time.monotonic()+1)
@@ -62,6 +67,14 @@ def test_reservation_precedes_dispatch_and_duplicate_id_never_dispatches_twice(t
     with pytest.raises(InfraError):
         wrapped.run(ep, time.monotonic()+1)
     assert inner.run.call_count == 1
+
+
+def test_wrapper_preserves_model_metadata_used_by_stored_episode_rows(tmp_path):
+    wrapped, inner, _, _ = competitor(tmp_path)
+    inner.model_label = 'monarch@abc123+prototype'
+    wrapped = BudgetedCompetitor(inner, CampaignBudget(tmp_path/'other.sqlite'),
+                                 authorize=lambda: None, stop=Mock())
+    assert wrapped.model_label == 'monarch@abc123+prototype'
 
 
 def test_unknown_cost_stops_paid_work_and_does_not_treat_zero_as_free(tmp_path):
@@ -83,6 +96,38 @@ def test_timeout_cost_is_unknown_until_cancellation_and_billing_are_settled(tmp_
         wrapped.run(SimpleNamespace(episode_id='a'), time.monotonic()+1)
     assert budget.snapshot()['unknown'] == ['a']
     stop.assert_called()
+
+
+def test_incomplete_child_usage_with_partial_cost_remains_unknown(tmp_path):
+    result = ArmResult(cost_usd=3, turn_log=[
+        {'authoring_events': {'complete': True, 'events': [
+            {'seq': 1, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+                                'usageComplete': True, 'costKnown': True}},
+            {'seq': 2, 'data': {'kind': 'section_model_usage', 'callId': 'child-2',
+                                'usageComplete': False, 'costKnown': False}},
+        ]}},
+        {'cost': {'authoring': {'model': {'cost_usd': 3}}}},
+    ])
+    wrapped, _, budget, stop = competitor(tmp_path, result)
+    wrapped.run(SimpleNamespace(episode_id='partial'), time.monotonic()+1)
+    assert budget.snapshot()['unknown'] == ['partial']
+    stop.assert_called_once()
+
+
+def test_complete_child_usage_allows_exactly_one_settlement(tmp_path):
+    result = ArmResult(cost_usd=3, turn_log=[
+        {'authoring_events': {'complete': True, 'events': [
+            {'seq': 1, 'data': {'kind': 'section_model_usage', 'callId': 'child-1',
+                                'usageComplete': True, 'costKnown': True}},
+        ]}},
+        {'cost': {'authoring': {'model': {'cost_usd': 3}}}},
+    ])
+    wrapped, inner, budget, _ = competitor(tmp_path, result)
+    wrapped.run(SimpleNamespace(episode_id='complete'), time.monotonic()+1)
+    assert budget.snapshot()['spent_usd'] == 3
+    with pytest.raises(InfraError):
+        wrapped.run(SimpleNamespace(episode_id='complete'), time.monotonic()+1)
+    assert inner.run.call_count == 1
 
 
 def test_preflight_is_rechecked_before_every_dispatch(tmp_path):

@@ -200,6 +200,7 @@ class BudgetedCompetitor:
     def __init__(self, inner, budget: CampaignBudget, *, authorize, stop):
         self.inner, self.budget, self.authorize, self.stop = inner, budget, authorize, stop
         self.name, self.provider_key = inner.name, inner.provider_key
+        self.model_label = getattr(inner, 'model_label', None)
 
     def prepare(self):
         self.authorize()
@@ -225,8 +226,21 @@ class BudgetedCompetitor:
             if isinstance(error, InfraError):
                 error.retryable = False
             raise
+        pages = [record['authoring_events'] for record in result.turn_log
+                 if isinstance(record, dict) and isinstance(record.get('authoring_events'), dict)]
+        usage = [event['data'] for page in pages for event in page.get('events', [])
+                 if isinstance(event, dict) and isinstance(event.get('data'), dict)
+                 and event['data'].get('kind') == 'section_model_usage']
+        durable_usage_complete = (bool(pages) and pages[-1].get('complete') is True
+                                  and all(item.get('callId')
+                                          and item.get('usageComplete') is True
+                                          and item.get('costKnown') is True
+                                          for item in usage))
         unknown = ('cost_missing' in result.flags or result.termination == 'timeout'
-                   or any('execution_cancel_error' in record for record in result.turn_log))
+                   or not durable_usage_complete
+                   or any('execution_cancel_error' in record
+                          or 'authoring_cancel_error' in record
+                          for record in result.turn_log))
         try:
             self.budget.reconcile(episode.episode_id, None if unknown else result.cost_usd)
         except BaseException:

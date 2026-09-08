@@ -117,3 +117,40 @@ def test_unknown_authoring_error_is_not_classified_by_provider_words():
     assert competitor._author(c, None, 'request', time.monotonic() + 10, result, {}) is None
     assert competitor._infra is None
     assert {'frame': frame} in result.turn_log
+
+
+def test_prototype_authoring_transport_failure_attempts_cancel_and_records_failure():
+    from types import SimpleNamespace
+    from wb_arms.monarch import MonarchArm
+    from wb_arms.api_loop import ArmResult
+    c = client()
+    c.start_authoring = Mock(return_value='r')
+    c.authoring_snapshots = Mock(side_effect=InfraError('infra:harness_crash', 'HTTP 500'))
+    c.cancel = Mock(side_effect=InfraError('infra:harness_crash', 'cancel HTTP 500'))
+    h = SimpleNamespace(authoring_mode='interactive', builder_experiment='compiled')
+    competitor = MonarchArm(h, 10, None, None, {}, 'prototype')
+    result = ArmResult()
+    with pytest.raises(InfraError, match='HTTP 500'):
+        competitor._author(c, None, 'request', time.monotonic() + 10, result, {})
+    c.cancel.assert_called_once()
+    assert any('authoring_cancel_error' in row for row in result.turn_log)
+
+
+def test_prototype_execution_transport_failure_cancels_known_run_and_records_failure():
+    from types import SimpleNamespace
+    from wb_arms.monarch import MonarchArm
+    from wb_arms.api_loop import ArmResult
+    c = client()
+    c.get_workflow = Mock(return_value={'recipe': {}})
+    c.run_workflow = Mock(return_value={'id': 'engine-run'})
+    c.get_run = Mock(side_effect=InfraError('infra:harness_crash', 'poll HTTP 500'))
+    c.cancel_execution = Mock(side_effect=InfraError('infra:harness_crash', 'cancel HTTP 500'))
+    h = SimpleNamespace(builder_experiment='compiled')
+    competitor = MonarchArm(h, 10, None, None, {}, 'prototype')
+    result, ids = ArmResult(), {'recipeVersion': None}
+    with pytest.raises(InfraError, match='poll HTTP 500'):
+        competitor._execute(c, SimpleNamespace(task={}), 'wf', time.monotonic() + 10,
+                            result, ids)
+    c.cancel_execution.assert_called_once()
+    assert ids['runId'] == 'engine-run'
+    assert any('execution_cancel_error' in row for row in result.turn_log)

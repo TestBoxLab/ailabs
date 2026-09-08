@@ -431,12 +431,20 @@ class MonarchArm:
                      deadline=deadline)
         return len(questions)
 
-    def _cancel(self, client, recipe_run: str) -> None:
+    def _cancel(self, client, recipe_run: str) -> str | None:
         """Best effort: a cancel that fails must not hide why the attempt ended."""
         try:
             client.cancel(recipe_run, deadline=time.monotonic() + 30)
-        except (InfraError, MonarchRefused):
-            pass
+        except (InfraError, MonarchRefused) as error:
+            return str(error)
+        return None
+
+    def _cancel_authoring_prototype(self, client, recipe_run: str, res: ArmResult) -> None:
+        error = self._cancel(client, recipe_run)
+        if error is None:
+            res.turn_log.append({'authoring_cancel': recipe_run})
+        else:
+            res.turn_log.append({'authoring_cancel_error': error})
 
     def _delete(self, client, workflow_id: str) -> bool:
         """Delete one workflow; remember it for the next attempt if it will not go."""
@@ -530,7 +538,10 @@ class MonarchArm:
                                 if asked is None:   # an account prompt, or nothing to answer
                                     res.termination = "agent_error"
                                     res.error = "account_requested"
-                                    self._cancel(client, recipe_run)
+                                    if self.harness.builder_experiment:
+                                        self._cancel_authoring_prototype(client, recipe_run, res)
+                                    else:
+                                        self._cancel(client, recipe_run)
                                     done = True
                                     break
                                 questions += asked
@@ -553,8 +564,15 @@ class MonarchArm:
                         time.sleep(self.POLL_INTERVAL_S)
             except EpisodeTimeout as e:
                 # FR-012: nothing is left running behind a timed-out attempt.
-                self._cancel(client, recipe_run)
+                if self.harness.builder_experiment:
+                    self._cancel_authoring_prototype(client, recipe_run, res)
+                else:
+                    self._cancel(client, recipe_run)
                 raise EpisodeTimeout(f"deadline passed in the authoring phase: {e}") from e
+        except (InfraError, MonarchRefused):
+            if self.harness.builder_experiment:
+                self._cancel_authoring_prototype(client, recipe_run, res)
+            raise
         finally:
             # Recorded even on a timeout: the phase clock is the FR-010 detail
             # that says where the deadline passed.
@@ -698,7 +716,7 @@ class MonarchArm:
                                      f"node={out.get('errorNodeId')}")
                     return
                 time.sleep(self.POLL_INTERVAL_S)
-        except EpisodeTimeout:
+        except (EpisodeTimeout, InfraError, MonarchRefused):
             if self.harness.builder_experiment and ids.get("runId"):
                 try:
                     cancelled = client.cancel_execution(ids["runId"], deadline=time.monotonic() + 30)
