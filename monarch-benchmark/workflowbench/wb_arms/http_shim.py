@@ -29,9 +29,9 @@ from wb_world.openapi import build_spec, load_schemas
 
 
 class _Server(ThreadingHTTPServer):
-    # A busy fixed port must fail loudly: on Windows the SO_REUSEADDR that
-    # HTTPServer sets lets a second bind steal a port that is already serving.
-    allow_reuse_address = False
+    # POSIX needs SO_REUSEADDR to reclaim a fixed port from closed connections.
+    # Windows keeps it off because there it can steal an address from a live server.
+    allow_reuse_address = os.name != "nt"
 
 
 class EpisodeHTTPShim:
@@ -153,6 +153,7 @@ class EpisodeHTTPShim:
 
     def stop(self) -> None:
         self.httpd.shutdown()
+        self._thread.join()
         self.httpd.server_close()
 
 

@@ -4,6 +4,7 @@ swagger-parser gate Feature Discovery runs on every spec it ingests."""
 from __future__ import annotations
 
 import json
+import socket
 import urllib.request
 from pathlib import Path
 
@@ -95,3 +96,31 @@ def test_default_host_stays_loopback():
         assert s.url == f"http://127.0.0.1:{s.port}"
     finally:
         s.httpd.server_close()
+
+
+def test_fixed_port_can_restart_after_serving_a_request():
+    ep = Episode(load_task_file(TASK), episode_id="shim-restart")
+    first = EpisodeHTTPShim(ep).start()
+    port = first.port
+    status, _ = _http("GET", f"{first.url}/openapi/index.json")
+    assert status == 200
+    first.stop()
+
+    second = EpisodeHTTPShim(ep, port=port).start()
+    try:
+        status, _ = _http("GET", f"{second.url}/openapi/index.json")
+        assert status == 200
+    finally:
+        second.stop()
+
+
+def test_fixed_port_refuses_an_active_listener():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    try:
+        ep = Episode(load_task_file(TASK), episode_id="shim-busy")
+        with pytest.raises(OSError):
+            EpisodeHTTPShim(ep, port=listener.getsockname()[1])
+    finally:
+        listener.close()
