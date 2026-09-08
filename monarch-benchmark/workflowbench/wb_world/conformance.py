@@ -6,8 +6,12 @@ the front door really returns. A wrong Google Sheets response schema passed it
 and made Monarch refuse every Sheets task.
 
 This module executes each action -- in process, over an Episode, through the
-same URL mapping `wb_arms/http_shim.py::_rest` uses -- and gives one of six
-verdicts. Design note: docs/superpowers/specs/2026-09-04-seed-conformance-design.md
+same URL mapping `wb_arms/http_shim.py::_rest` uses -- and gives one verdict per
+action. One of them is static: `body_unusable`, for a write whose seed declares
+no parameter for a body key its own router lambda reads. That action RUNS and
+answers 200, so every dynamic check passes on a seed the builder still cannot
+use (v5.2's `bench-airtable:create:root`).
+Design note: docs/superpowers/specs/2026-09-04-seed-conformance-design.md
 """
 from __future__ import annotations
 
@@ -606,6 +610,43 @@ def front_door_to_world(url: str, schemas: dict) -> tuple[str, str] | None:
     return service, world_url(service, rest, schemas) + (f"?{sp.query}" if sp.query else "")
 
 
+def _ab_route_path(service: str, world_url: str) -> str:
+    """The path AutomationBench's router matches, from a world URL.
+
+    `api_fetch` strips the service's own baseUrl and dispatches on
+    `<AB prefix><rest>`: `https://api.airtable.com/v0/app1/tbl1` is routed as
+    `airtable/v0/app1/tbl1`, which is what the `_ROUTES` regexes are written
+    against.
+    """
+    from wb_world.openapi import _ab_prefix, load_schemas
+    base = urlsplit((load_schemas().get(service) or {}).get("baseUrl", "")).path
+    rest = urlsplit(world_url).path
+    if base and rest.startswith(base.rstrip("/")):
+        rest = rest[len(base.rstrip("/")):]
+    return _ab_prefix(service) + rest.lstrip("/")
+
+
+def _undeclared_body_keys(service: str, world_url: str, method: str,
+                          step: dict) -> list[str]:
+    """Body keys the router lambda reads that this step's template does not send.
+
+    Read from the same AutomationBench source the generator reads, so the two
+    cannot drift: `wb_world.seeds` parses `_HANDLERS` once and this asks it what
+    the lambda serving `world_url` lifts. A read carries no body and is exempt;
+    so is a key the URL already places.
+    """
+    if method in READ_METHODS or method == "DELETE":
+        return []
+    from wb_world import seeds
+    picked = seeds.picked_keys_for(service, _ab_route_path(service, world_url), method)
+    if not picked:
+        return []
+    sent = set(step.get("body_template") or {})
+    placed = {n.lower() for n in TOKEN.findall(step.get("url_template") or "")}
+    return sorted(k for k in picked
+                  if k not in sent and k.lower() not in placed)
+
+
 def _required_in_schema(schema: Any, path: str | None) -> bool:
     """Does `schema` mark the field this extract path names as required?"""
     if not isinstance(schema, dict) or not isinstance(path, str):
@@ -833,6 +874,20 @@ def _check_action(service: str, doc: dict, task: dict, schemas: dict) -> Row:
         row.verdict, row.detail = "not_executable",             f"the service baseUrl leaves {{{leftover[0]}}} unsubstituted"
         return row
     row.url = mapped[1]
+
+    # Static, before the request runs: does this write declare the body keys its
+    # own router lambda lifts out of the body? A router that picks named keys
+    # (`fields=b.get("fields", b)`) rather than forwarding `**b` accepts the
+    # request either way, so every dynamic check below passes on an action that
+    # is still useless -- the builder has no parameter to put the record's
+    # fields in, and says so (v5.2's `bench-airtable:create:root`, 4 Sep 2026).
+    undeclared = _undeclared_body_keys(service, row.url, method, step)
+    if undeclared:
+        row.verdict = "body_unusable"
+        row.detail = ("the handler reads body key(s) the seed declares no "
+                      f"parameter for: {', '.join(undeclared)}")
+        return row
+
     body = _render_body(step.get("body_template"), filler)
 
     # AutomationBench's `api_fetch` does NOT parse a URL's query string: the

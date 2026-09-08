@@ -221,14 +221,19 @@ def _conform_gate(out: Path, services: list[str], stdout) -> None:
         return                                   # no corpus, no worlds to check against
     report = conformance.check(out, corpus, list(services))
     report.write_json(out.parent / "monarch-conformance.json")   # outside the seed folder: the deploy script scans it
-    bad_reads = [r for r in report.rows if r.is_read and r.verdict in
-                 ("schema_mismatch", "extract_empty", "request_rejected")]
+    # v5.3: `body_unusable` is a STATIC finding -- the seed declares no parameter
+    # for a body key the router lambda reads -- so it can never be this check's
+    # own invented input, and it gates exactly as a wrong read schema does.
+    bad_reads = [r for r in report.rows
+                 if r.verdict == "body_unusable"
+                 or (r.is_read and r.verdict in
+                     ("schema_mismatch", "extract_empty", "request_rejected"))]
     no_handler = [r for r in report.rows if r.verdict == "no_handler"]
     if no_handler:
         print(f"[warn] conform: {len(no_handler)} action(s) name a route the simulated "
               f"app does not serve (first: {no_handler[0].action_id})", file=stdout)
     bad_writes = [r for r in report.rows if not r.is_read and r.verdict not in
-                  conformance.BENIGN]
+                  conformance.BENIGN and r.verdict != "body_unusable"]
     if bad_writes:
         print(f"[warn] conform: {len(bad_writes)} write action(s) did not check out "
               f"(first: {bad_writes[0].action_id} {bad_writes[0].verdict})", file=stdout)
@@ -236,7 +241,7 @@ def _conform_gate(out: Path, services: list[str], stdout) -> None:
         for r in bad_reads[:5]:
             print(f"      {r.action_id}: {r.verdict}: {r.detail[:110]}", file=stdout)
         raise Stop(2, "conform",
-                   f"{len(bad_reads)} read action(s) do not match the simulated apps; "
+                   f"{len(bad_reads)} action(s) do not match the simulated apps; "
                    f"nothing imported (see {out.parent / 'monarch-conformance.json'})")
     print(f"[ok] conform: {len(report.rows)} actions true against the simulated apps",
           file=stdout)
