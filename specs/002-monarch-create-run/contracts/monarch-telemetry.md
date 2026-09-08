@@ -95,6 +95,48 @@ do the task, so the benchmark reads such a run as a failed attempt:
 `termination = "agent_error"`, `error = "run_no_writes"`, and the report's
 dispatch outcome reads "ran, no writes" rather than "success".
 
+## 1c. The run view: a backstop for a lost SSE frame
+
+The SSE stream is progress, not the record of truth. Live session `25ade669`
+(8 Sep 2026): Monarch's server finished `done` 10 min 50 s after the POST, with
+the recipe saved (`workflowId`, `recipeVersion`), and the benchmark never
+received the terminal frame -- it kept reading `running` frames for another 40
+minutes, until its deadline. So Monarch added a view of the run:
+
+```
+GET /api/workflows/recipe/runs/{runId}
+{"status": "running" | "awaiting_input" | "done" | "error",
+ "error": ..., "recipe": {...}, "workflowId": ..., "recipeVersion": ...,
+ "assistantText": ..., ...}
+```
+
+The fields are the ones the SSE frames carry, so either source can be read the
+same way. Monarch's recommendation, which the benchmark implements: keep the SSE
+for progress, and poll the view every 15-30 s as a backstop. **A run is terminal
+when `status` is `done` or `error` from either source.**
+
+What the benchmark does (`wb_arms/monarch.py`, `_author` / `_view`):
+
+- the reader waits at most `socket_timeout_s` (20 s) for the SSE socket to have
+  something, so the loop wakes on a fixed beat even when the server says nothing;
+- on each wake it checks the attempt's deadline, and if no frame has arrived for
+  `view_poll_interval_s` (20 s) it GETs the view;
+- it also GETs the view whenever the stream ends without a terminal frame, before
+  deciding whether to reconnect;
+- a `done` view with a `workflowId` is treated exactly like a `done` frame, and an
+  `error` view exactly like an `error` frame. The view is written to the attempt's
+  turn log as `{"view": {...}}` rather than `{"frame": {...}}`, so a report can
+  say which source ended the phase;
+- **the deadline is observed within 30 s of it** (live run `run-20260908-145828`:
+  a 1800 s deadline was cut only at 2369 s, because a silent socket read blocked
+  indefinitely). On the deadline the view is fetched once more: if it is `done`
+  with a workflow and at least 60 s of the attempt remain, the run phase goes
+  ahead; otherwise the row records `no_time_for_run`, and the authoring run is
+  cancelled as before. Either way a workflow the view revealed is deleted with
+  the rest of the attempt's cleanup -- a timed-out attempt leaves no orphan.
+
+Nothing here asks anything further of Monarch beyond the GET route itself.
+
 **The trace id in the frames is the primary join.** Every authoring SSE frame
 carries `traceId`, so the benchmark collects the ids it saw and fetches those
 traces by id (`GET /api/public/traces/<id>`), which is exact and needs no

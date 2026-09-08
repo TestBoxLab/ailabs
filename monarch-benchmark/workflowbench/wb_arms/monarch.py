@@ -47,6 +47,14 @@ RECIPE_CHECK_BUDGET_S = 60.0
 # the only cure for the leftover of a timed-out attempt.
 ACTIVE_RUN_WAIT_S = 60.0
 
+# A workflow the run view revealed at the deadline is only worth running if
+# there is time to run it; below this it is deleted and the row says why.
+MIN_RUN_TIME_S = 60.0
+
+# How long one read of the run view may take. Short: it is a backstop poll, and
+# a slow one must not eat the beat it runs on.
+DEFAULT_VIEW_BUDGET_S = 20.0
+
 # The unattended builder runs on a fixed budget (30 turns, 20 minutes of wall
 # clock from its first turn; backend 2ede4b3ee). Exhausting it is the
 # competitor's own failure: the row records it bare, and the episode's
@@ -127,6 +135,11 @@ def monarch_version(repo_path: str | Path) -> str:
 class MonarchArm:
     provider_key = "monarch"
     POLL_INTERVAL_S = 2.0
+    # How long the authoring loop waits without a frame before asking the run
+    # view where the job stands, and the beat the stream reader wakes on. Both
+    # are attributes, not constants, so the tests can turn them down.
+    view_poll_interval_s = 20.0
+    socket_timeout_s = 20.0
 
     def __init__(self, harness, timeout_s: float, price_table, kb, env, name: str,
                  mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None):
@@ -159,6 +172,9 @@ class MonarchArm:
         self._trace_ids: list[str] = []  # Langfuse traces this attempt's frames named
         self._started_at: datetime | None = None   # set by run(); bounds the cost read
         self._done_recipe: dict | None = None  # the done frame's recipe, for its `inputs`
+        # a workflow the run view revealed once the deadline had passed: nothing
+        # will run it, so `_attempt` deletes it rather than leave an orphan
+        self._orphan: str | None = None
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -370,7 +386,8 @@ class MonarchArm:
         assert _LOCK.locked(), "_client caches the session token; call it under _LOCK"
         h = self.harness
         token = self._token or self.env.get(h.credential_env or "")
-        client = MonarchClient(expand(h.base_url, self.env, "base_url"), token=token)
+        client = MonarchClient(expand(h.base_url, self.env, "base_url"), token=token,
+                               socket_timeout_s=self.socket_timeout_s)
         if not token:
             self._token = client.login(h.login_email, self.env.get(h.login_password_env or ""),
                                        deadline=deadline)
@@ -400,6 +417,7 @@ class MonarchArm:
             self._execute(client, ep, row.workflow_id, deadline, res, ids)
             return res
         workflow_id = None
+        self._orphan = None
         try:
             workflow_id = self._author(client, ep, goal, deadline, res, ids)
             if workflow_id is None:
@@ -407,6 +425,7 @@ class MonarchArm:
             self._execute(client, ep, workflow_id, deadline, res, ids)
             return res
         finally:
+            workflow_id = workflow_id or self._orphan
             if workflow_id and self.keep_workflows:
                 # `wb monarch recipes` decides keep-or-delete from the checker's
                 # verdict, which needs the snapshot this attempt has not taken yet,
@@ -475,6 +494,61 @@ class MonarchArm:
             if self._delete(client, workflow_id):
                 self._leftover.remove(workflow_id)
 
+    def _terminal(self, view: dict, res, ids) -> tuple[bool, str | None]:
+        """Read a `done`/`error` frame or run view. (terminal?, workflow id)."""
+        status = view.get("status")
+        if status == "done":
+            workflow_id = view.get("workflowId")
+            ids["workflowId"] = workflow_id
+            ids["recipeVersion"] = view.get("recipeVersion")
+            # The declaration the run must satisfy; the workflow detail is the
+            # fallback (_declared_inputs).
+            self._done_recipe = view.get("recipe")
+            assumptions = (self._done_recipe or {}).get("assumptions")
+            if assumptions:
+                # What the unattended builder decided for itself; the report
+                # shows it beside the row.
+                res.turn_log.append({"assumptions": assumptions})
+            if not workflow_id:
+                # Monarch finished by declining to build one: either it declined,
+                # or triage read the request as not a workflow (unattended, and
+                # `assistantText` is where it says why). There is nothing to run,
+                # and reading it as success recorded `completed` for an attempt
+                # that did nothing (live, 4 Sep 2026).
+                message = view.get("message") or view.get("assistantText") or ""
+                res.termination = "agent_error"
+                res.error = f"no_workflow: {message[:200]}"
+            return True, workflow_id
+        if status == "error":
+            message = view.get("error")
+            self._infra = _classify_authoring_error(message)
+            res.termination = "agent_error"
+            # The unattended builder's fixed budget (30 turns, 20 minutes) is the
+            # competitor's own failure, so it is recorded bare and never retried
+            # as infra.
+            res.error = (BUDGET_EXHAUSTED if message == BUDGET_EXHAUSTED
+                         else f"authoring_error: {message}")
+            return True, None
+        return False, None
+
+    def _view(self, client, recipe_run, res, ids, deadline) -> tuple[bool, str | None]:
+        """Ask the run view where the job stands; read a terminal one like a frame.
+
+        The backstop for a terminal frame the stream never delivered (live
+        session 25ade669, 8 Sep 2026: the job finished `done` with the recipe
+        saved and the bench streamed `running` for another 40 minutes). Recorded
+        as `{"view": ...}` so a report can tell it from a frame. A view the
+        backend cannot answer for is not a verdict: the stream stays the path.
+        """
+        try:
+            view = client.get_authoring_run(recipe_run, deadline=min(
+                deadline, time.monotonic() + DEFAULT_VIEW_BUDGET_S))
+        except (InfraError, MonarchRefused):
+            return False, None
+        res.turn_log.append({"view": view})
+        self._note_trace(view)
+        return self._terminal(view, res, ids)
+
     def _author(self, client, ep, goal, deadline, res, ids) -> str | None:
         """Stream the authoring run; return the workflow id, or fill `res` and return None."""
         t0 = time.monotonic()
@@ -487,55 +561,38 @@ class MonarchArm:
             try:
                 # The stream can end without a terminal frame while the job runs
                 # on: Railway's edge cuts a long SSE response (seen 4 Sep 2026,
-                # frames stopped at ~85 s of a ~120 s authoring). There is no job
-                # view to poll -- GET recipe/runs/<id> is 404 -- so the stream is
-                # re-opened, which resends the current view, until a terminal
-                # frame arrives, the job is gone (404), or the deadline passes.
+                # frames stopped at ~85 s of a ~120 s authoring), and a terminal
+                # frame can be lost outright (8 Sep 2026). So the stream is
+                # re-opened, and the run view is polled as a backstop, until a
+                # terminal frame or view arrives, the job is gone (404), or the
+                # deadline passes.
                 done = False
                 while not done:
+                    last_frame_at = time.monotonic()
                     try:
                         frames = client.stream(recipe_run, deadline=deadline)
                         for frame in frames:
+                            if frame is None:
+                                # The stream is open and silent. Wake, check the
+                                # deadline, and ask the view once the beat is up.
+                                if time.monotonic() >= deadline:
+                                    raise EpisodeTimeout(
+                                        f"deadline hit while streaming authoring "
+                                        f"run {recipe_run}")
+                                if (time.monotonic() - last_frame_at
+                                        >= self.view_poll_interval_s):
+                                    last_frame_at = time.monotonic()
+                                    done, workflow_id = self._view(
+                                        client, recipe_run, res, ids, deadline)
+                                    if done:
+                                        break
+                                continue
+                            last_frame_at = time.monotonic()
                             res.turn_log.append({"frame": frame})
                             self._note_trace(frame)
                             status = frame.get("status")
-                            if status == "done":
-                                workflow_id = frame.get("workflowId")
-                                ids["workflowId"] = workflow_id
-                                ids["recipeVersion"] = frame.get("recipeVersion")
-                                # The declaration the run must satisfy; the
-                                # workflow detail is the fallback (_declared_inputs).
-                                self._done_recipe = frame.get("recipe")
-                                assumptions = (self._done_recipe or {}).get("assumptions")
-                                if assumptions:
-                                    # What the unattended builder decided for
-                                    # itself; the report shows it beside the row.
-                                    res.turn_log.append({"assumptions": assumptions})
-                                if not workflow_id:
-                                    # Monarch finished by declining to build one:
-                                    # either it declined, or triage read the
-                                    # request as not a workflow (unattended, and
-                                    # `assistantText` is where it says why).
-                                    # There is nothing to run, and reading it as
-                                    # success recorded `completed` for an attempt
-                                    # that did nothing (live, 4 Sep 2026).
-                                    message = (frame.get("message")
-                                               or frame.get("assistantText") or "")
-                                    res.termination = "agent_error"
-                                    res.error = f"no_workflow: {message[:200]}"
-                                done = True
-                                break
-                            if status == "error":
-                                message = frame.get("error")
-                                self._infra = _classify_authoring_error(message)
-                                res.termination = "agent_error"
-                                # The unattended builder's fixed budget (30 turns,
-                                # 20 minutes) is the competitor's own failure, so
-                                # it is recorded bare and never retried as infra.
-                                res.error = (BUDGET_EXHAUSTED
-                                             if message == BUDGET_EXHAUSTED
-                                             else f"authoring_error: {message}")
-                                done = True
+                            if status in ("done", "error"):
+                                done, workflow_id = self._terminal(frame, res, ids)
                                 break
                             if status == "awaiting_input":
                                 rid = (frame.get("awaiting_reply") or {}).get("requestId")
@@ -560,6 +617,11 @@ class MonarchArm:
                         res.error = "stream_closed"
                         done = True
                     if not done:
+                        # The stream ended with no terminal frame. It may have
+                        # been cut mid-job, or the ending may simply be lost:
+                        # the view is what tells the two apart.
+                        done, workflow_id = self._view(client, recipe_run, res, ids, deadline)
+                    if not done:
                         # Paced, so a backend that closes instantly cannot spin.
                         if time.monotonic() + self.POLL_INTERVAL_S >= deadline:
                             raise EpisodeTimeout(
@@ -567,6 +629,20 @@ class MonarchArm:
                         res.turn_log.append({"stream_reconnect": recipe_run})
                         time.sleep(self.POLL_INTERVAL_S)
             except EpisodeTimeout as e:
+                # The deadline landed on a job that may already have finished:
+                # one last view says so. A workflow it reveals is run only if
+                # there is time to run it, and deleted by the caller otherwise,
+                # so a timed-out attempt never leaves an orphan behind.
+                done, workflow_id = self._view(client, recipe_run, res, ids,
+                                               time.monotonic() + DEFAULT_VIEW_BUDGET_S)
+                if done and workflow_id:
+                    if deadline - time.monotonic() >= MIN_RUN_TIME_S:
+                        return workflow_id
+                    res.termination = "agent_error"
+                    res.error = "no_time_for_run"
+                    self._orphan = workflow_id
+                    raise EpisodeTimeout(
+                        f"deadline passed in the authoring phase: {e}") from e
                 # FR-012: nothing is left running behind a timed-out attempt.
                 self._cancel(client, recipe_run)
                 raise EpisodeTimeout(f"deadline passed in the authoring phase: {e}") from e

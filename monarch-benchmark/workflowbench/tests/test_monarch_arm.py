@@ -1119,3 +1119,102 @@ def test_the_builders_assumptions_are_recorded(site, repo):
     assert {"assumptions": ["Used the first matching contact",
                             "Assumed the city is Denver"]} in result.turn_log
     free(port)
+
+
+# -- the run view as a backstop for a lost terminal frame ----------------------
+
+def fast_backstop(arm, poll=1.0, socket_timeout=1.0):
+    """Production waits 20 s on each; a test must not."""
+    arm.view_poll_interval_s = poll
+    arm.socket_timeout_s = socket_timeout
+    return arm
+
+
+def test_a_dropped_terminal_frame_is_recovered_from_the_run_view(site, repo):
+    """Live session 25ade669: the job finished `done` and the bench never heard.
+
+    The GET view is the backstop: a `done` view with a workflow ends the
+    authoring phase exactly like a `done` frame, and says so in the turn log.
+    """
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", frames=[RUNNING, DONE],
+                  drop_terminal_frame=True, engine_calls=DENVER)
+    with FakeMonarch(sc) as fake:
+        arm = fast_backstop(arm_against(site, fake, port, repo))
+        t0 = time.monotonic()
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+        took = time.monotonic() - t0
+
+    assert result.termination == "completed", result.error
+    assert took < 25, f"the view was polled too late ({took:.1f}s)"
+    ids = result.turn_log[0]["monarch"]
+    assert ids["workflowId"] == "wf-1" and ids["recipeVersion"] == 1
+    # The report must be able to tell a view from a frame.
+    views = [e["view"] for e in result.turn_log if "view" in e]
+    assert views and views[-1]["status"] == "done"
+    assert fake.deleted_workflows == ["wf-1"]
+    free(port)
+
+
+def test_an_error_view_ends_the_attempt_like_an_error_frame(site, repo):
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}",
+                  frames=[RUNNING, {"status": "error", "error": "planner gave up"}],
+                  drop_terminal_frame=True)
+    with FakeMonarch(sc) as fake:
+        arm = fast_backstop(arm_against(site, fake, port, repo))
+        result = arm.run(Episode(task(), episode_id=EPISODE),
+                         deadline=time.monotonic() + 60)
+
+    assert result.termination == "agent_error"
+    assert result.error == "authoring_error: planner gave up"
+    assert fake.deleted_workflows == []
+    free(port)
+
+
+def test_a_silent_stream_still_hits_the_deadline_on_time(site, repo):
+    """Live run-20260908-145828: the deadline was 1800 s, the cut came at 2369 s.
+
+    A server that says nothing must not park the reader past its deadline: the
+    socket timeout wakes the loop, and the deadline is observed within 30 s.
+    """
+    port = free_port()
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", stream_silent=True)
+    with FakeMonarch(sc) as fake:
+        arm = fast_backstop(arm_against(site, fake, port, repo))
+        arm.timeout_s = 40.0
+        t0 = time.monotonic()
+        with pytest.raises(EpisodeTimeout) as exc:
+            arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 120)
+        took = time.monotonic() - t0
+
+    assert "authoring" in str(exc.value)
+    assert 40 <= took < 70, f"the deadline was observed {took - 40:.1f}s late"
+    assert [r for r in fake.requests if r["path"].endswith("/cancel")]
+    free(port)
+
+
+def test_a_workflow_finished_at_the_deadline_is_deleted_not_orphaned(site, repo):
+    """The deadline lands on a job that did finish, with no time left to run it.
+
+    The last view reveals the workflow: too little of the attempt remains to run
+    it, so the row says `no_time_for_run` and the workflow is deleted like any
+    other -- a timed-out attempt never leaves an orphan behind.
+    """
+    port = free_port()
+    # The job ends `done` at ~1.5 s and the stream neither says so nor closes,
+    # so only the view knows -- and the arm's beat is longer than the attempt.
+    sc = Scenario(shim_url=f"http://127.0.0.1:{port}", frames=[RUNNING, DONE],
+                  drop_terminal_frame=True, hold_open_after_terminal=True,
+                  delay_s={"frame": 1.5})
+    with FakeMonarch(sc) as fake:
+        arm = fast_backstop(arm_against(site, fake, port, repo), poll=30.0)
+        arm.timeout_s = 4.0
+        with pytest.raises(EpisodeTimeout) as exc:
+            arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
+
+    assert exc.value.partial.error == "no_time_for_run"
+    assert fake.deleted_workflows == ["wf-1"]
+    assert not [r for r in fake.requests if r["path"].endswith("/run")]
+    free(port)
