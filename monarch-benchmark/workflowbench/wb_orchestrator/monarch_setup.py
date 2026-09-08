@@ -14,6 +14,11 @@ Five steps, printed one line each (contracts/cli.md):
   granted   an open question; warned about, never fails
   write     config/products/<product>.monarch-kb.yaml, the file `wb run` checks
 
+With `--knowledge <catalog.json>` the seeds it validates, checks and imports
+are the LAB seeds (`wb_world.knowledge`): the same routes, descriptions from
+the reviewed catalog, and the catalog's sha256 in the hash file. `wb monarch
+knowledge` runs only the first step and writes them without importing.
+
 Spends no model money: it talks only to the discovery service, never to the
 Monarch backend or Langfuse. Idempotent: a second run writes the same bytes.
 """
@@ -102,8 +107,62 @@ def _post(url: str, payload: dict, step: str, timeout: float = TIMEOUT_S,
         raise Stop(4, step, f"{url} failed: {e}") from e
 
 
+def _generate(out: Path, shim_public_url: str, stdout) -> None:
+    """Step 1 of both commands: the stock seeds, one line on success."""
+    try:
+        summary = seeds.generate(out, shim_public_url)
+    except seeds.SeedGap as e:
+        for g in e.gaps:
+            print(f"      {g.file}: {g.gap}", file=stdout)
+        raise Stop(2, "generate", f"{len(e.gaps)} gap(s); nothing written") from e
+    print(f"[ok] generate: operations_in_spec={summary.operations_in_spec} "
+          f"files_written={summary.files_written} folders={len(summary.folders)}", file=stdout)
+
+
+def _enrich(out: Path, product_path, knowledge_path, map_path, stdout):
+    """The lab seeds: descriptions from the knowledge catalog through the explicit table.
+
+    The table lives next to the product file (`<name>.knowledge-map.yaml`)
+    unless `map_path` names another; a missing or unusable input stops the
+    command with code 2 before anything is imported.
+    """
+    from wb_world import knowledge
+
+    table = Path(map_path) if map_path else knowledge.map_path_for(product_path)
+    try:
+        report = knowledge.enrich(out, knowledge.load_catalog(knowledge_path),
+                                  knowledge.load_map(table))
+    except knowledge.KnowledgeError as e:
+        raise Stop(2, "knowledge", str(e)) from e
+    c = report.counts
+    print(f"[ok] knowledge: matched={c['matched_entries']} catalog_only={c['catalog_only']} "
+          f"bench_only={c['bench_only']} (report: {report.report_path})", file=stdout)
+    return report
+
+
+def lab_seeds(product_path, harness_path, out_dir, env: dict, stdout, knowledge_path,
+              map_path=None, front_door: str | None = None) -> int:
+    """`wb monarch knowledge`: write the lab seeds and the mapping report; import nothing.
+
+    Two steps, `generate` and `knowledge`, printed one line each. The front door
+    the seeds point at comes from `--front-door` when given, else from the
+    harness exactly as `wb monarch setup` derives it.
+    """
+    out = Path(out_dir).resolve()
+    try:
+        harness = config.load_harness(harness_path)
+        shim_public_url = front_door.rstrip("/") if front_door else public_front_door_url(harness, env)
+        _generate(out, shim_public_url, stdout)
+        _enrich(out, product_path, knowledge_path, map_path, stdout)
+        return 0
+    except Stop as stop:
+        print(f"[stop] {stop.step}: {stop.message}", file=stdout)
+        return stop.code
+
+
 def run(product_path, harness_path, out_dir, env: dict, stdout,
-        conform: bool = True) -> int:
+        conform: bool = True, knowledge: str | None = None,
+        knowledge_map: str | None = None) -> int:
     def say(mark: str, step: str, detail: str = "") -> None:
         print(f"[{mark}] {step}{': ' + detail if detail else ''}", file=stdout)
 
@@ -115,15 +174,9 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
         shim_public_url = public_front_door_url(harness, env)
         fd_head = fd_headers(harness, env)
 
-        # 1. generate
-        try:
-            summary = seeds.generate(out, shim_public_url)
-        except seeds.SeedGap as e:
-            for g in e.gaps:
-                print(f"      {g.file}: {g.gap}", file=stdout)
-            raise Stop(2, "generate", f"{len(e.gaps)} gap(s); nothing written") from e
-        say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
-                              f"files_written={summary.files_written} folders={len(summary.folders)}")
+        # 1. generate (and, for the lab instance, enrich before anything checks or imports it)
+        _generate(out, shim_public_url, stdout)
+        taught = _enrich(out, product_path, knowledge, knowledge_map, stdout) if knowledge else None
         _run_seed_validator(out, env, stdout)
         if conform:
             _conform_gate(out, product.services, stdout)
@@ -157,7 +210,10 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
                                "are granted to the bench user's organisation")
 
         # 6. write
-        path, changed = _write_kb(Path(product_path), product.name, shim_public_url, kb)
+        path, changed = _write_kb(Path(product_path), product.name, shim_public_url, kb,
+                                  taught={"knowledge_source": taught.knowledge_source,
+                                          "knowledge_sha256": taught.knowledge_sha256}
+                                  if taught else {})
         say("ok", "write", f"{path} ({'changed' if changed else 'unchanged'})")
         return 0
     except Stop as stop:
@@ -259,14 +315,17 @@ def _override_snippet(out: Path) -> str:
 
 
 def _write_kb(product_path: Path, name: str, shim_public_url: str,
-              kb: dict[str, str]) -> tuple[Path, bool]:
+              kb: dict[str, str], taught: dict[str, str] | None = None) -> tuple[Path, bool]:
+    """The knowledge-base hash file; `taught` adds the knowledge catalog's name and sha256
+    when the seeds were the lab set, so the file says which knowledge the instance holds."""
     path = product_path.with_name(f"{name}.monarch-kb.yaml")
     doc = {"product": name, "generated_at": "", "seeds_format": SEEDS_FORMAT,
-           "shim_public_url": shim_public_url, "kb": dict(sorted(kb.items()))}
+           "shim_public_url": shim_public_url, "kb": dict(sorted(kb.items())), **(taught or {})}
     old = {}
     if path.is_file():
         old = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    same = old.get("kb") == doc["kb"] and old.get("shim_public_url") == shim_public_url
+    same = (old.get("kb") == doc["kb"] and old.get("shim_public_url") == shim_public_url
+            and old.get("knowledge_sha256") == doc.get("knowledge_sha256"))
     doc["generated_at"] = str(old.get("generated_at")) if same else \
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     text = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)

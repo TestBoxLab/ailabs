@@ -95,3 +95,24 @@ commit are not observable from the bench; both are recorded as declarations. A b
 route that reports its build identity and its model provider would close this. The
 agentic-request track (`POST /api/operator/runs`) has no adapter. Per-node run values
 are not fetched for the Activity lane.
+## 4. Lab seeds and the PG-Waki knowledge (unblock plan M6, 8 Sep 2026)
+
+- The knowledge lands in `business_action.description`, which the seed SPEC
+  stores but does not serve to the builder today (SPEC §2: "not served to the
+  builder"). Until Monarch's builder reads it (Deyton), the lab instance holds
+  more words than the stock one and plans the same way. Argument semantics
+  could also go into `constraints.helper_text`, the one prose field the builder
+  does see per parameter; that changes parameter bytes and needs its own
+  decision.
+- 16 catalog entries have no bench action and are listed with reasons in the
+  table's `notes` and in `KNOWLEDGE-MAPPING.yaml`. Two of them are seed gaps
+  rather than missing routes: QuickBooks' `POST /vendor` and `POST /invoice`
+  update or void when the body carries `Id`, and the seeds expose no `Id`
+  parameter (`quickbooks_update_vendor`, `quickbooks_void_invoice`).
+- Four bench products have no product paragraph in the catalog
+  (facebook_conversions, facebook_lead_ads, linkedin_ads, linkedin_conversions)
+  and 462 of the 686 actions have no entry; the catalog covers the Zapier
+  "hard 50" tool set only.
+- The lab set of 8 Sep was generated with the front door pinned to
+  `http://host.docker.internal:9105` because `FRONT_DOOR_URL` is empty offline;
+  regenerate with the lab instance's real front door before importing (T5.3).

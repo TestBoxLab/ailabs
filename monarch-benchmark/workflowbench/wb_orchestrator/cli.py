@@ -611,7 +611,21 @@ def cmd_monarch_setup(args) -> int:
         return monarch_setup.run(config.resolve_name_or_path(args.product, "product"),
                                  config.resolve_name_or_path(args.harness, "harness"),
                                  args.out, os.environ, sys.stdout,
-                                 conform=not args.no_conform)
+                                 conform=not args.no_conform,
+                                 knowledge=args.knowledge, knowledge_map=args.map)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+
+
+def cmd_monarch_knowledge(args) -> int:
+    """The lab seeds: stock seeds plus a knowledge catalog's descriptions; imports nothing."""
+    try:
+        return monarch_setup.lab_seeds(config.resolve_name_or_path(args.product, "product"),
+                                       config.resolve_name_or_path(args.harness, "harness"),
+                                       args.out, os.environ, sys.stdout,
+                                       knowledge_path=args.knowledge, map_path=args.map,
+                                       front_door=args.front_door)
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
@@ -813,7 +827,27 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("--no-conform", action="store_true",
                     help="import without checking that every action is true against "
                          "the simulated apps (see `wb monarch conform`)")
+    ms.add_argument("--knowledge", default=None,
+                    help="a reviewed knowledge catalog (JSON): teach the instance the lab "
+                         "seeds instead of the stock ones (see `wb monarch knowledge`)")
+    ms.add_argument("--map", default=None,
+                    help="the catalog-to-action table; default: <product>.knowledge-map.yaml "
+                         "next to the product file")
     ms.set_defaults(fn=cmd_monarch_setup)
+    mk = msub.add_parser("knowledge",
+                         help="write the lab seeds: the stock seeds with action descriptions "
+                              "from a reviewed knowledge catalog, plus KNOWLEDGE-MAPPING.yaml "
+                              "(offline; imports nothing)")
+    mk.add_argument("--knowledge", required=True, help="the knowledge catalog (JSON)")
+    mk.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
+    mk.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
+    mk.add_argument("--map", default=None,
+                    help="the catalog-to-action table; default: <product>.knowledge-map.yaml "
+                         "next to the product file")
+    mk.add_argument("--out", default="out/monarch-seeds-lab", help="where the seed folders are written")
+    mk.add_argument("--front-door", default=None,
+                    help="the front-door URL the seeds point at; default: from the harness")
+    mk.set_defaults(fn=cmd_monarch_knowledge)
     mc = msub.add_parser("conform",
                          help="execute every catalogue action against the simulated apps "
                               "and report the seeds that are not true")

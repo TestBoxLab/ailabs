@@ -1,0 +1,1468 @@
+knowledge_source: bridge-v8-zapier-hard50-reviewed-capabilities-enriched-4a8e106-v2.json
+knowledge_sha256: 7aea3d995c260edba3a84457f4cd634fd9c8c5e30f5bd6bebd52f0927a6c487d
+knowledge_generator: automationbench-zapier-hard50-reviewed-capabilities-v1
+knowledge_map: simulated-apps.knowledge-map.yaml
+knowledge_map_sha256: 9750ba6526bd6be74af45fcb7ddd0b917dd62dd61172f7d3cae721349b38cef3
+seeds_version: v5.3
+rule: An explicit table, one row per catalog entry, names the bench action that performs the entry's operation over the simulated app (same product, same resource, same kind of effect); several entries may name one action when they are aliases or special cases of its route. An entry without a row is catalog-only and an action without an entry is bench-only; neither is guessed. A record location is carried only when the seed's response schema reaches it; an argument's meaning only when the seed has a parameter of that name.
+counts:
+  catalog_entries: 273
+  bench_actions: 686
+  matched_entries: 257
+  matched_actions: 224
+  catalog_only: 16
+  bench_only: 462
+  map_rows_without_catalog_entry: 0
+  products_with_context: 43
+  products_without_context: 4
+matched:
+- catalog: zapier:airtable_add_comment
+  bench: bench-airtable:create:comments
+  arguments: 0 of 4
+- catalog: zapier:airtable_create_record
+  bench: bench-airtable:create:root
+  arguments: 0 of 3
+- catalog: zapier:airtable_findManyRecords
+  bench: bench-airtable:read:root
+  arguments: 0 of 9
+  note: the table read; the route's filterByFormula does the matching the tool does with searchByField/searchByValue
+- catalog: zapier:airtable_updateRecord
+  bench: bench-airtable:update:root
+  arguments: 0 of 4
+- catalog: zapier:asana_add_tag_to_task
+  bench: bench-asana:create:addtag
+  arguments: 0 of 2
+- catalog: zapier:asana_add_task_to_section
+  bench: bench-asana:create:addtask
+  arguments: 0 of 6
+- catalog: zapier:asana_create_task
+  bench: bench-asana:create:tasks
+  arguments: 0 of 16
+- catalog: zapier:asana_find_section
+  bench: bench-asana:list:sections
+  arguments: 0 of 3
+  note: the route lists a project's sections; the caller picks the one whose name matches
+- catalog: zapier:bamboohr_employeeCreate
+  bench: bench-bamboohr:create:employees
+  arguments: 0 of 20
+- catalog: zapier:bamboohr_update_employee
+  bench: bench-bamboohr:create:v1-employees
+  arguments: 0 of 21
+  note: BambooHR updates an employee with POST /employees/{id}; the seed's verb says create because of the method
+- catalog: zapier:basecamp3_todo
+  bench: bench-basecamp3:create:todos
+  arguments: 0 of 9
+- catalog: zapier:buffer_add_to_queue
+  bench: bench-buffer:create:create-json
+  arguments: 1 of 6
+- catalog: zapier:buffer_list_channels
+  bench: bench-buffer:list:profiles-json
+  arguments: 0 of 1
+  note: Buffer's profiles are its channels
+- catalog: zapier:calendly_cancel_event
+  bench: bench-calendly:create:cancellation
+  arguments: 2 of 2
+- catalog: zapier:calendly_create_event_type
+  bench: bench-calendly:create:one-off-event-types
+  arguments: 0 of 5
+  note: the only event-type creation route makes a one-off event type
+- catalog: zapier:calendly_find_event
+  bench: bench-calendly:read:scheduled-events
+  arguments: 1 of 1
+- catalog: zapier:calendly_list_event_types
+  bench: bench-calendly:list:event-types
+  arguments: 0 of 2
+- catalog: zapier:calendly_list_invitees
+  bench: bench-calendly:list:invitees
+  arguments: 1 of 2
+  note: the route lists the invitees of one scheduled event (uuid); the tool lists across events
+- catalog: zapier:calendly_list_scheduled_events
+  bench: bench-calendly:list:scheduled-events
+  arguments: 2 of 3
+- catalog: zapier:calendly_mark_no_show
+  bench: bench-calendly:create:invitee-no-shows
+  arguments: 0 of 3
+- catalog: zapier:canva_create_design
+  bench: bench-canva:create:designs
+  records: $.design
+  arguments: 1 of 5
+- catalog: zapier:canva_create_design_export_job
+  bench: bench-canva:create:exports
+  records: $.job
+  arguments: 0 of 3
+- catalog: zapier:canva_find_design
+  bench: bench-canva:list:designs
+  arguments: 2 of 3
+- catalog: zapier:chatgpt_chat_completion_memory
+  bench: bench-chatgpt:create:completions
+  records: $.id, $.model, $.usage
+  arguments: 0 of 7
+  note: chat completions with a system message; the conversation memory is the tool's own
+- catalog: zapier:chatgpt_send_prompt
+  bench: bench-chatgpt:create:v1-completions
+  records: $.id, $.model, $.usage
+  arguments: 0 of 8
+  note: the legacy completions endpoint (prompt, stop, frequency_penalty, presence_penalty)
+- catalog: zapier:confluence_pageCreate
+  bench: bench-confluence:create:pages
+  arguments: 0 of 6
+- catalog: zapier:docusign_add_envelope_cc
+  bench: bench-docusign:create:recipients
+  arguments: 0 of 4
+  note: the recipients route takes carbonCopies as well as signers
+- catalog: zapier:docusign_add_envelope_signer
+  bench: bench-docusign:create:recipients
+  arguments: 0 of 5
+- catalog: zapier:docusign_create_envelope_from_template
+  bench: bench-docusign:create:envelopes
+  arguments: 0 of 10
+  note: compositeTemplates on the envelope create
+- catalog: zapier:docusign_create_workspace
+  bench: bench-docusign:create:workspaces
+  arguments: 2 of 4
+- catalog: zapier:docusign_find_envelope_info
+  bench: bench-docusign:read:envelopes
+  arguments: 0 of 1
+- catalog: zapier:docusign_find_envelope_recipients
+  bench: bench-docusign:list:recipients
+  arguments: 0 of 1
+- catalog: zapier:docusign_find_template
+  bench: bench-docusign:read:templates
+  arguments: 0 of 2
+  note: by id; by name use bench-docusign:list:templates (search_text)
+- catalog: zapier:docusign_list_envelopes
+  bench: bench-docusign:list:envelopes
+  records: $.envelopes
+  arguments: 1 of 1
+- catalog: zapier:docusign_list_templates
+  bench: bench-docusign:list:templates
+  arguments: 0 of 1
+- catalog: zapier:docusign_void_envelope
+  bench: bench-docusign:update:envelopes
+  arguments: 0 of 2
+  note: PUT envelope with voidedReason
+- catalog: zapier:facebook_pages_create_photo
+  bench: bench-facebook-pages:create:photos
+  arguments: 0 of 3
+- catalog: zapier:facebook_pages_create_post
+  bench: bench-facebook-pages:create:feed
+  arguments: 0 of 4
+- catalog: zapier:freshdesk_add_note_to_ticket
+  bench: bench-freshdesk:create:notes
+  arguments: 3 of 3
+- catalog: zapier:freshdesk_create_contact
+  bench: bench-freshdesk:create:contacts
+  arguments: 8 of 8
+- catalog: zapier:freshdesk_create_ticket
+  bench: bench-freshdesk:create:tickets
+  arguments: 7 of 9
+- catalog: zapier:freshdesk_find_contact
+  bench: bench-freshdesk:list:search-contacts
+  records: $.contacts
+  arguments: 3 of 3
+- catalog: zapier:freshdesk_find_ticket
+  bench: bench-freshdesk:list:tickets
+  records: $.tickets
+  arguments: 1 of 2
+- catalog: zapier:freshdesk_get_contacts
+  bench: bench-freshdesk:list:contacts
+  records: $.contacts
+  arguments: 0 of 0
+- catalog: zapier:freshdesk_get_tickets
+  bench: bench-freshdesk:list:v2-tickets
+  arguments: 0 of 0
+- catalog: zapier:freshdesk_update_ticket
+  bench: bench-freshdesk:update:tickets
+  arguments: 7 of 9
+- catalog: zapier:gmail_add_label_to_email
+  bench: bench-gmail:create:modify
+  arguments: 0 of 6
+- catalog: zapier:gmail_create_draft
+  bench: bench-gmail:create:drafts
+  arguments: 0 of 10
+- catalog: zapier:gmail_create_draft_reply
+  bench: bench-gmail:create:drafts
+  arguments: 0 of 11
+  note: a draft whose message carries the threadId
+- catalog: zapier:gmail_create_label
+  bench: bench-gmail:create:labels
+  arguments: 1 of 5
+- catalog: zapier:gmail_find_email
+  bench: bench-gmail:list:messages
+  records: $.messages
+  arguments: 0 of 6
+- catalog: zapier:gmail_get_email_by_id
+  bench: bench-gmail:read:messages
+  arguments: 1 of 2
+- catalog: zapier:gmail_list_emails
+  bench: bench-gmail:list:messages
+  records: $.messages
+  arguments: 0 of 5
+- catalog: zapier:gmail_mark_as_read
+  bench: bench-gmail:create:modify
+  arguments: 0 of 3
+  note: messages/{id}/modify with removeLabelIds=[UNREAD]
+- catalog: zapier:gmail_remove_label_from_email
+  bench: bench-gmail:create:modify
+  arguments: 0 of 2
+- catalog: zapier:gmail_send_email
+  bench: bench-gmail:create:messages-send
+  arguments: 0 of 12
+- catalog: zapier:google_ads_find_campaign_by_id
+  bench: bench-google-ads:read:campaigns
+  arguments: 0 of 2
+- catalog: zapier:google_ads_find_campaign_by_name
+  bench: bench-google-ads:create:googleads-search
+  arguments: 0 of 2
+  note: a GAQL query over campaign through googleAds:search
+- catalog: zapier:google_ads_find_customer_list
+  bench: bench-google-ads:create:googleads-search
+  arguments: 0 of 2
+  note: a GAQL query over user_list through googleAds:search
+- catalog: zapier:google_ads_get_all_campaigns
+  bench: bench-google-ads:create:googleads-search
+  arguments: 0 of 1
+  note: a GAQL query over campaign through googleAds:search
+- catalog: zapier:google_ads_send_offline_conversion
+  bench: bench-google-ads:create:customers
+  arguments: 0 of 8
+  note: customers/{id}:uploadClickConversions
+- catalog: zapier:google_ads_set_campaign_status
+  bench: bench-google-ads:create:campaigns-mutate
+  arguments: 0 of 4
+- catalog: zapier:google_calendar_create_detailed_event
+  bench: bench-google-calendar:create:events
+  records: $.event
+  arguments: 7 of 27
+- catalog: zapier:google_calendar_find_calendars
+  bench: bench-google-calendar:list:calendarlist
+  records: $.calendars
+  arguments: 3 of 3
+- catalog: zapier:google_calendar_find_event
+  bench: bench-google-calendar:list:events
+  records: $.events
+  arguments: 0 of 4
+- catalog: zapier:google_calendar_update_event
+  bench: bench-google-calendar:update:events
+  records: $.event
+  arguments: 7 of 18
+- catalog: zapier:google_drive_find_multiple_files
+  bench: bench-google-drive:list:files
+  arguments: 0 of 7
+- catalog: zapier:google_drive_folder
+  bench: bench-google-drive:create:files
+  arguments: 0 of 3
+  note: a folder is a file whose mimeType is application/vnd.google-apps.folder
+- catalog: zapier:google_drive_move_file
+  bench: bench-google-drive:update:files
+  arguments: 0 of 3
+  note: PATCH the file with addParents and removeParents
+- catalog: zapier:google_sheets_add_row
+  bench: bench-google-sheets:create:values
+  arguments: 1 of 11
+- catalog: zapier:google_sheets_append_row
+  bench: bench-google-sheets:create:values
+  arguments: 0 of 11
+- catalog: zapier:google_sheets_delete_row
+  bench: bench-google-sheets:create:spreadsheets-values
+  arguments: 0 of 4
+  note: the values/{range}:clear route; Sheets clears rows, it does not remove them
+- catalog: zapier:google_sheets_find_many_rows
+  bench: bench-google-sheets:read:values
+  arguments: 0 of 13
+  note: read the range, then match the rows; the route does no filtering
+- catalog: zapier:google_sheets_find_worksheet
+  bench: bench-google-sheets:read:spreadsheets
+  arguments: 0 of 4
+  note: the spreadsheet read lists its sheets by title
+- catalog: zapier:google_sheets_get_many_rows
+  bench: bench-google-sheets:read:values
+  arguments: 1 of 10
+- catalog: zapier:google_sheets_get_spreadsheet_by_id
+  bench: bench-google-sheets:read:spreadsheets
+  arguments: 1 of 4
+- catalog: zapier:google_sheets_lookup_row
+  bench: bench-google-sheets:read:values
+  arguments: 0 of 11
+  note: read the range, then match the lookup column; the route does no filtering
+- catalog: zapier:google_sheets_update_row
+  bench: bench-google-sheets:update:values
+  arguments: 0 of 13
+- catalog: zapier:gorgias_create_ticket
+  bench: bench-gorgias:create:tickets
+  arguments: 0 of 7
+- catalog: zapier:gorgias_create_ticket_message
+  bench: bench-gorgias:create:messages
+  arguments: 1 of 8
+- catalog: zapier:gorgias_get_tickets
+  bench: bench-gorgias:list:tickets
+  arguments: 0 of 0
+- catalog: zapier:gorgias_update_ticket
+  bench: bench-gorgias:update:tickets
+  arguments: 1 of 3
+- catalog: zapier:helpcrunch_add_customer_event
+  bench: bench-helpcrunch:create:events
+  records: $.event
+  arguments: 1 of 3
+- catalog: zapier:helpcrunch_find_customer
+  bench: bench-helpcrunch:create:search
+  arguments: 0 of 3
+- catalog: zapier:helpcrunch_list_customers
+  bench: bench-helpcrunch:list:customers
+  arguments: 0 of 0
+- catalog: zapier:helpcrunch_tag_customer
+  bench: bench-helpcrunch:update:tags
+  arguments: 1 of 2
+  note: the route takes the customer's tag list
+- catalog: zapier:helpcrunch_untag_customer
+  bench: bench-helpcrunch:delete:tags
+  arguments: 1 of 2
+- catalog: zapier:helpscout_add_note
+  bench: bench-helpscout:create:note
+  records: $.thread_id
+  arguments: 1 of 4
+- catalog: zapier:helpscout_find_customer
+  bench: bench-helpscout:list:customers
+  records: $.customers
+  arguments: 2 of 3
+- catalog: zapier:helpscout_get_conversations
+  bench: bench-helpscout:list:conversations
+  records: $.conversations
+  arguments: 0 of 0
+- catalog: zapier:helpscout_get_customers
+  bench: bench-helpscout:list:customers
+  records: $.customers
+  arguments: 0 of 0
+- catalog: zapier:helpscout_get_mailboxes
+  bench: bench-helpscout:list:mailboxes
+  records: $.mailboxes
+  arguments: 0 of 0
+- catalog: zapier:helpscout_get_users
+  bench: bench-helpscout:list:users
+  records: $.users
+  arguments: 0 of 0
+- catalog: zapier:helpscout_send_reply
+  bench: bench-helpscout:create:reply
+  records: $.thread_id
+  arguments: 0 of 3
+- catalog: zapier:helpscout_update_conversation
+  bench: bench-helpscout:update:conversations
+  arguments: 0 of 5
+- catalog: zapier:hiver_get_conversations
+  bench: bench-hiver:list:conversations
+  arguments: 0 of 0
+  note: the route lists one inbox's conversations (inbox_id); list inboxes first
+- catalog: zapier:hiver_get_users
+  bench: bench-hiver:list:users
+  arguments: 0 of 0
+  note: the route lists one inbox's users (inbox_id); list inboxes first
+- catalog: zapier:hubspot_create_company
+  bench: bench-hubspot:create:companies
+  arguments: 0 of 9
+- catalog: zapier:hubspot_create_contact
+  bench: bench-hubspot:create:contacts
+  arguments: 0 of 11
+- catalog: zapier:hubspot_create_deal
+  bench: bench-hubspot:create:deals
+  arguments: 0 of 8
+- catalog: zapier:hubspot_create_engagement
+  bench: bench-hubspot:create:engagements
+  arguments: 0 of 7
+- catalog: zapier:hubspot_create_ticket
+  bench: bench-hubspot:create:tickets
+  arguments: 0 of 7
+- catalog: zapier:hubspot_find_contact
+  bench: bench-hubspot:create:search
+  arguments: 0 of 4
+  note: contacts/search by email or name; by id use bench-hubspot:read:contacts
+- catalog: zapier:hubspot_get_all_companies
+  bench: bench-hubspot:list:companies
+  arguments: 0 of 0
+- catalog: zapier:hubspot_get_all_contacts
+  bench: bench-hubspot:list:contacts
+  arguments: 0 of 0
+- catalog: zapier:hubspot_get_all_deals
+  bench: bench-hubspot:list:deals
+  arguments: 0 of 0
+- catalog: zapier:hubspot_update_contact
+  bench: bench-hubspot:update:contacts
+  arguments: 0 of 11
+- catalog: zapier:instagram_publish_photo
+  bench: bench-instagram:create:media
+  arguments: 1 of 5
+  note: the media container (caption, image) comes first; media_publish publishes it
+- catalog: zapier:intercom_add_note
+  bench: bench-intercom:create:notes
+  arguments: 3 of 4
+  note: contact notes; a note on a conversation is a reply with message_type note
+- catalog: zapier:intercom_add_tag_to_contact
+  bench: bench-intercom:create:tags
+  arguments: 1 of 3
+- catalog: zapier:intercom_add_tag_to_conversation
+  bench: bench-intercom:create:conversations-tags
+  arguments: 1 of 2
+- catalog: zapier:intercom_create_ticket
+  bench: bench-intercom:create:tickets
+  arguments: 1 of 6
+- catalog: zapier:intercom_find_company
+  bench: bench-intercom:create:search
+  records: $.companies
+  arguments: 0 of 3
+- catalog: zapier:intercom_find_contact
+  bench: bench-intercom:create:contacts-search
+  records: $.contacts
+  arguments: 0 of 4
+- catalog: zapier:intercom_find_conversation
+  bench: bench-intercom:create:conversations-search
+  records: $.conversations
+  arguments: 0 of 2
+- catalog: zapier:intercom_find_or_create_company
+  bench: bench-intercom:create:companies
+  arguments: 1 of 4
+  note: Intercom's POST /companies creates or updates by company_id or name
+- catalog: zapier:intercom_find_or_create_lead
+  bench: bench-intercom:create:contacts-findorcreatelead
+  arguments: 1 of 3
+- catalog: zapier:intercom_get_conversations
+  bench: bench-intercom:list:conversations
+  records: $.conversations
+  arguments: 0 of 0
+- catalog: zapier:intercom_list_companies
+  bench: bench-intercom:list:companies
+  records: $.companies
+  arguments: 0 of 0
+- catalog: zapier:intercom_list_contacts
+  bench: bench-intercom:list:contacts
+  records: $.contacts
+  arguments: 0 of 0
+- catalog: zapier:intercom_reply_to_conversation
+  bench: bench-intercom:create:reply
+  records: $.part_id
+  arguments: 2 of 4
+- catalog: zapier:intercom_tag_company
+  bench: bench-intercom:create:tags-post
+  arguments: 0 of 2
+- catalog: zapier:intercom_update_contact
+  bench: bench-intercom:update:contacts
+  arguments: 1 of 4
+- catalog: zapier:jira_add_comment
+  bench: bench-jira:create:comment
+  arguments: 0 of 2
+- catalog: zapier:jira_create_issue
+  bench: bench-jira:create:issue
+  arguments: 0 of 8
+- catalog: zapier:jira_project
+  bench: bench-jira:list:search
+  arguments: 0 of 1
+- catalog: zapier:linkedin_create_company_update
+  bench: bench-linkedin:create:companyupdates
+  records: $.post
+  arguments: 0 of 8
+- catalog: zapier:linkedin_create_share
+  bench: bench-linkedin:create:ugcposts
+  records: $.post
+  arguments: 0 of 6
+- catalog: zapier:linkedin_find_post
+  bench: bench-linkedin:list:ugcposts
+  records: $.posts
+  arguments: 0 of 3
+- catalog: zapier:linkedin_find_profile
+  bench: bench-linkedin:list:people
+  records: $.profiles
+  arguments: 0 of 5
+- catalog: zapier:linkedin_get_connections
+  bench: bench-linkedin:list:connections
+  arguments: 3 of 5
+- catalog: zapier:linkedin_get_job
+  bench: bench-linkedin:read:jobs
+  records: $.id
+  arguments: 1 of 4
+- catalog: zapier:linkedin_get_profile
+  bench: bench-linkedin:read:people
+  records: $.profile
+  arguments: 0 of 1
+- catalog: zapier:linkedin_list_companies
+  bench: bench-linkedin:list:organizations
+  records: $.companies
+  arguments: 2 of 5
+  note: by name and role; one by id is bench-linkedin:read:organizations
+- catalog: zapier:linkedin_send_invite
+  bench: bench-linkedin:create:invitations
+  records: $.invitation_id
+  arguments: 1 of 3
+- catalog: zapier:linkedin_send_message
+  bench: bench-linkedin:create:messages
+  records: $.message
+  arguments: 2 of 6
+- catalog: zapier:mailchimp_add_subscriber
+  bench: bench-mailchimp:create:members
+  arguments: 1 of 9
+  note: POST members adds; an existing member is bench-mailchimp:update:members
+- catalog: zapier:mailchimp_add_tag_to_subscriber
+  bench: bench-mailchimp:create:tags
+  arguments: 1 of 4
+- catalog: zapier:mailchimp_archive_subscriber
+  bench: bench-mailchimp:delete:members
+  arguments: 1 of 2
+  note: Mailchimp's DELETE member archives the member
+- catalog: zapier:mailchimp_find_subscriber
+  bench: bench-mailchimp:read:members
+  arguments: 1 of 2
+- catalog: zapier:mailchimp_list_subscribers
+  bench: bench-mailchimp:list:members
+  arguments: 1 of 1
+- catalog: zapier:mailchimp_remove_tag_from_subscriber
+  bench: bench-mailchimp:create:tags
+  arguments: 1 of 3
+  note: the tags route with the tag status inactive
+- catalog: zapier:monday_change_date_column_value
+  bench: bench-monday:create:columns-update
+  arguments: 0 of 5
+- catalog: zapier:monday_change_number_column_value
+  bench: bench-monday:create:columns-update
+  arguments: 0 of 4
+- catalog: zapier:monday_change_status_column_value
+  bench: bench-monday:create:columns-update
+  arguments: 0 of 5
+- catalog: zapier:monday_create_item
+  bench: bench-monday:create:items-create
+  arguments: 0 of 4
+- catalog: zapier:monday_find_item
+  bench: bench-monday:create:items-find
+  arguments: 0 of 2
+- catalog: zapier:notion_create_page
+  bench: bench-notion:create:pages
+  arguments: 0 of 5
+- catalog: zapier:pipefy_find_database_records
+  bench: bench-pipefy:list:records-find
+  arguments: 0 of 2
+- catalog: zapier:pipefy_move_card
+  bench: bench-pipefy:create:move
+  arguments: 0 of 3
+- catalog: zapier:pipefy_update_card_field
+  bench: bench-pipefy:create:fields-update
+  arguments: 0 of 5
+- catalog: zapier:quickbooks_create_bill_payment
+  bench: bench-quickbooks:create:billpayment
+  arguments: 0 of 8
+- catalog: zapier:quickbooks_create_customer
+  bench: bench-quickbooks:create:customer
+  arguments: 0 of 35
+- catalog: zapier:quickbooks_create_invoice
+  bench: bench-quickbooks:create:invoice
+  records: $.Id
+  arguments: 0 of 13
+- catalog: zapier:quickbooks_create_sales_receipt
+  bench: bench-quickbooks:create:salesreceipt
+  arguments: 0 of 11
+- catalog: zapier:quickbooks_find_customer
+  bench: bench-quickbooks:list:query
+  arguments: 0 of 3
+  note: a query 'select * from Customer where ...' through the GET query route
+- catalog: zapier:quickbooks_find_estimate
+  bench: bench-quickbooks:list:query
+  arguments: 0 of 2
+  note: a query over Estimate through the GET query route
+- catalog: zapier:quickbooks_find_payment
+  bench: bench-quickbooks:list:query
+  arguments: 0 of 2
+  note: a query over Payment through the GET query route
+- catalog: zapier:quickbooks_find_vendor
+  bench: bench-quickbooks:list:query
+  arguments: 0 of 2
+  note: a query over Vendor through the GET query route
+- catalog: zapier:quickbooks_query
+  bench: bench-quickbooks:list:query
+  records: $.QueryResponse
+  arguments: 1 of 1
+- catalog: zapier:reamaze_add_message
+  bench: bench-reamaze:create:messages
+  records: $.message_id
+  arguments: 1 of 6
+- catalog: zapier:reamaze_create_contact
+  bench: bench-reamaze:create:contacts
+  arguments: 0 of 5
+- catalog: zapier:reamaze_create_conversation
+  bench: bench-reamaze:create:conversations
+  arguments: 1 of 10
+- catalog: zapier:reamaze_get_contacts
+  bench: bench-reamaze:list:contacts
+  records: $.contacts
+  arguments: 0 of 0
+- catalog: zapier:reamaze_get_conversations
+  bench: bench-reamaze:list:conversations
+  records: $.conversations
+  arguments: 0 of 0
+- catalog: zapier:reamaze_update_conversation
+  bench: bench-reamaze:update:conversations
+  records: $.conversation
+  arguments: 1 of 6
+- catalog: zapier:recruitee_add_tags
+  bench: bench-recruitee:update:candidates
+  arguments: 0 of 3
+  note: PATCH the candidate with its tags
+- catalog: zapier:recruitee_candidateCreate
+  bench: bench-recruitee:create:candidates
+  arguments: 0 of 13
+- catalog: zapier:recruitee_create_offer
+  bench: bench-recruitee:create:placements
+  arguments: 0 of 8
+  note: 'a placement: candidate, offer (job) and start date'
+- catalog: zapier:salesforce_account_update
+  bench: bench-salesforce:update:account
+  arguments: 0 of 17
+- catalog: zapier:salesforce_case_create
+  bench: bench-salesforce:create:case
+  arguments: 9 of 17
+- catalog: zapier:salesforce_contact_add_to_campaign
+  bench: bench-salesforce:create:campaignmember
+  arguments: 3 of 6
+- catalog: zapier:salesforce_contact_create
+  bench: bench-salesforce:create:contact
+  arguments: 0 of 13
+- catalog: zapier:salesforce_contact_update
+  bench: bench-salesforce:update:contact
+  arguments: 1 of 21
+- catalog: zapier:salesforce_find_records
+  bench: bench-salesforce:list:query
+  records: $.results
+  arguments: 0 of 5
+  note: a SOQL query with a WHERE on the field
+- catalog: zapier:salesforce_lead_create
+  bench: bench-salesforce:create:lead
+  arguments: 0 of 16
+- catalog: zapier:salesforce_lead_update
+  bench: bench-salesforce:update:lead
+  arguments: 1 of 20
+- catalog: zapier:salesforce_note_create
+  bench: bench-salesforce:create:note
+  arguments: 0 of 5
+- catalog: zapier:salesforce_opportunity_create
+  bench: bench-salesforce:create:opportunity
+  arguments: 0 of 8
+- catalog: zapier:salesforce_opportunity_update
+  bench: bench-salesforce:update:opportunity
+  arguments: 1 of 16
+- catalog: zapier:salesforce_query
+  bench: bench-salesforce:list:query
+  records: $.results
+  arguments: 0 of 5
+- catalog: zapier:salesforce_task_create
+  bench: bench-salesforce:create:task
+  arguments: 0 of 12
+- catalog: zapier:slack_create_channel
+  bench: bench-slack:create:conversations-create
+  records: $.channel
+  arguments: 2 of 2
+- catalog: zapier:slack_find_message
+  bench: bench-slack:list:search-messages
+  arguments: 2 of 3
+- catalog: zapier:slack_find_message_in_channel
+  bench: bench-slack:list:search-messages
+  arguments: 0 of 3
+- catalog: zapier:slack_find_user_by_email
+  bench: bench-slack:list:users-lookupbyemail
+  records: $.user
+  arguments: 1 of 1
+- catalog: zapier:slack_find_user_by_name
+  bench: bench-slack:list:users-list
+  arguments: 0 of 3
+  note: users.list, then match the name; the bench has no name lookup
+- catalog: zapier:slack_get_channel_messages
+  bench: bench-slack:list:conversations-history
+  records: $.messages
+  arguments: 0 of 2
+- catalog: zapier:slack_get_conversation
+  bench: bench-slack:list:conversations-info
+  records: $.channel
+  arguments: 1 of 1
+- catalog: zapier:slack_invite_to_channel
+  bench: bench-slack:create:conversations-invite
+  records: $.channel
+  arguments: 2 of 2
+- catalog: zapier:slack_list_channel_messages
+  bench: bench-slack:list:conversations-history
+  records: $.messages
+  arguments: 2 of 3
+- catalog: zapier:slack_list_channels
+  bench: bench-slack:list:conversations-list
+  records: $.channels
+  arguments: 0 of 0
+- catalog: zapier:slack_send_channel_message
+  bench: bench-slack:create:chat-postmessage
+  records: $.ts
+  arguments: 5 of 15
+- catalog: zapier:slack_send_direct_message
+  bench: bench-slack:create:chat-postmessage
+  records: $.message
+  arguments: 2 of 4
+  note: chat.postMessage where channel is the user id (or the IM opened with conversations.open)
+- catalog: zapier:slack_set_channel_topic
+  bench: bench-slack:create:conversations-settopic
+  records: $.channel
+  arguments: 2 of 2
+- catalog: zapier:trello_card
+  bench: bench-trello:create:cards
+  arguments: 0 of 13
+- catalog: zapier:trello_card_comment
+  bench: bench-trello:create:comments
+  arguments: 0 of 4
+- catalog: zapier:trello_card_label
+  bench: bench-trello:create:idlabels
+  arguments: 0 of 4
+- catalog: zapier:trello_card_update
+  bench: bench-trello:update:cards
+  arguments: 0 of 21
+- catalog: zapier:trello_find_card
+  bench: bench-trello:list:cards
+  arguments: 0 of 4
+  note: the board's cards, then match the name
+- catalog: zapier:twilio_make_call
+  bench: bench-twilio:create:calls-json
+  arguments: 1 of 4
+- catalog: zapier:twilio_send_sms
+  bench: bench-twilio:create:messages-json
+  arguments: 0 of 6
+- catalog: zapier:twitter_find_tweet
+  bench: bench-twitter:list:recent
+  arguments: 1 of 1
+- catalog: zapier:twitter_find_user
+  bench: bench-twitter:read:username
+  arguments: 0 of 1
+  note: by username; the bench has no lookup by user id
+- catalog: zapier:twitter_follow_user
+  bench: bench-twitter:create:following
+  arguments: 1 of 1
+- catalog: zapier:twitter_like_tweet
+  bench: bench-twitter:create:likes
+  arguments: 0 of 1
+- catalog: zapier:twitter_post_tweet
+  bench: bench-twitter:create:tweets
+  arguments: 0 of 2
+- catalog: zapier:wave_create_invoice
+  bench: bench-wave:create:public
+  arguments: 0 of 18
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:wave_find_customer
+  bench: bench-wave:create:public
+  arguments: 0 of 3
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:wave_find_product
+  bench: bench-wave:create:public
+  arguments: 0 of 2
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:wave_list_invoices
+  bench: bench-wave:create:public
+  arguments: 0 of 3
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:wave_send_invoice
+  bench: bench-wave:create:public
+  arguments: 0 of 5
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:wave_update_product
+  bench: bench-wave:create:public
+  arguments: 0 of 5
+  note: Wave's API is GraphQL; every operation is a query or mutation on this one route
+- catalog: zapier:xero_allocate_credit_note
+  bench: bench-xero:update:allocations
+  arguments: 0 of 4
+- catalog: zapier:xero_create_bank_transaction
+  bench: bench-xero:update:banktransactions
+  arguments: 0 of 9
+  note: in Xero PUT creates; the seed's verb says update because of the method
+- catalog: zapier:xero_create_bill
+  bench: bench-xero:update:invoices
+  arguments: 0 of 15
+  note: a bill is an ACCPAY invoice; in Xero PUT creates
+- catalog: zapier:xero_create_contact
+  bench: bench-xero:update:2-0-contacts
+  arguments: 0 of 18
+  note: in Xero PUT creates; the seed's verb says update because of the method
+- catalog: zapier:xero_create_payment
+  bench: bench-xero:update:payments
+  arguments: 0 of 8
+  note: in Xero PUT creates; the seed's verb says update because of the method
+- catalog: zapier:xero_create_sales_invoice
+  bench: bench-xero:update:invoices
+  arguments: 0 of 18
+  note: an ACCREC invoice; in Xero PUT creates
+- catalog: zapier:xero_email_invoice
+  bench: bench-xero:create:email
+  arguments: 0 of 2
+- catalog: zapier:xero_find_bank_transaction
+  bench: bench-xero:list:banktransactions
+  arguments: 0 of 4
+- catalog: zapier:xero_find_contact
+  bench: bench-xero:list:contacts
+  arguments: 0 of 4
+- catalog: zapier:xero_find_credit_note
+  bench: bench-xero:list:creditnotes
+  arguments: 0 of 3
+- catalog: zapier:xero_find_invoice
+  bench: bench-xero:list:invoices
+  arguments: 0 of 3
+- catalog: zapier:xero_find_purchase_order
+  bench: bench-xero:list:purchaseorders
+  arguments: 0 of 2
+- catalog: zapier:xero_find_quote
+  bench: bench-xero:list:quotes
+  arguments: 0 of 3
+- catalog: zapier:xero_update_purchase_order
+  bench: bench-xero:create:purchaseorders
+  arguments: 0 of 5
+  note: in Xero POST /PurchaseOrders/{id} updates; the seed's verb says create because of the method
+- catalog: zapier:zendesk_add_comment_to_ticket
+  bench: bench-zendesk:update:tickets
+  arguments: 1 of 3
+  note: PATCH the ticket with a comment
+- catalog: zapier:zendesk_add_tags_to_ticket
+  bench: bench-zendesk:update:tags
+  records: $.tags
+  arguments: 2 of 2
+  note: Zendesk's PUT tickets/{id}/tags adds the given tags
+- catalog: zapier:zendesk_create_ticket
+  bench: bench-zendesk:create:tickets
+  records: $.ticket
+  arguments: 0 of 12
+- catalog: zapier:zendesk_delete_user
+  bench: bench-zendesk:delete:users
+  arguments: 0 of 1
+- catalog: zapier:zendesk_find_group
+  bench: bench-zendesk:list:groups
+  records: $.groups
+  arguments: 0 of 2
+  note: the groups list, then match the name; one by id is bench-zendesk:read:groups
+- catalog: zapier:zendesk_find_organization
+  bench: bench-zendesk:list:search
+  records: $.organizations
+  arguments: 1 of 2
+- catalog: zapier:zendesk_find_user
+  bench: bench-zendesk:list:users-search
+  records: $.users
+  arguments: 2 of 3
+- catalog: zapier:zendesk_get_organizations
+  bench: bench-zendesk:list:organizations
+  records: $.organizations
+  arguments: 0 of 0
+- catalog: zapier:zendesk_get_tickets
+  bench: bench-zendesk:list:tickets
+  records: $.tickets
+  arguments: 0 of 0
+- catalog: zapier:zendesk_get_users
+  bench: bench-zendesk:list:users
+  records: $.users
+  arguments: 0 of 0
+- catalog: zapier:zendesk_remove_tags_from_ticket
+  bench: bench-zendesk:delete:tags
+  records: $.tags
+  arguments: 1 of 2
+- catalog: zapier:zendesk_update_organization
+  bench: bench-zendesk:update:organizations
+  records: $.organization
+  arguments: 0 of 8
+- catalog: zapier:zendesk_update_ticket
+  bench: bench-zendesk:update:tickets
+  records: $.ticket
+  arguments: 1 of 11
+- catalog: zapier:zoho_desk_add_comment
+  bench: bench-zoho-desk:create:comments
+  arguments: 1 of 4
+- catalog: zapier:zoho_desk_create_account
+  bench: bench-zoho-desk:create:accounts
+  arguments: 0 of 4
+- catalog: zapier:zoho_desk_create_contact
+  bench: bench-zoho-desk:create:contacts
+  arguments: 0 of 7
+- catalog: zapier:zoho_desk_create_ticket
+  bench: bench-zoho-desk:create:tickets
+  arguments: 1 of 10
+- catalog: zapier:zoho_desk_find_account
+  bench: bench-zoho-desk:list:accounts
+  arguments: 0 of 2
+- catalog: zapier:zoho_desk_find_contact
+  bench: bench-zoho-desk:list:contacts
+  arguments: 2 of 3
+- catalog: zapier:zoho_desk_find_ticket
+  bench: bench-zoho-desk:list:tickets
+  arguments: 1 of 2
+- catalog: zapier:zoho_desk_get_contacts
+  bench: bench-zoho-desk:list:contacts
+  arguments: 0 of 0
+- catalog: zapier:zoho_desk_get_tickets
+  bench: bench-zoho-desk:list:tickets
+  arguments: 0 of 0
+- catalog: zapier:zoho_desk_update_ticket
+  bench: bench-zoho-desk:update:tickets
+  arguments: 0 of 10
+- catalog: zapier:zoom_create_meeting
+  bench: bench-zoom:create:meetings
+  arguments: 6 of 11
+- catalog: zapier:zoom_create_meeting_registrant
+  bench: bench-zoom:create:registrants
+  arguments: 3 of 7
+- catalog: zapier:zoom_find_meeting
+  bench: bench-zoom:list:meetings
+  records: $.meetings
+  arguments: 1 of 4
+  note: by topic through the user's meetings list; one by id is bench-zoom:read:meetings
+- catalog: zapier:zoom_find_meeting_participants
+  bench: bench-zoom:list:registrants
+  records: $.participants
+  arguments: 0 of 2
+- catalog: zapier:zoom_list_meetings
+  bench: bench-zoom:list:meetings
+  records: $.meetings
+  arguments: 0 of 3
+- catalog: zapier:zoom_list_recordings
+  bench: bench-zoom:list:users-recordings
+  arguments: 0 of 2
+- catalog: zapier:zoom_update_meeting
+  bench: bench-zoom:update:meetings
+  arguments: 4 of 5
+catalog_only:
+- zapier:asana_list_projects
+- zapier:buffer_get_posts
+- zapier:calendly_book_meeting
+- zapier:calendly_find_user
+- zapier:calendly_get_user_availability
+- zapier:chatgpt_analyze_text_sentiment
+- zapier:docusign_add_user_to_workspace
+- zapier:docusign_send_envelope
+- zapier:google_ads_add_email_to_customer_list
+- zapier:intercom_create_contact
+- zapier:intercom_create_conversation
+- zapier:linkedin_find_jobs
+- zapier:quickbooks_update_vendor
+- zapier:quickbooks_void_invoice
+- zapier:trello_board_list
+- zapier:zoho_desk_find_or_create_contact
+catalog_only_reasons:
+  zapier:asana_list_projects: no row; the bench has no route that lists projects
+  zapier:buffer_get_posts: no row; the bench has no route that lists posts
+  zapier:calendly_book_meeting: no row; the bench has no route that books an invitee onto an event type
+  zapier:calendly_find_user: no row; the tool searches by name or email, the route reads one user by id
+  zapier:calendly_get_user_availability: no row; the bench has no availability route
+  zapier:chatgpt_analyze_text_sentiment: no row; a prompt template over chat completions, not a route of its own
+  zapier:docusign_add_user_to_workspace: no row; the bench has no workspace-users route
+  zapier:docusign_send_envelope: no row; sending is PUT envelope with status=sent and the seed exposes no status parameter
+  zapier:google_ads_add_email_to_customer_list: no row; adding a member is an offline user-data job in three steps, not one route
+  zapier:intercom_create_contact: no row; the bench has no plain contact create, only contacts:findOrCreateLead
+  zapier:intercom_create_conversation: no row; the bench has no conversation create route
+  zapier:linkedin_find_jobs: no row; the bench reads one job by id and has no job search
+  zapier:quickbooks_update_vendor: no row; the POST /vendor route updates when the body carries Id, and the seed exposes no Id parameter
+  zapier:quickbooks_void_invoice: no row; voiding needs operation=void with the invoice Id, and the seed exposes no Id parameter
+  zapier:trello_board_list: no row; the tool finds or creates a list, and the bench has no list create route
+  zapier:zoho_desk_find_or_create_contact: no row; the bench has no upsert route for contacts
+bench_only:
+- bench-airtable:list:bases
+- bench-airtable:list:tables
+- bench-bamboohr:create:application
+- bench-bamboohr:create:categories
+- bench-bamboohr:create:category
+- bench-bamboohr:create:clock-in
+- bench-bamboohr:create:clock-out
+- bench-bamboohr:create:close
+- bench-bamboohr:create:comments
+- bench-bamboohr:create:companydomain-v1-files-fileid
+- bench-bamboohr:create:custom
+- bench-bamboohr:create:datasets
+- bench-bamboohr:create:employeedependents
+- bench-bamboohr:create:employees-files
+- bench-bamboohr:create:employees-tables
+- bench-bamboohr:create:files
+- bench-bamboohr:create:files-categories
+- bench-bamboohr:create:goals
+- bench-bamboohr:create:goals-comments
+- bench-bamboohr:create:hour-entries-store
+- bench-bamboohr:create:job-opening
+- bench-bamboohr:create:locations
+- bench-bamboohr:create:photo
+- bench-bamboohr:create:projects
+- bench-bamboohr:create:record
+- bench-bamboohr:create:reopen
+- bench-bamboohr:create:status
+- bench-bamboohr:create:store
+- bench-bamboohr:create:tables
+- bench-bamboohr:create:type
+- bench-bamboohr:create:v1-files
+- bench-bamboohr:create:webhooks
+- bench-bamboohr:delete:category
+- bench-bamboohr:delete:files
+- bench-bamboohr:delete:goals
+- bench-bamboohr:delete:locations
+- bench-bamboohr:delete:record
+- bench-bamboohr:delete:type
+- bench-bamboohr:delete:v1-files
+- bench-bamboohr:delete:webhooks
+- bench-bamboohr:list:aggregate
+- bench-bamboohr:list:applications
+- bench-bamboohr:list:benefitcoverages
+- bench-bamboohr:list:benefitplans
+- bench-bamboohr:list:benefittypes
+- bench-bamboohr:list:calculator
+- bench-bamboohr:list:category
+- bench-bamboohr:list:changed
+- bench-bamboohr:list:comments
+- bench-bamboohr:list:company-information
+- bench-bamboohr:list:custom-reports
+- bench-bamboohr:list:datasets
+- bench-bamboohr:list:datasets-fields
+- bench-bamboohr:list:directory
+- bench-bamboohr:list:employee-deductions
+- bench-bamboohr:list:employeedependents
+- bench-bamboohr:list:employees
+- bench-bamboohr:list:fields
+- bench-bamboohr:list:files-view
+- bench-bamboohr:list:goals
+- bench-bamboohr:list:hiring-leads
+- bench-bamboohr:list:jobs
+- bench-bamboohr:list:last-changed-employees
+- bench-bamboohr:list:lists
+- bench-bamboohr:list:locations
+- bench-bamboohr:list:log
+- bench-bamboohr:list:monitor-fields
+- bench-bamboohr:list:org-locations
+- bench-bamboohr:list:policies
+- bench-bamboohr:list:post-fields
+- bench-bamboohr:list:requests
+- bench-bamboohr:list:small
+- bench-bamboohr:list:statuscount
+- bench-bamboohr:list:statuses
+- bench-bamboohr:list:tables
+- bench-bamboohr:list:time-off-policies
+- bench-bamboohr:list:timesheet-entries
+- bench-bamboohr:list:type
+- bench-bamboohr:list:types
+- bench-bamboohr:list:users
+- bench-bamboohr:list:view
+- bench-bamboohr:list:webhooks
+- bench-bamboohr:list:whos-out
+- bench-bamboohr:read:applications
+- bench-bamboohr:read:custom-reports
+- bench-bamboohr:read:employeedependents
+- bench-bamboohr:read:employees
+- bench-bamboohr:read:employees-tables
+- bench-bamboohr:read:files
+- bench-bamboohr:read:locations
+- bench-bamboohr:read:record
+- bench-bamboohr:read:reports
+- bench-bamboohr:read:tables
+- bench-bamboohr:read:v1-files
+- bench-bamboohr:read:webhooks
+- bench-bamboohr:update:balance-adjustment
+- bench-bamboohr:update:category
+- bench-bamboohr:update:employeedependents
+- bench-bamboohr:update:goals
+- bench-bamboohr:update:goals-progress
+- bench-bamboohr:update:history
+- bench-bamboohr:update:lists
+- bench-bamboohr:update:locations
+- bench-bamboohr:update:policies
+- bench-bamboohr:update:progress
+- bench-bamboohr:update:record
+- bench-bamboohr:update:request
+- bench-bamboohr:update:status
+- bench-bamboohr:update:type
+- bench-bamboohr:update:webhooks
+- bench-calendly:create:scheduling-links
+- bench-calendly:read:users
+- bench-canva:create:asset-uploads
+- bench-canva:create:url-asset-uploads
+- bench-canva:read:asset-uploads
+- bench-canva:read:designs
+- bench-canva:read:exports
+- bench-canva:read:url-asset-uploads
+- bench-chatgpt:create:moderations
+- bench-chatgpt:create:responses
+- bench-docusign:list:documents
+- bench-docusign:list:workspaces
+- bench-facebook-conversions:create:events
+- bench-facebook-lead-ads:create:leadgen-forms
+- bench-facebook-lead-ads:list:ads
+- bench-facebook-lead-ads:list:leads
+- bench-facebook-pages:list:feed
+- bench-freshdesk:create:companies
+- bench-freshdesk:list:conversations
+- bench-freshdesk:read:contacts
+- bench-freshdesk:read:tickets
+- bench-gmail:create:send
+- bench-gmail:create:threads-modify
+- bench-gmail:create:threads-trash
+- bench-gmail:create:threads-untrash
+- bench-gmail:create:trash
+- bench-gmail:create:untrash
+- bench-gmail:delete:drafts
+- bench-gmail:delete:labels
+- bench-gmail:delete:messages
+- bench-gmail:delete:threads
+- bench-gmail:list:drafts
+- bench-gmail:list:labels
+- bench-gmail:list:threads
+- bench-gmail:read:drafts
+- bench-gmail:read:labels
+- bench-gmail:read:threads
+- bench-gmail:update:drafts
+- bench-gmail:update:labels
+- bench-google-ads:create:customers-offlineuserdatajobs
+- bench-google-ads:create:offlineuserdatajobs
+- bench-google-ads:create:offlineuserdatajobs-create
+- bench-google-ads:create:userlists
+- bench-google-calendar:create:calendars
+- bench-google-calendar:create:quickadd
+- bench-google-calendar:delete:events
+- bench-google-calendar:read:calendars
+- bench-google-calendar:read:events
+- bench-google-calendar:update:calendars-events
+- bench-google-drive:create:copy
+- bench-google-drive:delete:files
+- bench-google-drive:read:files
+- bench-google-sheets:create:sheets
+- bench-google-sheets:create:spreadsheets
+- bench-google-sheets:create:v4-spreadsheets
+- bench-google-sheets:list:values-batchget
+- bench-helpcrunch:create:customers
+- bench-helpcrunch:update:customers
+- bench-helpscout:create:conversations
+- bench-helpscout:create:customers
+- bench-helpscout:create:customers-findorcreate
+- bench-helpscout:read:customers
+- bench-helpscout:read:mailboxes
+- bench-helpscout:update:customers
+- bench-hiver:list:inboxes
+- bench-hiver:read:conversations
+- bench-hiver:read:inboxes
+- bench-hiver:update:conversations
+- bench-hubspot:create:calls
+- bench-hubspot:create:emails
+- bench-hubspot:create:meetings
+- bench-hubspot:create:notes
+- bench-hubspot:create:tasks
+- bench-hubspot:list:tickets
+- bench-hubspot:read:contacts
+- bench-hubspot:update:contact
+- bench-hubspot:update:deals
+- bench-hubspot:update:tickets
+- bench-instagram:create:media-publish
+- bench-instagram:read:mediaid
+- bench-instagram:read:root
+- bench-intercom:delete:tags
+- bench-linkedin-ads:create:adanalytics
+- bench-linkedin-ads:create:companies
+- bench-linkedin-ads:create:conversions
+- bench-linkedin-ads:create:dmpsegments
+- bench-linkedin-ads:create:users
+- bench-linkedin-ads:delete:users
+- bench-linkedin-conversions:create:conversionevents
+- bench-linkedin:list:me
+- bench-linkedin:read:organizations
+- bench-mailchimp:create:campaigns
+- bench-mailchimp:create:lists
+- bench-mailchimp:create:notes
+- bench-mailchimp:create:send
+- bench-mailchimp:list:lists
+- bench-mailchimp:list:tag-search
+- bench-mailchimp:update:members
+- bench-notion:update:pages
+- bench-pipefy:create:cards
+- bench-quickbooks:create:account
+- bench-quickbooks:create:attachable
+- bench-quickbooks:create:batch
+- bench-quickbooks:create:bill
+- bench-quickbooks:create:creditmemo
+- bench-quickbooks:create:department
+- bench-quickbooks:create:deposit
+- bench-quickbooks:create:employee
+- bench-quickbooks:create:estimate
+- bench-quickbooks:create:invoice-send
+- bench-quickbooks:create:item
+- bench-quickbooks:create:journalentry
+- bench-quickbooks:create:payment
+- bench-quickbooks:create:paymentmethod
+- bench-quickbooks:create:purchase
+- bench-quickbooks:create:purchaseorder
+- bench-quickbooks:create:query
+- bench-quickbooks:create:refundreceipt
+- bench-quickbooks:create:salesreceipt-send
+- bench-quickbooks:create:send
+- bench-quickbooks:create:term
+- bench-quickbooks:create:timeactivity
+- bench-quickbooks:create:transfer
+- bench-quickbooks:create:vendor
+- bench-quickbooks:create:vendorcredit
+- bench-quickbooks:list:agedpayables
+- bench-quickbooks:list:agedreceivables
+- bench-quickbooks:list:balancesheet
+- bench-quickbooks:list:cdc
+- bench-quickbooks:list:customerbalance
+- bench-quickbooks:list:generalledger
+- bench-quickbooks:list:preferences
+- bench-quickbooks:list:profitandloss
+- bench-quickbooks:list:trialbalance
+- bench-quickbooks:list:vendorbalance
+- bench-quickbooks:read:account
+- bench-quickbooks:read:attachable
+- bench-quickbooks:read:bill
+- bench-quickbooks:read:billpayment
+- bench-quickbooks:read:companyinfo
+- bench-quickbooks:read:creditmemo
+- bench-quickbooks:read:customer
+- bench-quickbooks:read:department
+- bench-quickbooks:read:deposit
+- bench-quickbooks:read:employee
+- bench-quickbooks:read:estimate
+- bench-quickbooks:read:invoice
+- bench-quickbooks:read:item
+- bench-quickbooks:read:journalentry
+- bench-quickbooks:read:payment
+- bench-quickbooks:read:paymentmethod
+- bench-quickbooks:read:purchase
+- bench-quickbooks:read:purchaseorder
+- bench-quickbooks:read:refundreceipt
+- bench-quickbooks:read:salesreceipt
+- bench-quickbooks:read:taxcode
+- bench-quickbooks:read:taxrate
+- bench-quickbooks:read:term
+- bench-quickbooks:read:timeactivity
+- bench-quickbooks:read:transfer
+- bench-quickbooks:read:vendor
+- bench-quickbooks:read:vendorcredit
+- bench-recruitee:create:attachments
+- bench-recruitee:create:departments
+- bench-recruitee:create:events
+- bench-recruitee:create:fields
+- bench-recruitee:create:messages
+- bench-recruitee:create:notes
+- bench-recruitee:create:offers
+- bench-recruitee:create:offers-candidates
+- bench-recruitee:delete:approval-flows
+- bench-recruitee:delete:auto-reply-templates
+- bench-recruitee:delete:calendars
+- bench-recruitee:delete:candidates
+- bench-recruitee:delete:containers
+- bench-recruitee:delete:cvs
+- bench-recruitee:delete:delete-cover-letter
+- bench-recruitee:delete:delete-cv
+- bench-recruitee:delete:departments
+- bench-recruitee:delete:disqualify-reasons
+- bench-recruitee:delete:event-invitation-templates
+- bench-recruitee:delete:events
+- bench-recruitee:delete:fields
+- bench-recruitee:delete:guests
+- bench-recruitee:delete:imports
+- bench-recruitee:delete:locations
+- bench-recruitee:delete:meeting-rooms
+- bench-recruitee:delete:messages
+- bench-recruitee:delete:notes
+- bench-recruitee:delete:offers
+- bench-recruitee:delete:open-questions
+- bench-recruitee:delete:personal-tokens
+- bench-recruitee:delete:pipeline-templates
+- bench-recruitee:delete:placements
+- bench-recruitee:delete:reactions-notes
+- bench-recruitee:delete:request-links
+- bench-recruitee:delete:result-requests
+- bench-recruitee:delete:schedules
+- bench-recruitee:delete:slack-integrations
+- bench-recruitee:delete:templates
+- bench-recruitee:delete:texting-messages
+- bench-recruitee:list:candidates
+- bench-recruitee:list:departments
+- bench-recruitee:list:disqualify-reasons
+- bench-recruitee:list:events
+- bench-recruitee:list:locations
+- bench-recruitee:list:messages
+- bench-recruitee:list:new-candidates
+- bench-recruitee:list:notes
+- bench-recruitee:list:offers
+- bench-recruitee:list:pipeline-templates
+- bench-recruitee:list:templates
+- bench-recruitee:read:candidates
+- bench-recruitee:read:offers
+- bench-recruitee:update:events
+- bench-recruitee:update:offers
+- bench-recruitee:update:placements
+- bench-recruitee:update:update-cv
+- bench-salesforce:create:account
+- bench-salesforce:create:attachment
+- bench-salesforce:create:campaign
+- bench-salesforce:create:casecomment
+- bench-salesforce:create:contentdocumentlink
+- bench-salesforce:create:contentnote
+- bench-salesforce:create:contentversion
+- bench-salesforce:create:convertlead
+- bench-salesforce:create:document
+- bench-salesforce:create:emailsimple
+- bench-salesforce:create:event
+- bench-salesforce:create:flow
+- bench-salesforce:delete:sobjects
+- bench-salesforce:list:search
+- bench-salesforce:read:reports
+- bench-salesforce:read:sobjects
+- bench-salesforce:update:sobjects
+- bench-slack:create:chat-delete
+- bench-slack:create:chat-update
+- bench-slack:create:conversations-archive
+- bench-slack:create:conversations-open
+- bench-slack:create:reactions-add
+- bench-slack:create:users-profile-set
+- bench-slack:list:conversations-members
+- bench-slack:list:conversations-replies
+- bench-slack:list:reactions-get
+- bench-slack:list:users-info
+- bench-trello:list:boards
+- bench-trello:list:lists
+- bench-twitter:list:me
+- bench-xero:create:accounts
+- bench-xero:create:banktransactions
+- bench-xero:create:contactgroups
+- bench-xero:create:contacts
+- bench-xero:create:creditnotes
+- bench-xero:create:employees
+- bench-xero:create:expenseclaims
+- bench-xero:create:invoices
+- bench-xero:create:items
+- bench-xero:create:linkedtransactions
+- bench-xero:create:manualjournals
+- bench-xero:create:options
+- bench-xero:create:payments
+- bench-xero:create:quotes
+- bench-xero:create:receipts
+- bench-xero:create:taxrates
+- bench-xero:create:trackingcategories
+- bench-xero:delete:accounts
+- bench-xero:delete:contactgroups-contacts
+- bench-xero:delete:contacts
+- bench-xero:delete:items
+- bench-xero:delete:linkedtransactions
+- bench-xero:delete:options
+- bench-xero:delete:purchaseorders
+- bench-xero:delete:trackingcategories
+- bench-xero:list:accounts
+- bench-xero:list:agedpayablesbycontact
+- bench-xero:list:agedreceivablesbycontact
+- bench-xero:list:balancesheet
+- bench-xero:list:banksummary
+- bench-xero:list:banktransfers
+- bench-xero:list:brandingthemes
+- bench-xero:list:budgetsummary
+- bench-xero:list:contactgroups
+- bench-xero:list:currencies
+- bench-xero:list:employees
+- bench-xero:list:executivesummary
+- bench-xero:list:expenseclaims
+- bench-xero:list:items
+- bench-xero:list:linkedtransactions
+- bench-xero:list:manualjournals
+- bench-xero:list:onlineinvoice
+- bench-xero:list:organisation
+- bench-xero:list:overpayments
+- bench-xero:list:payments
+- bench-xero:list:prepayments
+- bench-xero:list:profitandloss
+- bench-xero:list:receipts
+- bench-xero:list:taxrates
+- bench-xero:list:trackingcategories
+- bench-xero:list:trialbalance
+- bench-xero:read:accounts
+- bench-xero:read:banktransactions
+- bench-xero:read:banktransfers
+- bench-xero:read:brandingthemes
+- bench-xero:read:contactgroups
+- bench-xero:read:contacts
+- bench-xero:read:creditnotes
+- bench-xero:read:employees
+- bench-xero:read:expenseclaims
+- bench-xero:read:invoices
+- bench-xero:read:items
+- bench-xero:read:manualjournals
+- bench-xero:read:overpayments
+- bench-xero:read:payments
+- bench-xero:read:prepayments
+- bench-xero:read:purchaseorders
+- bench-xero:read:quotes
+- bench-xero:read:receipts
+- bench-xero:read:trackingcategories
+- bench-xero:update:accounts
+- bench-xero:update:banktransfers
+- bench-xero:update:contactgroups
+- bench-xero:update:contacts
+- bench-xero:update:creditnotes
+- bench-xero:update:currencies
+- bench-xero:update:employees
+- bench-xero:update:expenseclaims
+- bench-xero:update:items
+- bench-xero:update:linkedtransactions
+- bench-xero:update:manualjournals
+- bench-xero:update:options
+- bench-xero:update:overpayments-allocations
+- bench-xero:update:prepayments-allocations
+- bench-xero:update:purchaseorders
+- bench-xero:update:quotes
+- bench-xero:update:receipts
+- bench-xero:update:taxrates
+- bench-xero:update:trackingcategories
+- bench-zendesk:create:create-or-update
+- bench-zendesk:create:organizations
+- bench-zendesk:create:users
+- bench-zendesk:create:users-create-or-update
+- bench-zendesk:list:comments
+- bench-zendesk:list:v2-search
+- bench-zendesk:read:groups
+- bench-zendesk:read:organizations
+- bench-zendesk:read:tickets
+- bench-zendesk:read:users
+- bench-zendesk:update:users
+- bench-zoom:create:webinars-registrants
+- bench-zoom:list:meeting-summary
+- bench-zoom:list:recordings
+- bench-zoom:read:meetings
+map_rows_without_catalog_entry: []
+products_with_context:
+- bench-airtable
+- bench-asana
+- bench-bamboohr
+- bench-basecamp3
+- bench-buffer
+- bench-calendly
+- bench-canva
+- bench-chatgpt
+- bench-confluence
+- bench-docusign
+- bench-facebook-pages
+- bench-freshdesk
+- bench-gmail
+- bench-google-ads
+- bench-google-calendar
+- bench-google-drive
+- bench-google-sheets
+- bench-gorgias
+- bench-helpcrunch
+- bench-helpscout
+- bench-hiver
+- bench-hubspot
+- bench-instagram
+- bench-intercom
+- bench-jira
+- bench-linkedin
+- bench-mailchimp
+- bench-monday
+- bench-notion
+- bench-pipefy
+- bench-quickbooks
+- bench-reamaze
+- bench-recruitee
+- bench-salesforce
+- bench-slack
+- bench-trello
+- bench-twilio
+- bench-twitter
+- bench-wave
+- bench-xero
+- bench-zendesk
+- bench-zoho-desk
+- bench-zoom
+products_without_context:
+- bench-facebook-conversions
+- bench-facebook-lead-ads
+- bench-linkedin-ads
+- bench-linkedin-conversions
