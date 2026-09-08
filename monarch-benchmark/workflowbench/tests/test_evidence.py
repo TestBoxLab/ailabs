@@ -265,7 +265,9 @@ def test_uncommitted_attempt_is_quarantined_before_resume(tmp_path, monkeypatch,
     task = load_suite(TASKS)[0]
     store = Store(tmp_path / "results.sqlite3")
     orch = Orchestrator(store, TASKS, ["oracle"], 1, tmp_path / "out", tasks=[task])
-    store.create_run("crashed", orch._hash(), "test", orch._config())
+    # recorded under the set's own suite id: a run under another suite is refused
+    # for that reason before its evidence is looked at (M1, test_world_revision)
+    store.create_run("crashed", orch._hash(), orch.suite, orch._config())
     eid = f"crashed/{task['task']}/Oracle/t0"
     root = tmp_path / "out" / eid.split('/')[0] / "episodes" / task['task'] / "Oracle" / "t0"
     root.mkdir(parents=True)

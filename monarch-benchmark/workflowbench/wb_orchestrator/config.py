@@ -18,7 +18,9 @@ from pathlib import Path
 
 import yaml
 
-from wb_world.episode import contract_hash, load_suite
+from wb_world import episode as world
+from wb_world.episode import (WORLD_PACKAGE, contract_hash, load_suite, recorded_world_version,
+                              seeded_services)
 from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
@@ -797,13 +799,29 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:
         c.fail("tasks", str(e))
+    # A set runs only on the world it was imported under (unblock plan M1, 8 Sep
+    # 2026): the frozen sets of the upstream 1.0.6 world do not run on the
+    # repaired world by accident, nor the other way round. Both worlds are
+    # named, and the way out is said, before anything is spent.
+    try:
+        recorded = recorded_world_version(tasks)
+    except ValueError as e:
+        c.fail("tasks", str(e))
+    installed = world.installed_world_version()
+    if recorded != installed:
+        c.fail("tasks", f"this task set was imported under {WORLD_PACKAGE} {recorded}, but the "
+                        f"installed world is {WORLD_PACKAGE} {installed}; a set runs only on "
+                        f"the world it was imported under. Draw a set from a corpus imported "
+                        f"under {installed} (wb corpus import-ab --revision LABEL --out DIR), "
+                        f"or install {recorded} to run this one")
     for t in tasks:
-        for service in t["info"]["initial_state"]:
-            if service == "meta":            # the world's own header, not a service
-                continue
+        # The services the task's data seeds (wb_world.episode.seeded_services):
+        # the repaired world writes every app's empty default into each scored
+        # task, and an empty default is not something the product has to serve.
+        for service in seeded_services(t["info"]["initial_state"]):
             if service not in product.services:
                 raise ConfigError(product_path, "services",
-                                  f"task {t['task']} touches service {service}, which {product_path} "
+                                  f"task {t['task']} seeds service {service}, which {product_path} "
                                   f"does not list in services")
 
     excluded_tasks = {}

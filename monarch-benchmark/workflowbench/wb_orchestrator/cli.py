@@ -296,9 +296,17 @@ def cmd_corpus(args) -> int:
     from wb_orchestrator import corpus as corpus_mod
     if args.corpus_cmd == "import-ab":
         product = config.load_product(config.resolve_name_or_path(args.product, "product"))
+        if args.dest and args.out:
+            print("give --out DIR (the folder holding imported-<domain>/) or --dest "
+                  "(a pattern with {domain}), not both", file=sys.stderr)
+            return 2
+        # --out names the folder that holds one imported-<domain>/ per domain;
+        # with neither flag the folders land under corpus/, as they always did.
+        dest = args.dest or f"{args.out or 'corpus'}/imported-{{domain}}"
         try:
-            res = corpus_mod.import_ab(args.domains.split(","), args.dest,
-                                       product_services=product.services)
+            res = corpus_mod.import_ab(args.domains.split(","), dest,
+                                       product_services=product.services,
+                                       revision=args.revision)
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
@@ -308,10 +316,24 @@ def cmd_corpus(args) -> int:
                   f"{n['unchanged']} unchanged")
         print(f"total: {res['written'] + res['unchanged']} tasks "
               f"in {len(res['by_domain'])} folders")
+        if res["revision"]:
+            print(f"revision: {res['revision']} (automation-bench {res['world_version']})"
+                  + (f"; manifest: {Path(res['manifest']).as_posix()}" if res["manifest"] else ""))
         missing = ", ".join(res["missing_services"]) or "none"
         print(f"services seeded by these domains and NOT listed by product "
               f"{product.name}: {missing}")
         return 1 if res["missing_services"] else 0
+    if args.corpus_cmd == "manifest":
+        try:
+            m = corpus_mod.write_manifest(args.root)
+        except FileNotFoundError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(corpus_mod.format_manifest(args.root, m))
+        return 0
     if args.corpus_cmd == "validate":
         v = corpus_mod.validate_corpus(args.dir)
         print(corpus_mod.format_validation(v, verbose=args.verbose))
@@ -524,10 +546,22 @@ def main(argv: list[str] | None = None) -> int:
     ci = csub.add_parser("import-ab")
     ci.add_argument("--domains", required=True,
                     help="comma list, e.g. simple,sales,hr; or 'all' for every known domain")
-    ci.add_argument("--dest", required=True,
-                    help="output task dir; may contain {domain}, replaced per domain")
+    ci.add_argument("--dest", default=None,
+                    help="output task dir; may contain {domain}, replaced per domain "
+                         "(default: <--out>/imported-{domain})")
+    ci.add_argument("--out", default=None,
+                    help="the folder holding one imported-<domain>/ per domain "
+                         "(default: corpus); not with --dest")
+    ci.add_argument("--revision", default=None,
+                    help="label of the world revision the tasks are imported under, e.g. "
+                         "evalrepair10; stamps every task with info.world and writes "
+                         "<out>/MANIFEST.yaml. Required unless the installed package is "
+                         "the upstream 1.0.6")
     ci.add_argument("--product", default="simulated-apps",
                     help="product whose service list the seeded services are checked against")
+    cm = csub.add_parser("manifest",
+                         help="rewrite ROOT/MANIFEST.yaml from the imported-* folders under ROOT")
+    cm.add_argument("root", help="the folder holding imported-<domain>/, e.g. corpus-evalrepair10")
     cv = csub.add_parser("validate")
     cv.add_argument("dir")
     cv.add_argument("--verbose", action="store_true")

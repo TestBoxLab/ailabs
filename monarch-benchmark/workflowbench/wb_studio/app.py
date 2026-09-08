@@ -289,7 +289,7 @@ class Studio:
         store = Store(self.directory / identity / "results.sqlite3")
         orch = Orchestrator(store, ROOT / "tasks", [], 1, self.directory / identity / "evidence",
                             tasks=[self.tasks[t] for t in job["settings"]["tasks"]], provider_concurrency=1)
-        store.create_run(identity, orch._hash(), "workflowbench-synthetic@0.1", orch._config())
+        store.create_run(identity, orch._hash(), orch.suite, orch._config())
         arms = job["settings"].get("arms") or [{"id": m, "kind": "runner"} for m in job["settings"]["models"]]
         try:
             job["status"] = "running"

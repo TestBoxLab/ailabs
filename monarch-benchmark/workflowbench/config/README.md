@@ -120,6 +120,76 @@ domains by name or the word `all` (those six plus the baseline `simple`);
 `--dest` with `{domain}` writes one folder per domain. Full flags, exit codes
 and output: `specs/005-task-tiers/contracts/cli.md`.
 
+## `wb corpus import-ab --revision LABEL --out DIR` (world revisions, 8 Sep 2026)
+
+The world the tasks run on is the vendored AutomationBench package
+(`vendor/automation-bench`, installed as an editable dependency). When that
+package changes, so do the tasks: the repaired `1.0.6+evalrepair.10` release
+changed every scored task's starting data and most assertion sets. A corpus
+is therefore imported once per world revision, into its own folder:
+
+```
+uv run wb corpus import-ab --domains all --revision evalrepair10 --out corpus-evalrepair10
+```
+
+- `--out DIR` is the folder that holds the per-domain folders
+  (`DIR/imported-<domain>/`). Without it, and without `--dest`, the folders
+  land under `corpus/` as before. `--dest` (a pattern with `{domain}`) is still
+  accepted; giving both is an error.
+- `--revision LABEL` stamps every imported task with the world it was imported
+  under, inside `info.world`: the package name, the installed version and the
+  label. The block is part of the task's hash, so a task under a new world is a
+  new contract even when its text did not change. Every row a round records on
+  such a set carries the suite id `workflowbench-synthetic@<version>` (for
+  example `workflowbench-synthetic@1.0.6+evalrepair.10`); sets imported before
+  worlds were recorded keep `workflowbench-synthetic@0.1`. Reports and
+  `wb summary` never pool rounds of different suite ids.
+- Without `--revision`, the import refuses unless the installed package is the
+  upstream `1.0.6`: an import from a repaired world must say so, or it would
+  land in `corpus/` looking like the old one.
+- With `--revision`, the import also writes `DIR/MANIFEST.yaml` (below).
+
+The approval rules are derived per folder exactly as for `corpus/`, then the
+manifest is refreshed so its usable counts describe the declared tasks:
+
+```
+for d in simple finance hr marketing operations sales support; do
+  uv run wb corpus declare corpus-evalrepair10/imported-$d --overwrite --product simulated-apps
+  uv run wb corpus validate corpus-evalrepair10/imported-$d
+done
+uv run wb corpus manifest corpus-evalrepair10
+```
+
+## `wb run` and the installed world
+
+`wb run` (and `wb resume`) refuse a task set whose recorded world is not the
+installed package version, naming both: a set imported under
+`automation-bench 1.0.6` does not run on `1.0.6+evalrepair.10` by accident,
+and the other way round. A set that records no world counts as `1.0.6`, the
+only world the bench had before it recorded one. Draw new sets from the corpus
+imported under the installed world; the old frozen sets stay as records.
+
+## `corpus-<label>/MANIFEST.yaml`
+
+Written by `wb corpus import-ab --revision` and rewritten by
+`wb corpus manifest DIR`: the revision label; the world (package, version, and
+what `vendor/automation-bench/VENDORED-FROM.txt` records about where that copy
+came from: source path, Git tree id as given, content hash); the import date;
+one row per domain folder with its task count, whether its rules are declared
+and how many tasks are usable (a non-empty approval rule and a hash that
+matches the content, the same two checks `wb corpus tiers` applies); the
+totals; and the list of tasks without a rule, each with its reason.
+
+## `scripts/vendor_automation_bench.py`
+
+Replaces `vendor/automation-bench` with a source tree of the version you name
+(`--expect-version`; anything else is refused and nothing is copied), leaving
+behind its virtual environment, caches, logs and Git folder, and writes
+`VENDORED-FROM.txt` beside the copy: source path, version, the hash of its
+`pyproject.toml`, the file count, a content hash of the whole copy, the Git
+tree id as given on the command line, and the date. Then `uv lock` and
+`uv sync`. Adoption record: `specs/007-lab-foundation/dependency-adoption.md`.
+
 ## `wb corpus tiers --seed N`
 
 Free, offline. Scores every usable corpus task, cuts it into terciles, draws
