@@ -19,6 +19,7 @@ import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -34,6 +35,7 @@ from tests.test_config import (  # noqa: F401  (site is a fixture)
 from tests.test_monarch_client import header
 from wb_arms.api_loop import EpisodeTimeout, InfraError
 from wb_arms.monarch import MonarchArm, bench_episode_id
+from wb_arms.monarch_client import MonarchClient
 from wb_orchestrator import config
 from wb_orchestrator.config import ConfigError, load_product
 from wb_orchestrator.orchestrator import Orchestrator, build_arm_for
@@ -378,11 +380,31 @@ def test_timeout_during_authoring(site, repo):
     free(port)
 
 
-def test_timeout_during_run(site, repo):
+def test_timeout_during_run(site, repo, monkeypatch):
     """The engine never finishes: the workflow goes, and the spend still lands.
 
     Rule 9: money spent is money reported, whatever ended the attempt.
     """
+    # The attempt budget includes shim initialization and login. Freeze only
+    # the arm/client clock until a real execution poll has returned, so slow
+    # setup cannot turn this into an authoring timeout. Leave server clocks
+    # and socket timeouts real; the arm itself must detect the expired budget.
+    now = 0.0
+    clock = SimpleNamespace(monotonic=lambda: now, sleep=time.sleep)
+    monkeypatch.setattr("wb_arms.monarch.time", clock)
+    monkeypatch.setattr("wb_arms.monarch_client.time", clock)
+    get_run = MonarchClient.get_run
+    polls = []
+
+    def expire_after_poll(client, run_id, deadline=None):
+        nonlocal now
+        assert not polls, "the arm polled again after its deadline"
+        out = get_run(client, run_id, deadline=deadline)
+        polls.append(out)
+        now = deadline
+        return out
+
+    monkeypatch.setattr(MonarchClient, "get_run", expire_after_poll)
     port = free_port()
     sc = Scenario(shim_url=f"http://127.0.0.1:{port}", run_never_finishes=True)
     with FakeMonarch(sc) as fake, FakeLangfuse() as lf:
@@ -393,10 +415,17 @@ def test_timeout_during_run(site, repo):
         with pytest.raises(EpisodeTimeout) as exc:
             arm.run(Episode(task(), episode_id=EPISODE), deadline=time.monotonic() + 60)
 
-    assert "execution" in str(exc.value)
+    assert "execution phase, polling run run-1" in str(exc.value)
+    assert len(polls) == 1 and polls[0]["status"] == "running"
+    assert len(fake.run_started_at) == 1
     assert fake.deleted_workflows == ["wf-1"]
-    assert exc.value.partial.cost_usd > 0
-    assert exc.value.partial.phases["authoring"].cost_usd > 0
+    partial = exc.value.partial
+    opus = (1000 * 5.00 + 500 * 0.50 + 100 * 6.25 + 200 * 25.00) / 1e6
+    sonnet = (1000 * 2.00 + 500 * 0.20 + 100 * 2.50 + 200 * 10.00) / 1e6
+    assert partial.cost_usd == pytest.approx(opus + sonnet)
+    assert partial.phases["authoring"].cost_usd == pytest.approx(opus)
+    assert partial.phases["execution"].cost_usd == pytest.approx(sonnet)
+    assert partial.phases["execution"].wall_clock_s == arm.timeout_s
     free(port)
 
 

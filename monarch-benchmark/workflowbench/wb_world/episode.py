@@ -22,6 +22,10 @@ from automationbench.tools.api.search import api_search
 from automationbench.tools.api.encode import base64_encode
 
 
+class EvidenceWriteError(OSError):
+    """Durable recording failed, distinct from an application's tool I/O error."""
+
+
 class Episode:
     """One arm attempt on one task, over its own private world."""
 
@@ -37,20 +41,73 @@ class Episode:
         # Frozen clock: explicit arg > latest date in fixture > fixed default.
         self.world.meta.current_time = _resolve_clock(frozen_time, initial)
         self.tool_calls: list[dict[str, Any]] = []
+        self.events: list[dict[str, Any]] = []
+        self._journal = None
         self.snapshot0 = self.snapshot()
+
+    def attach_journal(self, directory: str | Path) -> None:
+        """Begin durable observations before arm.run, in a new attempt directory.
+
+        A recovered snapshot is only the last completed tool observation; a
+        crash in a later action may have changed state that was never observed.
+        Journal I/O failures propagate so recording cannot silently disappear.
+        """
+        if self._journal is not None or self.events:
+            raise RuntimeError("attach the journal before any tool use and only once")
+        from wb_results.evidence import AttemptJournal
+        self._journal = AttemptJournal(Path(directory), self.snapshot0)
+
+    def record_agent_event(self, entry: dict) -> None:
+        """Persist an observed request/response/error supplied by the harness.
+
+        Unattached episodes keep their existing in-memory behavior. The caller
+        remains responsible for excluding credentials and hidden reasoning.
+        """
+        if self._journal is not None:
+            try:
+                self._journal.agent(entry)
+            except OSError as exc:
+                raise EvidenceWriteError(f"agent journal write failed: {exc}") from exc
+
+    def _record_tool_event(self, event: dict, snapshot=None) -> None:
+        try:
+            self._journal.tool(event, snapshot)
+        except OSError as exc:
+            raise EvidenceWriteError(f"tool journal write failed: {exc}") from exc
 
     # -- the three tools, closed over this episode's world -------------------
     def api_search(self, query: str, top_k: int = 5) -> str:
         self.tool_calls.append({"tool": "api_search", "query": query})
-        return api_search(query, top_k)
+        return self._observe("api_search", {"query": query, "top_k": top_k},
+                             lambda: api_search(query, top_k))
 
     def api_fetch(self, method: str, url: str, params: str | None = None, body: str | None = None) -> str:
         self.tool_calls.append({"tool": "api_fetch", "method": method, "url": url})
-        return api_fetch(self.world, method, url, params=params, body=body)
+        return self._observe("api_fetch", {"method": method, "url": url, "params": params, "body": body},
+                             lambda: api_fetch(self.world, method, url, params=params, body=body))
 
     def base64_encode(self, text: str) -> str:
         self.tool_calls.append({"tool": "base64_encode"})
-        return base64_encode(text)
+        return self._observe("base64_encode", {"text": text}, lambda: base64_encode(text))
+
+    def _observe(self, tool: str, arguments: dict, call):
+        event = {"sequence": len(self.events), "kind": "tool", "tool": tool,
+                 "arguments": copy.deepcopy(arguments),
+                 "started_at": datetime.now(timezone.utc).isoformat()}
+        self.events.append(event)
+        if self._journal is not None:
+            self._record_tool_event({**event, "status": "running"})
+        try:
+            value = call()
+            event.update(status="completed", result=value)
+            return value
+        except Exception as exc:
+            event.update(status="error", error=str(exc))
+            raise
+        finally:
+            event["finished_at"] = datetime.now(timezone.utc).isoformat()
+            if self._journal is not None and event.get("status") in ("completed", "error"):
+                self._record_tool_event(event, self.snapshot if event["status"] == "completed" else None)
 
     # -- snapshots ------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:

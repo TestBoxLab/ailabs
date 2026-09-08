@@ -125,16 +125,32 @@ class MonarchClient:
         timeout is the remaining budget, so a stalled stream raises rather than
         hanging; the deadline is also checked between frames.
         """
-        req = self._request("GET", f"/api/workflows/recipe/runs/{run_id}/stream",
-                            accept="text/event-stream")
+        yield from self._sse(f"/api/workflows/recipe/runs/{run_id}/stream",
+                             f"authoring run {run_id}", deadline)
+
+    def run_stream(self, engine_run_id: str, deadline: float | None = None) -> Iterator[dict]:
+        """Yield the run views the engine streams while a workflow executes.
+
+        The stock backend (`engine.controller.ts`, `GET /api/engine/runs/:id/stream`)
+        writes one frame per change of the persisted run view -- the same shape as
+        `GET /api/workflows/runs/:id`, with `steps` carrying every recipe node's
+        status -- and closes the stream once the engine state is terminal. The
+        viewer guard accepts the owner's session, so the login token suffices.
+        A backend without the route answers 404, which the arm reads as "poll".
+        """
+        yield from self._sse(f"/api/engine/runs/{engine_run_id}/stream",
+                             f"engine run {engine_run_id}", deadline)
+
+    def _sse(self, path: str, label: str, deadline: float | None) -> Iterator[dict]:
+        req = self._request("GET", path, accept="text/event-stream")
         try:
             resp = urllib.request.urlopen(req, timeout=self._budget(deadline))
         except urllib.error.HTTPError as e:
             raise InfraError("infra:harness_crash",
-                             f"Monarch stream {run_id}: HTTP {e.code}") from e
+                             f"Monarch stream {label}: HTTP {e.code}") from e
         except OSError as e:
-            raise InfraError("infra:harness_crash", f"Monarch stream {run_id}: {e}") from e
-        timeout = EpisodeTimeout(f"deadline hit while streaming authoring run {run_id}")
+            raise InfraError("infra:harness_crash", f"Monarch stream {label}: {e}") from e
+        timeout = EpisodeTimeout(f"deadline hit while streaming {label}")
         with resp:
             while True:
                 if deadline is not None and time.monotonic() >= deadline:
@@ -192,6 +208,13 @@ class MonarchClient:
 
     def get_run(self, run_id: str, deadline: float | None = None) -> dict:
         return self._call("GET", f"/api/workflows/runs/{run_id}", deadline=deadline)
+
+    def run_recipe(self, run_id: str, deadline: float | None = None) -> dict | None:
+        """The recipe THIS run executed (`GET /api/workflows/runs/:id/recipe`);
+        None when the backend has no such route or no longer holds the run."""
+        out = self._call("GET", f"/api/workflows/runs/{run_id}/recipe", deadline=deadline,
+                         ok_status=(404,))
+        return None if not out or out.get("error") else out
 
     def delete_workflow(self, workflow_id: str, deadline: float | None = None) -> dict:
         # Already gone is the state we wanted, so 404 is success.

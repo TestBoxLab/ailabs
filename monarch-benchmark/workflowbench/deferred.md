@@ -82,3 +82,15 @@ than 30 days (warning, never a gate).
 - The 47 simulated apps' OpenAPI documents carry no request or response
   schemas; the seeds derive body fields from the AutomationBench data model
   and the corpus. When the documents gain schemas, prefer them.
+
+## Stock Monarch Enterprise in the Studio: what the adapter cannot verify (8 Sep 2026)
+
+**Today.** `wb_studio/enterprise.py` launches Default Monarch Enterprise only after a
+verification probe (liveness, session, knowledge base, Langfuse) and names the build
+from the checkout `monarch_repo` points at (`specs/011-monarch-runtime-integration/checkpoint-3.md`).
+
+**Missing.** The provider path (Bedrock in the stock product) and the deployment's real
+commit are not observable from the bench; both are recorded as declarations. A backend
+route that reports its build identity and its model provider would close this. The
+agentic-request track (`POST /api/operator/runs`) has no adapter. Per-node run values
+are not fetched for the Activity lane.

@@ -19,7 +19,7 @@ from typing import Any
 
 from wb_arms import providers
 from wb_arms.providers import Provider
-from wb_world.episode import Episode
+from wb_world.episode import Episode, EvidenceWriteError
 
 MAX_TOOL_TURNS = 50  # the AB budget
 MAX_TOOL_RESULT_CHARS = 100_000  # context guard; truncation is marked, never silent
@@ -143,6 +143,10 @@ def _exec_tool(ep: Episode, name: str, args: dict) -> str:
         if name == "base64_encode":
             return ep.base64_encode(args["text"])
         return json.dumps({"error": f"unknown tool {name}"})
+    except EvidenceWriteError:
+        # A missing durable observation is a harness failure, not an application
+        # error to send back to the model and continue spending through.
+        raise
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -433,7 +437,17 @@ class _AnthropicAdapter:
             messages.append({"role": "user", "content": [block]})
 
 
+def _json_messages(messages: list) -> list:
+    """Normalize SDK messages without flattening their structured contents."""
+    def encode(value):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json", exclude_none=True)
+        raise TypeError(f"unsupported message type: {type(value).__name__}")
+    return json.loads(json.dumps(messages, default=encode))
+
+
 class ApiLoopArm:
+    message_evidence = "normalized"  # observable messages; not raw provider/private reasoning
     """One arm instance per (provider, run); tools serialized once, reused verbatim."""
 
     def __init__(self, provider_key: str, request_timeout: float = 120.0):
@@ -455,11 +469,28 @@ class ApiLoopArm:
         return _OpenAIAdapter(self.provider, self._tools_openai, self._request_timeout)
 
     def run(self, ep: Episode, deadline: float | None = None) -> ArmResult:
+        res = ArmResult()
+        try:
+            return self._run(ep, deadline, res)
+        except EvidenceWriteError as exc:
+            # The response may already have incurred cost before its journal
+            # failed. Preserve those observed tokens and stop without retry:
+            # a later successful write cannot make this trajectory complete.
+            res.flags.append("evidence_incomplete")
+            res.termination = "infra:harness_crash"
+            res.error = str(exc)
+            res.cost_usd = providers.cost_usd(self.provider, res.tokens_prompt,
+                                              res.tokens_cached, res.tokens_output,
+                                              res.tokens_cache_write)
+            failed = InfraError("infra:harness_crash", str(exc), retryable=False)
+            failed.partial = res
+            raise failed from exc
+
+    def _run(self, ep: Episode, deadline: float | None, res: ArmResult) -> ArmResult:
         system = ep.task["prompt"][0]["content"]
         brief = ep.task["prompt"][1]["content"]
         adapter = self._adapter()
         messages = adapter.start(system, brief)
-        res = ArmResult()
         prev_prompt_tokens: int | None = None
         saw_cache_source = degraded_flagged = False
 
@@ -473,10 +504,16 @@ class ApiLoopArm:
             # Per-request timeout never exceeds the episode's remaining budget,
             # so a stalled provider can't overrun ARM_RUN's deadline by 120s.
             budget = None if deadline is None else max(deadline - time.monotonic(), 1.0)
+            entry = {"turn": turn_i, "request": {"messages": _json_messages(messages)},
+                     "started_monotonic": time.monotonic(), "tool_results": []}
+            res.turn_log.append(entry)
+            ep.record_agent_event({"type": "agent_request", **entry})
             try:
                 t = adapter.turn(messages,
                                  timeout=None if budget is None else min(self._request_timeout, budget))
             except InfraError as e:
+                entry.update(status="error", error=str(e), finished_monotonic=time.monotonic())
+                ep.record_agent_event({"type": "agent_error", **entry})
                 if deadline is not None and time.monotonic() > deadline:
                     # The request died because the episode budget expired —
                     # that's a timeout verdict, not an infra retry.
@@ -495,11 +532,14 @@ class ApiLoopArm:
             res.tokens_cached += t["cached_tokens"]
             res.tokens_cache_write += t.get("cache_write_tokens", 0)
             res.tokens_output += t["output_tokens"]
-            res.turn_log.append({"turn": turn_i, "prompt_tokens": t["prompt_tokens"],
-                                 "cached_tokens": t["cached_tokens"],
-                                 "output_tokens": t["output_tokens"],
-                                 "cache_source": t["cache_source"],
-                                 "tool_calls": [c["name"] for c in t["tool_calls"]]})
+            entry.update({"prompt_tokens": t["prompt_tokens"],
+                          "cached_tokens": t["cached_tokens"],
+                          "output_tokens": t["output_tokens"],
+                          "cache_source": t["cache_source"],
+                          "tool_calls": [c["name"] for c in t["tool_calls"]],
+                          "response": {"text": t["text"], "tool_calls": _json_messages(t["tool_calls"])},
+                          "status": "completed", "finished_monotonic": time.monotonic()})
+            ep.record_agent_event({"type": "agent_response", **entry})
             saw_cache_source = saw_cache_source or t["cache_source"] is not None
             if t["cached_tokens"] > t["prompt_tokens"] and "cache_overreport" not in res.flags:
                 res.flags.append("cache_overreport")   # provider bug; cost math clamps
@@ -521,12 +561,19 @@ class ApiLoopArm:
                                                   + call["parse_error"]})
                 else:
                     result = _exec_tool(ep, call["name"], call["args"])
-                if len(result) > MAX_TOOL_RESULT_CHARS:
+                truncated = len(result) > MAX_TOOL_RESULT_CHARS
+                if truncated:
                     result = result[:MAX_TOOL_RESULT_CHARS] + " ...[truncated by harness]"
                 res.tool_calls += 1
+                entry["tool_results"].append({"call_id": call["id"], "name": call["name"],
+                                              "content": result, "truncated": truncated})
                 adapter.append_tool_result(messages, call, result)
+                ep.record_agent_event({"type": "tool_result_delivered", "turn": turn_i,
+                                       **entry["tool_results"][-1]})
         else:
             res.flags.append("turn_budget_exhausted")
+            res.termination = "agent_error"
+            res.error = "tool turn budget exhausted without a final response"
 
         # Providers that omit the cache field on uncached turns (Gemini) must
         # not be flagged absent: only flag when NO turn ever reported one.

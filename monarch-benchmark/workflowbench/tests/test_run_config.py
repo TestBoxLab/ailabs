@@ -180,18 +180,17 @@ def test_build_arm_for_renders_cli_env_from_model(site, monkeypatch):
     assert arm.env == {"ANTHROPIC_MODEL": "claude-opus-4-8", "WB_KEY_ENV": "ANTHROPIC_API_KEY",
                        "WB_PROVIDER": "anthropic"}
 
-    captured = {}
-
-    def fake_run(cmd, **kw):
-        captured.update(kw)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    from unittest.mock import Mock
+    from wb_arms.api_loop import InfraError
+    process = Mock(side_effect=AssertionError("unverified native launch"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_claude_code.shutil, "which", lambda _: "claude")
-    monkeypatch.setattr(cli_claude_code.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", process)
     arm.workdir_root = site / "cc-work"
-    arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
-    assert captured["env"]["ANTHROPIC_MODEL"] == "claude-opus-4-8"
-    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-test"
+    with pytest.raises(InfraError, match="verified isolated runtime") as error:
+        arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
+    assert error.value.retryable is False
+    process.assert_not_called()
+    assert not arm.workdir_root.exists()
 
 
 @pytest.mark.parametrize("value", ['{"a":1}', "{modle}"])

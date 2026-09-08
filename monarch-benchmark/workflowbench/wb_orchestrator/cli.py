@@ -111,6 +111,43 @@ def _banner(rc) -> str:
         *monarch])
 
 
+def _paid_launch_blocked() -> int:
+    print("Benchmark foundation is not ready for paid dispatch: verified provider liability "
+          "bounds, shared reservations, historical billing reconciliation and native isolation "
+          "must be connected and verified. Bounded Gemini API controls are available through `wb studio`; unsupported native launch paths remain blocked.",
+          file=sys.stderr)
+    return 2
+
+
+def _has_paid_competitor(rc) -> bool:
+    return any(c.harness.kind != "scripted" for c in rc.competitors)
+
+
+def cmd_studio(args) -> int:
+    from wb_studio.app import main
+    main(["--port", str(args.port)])
+    return 0
+
+
+def cmd_budget_status(args) -> int:
+    from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
+    try:
+        status = BudgetLedger(args.ledger).status()
+    except (BudgetConfigurationError, ValueError) as exc:
+        print(f"budget: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps({
+        "ledger": str(Path(args.ledger).resolve()), "week_start": status.week_start,
+        "timezone": "America/Sao_Paulo",
+        **{name + "_usd": str(getattr(status, name + "_usd"))
+           for name in ("weekly_limit", "actual", "held", "carried_held", "committed", "available")},
+        "blocked": status.blocked, "overrun_ids": status.overrun_ids,
+        "historical_billing_verified": False, "paid_launch_enabled": False,
+        "note": "Only recorded liabilities are shown. Weekly actual_usd conservatively occupies capacity across dispatch-to-settlement weeks; it is not invoice attribution. Historical provider billing has not been imported."
+    }, indent=2))
+    return 0
+
+
 def cmd_run(args) -> int:
     # Two error formats per contracts/cli.md: `wb run: ...` for picker and
     # name errors, `config error in <file>: <field>: <why>` for file errors.
@@ -127,6 +164,8 @@ def cmd_run(args) -> int:
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
+    if _has_paid_competitor(rc):
+        return _paid_launch_blocked()
     print(_banner(rc))
     store = _store(args)
     orch = Orchestrator.from_config(store, rc, args.out)
@@ -149,8 +188,12 @@ def cmd_resume(args) -> int:
     try:
         if "plan_path" in cfg:
             rc = config.resolve(cfg["product_path"], cfg["plan_path"])
+            if _has_paid_competitor(rc):
+                return _paid_launch_blocked()
             orch = Orchestrator.from_config(store, rc, args.out, provider_concurrency=args.concurrency)
         else:  # a run from before product/plan files
+            if any(key not in ("oracle", "sloppy", "null") for key in cfg["arms"]):
+                return _paid_launch_blocked()
             orch = Orchestrator(store, cfg["suite_dir"], cfg["arms"], cfg["k"],
                                 out_dir=args.out, timeout_s=cfg["timeout_s"],
                                 provider_concurrency=args.concurrency or 4)
@@ -177,7 +220,10 @@ def cmd_status(args) -> int:
 
 def cmd_doctor(args) -> int:
     keys = args.arms.split(",") if args.arms else None
-    reports = doctor_mod.run_doctor(keys, monarch_probe=args.monarch_probe)
+    # Default provider checks and the optional Monarch authoring check spend money.
+    if args.monarch_probe or keys != ["monarch"]:
+        return _paid_launch_blocked()
+    reports = doctor_mod.run_doctor(keys, monarch_probe=False)
     print(doctor_mod.format_report(reports))
     return 0 if all(r.get("ok") for r in reports) else 1
 
@@ -191,7 +237,7 @@ def cmd_grade(args) -> int:
     suite_dir = args.suite or json.loads(run["config_json"])["suite_dir"]
     res = regrade(store, args.run_id, suite_dir)
     print(f"regraded {res['regraded']} episodes, {res['changed']} verdicts changed")
-    for k in ("contract_drift", "task_missing", "artifacts_missing"):
+    for k in ("contract_drift", "task_missing", "artifacts_missing", "evidence_invalid"):
         if res[k]:
             print(f"WARNING: {res[k]} episodes skipped ({k.replace('_', ' ')})")
     _print_run_report(store, args.run_id)
@@ -400,20 +446,12 @@ def cmd_monarch_conform(args) -> int:
 
 
 def cmd_monarch_recipes(args) -> int:
-    from wb_orchestrator import monarch_recipes
     if bool(args.plan) == bool(args.tasks):
         print("wb monarch recipes: give exactly one of --plan and --tasks", file=sys.stderr)
         return 2
-    try:
-        return monarch_recipes.run(
-            product_path=config.resolve_name_or_path(args.product, "product"),
-            harness_path=config.resolve_name_or_path(args.harness, "harness"),
-            plan_path=config.resolve_name_or_path(args.plan, "plan") if args.plan else None,
-            tasks_dir=args.tasks, attempts=args.attempts, yes=args.yes,
-            env=os.environ, stdout=sys.stdout)
-    except ConfigError as e:
-        print(e, file=sys.stderr)
-        return 2
+    return _paid_launch_blocked()
+
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -422,6 +460,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--out", default=DEFAULT_OUT)
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("budget", help="inspect the shared weekly experiment ledger")
+    bsub = p.add_subparsers(dest="budget_cmd", required=True)
+    bs = bsub.add_parser("status")
+    bs.add_argument("--ledger", default=str(Path(__file__).resolve().parents[3] / "research" / "budget.sqlite3"),
+                    help="ledger to inspect; all paid launchers must share the canonical ledger")
+    bs.set_defaults(fn=cmd_budget_status)
 
     p = sub.add_parser("run")
     p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
@@ -539,6 +584,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("runs_dir", help=r"e.g. C:\...\Monarch_Main\bench-host-state\runs")
     p.add_argument("--limit", type=int, default=None, help="import only the first N run dirs")
     p.set_defaults(fn=cmd_legacy)
+
+    p = sub.add_parser("studio", help="private live comparison UI with bounded paid API controls")
+    p.add_argument("--port", type=int, default=8765)
+    p.set_defaults(fn=cmd_studio)
 
     args = ap.parse_args(argv)
     return args.fn(args)

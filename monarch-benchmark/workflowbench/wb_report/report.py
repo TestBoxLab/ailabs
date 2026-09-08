@@ -21,6 +21,8 @@ from wb_report.metrics import (NOT_APPLICABLE_REASON, comparison,
                                competitor_metrics, is_monarch, is_not_applicable,
                                monarch_attempts, round_totals)
 from wb_results.store import Store
+from wb_results.evidence import EvidenceIntegrityError, verify_manifest
+from wb_results.regrade_evidence import validate_current
 from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
 from wb_stats.stats import sem as stats_sem
 
@@ -202,8 +204,22 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
     show_dollars = audience == "internal"
     figures: list[dict[str, Any]] = []
     per_arm_rows: dict[str, list[dict]] = {}
+    grading_evidence: dict[str, dict] = {}
     for arm in arms:
         res = store.episodes(run=run_id, arm=arm)
+        for row in res["rows"]:
+            artifacts = store.artifacts(row["episode_id"])
+            manifest = artifacts.get("manifest")
+            if ("evidence_manifest=v1" in row.get("flags", []) and not manifest) or (
+                    manifest and verify_manifest(manifest, episode_id=row["episode_id"],
+                                                 contract_sha256=row.get("contract_sha256"))):
+                raise GateError(f"invalid evidence for episode {row['episode_id']}; refusing scored report")
+            try:
+                selected = validate_current(row, artifacts)
+            except EvidenceIntegrityError as error:
+                raise GateError(f"invalid grading evidence for episode {row['episode_id']}: {error}") from error
+            grading_evidence[row["episode_id"]] = selected if audience == "internal" else {
+                key: value for key, value in selected.items() if key in ("kind", "revision_id", "sha256")}
         suites = {r["suite"] for r in res["rows"]}
         if len(suites) > 1 or (suites and suites != {run["suite"]}):
             # Legacy rows live beside new rows in one store but never pool
@@ -272,6 +288,7 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                      "per_competitor": len(tasks) * k, "competitors": len(arms),
                      "total": sum(len(per_arm_rows[a]) for a in arms)},
             "metrics": metrics, "comparisons": comparisons,
+            "grading_evidence": grading_evidence,
             "totals": round_totals(metrics),
             # one entry per Monarch attempt, per Monarch competitor; empty when
             # none ran, and the page omits the section entirely

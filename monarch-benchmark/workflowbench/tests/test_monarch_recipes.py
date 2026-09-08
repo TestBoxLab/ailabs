@@ -311,7 +311,7 @@ def test_rows_an_earlier_run_earned_survive_a_rerun(site, repo):
 
 # -- T034: the subcommand ------------------------------------------------------
 
-def test_main_returns_the_steps_exit_code(site, repo, monkeypatch):
+def test_main_blocks_authoring_until_foundation_ready(site, repo, monkeypatch):
     for k, v in MONARCH_ENV.items():
         monkeypatch.setenv(k, v)
     port = free_port()
@@ -322,7 +322,8 @@ def test_main_returns_the_steps_exit_code(site, repo, monkeypatch):
                      "--product", str(site / "config/products/simulated-apps.yaml"),
                      "--harness", str(site / "config/harnesses/monarch.yaml"),
                      "--tasks", str(site / "tasks")])
-    assert code == 5        # the gate, because no --yes and no approved plan
+    assert code == 2        # foundation gate precedes paid recipe creation
+    assert not monarch.requests
 
 
 def test_plan_and_tasks_together_are_refused(site, capsys):

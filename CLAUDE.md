@@ -189,7 +189,8 @@ each stage hands its artifact to the next:
 | `workflowbench/wb_orchestrator/orchestrator.py` | Attempt state machine, config hash, resume. |
 | `workflowbench/wb_orchestrator/declare.py` | Approval-rule derivation and the side-effect list. |
 | `workflowbench/wb_arms/providers.py`, `api_loop.py` | Model catalog with prices; generic tool loop (OpenAI chat, OpenAI Responses, Gemini, Anthropic). |
-| `workflowbench/wb_arms/monarch.py` | Monarch competitor (feature 002, in progress). |
+| `workflowbench/wb_arms/monarch.py` | Monarch competitor (feature 002): create + run through Monarch's API; `observer` hook and the engine run stream feed the Studio's live view (feature 011). |
+| `workflowbench/wb_studio/enterprise.py` | Stock Monarch Enterprise as a Studio comparison version: verification probe, readiness, frozen runtime manifest, the attempt arm that streams builder frames and recipe nodes and reserves its ceiling in the weekly ledger (feature 011, `specs/011-monarch-runtime-integration/checkpoint-3.md`). |
 | `workflowbench/wb_world/openapi.py`, `wb_arms/http_shim.py` | OpenAPI documents + HTTP front door for Monarch. |
 | `workflowbench/wb_report/audiences.yaml` | Which competitors may appear in which report. |
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |

@@ -32,6 +32,7 @@ from runner.schema import EpisodeRow, PhaseMetrics, TokenUsage
 from wb_arms.api_loop import ApiLoopArm, ArmResult, EpisodeTimeout, InfraError
 from wb_arms import providers
 from wb_results.store import Store
+from wb_results import evidence
 from wb_orchestrator import config as config_mod
 from wb_orchestrator.config import ConfigError
 from wb_world.episode import Episode, contract_hash, load_suite  # noqa: F401  (re-exported)
@@ -363,22 +364,69 @@ class Orchestrator:
         eid = f"{run_id}/{task_id}/{arm.name.replace('/', '_')}/t{trial}"
         ep_dir = self._run_dir(run_id) / "episodes" / task_id / arm.name.replace("/", "_") / f"t{trial}"
         ep_dir.mkdir(parents=True, exist_ok=True)
+        prior = next((r for r in self.store.episodes(run=run_id, arm=arm.name)["rows"]
+                      if r["episode_id"] == eid), None)
+        if prior and "evidence_incomplete" in prior.get("flags", []):
+            raise evidence.EvidenceIntegrityError(f"incomplete prior evidence requires reconciliation for {eid}")
+        if prior and any(flag.startswith("grading_revision=") for flag in prior.get("flags", [])):
+            raise evidence.EvidenceIntegrityError(f"regraded episode requires preserved generation recovery for {eid}")
+        previous_manifest = ep_dir / "manifest.json"
+        old_attempts = list(ep_dir.glob("attempt-*"))
+        # A crash can precede the row/manifest commit. Keep those observations
+        # untouched until their evidence and billing have been reconciled.
+        if old_attempts and (prior is None or not previous_manifest.is_file()):
+            raise evidence.EvidenceIntegrityError(f"unreconciled prior attempts for {eid}")
+        if prior and "evidence_manifest=v1" in prior.get("flags", []) and not previous_manifest.is_file():
+            raise evidence.EvidenceIntegrityError(f"prior evidence manifest is missing for {eid}")
+        for directory in old_attempts:
+            try:
+                metadata = json.loads((directory / "attempt.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                metadata = {}
+            if (not isinstance(metadata, dict) or metadata.get("status") != "finalized"
+                    or metadata.get("completion") != "complete"):
+                raise evidence.EvidenceIntegrityError(f"incomplete prior attempt for {eid}: {directory.name}")
+        if previous_manifest.exists():
+            problems = evidence.verify_manifest(previous_manifest, episode_id=eid,
+                                                 contract_sha256=contract_hash(task))
+            if problems:
+                raise evidence.EvidenceIntegrityError(f"prior evidence is invalid for {eid}: {problems}")
         started = datetime.now(timezone.utc)
         t0 = time.monotonic()
 
         termination, error, retries = "completed", None, 0
         result = ArmResult()
         acc = ArmResult()   # spend from failed attempts: paid for, so accounted
+        prior_spend = (prior.get("cost_usd") or 0.0) if prior else 0.0
+        if prior:
+            tokens = prior.get("tokens") or {}
+            acc.cost_usd = prior_spend
+            acc.tokens_prompt = tokens.get("prompt", 0)
+            acc.tokens_cached = tokens.get("cached", 0)
+            acc.tokens_cache_write = tokens.get("cache_write", 0)
+            acc.tokens_output = tokens.get("output", 0)
+            acc.turns = prior.get("phases", {}).get("run", {}).get("turns", 0)
+            acc.tool_calls = prior.get("tool_calls", 0)
+            old_turns = ep_dir / "turns.jsonl"
+            if old_turns.is_file():
+                acc.turn_log = [json.loads(line) for line in old_turns.read_text(encoding="utf-8").splitlines()
+                                if line.strip()]
         ep: Episode | None = None
         attempt = 0
+        # Resume appends evidence; it must not erase the failed invocation.
+        evidence_index = max((int(p.name.split("-")[1]) for p in ep_dir.glob("attempt-*")
+                              if p.is_dir() and p.name.split("-")[1].isdigit()), default=-1) + 1
         while True:
             # PROVISION + SNAPSHOT0: fresh world per attempt (a retried episode
             # must not see the aborted attempt's writes).
             ep = Episode(task, episode_id=eid)
+            ep.attach_journal(ep_dir / f"attempt-{evidence_index:03d}")
             (ep_dir / "snapshot0.json").write_text(json.dumps(ep.snapshot0))
             deadline = time.monotonic() + self.timeout_s
+            attempt_result = ArmResult()
             try:
                 result = arm.run(ep, deadline=deadline)
+                attempt_result = result
                 termination, error = result.termination, result.error
                 break
             except EpisodeTimeout as e:
@@ -387,15 +435,18 @@ class Orchestrator:
                 # phases; the row reports both (rule 9). No retry follows, so
                 # the partial result is the result.
                 result = getattr(e, "partial", None) or result
+                attempt_result = result
                 break
             except InfraError as e:
                 termination, error = e.kind, str(e)
                 partial = getattr(e, "partial", None)
+                attempt_result = partial or ArmResult()
                 if partial is not None:
                     for f in ("tokens_prompt", "tokens_cached", "tokens_cache_write", "tokens_output",
                               "cost_usd", "turns", "tool_calls"):
                         setattr(acc, f, getattr(acc, f) + getattr(partial, f))
                     acc.turn_log.extend(partial.turn_log)
+                    acc.flags.extend(flag for flag in partial.flags if flag not in acc.flags)
                 if not e.retryable or attempt >= MAX_INFRA_RETRIES:
                     break
                 attempt += 1
@@ -409,13 +460,26 @@ class Orchestrator:
             except Exception as e:
                 termination, error = "agent_error", str(e)
                 break
+            finally:
+                evidence.write_attempt(ep_dir, evidence_index, ep, attempt_result, termination, error)
+                evidence_index += 1
 
-        if acc.tokens_prompt or acc.cost_usd:
+        if any((acc.tokens_prompt, acc.tokens_cached, acc.tokens_cache_write, acc.tokens_output,
+                acc.cost_usd, acc.turns, acc.tool_calls, acc.turn_log, acc.flags)):
             for f in ("tokens_prompt", "tokens_cached", "tokens_cache_write", "tokens_output",
                       "cost_usd", "turns", "tool_calls"):
                 setattr(result, f, getattr(result, f) + getattr(acc, f))
             result.turn_log = acc.turn_log + result.turn_log
+            result.flags.extend(flag for flag in acc.flags if flag not in result.flags)
             result.flags.append("spend_includes_failed_attempts")
+
+        if prior:
+            result.flags.append("spend_includes_resumed_attempts")
+            result.flags.extend(flag for flag in prior.get("flags", [])
+                                if flag in ("cost_missing", "billing=unknown") and flag not in result.flags)
+            # The run aggregate includes prior invocations; detailed native
+            # phases describe the latest invocation and retain attempt evidence.
+            result.flags.append("detailed_phases=latest_invocation")
 
         # SNAPSHOT1 + GRADE + RECORD always run, whatever ARM_RUN did. A crash
         # in this stage records an infra:harness_crash row rather than losing
@@ -447,6 +511,7 @@ class Orchestrator:
         model = (getattr(arm, "model_label", None)
                  or getattr(getattr(arm, "provider", None), "model_id", None))
         test_mode = self.run_config.plan.mode if self.run_config else None
+        result.flags.append("evidence_manifest=v1")
         row = EpisodeRow(
             episode_id=eid, run_id=run_id, task_id=task_id, suite=SUITE,
             contract_sha256=contract_hash(task), arm=arm.name, trial=trial,
@@ -468,17 +533,32 @@ class Orchestrator:
                                         tokens_input=result.tokens_prompt,
                                         tokens_output=result.tokens_output,
                                         cost_usd=result.cost_usd,
-                                        wall_clock_s=round(time.monotonic() - t0, 4))},
+                                        wall_clock_s=round(time.monotonic() - t0 + (
+                                            prior.get("phases", {}).get("run", {}).get("wall_clock_s", 0)
+                                            if prior else 0), 4))},
             termination=termination, error=error, artifacts_uri=str(ep_dir),
             started_at=started, finished_at=datetime.now(timezone.utc))
+        evidence.write_events(ep_dir / "events.jsonl", ep.events)
+        evidence.write_json(ep_dir / "grading.json", g)
+        evidence.write_json(ep_dir / "result.json", {
+            "termination": termination, "error": error, "final_text": result.final_text,
+            "cost_usd": result.cost_usd, "flags": result.flags,
+            "row": row.model_dump(mode="json")})
+        evidence.write_manifest(
+            ep_dir, episode_id=eid, contract_sha256=contract_hash(task),
+            agent_messages="not_applicable" if isinstance(arm, _ScriptedAdapter) else
+                           getattr(arm, "message_evidence", "unavailable"))
+
         self.store.record_episode(row)
         for kind, name in (("snapshot0", "snapshot0.json"), ("snapshot1", "snapshot1.json"),
-                           ("turns", "turns.jsonl")):
+                           ("turns", "turns.jsonl"), ("events", "events.jsonl"),
+                           ("grading", "grading.json"), ("result", "result.json"),
+                           ("manifest", "manifest.json")):
             self.store.add_artifact(eid, kind, str(ep_dir / name))
 
         with self._count_lock:
             self._recorded += 1
-            self._spent += row.cost_usd or 0.0
+            self._spent += (row.cost_usd or 0.0) - prior_spend
             if self._stop_after is not None and self._recorded >= self._stop_after:
                 self._abort.set()
             # ponytail: at most concurrency x competitors in-flight attempts can finish
@@ -492,10 +572,11 @@ class Orchestrator:
 
 
 def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
-    """wb grade: re-grade offline from stored snapshots, update rows in place."""
+    """Re-grade offline; append grading evidence before selecting the new verdict."""
+    from wb_results import regrade_evidence
     tasks = {t["task"]: t for t in load_suite(suite_dir)}
     res = store.episodes(run=run_id)
-    changed = regraded = drifted = missing_task = missing_artifacts = 0
+    changed = regraded = drifted = missing_task = missing_artifacts = evidence_invalid = 0
     for r in res["rows"]:
         task = tasks.get(r["task_id"])
         if task is None:
@@ -505,18 +586,32 @@ def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
         if r.get("contract_sha256") and contract_hash(task) != r["contract_sha256"]:
             drifted += 1
             continue
+        if "evidence_incomplete" in r.get("flags", []):
+            evidence_invalid += 1
+            continue
         arts = store.artifacts(r["episode_id"])
+        if (("evidence_manifest=v1" in r.get("flags", []) and "manifest" not in arts)
+                or ("manifest" in arts and evidence.verify_manifest(
+                    arts["manifest"], episode_id=r["episode_id"], contract_sha256=r.get("contract_sha256")))):
+            evidence_invalid += 1
+            continue
         if "snapshot0" not in arts or "snapshot1" not in arts:
             missing_artifacts += 1
             continue
+        try:
+            regrade_evidence.validate_current(r, arts)
+            input_bindings = regrade_evidence.inputs(arts)
+        except (evidence.EvidenceIntegrityError, OSError, ValueError):
+            evidence_invalid += 1
+            continue
+        grader_provenance = evidence.provenance()
         s0 = json.loads(Path(arts["snapshot0"]).read_text())
         s1 = json.loads(Path(arts["snapshot1"]).read_text())
         g = grade(task, s0, s1)
         row = EpisodeRow(**r)
         new_passed = g["passed"] and row.termination == "completed"
-        if (new_passed, g["assertions_passed"], g["invariant"]["passed"]) != (
-                row.passed, row.assertions_passed, row.invariant_passed):
-            changed += 1
+        verdict_changed = (new_passed, g["assertions_passed"], g["invariant"]["passed"]) != (
+            row.passed, row.assertions_passed, row.invariant_passed)
         row.passed = new_passed
         row.assertions_passed = g["assertions_passed"]
         row.invariant_passed = g["invariant"]["passed"]
@@ -524,8 +619,13 @@ def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
         row.check_results = [{k: x[k] for k in ("type", "passed")} for x in g["assertion_results"]]
         row.unexpected_changes = g["invariant"]["unexpected_changes"]
         row.n_changes = g["n_changes"]
-        store.record_episode(row)
+        try:
+            regrade_evidence.publish(store, r, row, g, arts, input_bindings, grader_provenance)
+        except evidence.EvidenceIntegrityError:
+            evidence_invalid += 1
+            continue
+        changed += int(verdict_changed)
         regraded += 1
     return {"run_id": run_id, "regraded": regraded, "changed": changed,
-            "contract_drift": drifted, "task_missing": missing_task,
+            "contract_drift": drifted, "task_missing": missing_task, "evidence_invalid": evidence_invalid,
             "artifacts_missing": missing_artifacts}

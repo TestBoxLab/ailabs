@@ -34,7 +34,12 @@ _LOCK = threading.Lock()
 
 # verified 4 Sep 2026 on Railway: the engine reports a finished run as "success"
 SUCCESS_RUN_STATES = {"succeeded", "success"}
-TERMINAL_RUN_STATES = SUCCESS_RUN_STATES | {"failed", "failure", "error", "cancelled", "canceled", "stopped"}
+# `partial` and `blocked` are terminal in the stock run view (workflow-run.types.ts);
+# neither is a success. `done` is the engine state's word for a finished run.
+TERMINAL_RUN_STATES = SUCCESS_RUN_STATES | {"failed", "failure", "error", "cancelled", "canceled",
+                                            "stopped", "partial", "blocked", "done"}
+# The engine-state words that mean the run is over (EngineRunState.status).
+ENGINE_TERMINAL_STATES = {"done", "error", "blocked", "partial", "cancelled"}
 
 # How long one read of `prepare()`'s recipe check may take: the login, and then
 # each workflow read.
@@ -148,6 +153,16 @@ class MonarchArm:
         self._trace_ids: list[str] = []  # Langfuse traces this attempt's frames named
         self._started_at: datetime | None = None   # set by run(); bounds the cost read
         self._done_recipe: dict | None = None  # the done frame's recipe, for its `inputs`
+        # A live view (the Studio) may watch the attempt: called with a kind and
+        # keyword data at every builder frame, run start, node change and finish.
+        # Never on the verdict path: an observer that raises is the caller's bug
+        # and surfaces as such, but it cannot alter what Monarch did.
+        self.observer = None
+        self._step_states: dict[str, tuple] = {}
+
+    def _notify(self, kind: str, **data) -> None:
+        if self.observer is not None:
+            self.observer(kind, **data)
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -470,6 +485,7 @@ class MonarchArm:
         recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline,
                                             authoring_mode=self.harness.authoring_mode)
         ids["recipeRunId"] = recipe_run
+        self._notify("authoring_started", recipe_run=recipe_run, goal=goal)
         workflow_id, questions = None, 0
         answered: set[str] = set()     # a reconnected stream replays the prompt
         try:
@@ -487,6 +503,7 @@ class MonarchArm:
                         for frame in frames:
                             res.turn_log.append({"frame": frame})
                             self._note_trace(frame)
+                            self._notify("authoring_frame", frame=frame)
                             status = frame.get("status")
                             if status == "done":
                                 workflow_id = frame.get("workflowId")
@@ -519,6 +536,9 @@ class MonarchArm:
                                 asked = self._reply(client, recipe_run, frame, deadline)
                                 if rid:
                                     answered.add(rid)
+                                if asked:
+                                    self._notify("authoring_reply", request_id=rid,
+                                                 questions=asked, text=self._reply_text)
                                 if asked is None:   # an account prompt, or nothing to answer
                                     res.termination = "agent_error"
                                     res.error = "account_requested"
@@ -551,6 +571,9 @@ class MonarchArm:
             res.phases["authoring"] = PhaseMetrics(turns=questions,
                                                    wall_clock_s=round(time.monotonic() - t0, 4))
             res.flags.append(f"questions_asked={questions}")
+            self._notify("authoring_finished", workflow_id=workflow_id,
+                         recipe_version=ids.get("recipeVersion"), recipe=self._done_recipe,
+                         questions=questions, error=res.error if workflow_id is None else None)
         return workflow_id
 
     def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
@@ -633,6 +656,61 @@ class MonarchArm:
         """
         return [d["name"] for d in declared if d.get("required") and "default" not in d]
 
+    def _follow_run(self, client, run_id, engine_run_id, deadline, res) -> dict:
+        """Watch the run to its end and return the terminal view.
+
+        The engine stream is tried first: one frame per change of the run view,
+        every recipe node's status in `steps`, closed when the engine is done.
+        A backend without the route (404) or a stream that closes before the
+        run ends falls back to polling `GET /api/workflows/runs/:id`, the path
+        the 4-6 Sep rounds used. Every distinct view lands in the turn log, and
+        every node whose status changed is reported to the observer.
+        """
+        try:
+            for view in client.run_stream(engine_run_id, deadline=deadline):
+                if time.monotonic() >= deadline:
+                    raise EpisodeTimeout(
+                        f"deadline passed in the execution phase, streaming run {run_id}")
+                self._run_update(view, res)
+                if self._terminal(view):
+                    return view
+        except InfraError as e:
+            # 404: the route is not there (or the run is gone); anything else is
+            # a transport failure. Both are the poll loop's problem from here.
+            res.turn_log.append({"run_stream_unavailable": str(e)[:200]})
+        while True:
+            # Checked before the call, so the attempt overshoots its deadline
+            # by at most one poll interval rather than by a whole request.
+            if time.monotonic() >= deadline:
+                raise EpisodeTimeout(
+                    f"deadline passed in the execution phase, polling run {run_id}")
+            view = client.get_run(run_id, deadline=deadline)
+            self._run_update(view, res)
+            if self._terminal(view):
+                return view
+            time.sleep(self.POLL_INTERVAL_S)
+
+    @staticmethod
+    def _terminal(view: dict) -> bool:
+        engine = (view.get("engineState") or {}).get("status")
+        if engine is not None:
+            return engine in ENGINE_TERMINAL_STATES
+        return view.get("status") in TERMINAL_RUN_STATES
+
+    def _run_update(self, view: dict, res: ArmResult) -> None:
+        """Log the view once per change and report each node whose state moved."""
+        if not res.turn_log or res.turn_log[-1].get("poll") != view:
+            res.turn_log.append({"poll": view})
+        for step in view.get("steps") or []:
+            if not isinstance(step, dict) or not step.get("stepId"):
+                continue
+            key = (step.get("status"), step.get("message"),
+                   json.dumps(step.get("progress"), sort_keys=True))
+            if self._step_states.get(step["stepId"]) == key:
+                continue
+            self._step_states[step["stepId"]] = key
+            self._notify("run_step", step=step)
+
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
         try:
@@ -664,22 +742,18 @@ class MonarchArm:
             if started is None:     # the wait expired; `res` and `_infra` are set
                 return
             run_id = started.get("id") or (started.get("engine") or {}).get("runId")
+            engine_run_id = (started.get("engine") or {}).get("runId") or run_id
             ids["runId"] = run_id
-            while True:
-                # Checked before the call, so the attempt overshoots its deadline
-                # by at most one poll interval rather than by a whole request.
-                if time.monotonic() >= deadline:
-                    raise EpisodeTimeout(
-                        f"deadline passed in the execution phase, polling run {run_id}")
-                out = client.get_run(run_id, deadline=deadline)
-                res.turn_log.append({"poll": out})
-                status = out.get("status")
-                if status in TERMINAL_RUN_STATES:
-                    if status not in SUCCESS_RUN_STATES:
-                        res.termination = "agent_error"
-                        res.error = (f"run_error:{out.get('errorCode')} "
-                                     f"node={out.get('errorNodeId')}")
-                    return
-                time.sleep(self.POLL_INTERVAL_S)
+            self._step_states = {}
+            self._notify("run_started", run_id=run_id, workflow_id=workflow_id,
+                         recipe=self._done_recipe, started=started)
+            out = self._follow_run(client, run_id, engine_run_id, deadline, res)
+            status = out.get("status")
+            if status not in SUCCESS_RUN_STATES:
+                res.termination = "agent_error"
+                res.error = (f"run_error:{out.get('errorCode')} "
+                             f"node={out.get('errorNodeId')}")
+            self._notify("run_finished", run_id=run_id, view=out,
+                         status="completed" if status in SUCCESS_RUN_STATES else "error")
         finally:
             res.phases["execution"] = PhaseMetrics(wall_clock_s=round(time.monotonic() - t0, 4))
