@@ -161,6 +161,80 @@ def test_durable_usage_matches_every_launch_and_allows_zero_child_current_mode()
     ])
 
 
+def test_durable_usage_accepts_normal_progress_and_complete_section_lifecycle():
+    events = [
+        {'type': 'progress', 'data': None},
+        {'data': {'kind': 'section_authoring', 'status': 'started',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+        {'data': {'kind': 'section_model_usage', 'callId': 'planner',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+        {'data': {'kind': 'section_authoring', 'status': 'completed',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+        {'data': {'kind': 'section_plan', 'buildAttempt': 1, 'revision': 'v1',
+                  'sections': [{'id': 'write', 'nodeIds': ['save'], 'imports': []}]}},
+        {'data': {'kind': 'section_authoring', 'status': 'started',
+                  'buildAttempt': 1, 'phase': 'author', 'sectionId': 'write', 'attempt': 0}},
+        {'data': {'kind': 'section_model_usage', 'callId': 'writer',
+                  'buildAttempt': 1, 'phase': 'author', 'sectionId': 'write', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+        {'data': {'kind': 'section_authoring', 'status': 'completed',
+                  'buildAttempt': 1, 'phase': 'author', 'sectionId': 'write', 'attempt': 0}},
+    ]
+    for phase in ['merge', 'validate', 'build']:
+        for status in ['started', 'completed']:
+            events.append({'data': {'kind': 'section_authoring', 'buildAttempt': 1,
+                                    'phase': phase, 'status': status}})
+    events.extend([{'data': {'kind': 'section_assembly', 'buildAttempt': 1}}, {'type': 'done'}])
+    assert durable_section_usage_complete([
+        {'authoring_events': {'complete': False, 'events': events[:6]}},
+        {'authoring_events': {'complete': True, 'events': events[6:]}},
+    ])
+    assert durable_section_usage_complete([
+        {'authoring_events': {'complete': True, 'events': [{'data': None}, {'type': 'done'}]}},
+    ])
+
+
+def test_durable_usage_matches_reused_keys_across_clarification_resumes():
+    pages = []
+    for call_id in ['before-clarification', 'after-clarification']:
+        pages.append({'authoring_events': {'complete': False, 'events': [
+            {'data': {'kind': 'section_authoring', 'status': 'started',
+                      'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+            {'data': {'kind': 'section_model_usage', 'callId': call_id,
+                      'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                      'usageComplete': True, 'costKnown': True}},
+        ]}})
+    pages[-1]['authoring_events']['complete'] = True
+    assert durable_section_usage_complete(pages)
+
+
+@pytest.mark.parametrize('events', [
+    [None],
+    [{'data': []}],
+    [{'data': {'kind': 'section_authoring', 'status': 'started', 'phase': 'plan'}}],
+    [{'data': {'kind': 'section_model_usage', 'phase': 'merge'}}],
+    [
+        {'data': {'kind': 'section_model_usage', 'callId': 'early',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+        {'data': {'kind': 'section_authoring', 'status': 'started',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}},
+    ],
+    [
+        *[{'data': {'kind': 'section_authoring', 'status': 'started',
+                    'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}}] * 2,
+        {'data': {'kind': 'section_model_usage', 'callId': 'only-one-receipt',
+                  'buildAttempt': 1, 'phase': 'plan', 'attempt': 0,
+                  'usageComplete': True, 'costKnown': True}},
+    ],
+])
+def test_durable_usage_rejects_malformed_or_out_of_order_accounting(events):
+    assert not durable_section_usage_complete([
+        {'authoring_events': {'complete': True, 'events': events}},
+    ])
+
+
 @pytest.mark.parametrize('events', [
     [{'data': {'kind': 'section_authoring', 'status': 'started',
                'buildAttempt': 1, 'phase': 'plan', 'attempt': 0}}],

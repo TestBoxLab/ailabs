@@ -9,6 +9,7 @@ import re
 import random
 import shutil
 import subprocess
+from collections import Counter
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -47,17 +48,23 @@ def durable_section_usage_complete(turn_log: list[dict]) -> bool:
              if isinstance(record, dict) and isinstance(record.get('authoring_events'), dict)]
     if not pages or pages[-1].get('complete') is not True:
         return False
-    launches, receipts, call_ids = set(), set(), set()
+    pending, call_ids = Counter(), set()
     for page in pages:
         events = page.get('events')
         if not isinstance(events, list):
             return False
         for event in events:
-            data = event.get('data') if isinstance(event, dict) else None
+            if not isinstance(event, dict):
+                return False
+            data = event.get('data')
+            if data is None:
+                continue
             if not isinstance(data, dict) or data.get('truncated') is True:
                 return False
             kind = data.get('kind')
             if kind not in ('section_authoring', 'section_model_usage'):
+                continue
+            if kind == 'section_authoring' and data.get('phase') in ('merge', 'validate', 'build'):
                 continue
             key = (data.get('buildAttempt'), data.get('phase'),
                    data.get('sectionId'), data.get('attempt'))
@@ -71,18 +78,17 @@ def durable_section_usage_complete(turn_log: list[dict]) -> bool:
             if kind == 'section_authoring':
                 if data.get('status') != 'started':
                     continue
-                if key in launches:
-                    return False
-                launches.add(key)
+                # A clarification resume can reuse the same per-turn build key.
+                pending[key] += 1
                 continue
             call_id = data.get('callId')
             if (not isinstance(call_id, str) or not call_id or call_id in call_ids
-                    or key in receipts or data.get('usageComplete') is not True
+                    or pending[key] == 0 or data.get('usageComplete') is not True
                     or data.get('costKnown') is not True):
                 return False
             call_ids.add(call_id)
-            receipts.add(key)
-    return launches == receipts
+            pending[key] -= 1
+    return not any(pending.values())
 
 
 def digest(value) -> str:
