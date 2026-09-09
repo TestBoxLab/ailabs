@@ -31,6 +31,13 @@ def _walk(svc: str, a: Any, b: Any, path: str, out: list) -> None:
     leaf = path.rsplit(".", 1)[-1]
     if leaf in IGNORE_FIELDS:
         return
+    # An added or removed subtree is walked against an empty one of its own kind:
+    # action-log services keep every write under one key, so collapsing a new key
+    # into a single "<object>" change would hide the writes inside it.
+    if isinstance(a, (dict, list)) and b in (None, [], {}):
+        b = type(a)()
+    elif isinstance(b, (dict, list)) and a in (None, [], {}):
+        a = type(b)()
     if isinstance(a, dict) and isinstance(b, dict):
         for k in sorted(set(a) | set(b)):
             _walk(svc, a.get(k), b.get(k), f"{path}.{k}", out)
@@ -52,7 +59,11 @@ def _walk(svc: str, a: Any, b: Any, path: str, out: list) -> None:
 
 
 def _brief(v: Any, limit: int = 400) -> Any:
-    s = v if not isinstance(v, (dict, list)) else "<object>"
-    if isinstance(s, str) and len(s) > limit:
-        return s[:limit] + "…"
-    return s
+    # An added/removed entry keeps its own content: the collateral judge matches
+    # a write by what it says (`where`), because an action-log id is minted
+    # during the run and no frozen rule can name it.
+    if isinstance(v, (dict, list)):
+        return v
+    if isinstance(v, str) and len(v) > limit:
+        return v[:limit] + "…"
+    return v

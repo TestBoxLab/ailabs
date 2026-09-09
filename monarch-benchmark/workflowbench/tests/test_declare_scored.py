@@ -283,7 +283,16 @@ def apply_expected(s0: dict, expected: list[dict]) -> dict:
         if log:
             service, key = log.groups()
             key = key or "createRecord"   # a matcher with no action_key: any key
-            record = {"id": f"a_{i}", "action_key": key, "params": {}}
+            # A `where` matcher names the content the write must carry, so the
+            # oracle-like change writes exactly that and nothing more.
+            params: dict[str, Any] = {}
+            for dotted, value in (m.get("where") or {}).items():
+                target, _, leaf = dotted.rpartition(".")
+                node = params
+                for part in target.split(".")[1:]:   # drop the leading "params"
+                    node = node.setdefault(part, {})
+                node[leaf] = value
+            record = {"id": f"a_{i}", "action_key": key, "params": params}
             actions = s1.setdefault(service, {}).setdefault("actions", {})
             if isinstance(actions, list):          # a service that logs a flat list
                 actions.append(record)

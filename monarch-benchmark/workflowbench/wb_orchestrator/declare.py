@@ -315,6 +315,28 @@ def _schema_default(service: str, collection: str, field: str) -> Any:
     return spec.get_default(call_default_factory=False)
 
 
+def _content_of(a: dict[str, Any]) -> dict[str, Any]:
+    """The assertion's own content, as `where` keys over a logged action's params.
+
+    Only scalars are pinned: a nested object would make the rule demand an exact
+    shape the prompt never asked for.
+    """
+    where: dict[str, Any] = {}
+    for field, value in (a.get("fields") or {}).items():
+        if isinstance(value, (str, int, float, bool)):
+            where[f"params.fields.{field}"] = value
+    for key in ("tableName", "listId", "channel"):
+        if isinstance(a.get(key), (str, int, float, bool)):
+            where[f"params.{key}"] = a[key]
+    # A container alone ("this base", "this workspace") says nothing about which
+    # write was asked for, so it never pins a rule on its own.
+    if not where:
+        return {}
+    if isinstance(a.get("applicationId"), (str, int, float, bool)):
+        where["params.applicationId"] = a["applicationId"]
+    return where
+
+
 def _derived_matcher(a: dict[str, Any],
                      initial_state: dict[str, Any] | None = None,
                      ) -> tuple[dict[str, Any] | None, bool]:
@@ -358,8 +380,15 @@ def _derived_matcher(a: dict[str, Any],
     if collection == "actions" or rest.startswith("action_"):
         key = a.get("action_key")
         base = f"{service}.actions"
-        return {"service": service, "op": "*",
-                "path": f"{base}.{key}*" if key else f"{base}*"}, True
+        # The log key is minted during the run, so the matcher names the write's
+        # own content instead, and `count` pins how many were asked for: doing
+        # the requested thing 201 times is not doing the requested thing.
+        m = {"service": service, "op": "*",
+             "path": f"{base}.{key}*" if key else f"{base}*"}
+        where = _content_of(a)
+        if where:
+            m["where"], m["count"] = where, 1
+        return m, True
 
     # An id key only anchors the matcher to a record when it really names one
     # the world already carries. `slack_dm_sent_to`'s `user_id` is the
@@ -380,7 +409,15 @@ def _derived_matcher(a: dict[str, Any],
     field = _FIELD_ALIAS.get(field, field) if field else None
 
     if collection == "*":
-        return {"service": service, "op": "*", "path": f"{service}.*"}, True
+        # A service that only logs actions has no stable path to the record: the
+        # log key is minted during the run. The matcher names the write's own
+        # content instead, and `count` pins how many were asked for, so doing the
+        # requested thing 201 times is not a pass.
+        m = {"service": service, "op": "*", "path": f"{service}.*"}
+        where = _content_of(a)
+        if where:
+            m["where"], m["count"] = where, 1
+        return m, True
     if rid is not None:
         # A record that already exists: allow that one field, or that record.
         path = f"{service}.{collection}[id={rid}]"
@@ -446,6 +483,12 @@ def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
         else:
             m = {"service": service, "op": "added",
                  "path": f"{service}.{collection}[*]" if collection != "*" else f"{service}.*"}
+            if collection == "*":
+                # See _derived_matcher: an action log has no stable path, so the
+                # matcher pins the write's content and how many were asked for.
+                where = _content_of(a)
+                if where:
+                    m["where"], m["count"] = where, 1
         if m not in expected:
             expected.append(m)
 
