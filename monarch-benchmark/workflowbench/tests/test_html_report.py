@@ -1371,8 +1371,8 @@ def test_executive_page_shape(phase_store, tmp_path):
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 4          # the four headline cards
-    assert page.count('class="bars"') == 4           # one chart per metric
+    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
+    assert page.count('class="bars"') == 5           # one chart per metric
     assert "Success, first try" in page
     assert "Success after one retry" in page
     assert "Monarch benchmark" in page
@@ -1578,8 +1578,8 @@ def test_executive_page_shape(phase_store, tmp_path):
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 4          # the four headline cards
-    assert page.count('class="bars"') == 4           # one chart per metric
+    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
+    assert page.count('class="bars"') == 5           # one chart per metric
     assert "Success, first try" in page
     assert "Success after one retry" in page
     assert "Monarch benchmark" in page
@@ -2062,3 +2062,16 @@ def test_front_door_columns_and_failure_detail(phase_store, tmp_path):
     assert "front door" in section and "front door errors" in section
     failures = page[page.index('id="failures"'):]
     assert "last front-door error: GET /bench-airtable/read/root -&gt; 404" in failures
+
+
+def test_the_executive_page_shows_collateral_damage(phase_store):
+    """Two competitors can share a pass rate and differ entirely in how much
+    they touched that nobody asked for; the stakeholder page has to say so."""
+    from wb_report.report import build_report, render_executive
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm=None))
+    text = re.sub(r"<[^>]+>", " ", page).lower()
+    # Plain words on purpose: the stakeholder page says what the number counts,
+    # not the word the code uses for it.
+    assert "changes nobody asked for" in text
+    assert "read it next to the success rate" in text
