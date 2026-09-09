@@ -55,6 +55,7 @@ from typing import Any
 from wb_orchestrator import config
 from wb_orchestrator.config import SideEffects, load_side_effects  # noqa: F401  (re-export)
 from wb_orchestrator.orchestrator import contract_hash
+from wb_world.episode import seeded_services
 
 # assertion type -> (service, collection or "*", id key or None)
 _TYPES: dict[str, tuple[str, str, str | None]] = {
@@ -624,7 +625,11 @@ def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
         if m not in expected:
             expected.append(m)
 
-    seeded = set(task["info"].get("initial_state", {}).keys())
+    # A service the task's data says something about, not every key the world
+    # writes: the repaired world spells out all 48 apps' empty defaults in every
+    # scored task, and an empty default is not a reason to allow that app's
+    # housekeeping (unblock plan M1, 8 Sep 2026).
+    seeded = set(seeded_services(task["info"].get("initial_state", {})))
     touched = seeded | {m["service"] for m in expected} | {m["service"] for m in granted}
     allowed: list[dict[str, Any]] = list(granted)
     paths = " ".join(m["path"] for m in expected)

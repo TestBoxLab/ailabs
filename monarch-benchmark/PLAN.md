@@ -169,6 +169,24 @@ post summary to Slack #benchmarks; link Langfuse traces
 - [ ] G4 `wb summary --runs | --plans`: two to six rounds on one page, a mean per competitor across rounds, the random draw beside the mean of the three tiers. Paired figures stay per round on identical sets, never pooled. → **D14**
 - [ ] G5 Slack post rendered from the page. → WS-D, D11 (not feature 006)
 
+### WS-H · Studio: design system, measures, reports, live views (added 9 Sep)
+
+The web app that launches and reads rounds. Plan of record:
+`docs/AI-LABS-IMPLEMENTATION-PLAN-2026-09-09.md` (seven phases, features 012
+to 018). The methodology in §1 does not change; the Studio reads stored
+records and never grades anything.
+
+- [x] H0 Stabilise: New run as a route, one vocabulary (setup, track, attempt), the browser suite in `tests/browser/`, the CSS test, `THIRD_PARTY_LICENSES.md`. (9 Sep)
+- [x] H1 Design system: Radix Colors, IBM Plex, Lucide, one token sheet, CSS layers, no hex colours or `!important` outside the tokens. (9 Sep)
+- [x] H2 Measures on the server and the chart kit; Budget on the kit. (9 Sep)
+- [x] H3 Reports as the front door: run and round reports, caveats from data, automatic ledger-charged narrative, public audience by default, print and HTML export. (9 Sep)
+- [ ] H4 Evidence and live views: side panel tabs (Output, Checks, Trace, Timeline), workstream blocks, turns and violations columns, leaderboard fairness in Standings, Settings regrouped. (in progress, 9 Sep)
+- [x] H5 Genesis research library and the hypothesis record with written rules. (9 Sep)
+- [ ] H6 Runtime closure: budget chip in the top bar and the concurrency note at launch are done (9 Sep); live provider acceptance, the workers-mode pause drill and the restart drill wait for approved spend and a real coordinator.
+- [x] H7 Product graph versions readable at a glance: summary sentence from diff counts, per-product drilldown, research log as blocks. (9 Sep)
+- [x] H8 Genesis as an autonomous scientist (feature 019, 9 Sep): cards as inputs worked by a watcher under daily and per-card ceilings; a daily Monarch code index with read-only code tools; a bounded three-tier memory with a nightly consolidation job; a Trello-like board; a fixed library topic list. Live acceptance of the watcher and the nightly turn waits on a verified model route.
+- [ ] H9 Genesis grows (feature 020, started 9 Sep, order from the research note Part 3): identity file `SOUL.md` done (a starter text, an editor on the Memory tab, people-only writes, first block of every prompt); next confidence and provenance tags, post-run debrief, question cards, skills, weekly sweep, evidence-to-proposal, memory self-check, digest page, Slack brief once a webhook exists.
+
 ### WS-B · Monarch on the simulated target, three modes
 
 - [ ] B1 Bring up the Monarch stack locally (`just dev`); confirm workflow creation works with Bedrock from this machine.
@@ -235,6 +253,15 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 4 Sep 2026 | The official record of a round is the HTML page written by `wb report`: real tables, every number from the results store, every table carrying its source line. Langfuse stays where the raw traces live. | Carlos |
 | 4 Sep 2026 | Report pages are built with the standard library, no templating engine, CSS framework or chart library, and open from disk with no network. | Carlos |
 | 4 Sep 2026 | Across rounds, the aggregate is a mean of per-round rates; paired comparisons are never pooled across different task sets. | Carlos |
+| 9 Sep 2026 | Studio reports render for the public audience by default; the internal view is a filter with a visible mark, never a different report. | Lucas |
+| 9 Sep 2026 | The narrative of a finished run is written automatically, reserved in the weekly ledger before the request and settled from the receipt, US$ 0.50 per run unless the plan says otherwise; no manual "Analyse" button. Every number in a report comes from code; the model fills prose slots only, and a claim without evidence renders as Unknown. | Lucas |
+| 9 Sep 2026 | The Studio's design system is composed, not adopted: Radix Colors (sage, green accent), IBM Plex, Lucide, Tufte-style report layer; square geometry; green means better than Bare and red worse; model families get hues that are neither green nor red. | Lucas |
+| 9 Sep 2026 | The weekly budget is a chip in the Studio's top bar, always visible; Budget leaves the main navigation. | Lucas |
+| 9 Sep 2026 | Genesis works dropped cards on its own: reading, searching records and writing analyses are automatic under `STUDIO_GENESIS_CARD_USD` (US$ 2.00 per card) and `STUDIO_GENESIS_DAILY_USD` (US$ 6.00 per day); anything that launches or pays for a run or an analysis stays behind the approval card. The watcher only takes runs and sources that arrive after it first ran. | Lucas |
+| 9 Sep 2026 | Genesis memory is bounded: two core files of 2,500 characters and 4,000 per card, every entry tagged with its record, seven-day probation, thirty-day decay, pinned entries never decay; the nightly consolidation turn is capped at US$ 0.50. No hosted memory vendor, no vector store. Facts from Monarch's code are internal-only. | Lucas |
+| 9 Sep 2026 | The Monarch code index follows the declared build (`MONARCH_BUILD_COMMIT`, else the branch of `MONARCH_BUILD`, else `main`) and is rebuilt daily at 04:00 São Paulo by code, with no model; docs extraction is not scheduled yet. | Lucas |
+| 9 Sep 2026 | The Studio shows the live Product Graph Monarch Enterprise uses (products and their stored business actions) read only, through GET routes to the discovery service; the same view shows any bench product-graph version. The Studio never writes to Monarch's graph. | Lucas |
+| 9 Sep 2026 | Genesis grows next (chosen by multiple select): weekly research sweep, post-run debrief, evidence-to-proposal, nightly memory self-check; self-written skills and Monarch patch proposals; daily brief to Slack `#ailabs`, a weekly digest page, question cards, an identity file; confidence and provenance on every claim. Not chosen: second-opinion turns, deterministic notebooks, per-drop budgets, weekly memory score, per-card change log. | Lucas |
 
 ## 5. Open questions
 

@@ -1,0 +1,2 @@
+from pathlib import Path
+p=Path('monarch-benchmark/workflowbench/wb_studio/analysis.py');s=p.read_text(encoding='utf8').replace("    gateway = (studio.gateway_factory or PaidGateway)(studio.ledger,model='gemini-3.7-flash')\n    gateway.thinking_level = 'medium'\n    try:", "    try:\n        gateway = (studio.gateway_factory or PaidGateway)(studio.ledger,model='gemini-3.7-flash')\n        gateway.thinking_level = 'medium'");p.write_text(s,encoding='utf8')

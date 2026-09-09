@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from runner.schema import PhaseMetrics
@@ -34,11 +35,35 @@ _LOCK = threading.Lock()
 
 # verified 4 Sep 2026 on Railway: the engine reports a finished run as "success"
 SUCCESS_RUN_STATES = {"succeeded", "success"}
-TERMINAL_RUN_STATES = SUCCESS_RUN_STATES | {"failed", "failure", "error", "cancelled", "canceled", "stopped"}
+# `partial` and `blocked` are terminal in the stock run view (workflow-run.types.ts);
+# neither is a success. `done` is the engine state's word for a finished run.
+TERMINAL_RUN_STATES = SUCCESS_RUN_STATES | {"failed", "failure", "error", "cancelled", "canceled",
+                                            "stopped", "partial", "blocked", "done"}
+# The engine-state words that mean the run is over (EngineRunState.status).
+ENGINE_TERMINAL_STATES = {"done", "error", "blocked", "partial", "cancelled"}
 
 # How long one read of `prepare()`'s recipe check may take: the login, and then
 # each workflow read.
 RECIPE_CHECK_BUDGET_S = 60.0
+
+# What one Monarch attempt reserves in the shared weekly ledger before Monarch is
+# called, settled afterwards from the Langfuse total (milestone M3). The Studio's
+# Enterprise version reserves the same amount (`wb_studio.enterprise`).
+DEFAULT_CEILING_USD = Decimal("25.00")
+CEILING_ENV = "MONARCH_ATTEMPT_CEILING_USD"
+
+
+def attempt_ceiling_usd(env) -> Decimal:
+    raw = env.get(CEILING_ENV)
+    if not raw:
+        return DEFAULT_CEILING_USD
+    try:
+        value = Decimal(str(raw))
+        if not value.is_finite() or value <= 0 or value > 300:
+            raise ValueError()
+        return value.quantize(Decimal("0.01"))
+    except Exception:
+        raise ValueError(f"{CEILING_ENV} must be a positive amount up to 300, got {raw!r}") from None
 
 # ponytail: a fixed 60 s bound on waiting out a run already in flight, not a
 # configurable one; the upgrade is a harness field if a real workflow ever
@@ -117,18 +142,30 @@ def _classify_refusal(code: str) -> InfraError | None:
     return None
 
 
-def monarch_version(repo_path: str | Path) -> str:
-    """Name the Monarch build in `repo_path`: `monarch@<sha>`, `+<branch>` off main."""
+def monarch_version(repo_path: str | Path, declared: str | None = None) -> str:
+    """Name the Monarch build in `repo_path`: `monarch@<sha>`, `+<branch>` off main.
+
+    Without git or a checkout (a hosted bench), `declared` (the MONARCH_BUILD
+    variable) names the served build instead; a declared name is never stock.
+    """
     def git(*args: str) -> str:
-        out = subprocess.run(["git", "-C", str(repo_path), *args],
-                             capture_output=True, text=True)
+        try:
+            out = subprocess.run(["git", "-C", str(repo_path), *args],
+                                 capture_output=True, text=True)
+        except OSError as exc:
+            raise ValueError(f"git is not available here ({exc})") from exc
         if out.returncode != 0:
             raise ValueError(f"git {' '.join(args)} in {repo_path}: "
                              f"{(out.stderr or out.stdout).strip()}")
         return out.stdout.strip()
 
-    sha = git("rev-parse", "--short", "HEAD")
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    except ValueError:
+        if declared and declared.strip():
+            return declared.strip()
+        raise
     return f"monarch@{sha}" if branch == "main" else f"monarch@{sha}+{branch}"
 
 
@@ -142,13 +179,19 @@ class MonarchArm:
     socket_timeout_s = 20.0
 
     def __init__(self, harness, timeout_s: float, price_table, kb, env, name: str,
-                 mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None):
+                 mode: str = "create-run", recipes=None, kb_path=None, recipes_path=None,
+                 ledger=None):
         self.harness = harness
         self.timeout_s = timeout_s
         self.price_table = price_table
         self.kb = kb
         self.env = env
         self.name = name
+        # With a ledger, every attempt reserves the ceiling `MONARCH_ATTEMPT_CEILING_USD`
+        # names (default US$ 25.00) before Monarch is called and settles it from the
+        # Langfuse total; a cost that cannot be read keeps the whole hold.
+        self.ledger = ledger
+        self._price_unknown = False      # a PriceLookupError left this attempt's cost unknown
         # run-only: the frozen recipes this competitor may run, and the knowledge-base
         # file they were made against. Both are None in create + run.
         self.mode = mode
@@ -172,9 +215,19 @@ class MonarchArm:
         self._trace_ids: list[str] = []  # Langfuse traces this attempt's frames named
         self._started_at: datetime | None = None   # set by run(); bounds the cost read
         self._done_recipe: dict | None = None  # the done frame's recipe, for its `inputs`
+        # A live view (the Studio) may watch the attempt: called with a kind and
+        # keyword data at every builder frame, run start, node change and finish.
+        # Never on the verdict path: an observer that raises is the caller's bug
+        # and surfaces as such, but it cannot alter what Monarch did.
+        self.observer = None
+        self._step_states: dict[str, tuple] = {}
         # a workflow the run view revealed once the deadline had passed: nothing
         # will run it, so `_attempt` deletes it rather than leave an orphan
         self._orphan: str | None = None
+
+    def _notify(self, kind: str, **data) -> None:
+        if self.observer is not None:
+            self.observer(kind, **data)
 
     def prepare(self) -> None:
         """Refuse the run if Monarch's knowledge base is not the one that was frozen.
@@ -260,6 +313,8 @@ class MonarchArm:
         """
         h = self.harness
         failed = None
+        self._price_unknown = False
+        reservation, ceiling = self._reserve(ep)   # before Monarch is called; None without a ledger
         # The window `_add_cost` asks Langfuse for. A minute of margin covers the
         # clock skew between this machine and the trace timestamps.
         self._started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
@@ -297,6 +352,8 @@ class MonarchArm:
         # Cost is read after the front door is down and the lock is free: it is
         # bookkeeping, and a slow Langfuse must not hold the next attempt.
         self._add_cost(res, self._bench_id)
+        if reservation is not None:
+            self._settle(reservation, ceiling, res)
         # A refusal classified as infrastructure was stored rather than raised,
         # so cleanup could finish first (FR-011); it is raised here, outside the
         # lock and against a free port. `_add_cost` may have stored one of its
@@ -306,6 +363,49 @@ class MonarchArm:
             failed.partial = res
             raise failed
         return res
+
+    def _reserve(self, ep: Episode) -> tuple[str | None, Decimal | None]:
+        """Reserve this attempt's ceiling in the shared ledger, or (None, None) without one.
+
+        An exhausted week is `infra:weekly_budget`: the orchestrator records the
+        attempt and stops the run until the week has room again.
+        """
+        if self.ledger is None:
+            return None, None
+        from wb_arms import reservations
+        from wb_orchestrator.budget import BudgetExceeded
+        ceiling = attempt_ceiling_usd(self.env)
+        token = reservations.invocation_token(ep)
+        reservation = f"{ep.episode_id}#{token}#monarch"
+        try:
+            self.ledger.reserve(reservation, ceiling, scope_id=ep.episode_id,
+                                metadata={"harness": "monarch", "billing_provider": "monarch",
+                                          "version": self.name, "episode_id": ep.episode_id,
+                                          "invocation": token, "ceiling_env": CEILING_ENV,
+                                          "purpose": "one Monarch attempt; settled from Langfuse"})
+            self.ledger.claim(reservation)
+        except BudgetExceeded as e:
+            failed = InfraError("infra:weekly_budget",
+                                f"shared weekly budget exhausted before the attempt: {e}; the run "
+                                "stops and resumes when the week has room", retryable=False)
+            failed.partial = ArmResult()
+            raise failed from e
+        return reservation, ceiling
+
+    def _settle(self, reservation: str, ceiling: Decimal, res: ArmResult) -> None:
+        """Settle the attempt's reservation from what `_add_cost` read; unknown keeps the hold."""
+        from wb_arms import reservations
+        known = ("cost_missing" not in res.flags and not self._price_unknown
+                 and isinstance(res.cost_usd, (int, float)))
+        actual = reservations.money(res.cost_usd) if known else None
+        self.ledger.settle(reservation, actual)
+        if actual is None and "billing=unknown" not in res.flags:
+            res.flags.append("billing=unknown")
+        res.turn_log.append({"billing": {
+            "reservation_id": reservation, "scope_id": reservation.split("#", 1)[0],
+            "maximum_usd": str(ceiling), "actual_usd": None if actual is None else str(actual),
+            "status": "estimated_from_langfuse" if actual is not None else "unknown_hold",
+            "invoice_verified": False, "billing_provider": "monarch"}})
 
     def _add_cost(self, res: ArmResult, episode_id: str) -> None:
         """Price the attempt's traces. Never changes the verdict (contract §4 rule 5).
@@ -333,6 +433,7 @@ class MonarchArm:
             # its place: the run stops on it either way, and it came first.
             self._infra = self._infra or InfraError("infra:harness_crash", str(e),
                                                     retryable=False)
+            self._price_unknown = True   # a reservation must not settle on a cost nobody priced
             return
         if not gens:
             res.flags.append("cost_missing")
@@ -561,6 +662,7 @@ class MonarchArm:
         recipe_run = client.start_authoring(goal, self._bench_id, deadline=deadline,
                                             authoring_mode=self.harness.authoring_mode)
         ids["recipeRunId"] = recipe_run
+        self._notify("authoring_started", recipe_run=recipe_run, goal=goal)
         workflow_id, questions = None, 0
         answered: set[str] = set()     # a reconnected stream replays the prompt
         try:
@@ -596,6 +698,7 @@ class MonarchArm:
                             last_frame_at = time.monotonic()
                             res.turn_log.append({"frame": frame})
                             self._note_trace(frame)
+                            self._notify("authoring_frame", frame=frame)
                             status = frame.get("status")
                             if status in ("done", "error"):
                                 done, workflow_id = self._terminal(frame, res, ids)
@@ -607,6 +710,9 @@ class MonarchArm:
                                 asked = self._reply(client, recipe_run, frame, deadline)
                                 if rid:
                                     answered.add(rid)
+                                if asked:
+                                    self._notify("authoring_reply", request_id=rid,
+                                                 questions=asked, text=self._reply_text)
                                 if asked is None:   # an account prompt, or nothing to answer
                                     res.termination = "agent_error"
                                     res.error = "account_requested"
@@ -658,6 +764,9 @@ class MonarchArm:
             res.phases["authoring"] = PhaseMetrics(turns=questions,
                                                    wall_clock_s=round(time.monotonic() - t0, 4))
             res.flags.append(f"questions_asked={questions}")
+            self._notify("authoring_finished", workflow_id=workflow_id,
+                         recipe_version=ids.get("recipeVersion"), recipe=self._done_recipe,
+                         questions=questions, error=res.error if workflow_id is None else None)
         return workflow_id
 
     def _start_run(self, client, ep, workflow_id, deadline, res) -> dict | None:
@@ -743,6 +852,61 @@ class MonarchArm:
         return [d["name"] for d in declared
                 if d.get("required") and d.get("default") in (None, "")]
 
+    def _follow_run(self, client, run_id, engine_run_id, deadline, res) -> dict:
+        """Watch the run to its end and return the terminal view.
+
+        The engine stream is tried first: one frame per change of the run view,
+        every recipe node's status in `steps`, closed when the engine is done.
+        A backend without the route (404) or a stream that closes before the
+        run ends falls back to polling `GET /api/workflows/runs/:id`, the path
+        the 4-6 Sep rounds used. Every distinct view lands in the turn log, and
+        every node whose status changed is reported to the observer.
+        """
+        try:
+            for view in client.run_stream(engine_run_id, deadline=deadline):
+                if time.monotonic() >= deadline:
+                    raise EpisodeTimeout(
+                        f"deadline passed in the execution phase, streaming run {run_id}")
+                self._run_update(view, res)
+                if self._run_terminal(view):
+                    return view
+        except InfraError as e:
+            # 404: the route is not there (or the run is gone); anything else is
+            # a transport failure. Both are the poll loop's problem from here.
+            res.turn_log.append({"run_stream_unavailable": str(e)[:200]})
+        while True:
+            # Checked before the call, so the attempt overshoots its deadline
+            # by at most one poll interval rather than by a whole request.
+            if time.monotonic() >= deadline:
+                raise EpisodeTimeout(
+                    f"deadline passed in the execution phase, polling run {run_id}")
+            view = client.get_run(run_id, deadline=deadline)
+            self._run_update(view, res)
+            if self._run_terminal(view):
+                return view
+            time.sleep(self.POLL_INTERVAL_S)
+
+    @staticmethod
+    def _run_terminal(view: dict) -> bool:
+        engine = (view.get("engineState") or {}).get("status")
+        if engine is not None:
+            return engine in ENGINE_TERMINAL_STATES
+        return view.get("status") in TERMINAL_RUN_STATES
+
+    def _run_update(self, view: dict, res: ArmResult) -> None:
+        """Log the view once per change and report each node whose state moved."""
+        if not res.turn_log or res.turn_log[-1].get("poll") != view:
+            res.turn_log.append({"poll": view})
+        for step in view.get("steps") or []:
+            if not isinstance(step, dict) or not step.get("stepId"):
+                continue
+            key = (step.get("status"), step.get("message"),
+                   json.dumps(step.get("progress"), sort_keys=True))
+            if self._step_states.get(step["stepId"]) == key:
+                continue
+            self._step_states[step["stepId"]] = key
+            self._notify("run_step", step=step)
+
     def _execute(self, client, ep, workflow_id, deadline, res, ids) -> None:
         t0 = time.monotonic()
         try:
@@ -774,25 +938,21 @@ class MonarchArm:
             if started is None:     # the wait expired; `res` and `_infra` are set
                 return
             run_id = started.get("id") or (started.get("engine") or {}).get("runId")
+            engine_run_id = (started.get("engine") or {}).get("runId") or run_id
             ids["runId"] = run_id
-            while True:
-                # Checked before the call, so the attempt overshoots its deadline
-                # by at most one poll interval rather than by a whole request.
-                if time.monotonic() >= deadline:
-                    raise EpisodeTimeout(
-                        f"deadline passed in the execution phase, polling run {run_id}")
-                out = client.get_run(run_id, deadline=deadline)
-                res.turn_log.append({"poll": out})
-                status = out.get("status")
-                if status in TERMINAL_RUN_STATES:
-                    if status not in SUCCESS_RUN_STATES:
-                        res.termination = "agent_error"
-                        res.error = (f"run_error:{out.get('errorCode')} "
-                                     f"node={out.get('errorNodeId')}")
-                    elif NO_WRITES in (out.get("summary") or ""):
-                        res.termination = "agent_error"
-                        res.error = "run_no_writes"
-                    return
-                time.sleep(self.POLL_INTERVAL_S)
+            self._step_states = {}
+            self._notify("run_started", run_id=run_id, workflow_id=workflow_id,
+                         recipe=self._done_recipe, started=started)
+            out = self._follow_run(client, run_id, engine_run_id, deadline, res)
+            status = out.get("status")
+            if status not in SUCCESS_RUN_STATES:
+                res.termination = "agent_error"
+                res.error = (f"run_error:{out.get('errorCode')} "
+                             f"node={out.get('errorNodeId')}")
+            elif NO_WRITES in (out.get("summary") or ""):
+                res.termination = "agent_error"
+                res.error = "run_no_writes"
+            self._notify("run_finished", run_id=run_id, view=out,
+                         status="completed" if status in SUCCESS_RUN_STATES else "error")
         finally:
             res.phases["execution"] = PhaseMetrics(wall_clock_s=round(time.monotonic() - t0, 4))

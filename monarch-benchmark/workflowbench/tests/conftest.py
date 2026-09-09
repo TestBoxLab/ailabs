@@ -1,8 +1,25 @@
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from tests.mock_openai import MockOpenAIServer
 from wb_arms import providers
 from wb_arms.providers import Provider
+from wb_world import episode
+
+
+@pytest.fixture(autouse=True)
+def upstream_world(monkeypatch):
+    """The fixture task sets record no world, which means the upstream
+    AutomationBench 1.0.6. Pin the "installed world" to it, so the guard in
+    config.resolve and corpus.import_ab sees a match whatever package this
+    machine has installed. Tests of the guard itself set both sides
+    (tests/test_world_revision.py)."""
+    monkeypatch.setattr(episode, "installed_world_version",
+                        lambda: episode.UPSTREAM_WORLD_VERSION)
 
 
 @pytest.fixture()
@@ -15,3 +32,20 @@ def mock_server(monkeypatch):
     yield server
     server.shutdown()
     providers.REGISTRY.pop("mock", None)
+
+
+def pytest_configure(config):
+    """Windows refuses paths past 260 characters. Evidence folders are deep and pytest's
+    default temp root ("pytest-of-<user>/pytest-NNN/<long test name>") pushes them past
+    the limit, so a short per-process root is used instead and removed at the end."""
+    if os.name == "nt" and not config.option.basetemp:
+        root = Path(tempfile.gettempdir()) / "wb" / str(os.getpid())
+        shutil.rmtree(root, ignore_errors=True)
+        config.option.basetemp = str(root)
+        config._wb_basetemp = root
+
+
+def pytest_sessionfinish(session, exitstatus):
+    root = getattr(session.config, "_wb_basetemp", None)
+    if root:
+        shutil.rmtree(root, ignore_errors=True)

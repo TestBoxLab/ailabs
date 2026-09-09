@@ -18,11 +18,16 @@ from pathlib import Path
 
 import yaml
 
-from wb_world.episode import contract_hash, load_suite
+from wb_world import episode as world
+from wb_world.episode import (WORLD_PACKAGE, contract_hash, load_suite, recorded_world_version,
+                              seeded_services)
 from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
 MODES = ("full-flow", "create-run", "run-only")
+# Evaluation track (direction of 7 Sep 2026): a one-off agentic request, or workflow
+# creation plus execution. Results are never pooled across tracks.
+TRACKS = ("agentic-request", "create-run")
 AUTHORING_MODES = ("interactive", "unattended")   # how Monarch is asked to build (002)
 PROVIDERS = ("anthropic", "openai", "google", "zai", "moonshot", "fireworks")
 EFFORTS = ("xhigh", "high", "medium", "low", "none")
@@ -31,7 +36,8 @@ HARNESS_KINDS = ("api", "cli", "scripted", "monarch")
 LAUNCHERS = ("claude-code", "codex", "gemini-cli", "opencode")
 SCRIPTS = ("oracle", "sloppy", "null")
 MISSING_REASONS = ("checker_failed", "authoring_error", "run_error", "timeout", "infra")
-SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without approved_by (rule 9)
+SMOKE_SCALE_ATTEMPTS = 20  # attempts per competitor a plan may run without an approval record (rule 9)
+DEFAULT_ATTEMPT_CAP_USD = 3.0  # the most one attempt of an API competitor may settle (milestone M3)
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 SideEffects = list[tuple[str, str | None, list[dict]]]
 
@@ -152,9 +158,16 @@ class Plan:
     baseline: str
     audience: str
     cost_ceiling_usd: float
-    approved_by: str | None
+    # Kept so older plan files load; ignored since decision D5 (8 Sep 2026): an
+    # approval is a record in the results store (`wb approvals`), not a word in a file.
+    approved_by: str | None = None
     description: str | None = None
     retry_on_fail: int = 0   # extra attempts a failed prompt gets, on top of `repetitions`
+    track: str = "create-run"  # TRACKS; the default keeps the hash of plans written before the key
+    # The most one attempt of an API competitor may spend before its next request
+    # is refused (`infra:attempt_cap`). Same hash rule as `track`: only a
+    # non-default value moves the hash.
+    attempt_cap_usd: float = DEFAULT_ATTEMPT_CAP_USD
 
 
 # ---------------------------------------------------------------- checks
@@ -426,8 +439,8 @@ def load_harness(path) -> Harness:
 def load_plan(path) -> Plan:
     c = _read(path, "plan")
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
-            "baseline", "audience", "cost_ceiling_usd", "approved_by"),
-           ("description", "retry_on_fail"))
+            "baseline", "audience", "cost_ceiling_usd"),
+           ("approved_by", "description", "retry_on_fail", "track", "attempt_cap_usd"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -435,7 +448,7 @@ def load_plan(path) -> Plan:
         s = _Checker(c.path, item, f"competitors[{i}].")
         s.keys(("harness",), ("model",))
         competitors.append(CompetitorSpec(model=s.get("model", str), harness=s.get("harness", str)))
-    approved = c.data["approved_by"]
+    approved = c.data.get("approved_by")
     if approved is not None and not isinstance(approved, str):
         c.fail("approved_by", f"expected str or null; got {type(approved).__name__}")
     num = (int, float)
@@ -453,6 +466,9 @@ def load_plan(path) -> Plan:
         approved_by=approved,
         description=c.get("description", str),
         retry_on_fail=c.get("retry_on_fail", int, minimum=0, default=0),
+        track=c.get("track", str, enum=TRACKS, default="create-run"),
+        attempt_cap_usd=float(c.get("attempt_cap_usd", num, minimum=0, strict=True,
+                                    default=DEFAULT_ATTEMPT_CAP_USD)),
     )
 
 
@@ -633,6 +649,13 @@ class RunConfig:
             # A plan that asks for no retry is the plan it was before the key
             # existed, and keeps the hash its stored runs were recorded under.
             del plan["retry_on_fail"]
+        if plan["track"] == "create-run":
+            # Same rule: the default track is what every plan was before the key
+            # existed. Another track is a different measurement and moves the hash.
+            del plan["track"]
+        if plan["attempt_cap_usd"] == DEFAULT_ATTEMPT_CAP_USD:
+            # Same rule again: the default cap keeps every stored hash in place.
+            del plan["attempt_cap_usd"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
              "product": asdict(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},
@@ -788,13 +811,29 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
         tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:
         c.fail("tasks", str(e))
+    # A set runs only on the world it was imported under (unblock plan M1, 8 Sep
+    # 2026): the frozen sets of the upstream 1.0.6 world do not run on the
+    # repaired world by accident, nor the other way round. Both worlds are
+    # named, and the way out is said, before anything is spent.
+    try:
+        recorded = recorded_world_version(tasks)
+    except ValueError as e:
+        c.fail("tasks", str(e))
+    installed = world.installed_world_version()
+    if recorded != installed:
+        c.fail("tasks", f"this task set was imported under {WORLD_PACKAGE} {recorded}, but the "
+                        f"installed world is {WORLD_PACKAGE} {installed}; a set runs only on "
+                        f"the world it was imported under. Draw a set from a corpus imported "
+                        f"under {installed} (wb corpus import-ab --revision LABEL --out DIR), "
+                        f"or install {recorded} to run this one")
     for t in tasks:
-        for service in t["info"]["initial_state"]:
-            if service == "meta":            # the world's own header, not a service
-                continue
+        # The services the task's data seeds (wb_world.episode.seeded_services):
+        # the repaired world writes every app's empty default into each scored
+        # task, and an empty default is not something the product has to serve.
+        for service in seeded_services(t["info"]["initial_state"]):
             if service not in product.services:
                 raise ConfigError(product_path, "services",
-                                  f"task {t['task']} touches service {service}, which {product_path} "
+                                  f"task {t['task']} seeds service {service}, which {product_path} "
                                   f"does not list in services")
 
     excluded_tasks = {}
@@ -817,13 +856,9 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
                               "every task of the set is missing a known-correct recipe, so there "
                               "is nothing to compare; run `wb monarch recipes` first")
 
-    # The gate counts the most a competitor can attempt, retries included: the
-    # approval is for what the round could cost, not for its best case.
-    per_competitor = len(tasks) * (plan.repetitions + plan.retry_on_fail)
-    if per_competitor > SMOKE_SCALE_ATTEMPTS and not plan.approved_by:
-        c.fail("approved_by", f"{per_competitor} attempts per competitor exceed smoke scale "
-                              f"({SMOKE_SCALE_ATTEMPTS}); set approved_by")
-
+    # Smoke scale (SMOKE_SCALE_ATTEMPTS per competitor, retries included) is judged
+    # at launch, not here: above it, `wb run` needs an approval record (decision
+    # D5, wb_orchestrator.approvals); resolving the config never spends anything.
     return RunConfig(product=product, plan=plan, competitors=competitors, tasks=tasks,
                      product_path=str(product_path), plan_path=str(plan_path),
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
@@ -865,3 +900,30 @@ def pick(kind, folder, stdin=None, stdout=None) -> Path:
         if answer.isdigit() and 1 <= int(answer) <= len(names):
             return Path(folder) / f"{names[int(answer) - 1]}.yaml"
         print(f"not a choice: {answer!r}", file=stdout)
+
+
+def derive_langfuse_keys(env) -> bool:
+    """Fill LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY from LANGFUSE_OTLP_AUTH when they are unset.
+
+    A Monarch deployment carries its Langfuse credentials as the OTLP header
+    `Basic base64(public:secret)`; a hosted bench that references that variable
+    needs the pair the cost reader uses. Returns True when it filled them.
+    """
+    import base64
+    if env.get("LANGFUSE_PUBLIC_KEY") and env.get("LANGFUSE_SECRET_KEY"):
+        return False
+    raw = (env.get("LANGFUSE_OTLP_AUTH") or "").strip()
+    if raw.lower().startswith("basic "):
+        raw = raw[6:].strip()
+    if not raw:
+        return False
+    try:
+        pair = base64.b64decode(raw, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    public, sep, secret = pair.partition(":")
+    if not sep or not public or not secret:
+        return False
+    env.setdefault("LANGFUSE_PUBLIC_KEY", public)
+    env.setdefault("LANGFUSE_SECRET_KEY", secret)
+    return True

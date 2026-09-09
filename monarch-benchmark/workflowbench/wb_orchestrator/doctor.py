@@ -24,7 +24,9 @@ _SYSTEM = ("You are a workflow automation agent. Execute the requested tasks usi
 _TOOL_PROMPT = "Call the base64_encode tool on the text 'doctor' and then stop."
 
 
-def check_provider(key: str) -> dict[str, Any]:
+def check_provider(key: str, ledger=None, operator: str | None = None) -> dict[str, Any]:
+    """Probe one provider. With a `ledger`, every probe request is one reservation
+    (reserved for its maximum, claimed, sent, settled from the receipt), like a run's."""
     report: dict[str, Any] = {"provider": key, "ok": False}
     try:
         p = providers.get(key)
@@ -35,15 +37,16 @@ def check_provider(key: str) -> dict[str, Any]:
         report["error"] = f"{p.key_env} not set"
         return report
 
+    arm = ApiLoopArm(key)
+    probe = _ProbeRequests(ledger, p, arm, operator)
     try:
-        arm = ApiLoopArm(key)
         adapter = arm._adapter()
 
         def one_call():
             msgs = adapter.start(_SYSTEM, _TOOL_PROMPT)
             turns = []
             for _ in range(3):
-                t = adapter.turn(msgs)
+                t = probe.turn(adapter, msgs)
                 turns.append(t)
                 if not t["tool_calls"]:
                     break
@@ -85,7 +88,45 @@ def check_provider(key: str) -> dict[str, Any]:
     except Exception as e:
         report["error"] = f"{type(e).__name__}: {e}"
         report["traceback"] = traceback.format_exc(limit=3)
+    if ledger is not None:
+        report["reservations"] = probe.count
+        report["settled_usd"] = str(probe.settled)
+        if probe.unknown:
+            report["billing_warning"] = (f"{probe.unknown} probe request(s) had no readable usage "
+                                         "receipt; their maximum stays held in the ledger")
     return report
+
+
+class _ProbeRequests:
+    """The doctor's requests through the ledger, one reservation each; a pass-through without one."""
+
+    def __init__(self, ledger, provider, arm, operator: str | None):
+        import secrets
+        self.ledger, self.provider, self.arm, self.operator = ledger, provider, arm, operator
+        self.scope = f"doctor/{provider.key}/{secrets.token_hex(4)}"
+        self.count = 0
+        self.unknown = 0
+        from decimal import Decimal
+        self.settled = Decimal("0")
+
+    def turn(self, adapter, messages):
+        if self.ledger is None:
+            return adapter.turn(messages)
+        from decimal import Decimal
+        from wb_arms import reservations
+        from wb_arms.api_loop import _json_messages
+        self.count += 1
+        turn, billing = reservations.dispatch(
+            self.ledger, self.provider, lambda: adapter.turn(messages),
+            request_id=f"{self.scope}#r{self.count}", scope_id=self.scope, system=_SYSTEM,
+            messages=_json_messages(messages), tools=self.arm._bound_tools(),
+            metadata={"harness": "doctor", "operator": self.operator,
+                      "purpose": "wb doctor connectivity and cache probe"})
+        if billing["actual_usd"] is None:
+            self.unknown += 1
+        else:
+            self.settled += Decimal(billing["actual_usd"])
+        return turn
 
 
 MONARCH_KEYS = ("backend", "backend_health", "fd", "langfuse", "authoring_probe")
@@ -211,13 +252,14 @@ def check_monarch(harness, env: dict, probe: bool = False) -> dict[str, Any]:
 
 
 def run_doctor(keys: list[str] | None = None, monarch_probe: bool = False,
-               config_dir=None, env: dict | None = None) -> list[dict[str, Any]]:
+               config_dir=None, env: dict | None = None, ledger=None,
+               operator: str | None = None) -> list[dict[str, Any]]:
     # "monarch" is a name --arms accepts but not a provider: it selects the block
     # below. An explicit list of providers only (as CI passes) skips the block
     # entirely, so `wb doctor --arms <providers>` never fails on an absent stack.
     want_monarch = keys is None or "monarch" in keys
     keys = sorted(providers.REGISTRY) if keys is None else [k for k in keys if k != "monarch"]
-    reports = [check_provider(k) for k in keys]
+    reports = [check_provider(k, ledger=ledger, operator=operator) for k in keys]
     path = Path(config_dir or config.DEFAULT_CONFIG_DIR) / "harnesses" / "monarch.yaml"
     if want_monarch and path.is_file():
         harness = config.load_harness(path)
@@ -234,7 +276,8 @@ def format_report(reports: list[dict[str, Any]]) -> str:
         lines.append(f"[{mark}] {r['provider']}")
         for k in ("error", "reachable", "tool_call_works", "prompt_tokens",
                   "cached_tokens_second_call", "cache_probe_attempts", "cache_field",
-                  "cache_hit", "cache_min_warning", "cache_warning", *MONARCH_KEYS):
+                  "cache_hit", "cache_min_warning", "cache_warning", "reservations",
+                  "settled_usd", "billing_warning", *MONARCH_KEYS):
             if k in r:
                 lines.append(f"       {MONARCH_LABELS.get(k, k)}: {r[k]}")
     return "\n".join(lines)

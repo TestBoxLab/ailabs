@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import socketserver
 import threading
 import time
 from datetime import datetime, timezone
@@ -39,6 +40,14 @@ class _Server(ThreadingHTTPServer):
     # POSIX needs SO_REUSEADDR to reclaim a fixed port from closed connections.
     # Windows keeps it off because there it can steal an address from a live server.
     allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the bound host's name (getfqdn), a DNS
+        # round trip that stalls for seconds per attempt on a machine with slow
+        # or absent name resolution (seen 8 Sep 2026: 40 attempts, minutes of
+        # waiting). The front door never uses the name, so bind without it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
 
 class EpisodeHTTPShim:

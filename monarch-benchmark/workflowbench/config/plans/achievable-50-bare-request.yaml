@@ -1,0 +1,25 @@
+name: achievable-50-bare-request
+description: >
+  The gauntlet's control-only round on the one-off agentic request track:
+  bare Claude Opus 5 through the API tool loop beside the answer key, on the
+  50 prompts of the ApplicationBench achievable50 slate (tasks/achievable-50).
+  This is the round that can run before the two Monarch instances exist
+  (unblock plan of 8 Sep 2026, M5); its rows pair later with the Monarch rounds
+  on the same frozen set. Prompts: 50; attempts per prompt: 1 plus 1 retry on
+  failure; attempts per competitor: 50 to 100; competitors: 2; attempts in the
+  round: 100 to 200, of which up to 100 paid. Internal. Never pooled with the
+  workflow track (achievable-50-bare-workflow).
+track: agentic-request         # the competitor gets the request once and acts on it
+tasks: tasks/achievable-50
+mode: create-run
+repetitions: 1                 # planned attempts per prompt and competitor
+retry_on_fail: 1               # a failed prompt gets one more attempt, fresh data
+timeout_s: 1800
+concurrency: 4
+competitors:
+  - {harness: oracle}
+  - {model: claude-opus-5, harness: api}
+cost_ceiling_usd: 40           # bare Opus 5 measured at US$ 0.07 to 0.26 per attempt; reserved in the weekly ledger
+baseline: claude-opus-5/api
+audience: internal
+approved_by: null              # Lucas approves (D5); a launch by anyone else waits for his approval

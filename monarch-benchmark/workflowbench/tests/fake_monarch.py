@@ -81,6 +81,14 @@ class Scenario:
     recipe_assumptions: list[str] = field(default_factory=list)
     # The recipe version has an LLM loop, so it must be acked before it may run.
     has_llm_loop: bool = False
+    # -- the live run view (011) ----------------------------------------------
+    # Successive views of the workflow run, each in the stock `WorkflowRun` shape
+    # (`status`, `steps: [{stepId, label, productSlug, status, ...}]`). They are
+    # streamed on GET /api/engine/runs/:id/stream while the engine calls run, and
+    # the poll route serves them one per poll. Empty: the stream route answers
+    # 404, as a backend without the engine does, and polls carry no steps.
+    run_views: list[dict] = field(default_factory=list)
+    run_stream_404: bool = False              # the route exists but refuses this run
 
 
 class _ClientGone(Exception):
@@ -154,6 +162,8 @@ class FakeMonarch:
         self._frames_sent: dict[str, int] = {}
         self._connections: dict[str, int] = {}     # stream opens, per recipe run
         self._authoring_jobs = 0                   # POSTs to recipe/runs, so far
+        self._polls: dict[str, int] = {}           # run id -> GET .../runs/:id count
+        self.run_stream_connections = 0            # GET /api/engine/runs/:id/stream opens
         self._workflow_for_job: dict[int, str] = {}
         self._lock = threading.Lock()
         self._stopping = threading.Event()   # released so held-open streams end
@@ -294,16 +304,37 @@ class FakeMonarch:
                     items = ([] if run_id is None else
                              [{"id": run_id, "status": "succeeded" if done else "running"}])
                     self._reply(200, {"items": items})
+                elif path.startswith("/api/engine/runs/") and path.endswith("/stream"):
+                    try:
+                        self._run_stream()
+                    except _ClientGone:
+                        self.close_connection = True
+                elif path.startswith("/api/workflows/runs/") and path.endswith("/recipe"):
+                    run_id = path[len("/api/workflows/runs/"):-len("/recipe")]
+                    with outer._lock:
+                        known = run_id in outer._run_done
+                    if not known:
+                        self._reply(404, {"error": "not_found"})
+                    else:
+                        self._reply(200, {"runId": run_id, "recipe": {"inputs": outer.scenario.recipe_inputs}})
                 elif path.startswith("/api/workflows/runs/"):
                     run_id = path.rsplit("/", 1)[-1]
                     time.sleep(outer.scenario.delay_s.get("poll", 0))
+                    views = outer.scenario.run_views
                     with outer._lock:
                         done = outer._run_done.get(run_id, False)
                         failed = outer._run_error.get(run_id)
+                        n = outer._polls[run_id] = outer._polls.get(run_id, 0) + 1
                     if not done:
-                        self._reply(200, {"status": "running"})
+                        view = {"status": "running"}
+                        if views:
+                            view = {**views[min(n - 1, len(views) - 1)], "status": "running"}
+                        self._reply(200, view)
                     else:
-                        self._reply(200, dict(failed or outer.scenario.run_outcome))
+                        outcome = dict(failed or outer.scenario.run_outcome)
+                        if views:
+                            outcome = {**views[-1], **outcome}
+                        self._reply(200, outcome)
                 elif path.startswith("/api/workflows/"):
                     # The workflow detail. Must stay LAST of the /api/workflows/
                     # branches: its prefix also matches every route above it.
@@ -544,6 +575,39 @@ class FakeMonarch:
                     if frame.get("status") in ("done", "error"):
                         break
                 self._chunk(b"")   # terminating chunk closes the stream
+
+            def _run_stream(self):
+                """The stock engine stream: one frame per change of the run view,
+                closed once the run is terminal. Views come from the scenario;
+                the terminal frame merges the run's outcome into the last view."""
+                sc = outer.scenario
+                run_id = urlsplit(self.path).path[len("/api/engine/runs/"):-len("/stream")]
+                with outer._lock:
+                    outer.run_stream_connections += 1
+                    known = run_id in outer._run_done
+                if not sc.run_views or sc.run_stream_404 or not known:
+                    self._reply(404, {"error": "run_not_found"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self._chunk(b": ping\n\n")
+                for view in sc.run_views:
+                    time.sleep(sc.delay_s.get("view", 0))
+                    frame = {"id": run_id, **view, "status": "running",
+                             "engineState": {"status": "running", "parkedReason": None}}
+                    self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
+                outer.wait_for_run(run_id)
+                with outer._lock:
+                    failed = outer._run_error.get(run_id)
+                outcome = dict(failed or sc.run_outcome)
+                engine = "done" if outcome.get("status") in ("succeeded", "success") else "error"
+                final = {"id": run_id, **sc.run_views[-1], **outcome,
+                         "engineState": {"status": engine, "parkedReason": None}}
+                self._chunk(f"data: {json.dumps(final)}\n\n".encode())
+                self._chunk(b"")
 
             def _chunk(self, payload: bytes):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(payload), payload))

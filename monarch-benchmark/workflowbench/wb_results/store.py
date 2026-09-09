@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS artifacts (
   uri TEXT NOT NULL,
   PRIMARY KEY (episode_id, kind)
 );
+CREATE TABLE IF NOT EXISTS approval_requests (
+  id TEXT PRIMARY KEY,
+  plan_name TEXT NOT NULL,
+  config_hash TEXT NOT NULL,
+  product_path TEXT NOT NULL,
+  plan_path TEXT NOT NULL,
+  attempts_total INTEGER NOT NULL,
+  ceiling_usd REAL NOT NULL,
+  requested_by TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT,
+  run_id TEXT
+);
 """
 
 
@@ -87,7 +102,7 @@ class Store:
                                (_now(), run_id))
 
     def set_stop_reason(self, run_id: str, reason: str | None) -> None:
-        """One of cost_ceiling, interrupted, worker_error, or None (data-model.md, State: run)."""
+        """One of cost_ceiling, weekly_budget, interrupted, worker_error, or None (data-model.md, State: run)."""
         with self._lock, self._conn:
             self._conn.execute("UPDATE runs SET stop_reason=? WHERE run_id=?", (reason, run_id))
 
@@ -99,6 +114,45 @@ class Store:
     def runs(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self._conn.execute("SELECT * FROM runs ORDER BY started")]
+
+    # -- approval requests (decision D5; wb_orchestrator.approvals) ------------
+    def create_approval_request(self, *, plan_name: str, config_hash: str, product_path: str,
+                                plan_path: str, attempts_total: int, ceiling_usd: float,
+                                requested_by: str, status: str, decided_by: str | None = None) -> str:
+        """One record per launch above smoke scale; approved on creation for an approver."""
+        import secrets
+        request_id = f"apr-{secrets.token_hex(4)}"
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO approval_requests
+                   (id, plan_name, config_hash, product_path, plan_path, attempts_total, ceiling_usd,
+                    requested_by, requested_at, status, decided_by, decided_at, run_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+                (request_id, plan_name, config_hash, product_path, plan_path, attempts_total, ceiling_usd,
+                 requested_by, now, status, decided_by, now if decided_by else None))
+        return request_id
+
+    def approval_request(self, request_id: str) -> dict | None:
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM approval_requests WHERE id=?", (request_id,)).fetchone()
+            return dict(r) if r else None
+
+    def approval_requests(self) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT * FROM approval_requests ORDER BY requested_at, id")]
+
+    def decide_approval(self, request_id: str, status: str, *, decided_by: str) -> dict:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE approval_requests SET status=?, decided_by=?, decided_at=? WHERE id=?",
+                               (status, decided_by, _now(), request_id))
+        return self.approval_request(request_id)
+
+    def bind_approval_run(self, request_id: str, run_id: str) -> None:
+        """The request ran as `run_id`; a request runs once (resume continues that run)."""
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE approval_requests SET run_id=? WHERE id=?", (run_id, request_id))
 
     # -- episodes -------------------------------------------------------------
     def record_episode(self, row: EpisodeRow) -> None:
@@ -131,11 +185,13 @@ class Store:
     def completed_identities(self, run_id: str) -> set[tuple[str, str, int]]:
         """Identities resume may skip. Infra-terminated rows are NOT final
         verdicts (the API failed, not the task) — resume re-attempts them and
-        the fresh row replaces the infra one."""
+        the fresh row replaces the infra one. The one exception is the attempt
+        cap: the attempt's own spend hit it, so running it again can only hit
+        it again."""
         with self._lock:
             return {(r["task_id"], r["arm"], r["trial"]) for r in self._conn.execute(
                 "SELECT task_id, arm, trial FROM episodes WHERE run_id=? "
-                "AND termination NOT LIKE 'infra:%'", (run_id,))}
+                "AND (termination NOT LIKE 'infra:%' OR termination = 'infra:attempt_cap')", (run_id,))}
 
     # -- the query view (only read path for stats/report) ---------------------
     def episodes(self, suite: str | None = None, arm: str | None = None,

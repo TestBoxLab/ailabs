@@ -1,0 +1,888 @@
+--- before/app.js
++++ after/app.js
+@@ -1,56 +1,366 @@
+ 'use strict';
+ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+-const money=n=>Number(n).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:Number(n)>0&&Number(n)<.01?4:2});
++const knownNumber=n=>n!==null&&n!==undefined&&n!==''&&Number.isFinite(Number(n));
++const money=n=>!knownNumber(n)?'Not available':Number(n).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:Number(n)>0&&Number(n)<.01?4:2});
+ const human=s=>String(s).replaceAll('_',' ').replaceAll('.',' / ');
+ const icon=(kind='check')=>'<svg viewBox="0 0 24 24" aria-hidden="true">'+(kind==='check'?'<path d="m5 12 4 4 10-10"/>':kind==='tool'?'<path d="m4 17 9-9m1-5a6 6 0 0 0 7 7l-4 4-4-4-7 10-3-3 10-7-4-4z"/>':'<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/>')+'</svg>';
+ const emptyOutput=$('#output').innerHTML;
+-function clearSelection(){selected=null;document.querySelector('.workspace').classList.remove('has-inspector');$('#inspector-title').textContent='Output';$('#inspector-meta').textContent='Select an action or result';$('#output').innerHTML=emptyOutput;}
+-let report, openSequence=0;
++function clearSelection(restoreFocus=false) {
++  selected=null; $('.workspace').classList.remove('has-inspector');
++  $('#inspector-title').textContent='Output'; $('#inspector-meta').textContent='Select an action or result';
++  $('#output').innerHTML=emptyOutput;
++  if(restoreFocus) {
++    const opener=selectionOpener?.isConnected?selectionOpener:$('#comparison-title');
++    opener.focus({preventScroll:true});
++  }
++}
++function revealSelection() {
++  if(!$('#inspector').contains(document.activeElement))selectionOpener=document.activeElement;
++  renderOutput(); bindEvidence();
++  $('#inspector-title').focus({preventScroll:true});
++  if(innerWidth<=1100)$('#inspector').scrollIntoView({behavior:'smooth',block:'start'});
++}
++let report, openSequence=0, reportSequence=0, launchStep=0, launching=false, launchOpening=false, launchRequest=null;
++let toastTimer, reportRefreshTimer, selectionOpener, pendingJobId=null, renderFrame=null;
++const analysisPending=new Set(), seenEvents=new Set();
+ let state, job, events=[], stream, taskId, selected, outputMode='formatted', view='report', selectedTasks=new Set(), selectedModels=new Set();
+-function toast(text){$('#toast').textContent=text;$('#toast').classList.remove('hidden');setTimeout(()=>$('#toast').classList.add('hidden'),3200)}
+-async function api(path,body){const response=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state.token},body:JSON.stringify(body)}:{});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed');return data}
++function toast(text) {
++  clearTimeout(toastTimer);
++  $('#toast').textContent=text; $('#toast').classList.remove('hidden');
++  toastTimer=setTimeout(()=>$('#toast').classList.add('hidden'),6000);
++}
++async function api(path,body) {
++  const write=body!==undefined;
++  let response;
++  try {
++    response=await fetch(path,write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||''},body:JSON.stringify(body)}:{signal:AbortSignal.timeout(30000)});
++  } catch (error) {
++    const issue=new Error(error.name==='TimeoutError'?'Studio took too long to respond. Try again.':'Cannot reach Studio. Check the local server and try again.');
++    issue.uncertain=write; throw issue;
++  }
++  let data;
++  try { data=await response.json(); } catch {
++    const issue=new Error('Studio returned an unreadable response. Reload the workspace to check its status.');
++    issue.uncertain=write; throw issue;
++  }
++  if(!response.ok) {
++    const issue=new Error(response.status===403?'Your Studio session changed. Reload the workspace before trying again.':data.error||'Studio could not complete this request. Try again.');
++    issue.status=response.status; issue.uncertain=write&&response.status>=500; throw issue;
++  }
++  return data;
++}
+ function budget(data){state.budget=data;$('#budget-available').textContent=money(data.available)+' left';$('#budget-detail').textContent=money(data.actual)+' estimated · '+money(data.held)+' held / $300';$('#budget-fill').style.width=Math.min(100,(Number(data.actual)+Number(data.held))/3)+'%'}
+-function renderJobs(){ $('#job-count').textContent=state.jobs.length;$('#jobs').innerHTML=state.jobs.length?state.jobs.map(j=>'<button class="job '+(job?.id===j.id?'active':'')+'" data-job="'+esc(j.id)+'"><strong>'+esc(j.title)+'</strong><small><span class="dot"></span>'+esc(j.status)+' · '+j.completed+'/'+j.total+' attempts</small></button>').join(''):'<p class="jobs-empty">No comparisons yet</p>';$$('[data-job]').forEach(b=>b.onclick=()=>openJob(b.dataset.job))}
+-function syncJob(value){job=value;const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;renderJobs();$('#comparison-title').textContent=job.title;$('#comparison-meta').textContent=job.settings.tasks.length+' tasks · '+job.settings.models.length+' runners · '+money(job.settings.maximum_usd)+' maximum';$('#job-status').textContent=job.status;$('#job-status').className='status '+job.status;$('#cancel-run').classList.toggle('hidden',!['queued','running','cancelling'].includes(job.status));$('#cancel-run').disabled=job.status==='cancelling';$('#result-count').textContent=job.results.length;$('#stream-note').textContent=['queued','running','cancelling'].includes(job.status)?'Live updates':'Recorded execution';$('#run-message').textContent=job.error||'';$('#run-message').classList.toggle('hidden',!job.error)}
+-async function openJob(id){const sequence=++openSequence;if(stream)stream.close();clearSelection();const [next,account]=await Promise.all([api('/api/jobs/'+id),api('/api/jobs/'+id+'/report')]);if(sequence!==openSequence)return;events=[];report=account;job=next;syncJob(job);taskId=job.settings.tasks[0];$('#task-select').innerHTML=job.settings.tasks.map(t=>'<option value="'+esc(t)+'">'+esc(taskTitle(t))+'</option>').join('');$('#empty').classList.add('hidden');switchView(view);renderGraph();renderResults();renderReport();stream=new EventSource('/api/jobs/'+id+'/events');stream.onopen=()=>$('#connection').textContent='Connected';stream.onmessage=async e=>{if(sequence!==openSequence)return;const event=JSON.parse(e.data);if(events.some(x=>x.id===event.id))return;events.push(event);if(event.type==='finished'){syncJob(event.job);budget(event.budget);stream.close();report=await api('/api/jobs/'+id+'/report');if(sequence!==openSequence)return;}else if(event.type==='attempt_finished'){if(!job.results.some(r=>r.task===event.task&&r.model===event.model)){job.results.push(event);job.completed++;syncJob(job)}report=await api('/api/jobs/'+id+'/report');if(sequence!==openSequence)return;}else if(event.type==='running'&&['queued','running'].includes(job.status)){job.status='running';syncJob(job)}else if(event.type==='billing')budget(event.budget);renderGraph();renderResults();renderReport();if(window.builderLive)builderLive(job,events);if(selected&&!selected.report){const latest=nodeList(selected.model).find(n=>n.node===selected.node);if(latest){selected=latest;renderOutput();bindEvidence();}}};stream.onerror=()=>{$('#connection').textContent=['completed','failed','cancelled','interrupted'].includes(job.status)?'Connected':'Reconnecting'};}
++function renderJobs() {
++  const focusId=document.activeElement?.dataset?.job;
++  const query=($('#run-search')?.value||'').trim().toLowerCase();
++  const rows=state.jobs.filter(j=>(j.title+' '+j.status).toLowerCase().includes(query));
++  $('#job-count').textContent=query?rows.length+' / '+state.jobs.length:state.jobs.length;
++  $('#jobs').innerHTML=rows.length?rows.map(j=>'<button class="job '+(job?.id===j.id?'active':'')+'" data-job="'+esc(j.id)+'" data-status="'+esc(j.status)+'" aria-current="'+(job?.id===j.id?'true':'false')+'"><strong>'+esc(j.title)+'</strong><small><span class="dot"></span>'+esc(j.status)+' · '+j.completed+'/'+j.total+' attempts</small></button>').join(''):'<p class="jobs-empty">'+(query?'No runs match your search.':'No runs yet. Start with a few tasks and compare the outcomes.')+'</p>';
++  $$('[data-job]').forEach(b=>b.onclick=()=>openJob(b.dataset.job));
++  if(focusId)$$('[data-job]').find(b=>b.dataset.job===focusId)?.focus({preventScroll:true});
++}
++function syncJob(value){job=value;const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;renderJobs();$('#comparison-title').textContent=job.title;$('#comparison-meta').textContent=job.settings.tasks.length+' '+plural(job.settings.tasks.length,'task')+' · '+job.settings.models.length+' '+plural(job.settings.models.length,'approach')+' · '+money(job.settings.maximum_usd)+' maximum';$('#job-status').textContent=job.status;$('#job-status').className='status '+job.status;$('#cancel-run').classList.toggle('hidden',!['queued','running','cancelling'].includes(job.status));$('#cancel-run').disabled=job.status==='cancelling';$('#result-count').textContent=job.results.length;$('#stream-note').textContent=['queued','running','cancelling'].includes(job.status)?'Live updates':'Recorded execution';$('#run-message').textContent=job.error||'';$('#run-message').classList.toggle('hidden',!job.error)}
++async function openJob(id) {
++  const sequence=++openSequence;
++  clearTimeout(reportRefreshTimer);
++  if(stream)stream.close();
++  pendingJobId=id; clearSelection();
++  $('.comparison').setAttribute('aria-busy','true');
++  setConnection('Loading run…','loading');
++  $('#connection-error').classList.add('hidden');
++  try {
++    const [next,account]=await Promise.all([api('/api/jobs/'+id),api('/api/jobs/'+id+'/report')]);
++    if(sequence!==openSequence)return;
++    clearSelection(); events=[]; seenEvents.clear(); report=account; job=next; syncJob(job);
++    taskId=job.settings.tasks[0];
++    $('#task-select').innerHTML=job.settings.tasks.map(t=>'<option value="'+esc(t)+'">'+esc(taskTitle(t))+'</option>').join('');
++    $('#empty').classList.add('hidden'); switchView(view);
++    renderGraph(); renderResults(); renderReport();
++    setConnection('Connected','connected');
++    const source=new EventSource('/api/jobs/'+id+'/events'); stream=source;
++    source.onopen=()=>{if(sequence===openSequence)setConnection('Connected','connected');};
++    source.onmessage=e=>{
++      if(sequence!==openSequence)return;
++      let event;
++      try { event=JSON.parse(e.data); } catch { setConnection('Unreadable update','error'); return; }
++      if(seenEvents.has(event.id))return;
++      seenEvents.add(event.id); events.push(event);
++      if(event.type==='finished') { syncJob(event.job); budget(event.budget); source.close(); queueReportRefresh(id,sequence); }
++      else if(event.type==='attempt_finished') {
++        if(!job.results.some(r=>r.task===event.task&&r.model===event.model)) {job.results.push(event);job.completed++;syncJob(job);}
++        queueReportRefresh(id,sequence);
++      } else if(event.type==='running'&&['queued','running'].includes(job.status)) {job.status='running';syncJob(job);}
++      else if(event.type==='cancelling') {job.status='cancelling';syncJob(job);}
++      else if(event.type==='billing')budget(event.budget);
++      scheduleEventRender();
++    };
++    source.onerror=()=>{
++      if(sequence!==openSequence)return;
++      if(!['queued','running','cancelling'].includes(job.status)) {source.close();setConnection('Connected','connected');}
++      else setConnection('Reconnecting…','loading');
++    };
++  } catch(error) {
++    if(sequence!==openSequence)return;
++    showConnectionError('Could not open this run. '+error.message);
++  } finally { if(sequence===openSequence)$('.comparison').removeAttribute('aria-busy'); }
++}
++function queueReportRefresh(id,sequence) {
++  clearTimeout(reportRefreshTimer);
++  reportRefreshTimer=setTimeout(()=>refreshReport(id,sequence),120);
++}
++async function refreshReport(id,sequence) {
++  const revision=++reportSequence;
++  try {
++    const next=await api('/api/jobs/'+id+'/report');
++    if(sequence!==openSequence||revision!==reportSequence)return;
++    report=next; renderReport();
++  } catch(error) {if(sequence===openSequence)toast('Findings could not refresh. '+error.message);}
++}
++function scheduleEventRender() {
++  if(renderFrame!==null)return;
++  renderFrame=requestAnimationFrame(()=>{
++    renderFrame=null;
++    if(view==='live')renderGraph();
++    if(view==='results')renderResults();
++    if(window.builderLive)builderLive(job,events);
++    if(selected&&!selected.report) {
++      const latest=nodeList(selected.model).find(n=>n.node===selected.node);
++      if(latest&&JSON.stringify(latest)!==JSON.stringify(selected)){selected=latest;renderOutput();bindEvidence();}
++    }
++  });
++}
+ 
+ function nodeLabel(node){if(node.category==='result')return 'Verify task outcome';if(node.category==='model')return 'Generate next response';if(node.label==='api_search')return 'Find application actions';if(node.label==='base64_encode')return 'Encode message content';if(node.label==='api_fetch'){const a=node.arguments||{};let service='application';try{const host=new URL(a.url).hostname;service=host.includes('salesforce')?'Salesforce':host.includes('gmail')?'Gmail':host.split('.')[0]}catch{}const verb={GET:'Read',POST:'Create',PATCH:'Update',PUT:'Update',DELETE:'Delete'}[a.method]||'Call';return verb+' '+service+(service==='Gmail'?' message':' record')}return human(node.label||'Response')}
+ function nodeList(model){const nodes=[];for(const e of events.filter(x=>x.task===taskId&&x.model===model)){if(e.type==='step_started'){nodes.push({...e,node:'step:'+e.step,status:'running',category:'step'})}else if(e.type==='step_finished'){const old=nodes.find(n=>n.node==='step:'+e.step);if(old)Object.assign(old,e,{node:'step:'+e.step});else nodes.push({...e,node:'step:'+e.step,category:'step'})}else if(['node_started','model_started'].includes(e.type)){nodes.push({...e,status:'running',category:e.type==='model_started'?'model':'tool'})}else if(['node_finished','model_finished'].includes(e.type)){let old=nodes.find(n=>n.node===e.node);if(old)Object.assign(old,e);else nodes.push({...e,category:e.type==='model_finished'?'model':'tool'})}}
+ const result=job?.results.find(r=>r.task===taskId&&r.model===model);if(result){nodes.forEach(n=>{if(n.status==='running')n.status='error'});}if(result)nodes.push({node:'result',model,task:taskId,label:'Task result',status:result.passed?'completed':'error',category:'result',output:result.output,result});return nodes}
+-function renderGraph(){if(!job)return;const focusNode=document.activeElement?.dataset?.node;const focusModel=document.activeElement?.dataset?.model;$('#task-brief').textContent=state.tasks.find(t=>t.id===taskId)?.brief||'';$('#task-progress').textContent=(job.settings.tasks.indexOf(taskId)+1)+' / '+job.settings.tasks.length;$('#lanes').innerHTML=job.settings.models.map(model=>{const info=state.models.find(m=>m.id===model);const nodes=nodeList(model);return '<section class="lane" aria-label="'+esc(modelName(model))+'"><div class="lane-heading"><span class="model-icon">'+icon(armKind(model)==='version'?'model':'tool')+'</span><div><strong>'+esc(modelName(model))+'</strong><small>'+esc(armKind(model)==='version'?'Published architecture · steps run in order':info?.kind||'Runner')+'</small></div></div><div class="lane-nodes">'+(nodes.length?nodes.map(n=>n.category==='step'?'<div class="lane-step '+esc(n.status)+'"><strong>'+esc(n.label)+'</strong><small>'+esc(n.status==='running'?'Running this step':n.status==='error'?'Stopped with an error':'Step finished')+(n.output&&n.status!=='running'?' · '+esc(String(n.output).slice(0,220)):'')+'</small></div>':'<button class="node '+esc(n.status)+(selected?.node===n.node&&selected?.model===model?' selected':'')+'" data-node="'+esc(n.node)+'" data-model="'+esc(model)+'"><div class="node-head">'+icon(n.category==='model'?'model':'check')+'<span>'+esc(nodeLabel(n))+'</span></div><p>'+esc(n.category==='result'?(n.result.passed?'All task checks passed':n.result.error||'One or more task checks failed'):n.arguments?JSON.stringify(n.arguments):n.output||(n.status==='running'?'Waiting for the response…':n.status==='error'?'The request stopped before a response arrived.':'Chose the next application actions without a written reply.'))+'</p><div class="node-foot"><span>'+esc(n.category==='result'?'Verified task checks':n.category==='model'?'Model response':'Application action')+'</span><span>'+esc(n.status==='running'?'Running':n.status==='error'?'Attention':'Done')+'</span></div></button>').join(''):'<div class="lane-waiting">Waiting for this task</div>')+'</div></section>'}).join('');$$('[data-node]').forEach(b=>b.onclick=()=>{selected=nodeList(b.dataset.model).find(n=>n.node===b.dataset.node);renderOutput();renderGraph();if(innerWidth<980)$('#inspector').scrollIntoView({behavior:'smooth',block:'start'})});if(focusNode){const target=$$('[data-node]').find(b=>b.dataset.node===focusNode&&b.dataset.model===focusModel);target?.focus({preventScroll:true});}}
++function renderGraph(){if(!job)return;const focusNode=document.activeElement?.dataset?.node;const focusModel=document.activeElement?.dataset?.model;$('#task-brief').textContent=state.tasks.find(t=>t.id===taskId)?.brief||'';$('#task-progress').textContent=(job.settings.tasks.indexOf(taskId)+1)+' / '+job.settings.tasks.length;$('#lanes').innerHTML=job.settings.models.map(model=>{const info=state.models.find(m=>m.id===model);const nodes=nodeList(model);return '<section class="lane" aria-label="'+esc(modelName(model))+'"><div class="lane-heading"><span class="model-icon">'+icon(armKind(model)==='version'?'model':'tool')+'</span><div><strong>'+esc(modelName(model))+'</strong><small>'+esc(armKind(model)==='version'?'Published architecture · steps run in order':info?.kind||'Runner')+'</small></div></div><div class="lane-nodes">'+(nodes.length?nodes.map(n=>n.category==='step'?'<div class="lane-step '+esc(n.status)+'"><strong>'+esc(n.label)+'</strong><small>'+esc(n.status==='running'?'Running this step':n.status==='error'?'Stopped with an error':'Step finished')+(n.output&&n.status!=='running'?' · '+esc(String(n.output).slice(0,220)):'')+'</small></div>':'<button class="node '+esc(n.status)+(selected?.node===n.node&&selected?.model===model?' selected':'')+'" data-node="'+esc(n.node)+'" data-model="'+esc(model)+'"><div class="node-head">'+icon(n.category==='model'?'model':'check')+'<span>'+esc(nodeLabel(n))+'</span></div><p>'+esc(n.category==='result'?(n.result.passed?'All task checks passed':n.result.error||'One or more task checks failed'):n.arguments?JSON.stringify(n.arguments):n.output||(n.status==='running'?'Waiting for the response…':n.status==='error'?'The request stopped before a response arrived.':'Chose the next application actions without a written reply.'))+'</p><div class="node-foot"><span>'+esc(n.category==='result'?'Verified task checks':n.category==='model'?'Model response':'Application action')+'</span><span>'+esc(n.status==='running'?'Running':n.status==='error'?'Attention':'Done')+'</span></div></button>').join(''):'<div class="lane-waiting">Waiting for this task</div>')+'</div></section>'}).join('');$$('[data-node]').forEach(b=>b.onclick=()=>{selected=nodeList(b.dataset.model).find(n=>n.node===b.dataset.node);revealSelection();renderGraph()});if(focusNode){const target=$$('[data-node]').find(b=>b.dataset.node===focusNode&&b.dataset.model===focusModel);target?.focus({preventScroll:true});}}
+ function pretty(value,depth=0){if(value&&typeof value==='object'&&!Array.isArray(value)&&!Object.keys(value).length)return '<p>No response body returned.</p>';if(depth>5)return '<pre>'+esc(JSON.stringify(value,null,2))+'</pre>';if(value===null||value===undefined)return '<span>Not available</span>';if(typeof value==='string'){try{return pretty(JSON.parse(value),depth)}catch{}return textDocument(value)}if(typeof value!=='object')return esc(value);if(Array.isArray(value)){if(!value.length)return '<p>No records returned.</p>';if(value.every(v=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.values(v).every(x=>x===null||typeof x!=='object'))){const allKeys=[...new Set(value.flatMap(v=>Object.keys(v)))],keys=allKeys.slice(0,8);return '<div class="collection-label">'+(value.length>100||allKeys.length>8?'Showing '+Math.min(100,value.length)+' of '+value.length+' records and '+keys.length+' of '+allKeys.length+' fields. Open Raw evidence for the complete output.':value.length+' records')+'</div><div class="table-scroll"><table><thead><tr>'+keys.map(k=>'<th>'+esc(human(k))+'</th>').join('')+'</tr></thead><tbody>'+value.slice(0,100).map(v=>'<tr>'+keys.map(k=>'<td>'+esc(v[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';}return '<div class="collection-label">'+value.length+' records</div>'+value.slice(0,100).map(v=>'<section class="record">'+pretty(v,depth+1)+'</section>').join('')+(value.length>100?'<p>Showing the first 100 records. Copy raw evidence for the full output.</p>':'')}return '<dl>'+Object.entries(value).map(([k,v])=>'<dt>'+esc(human(k))+'</dt><dd>'+pretty(v,depth+1)+'</dd>').join('')+'</dl>'}
+ function textDocument(value){return value.split(/\n\s*\n/).map(block=>{if(/^#{1,3}\s/.test(block))return '<h3>'+esc(block.replace(/^#{1,3}\s/,''))+'</h3>';if(block.split('\n').every(l=>/^[-*]\s/.test(l)))return '<ul>'+block.split('\n').map(l=>'<li>'+esc(l.slice(2))+'</li>').join('')+'</ul>';return '<p>'+esc(block).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replaceAll('\n','<br>')+'</p>'}).join('')}
+-function renderOutput(){if(!selected)return;document.querySelector('.workspace').classList.add('has-inspector');$('#inspector-title').textContent=selected.category==='result'?'Task output':nodeLabel(selected);$('#inspector-meta').textContent=modelName(selected.model)+' · '+selected.status;let raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes,report:selected.report}: {})};if(outputMode==='raw')$('#output').innerHTML='<pre>'+esc(JSON.stringify(raw,null,2))+'</pre>';else if(selected.report){$('#output').innerHTML=reportDetails(selected.report);}else{$('#output').innerHTML=(selected.result?.error?'<p class="fail">'+esc(selected.result.error)+'</p>':'')+(selected.output?pretty(selected.output):'<p>No output received yet.</p>')+(selected.result?'<h4>Task checks</h4>'+selected.result.checks.map(c=>'<div class="check"><span>'+esc(human(c.type))+'</span><strong class="'+(c.passed?'pass':'fail')+'">'+(c.passed?'Passed':'Failed')+'</strong></div>').join(''):'');if(selected.result?.unexpected_changes?.length)$('#output').insertAdjacentHTML('beforeend','<h4>Unexpected changes</h4>'+pretty(selected.result.unexpected_changes));if(selected.arguments)$('#output').insertAdjacentHTML('beforeend','<h4>Input</h4>'+pretty(selected.arguments));}}
+-function renderResults(){if(!job)return;const results=job.results,total=results.length,passed=results.filter(r=>r.passed).length,cost=results.reduce((a,r)=>a+Number(r.cost_usd||0),0);$('#results-summary').innerHTML='<div class="result-stat"><strong>'+passed+' / '+total+'</strong><span>Tasks passed</span></div><div class="result-stat"><strong>'+money(cost)+'</strong><span>Known cost estimate'+(results.some(r=>r.flags?.includes('billing=unknown'))?' + unresolved holds':'')+'</span></div><div class="result-stat"><strong>'+job.completed+' / '+job.total+'</strong><span>Attempts finished</span></div>';$('#result-rows').innerHTML=results.map((r,i)=>'<tr tabindex="0" data-index="'+i+'"><td>'+esc(taskTitle(r.task))+'<small>'+esc(modelName(r.model))+'</small></td><td class="'+(r.passed?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Checks failed':esc(human(r.termination)))+'</td><td>'+Number(r.seconds).toFixed(1)+'s</td><td>'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td><td>'+r.tool_calls+'</td></tr>').join('');$$('[data-index]').forEach(row=>{const choose=()=>{const r=results[Number(row.dataset.index)];taskId=r.task;$('#task-select').value=taskId;selected={node:'result',model:r.model,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};renderOutput();renderGraph()};row.onclick=choose;row.onkeydown=e=>{if(e.key==='Enter')choose()}})}
+-function switchView(next){view=next;$$('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-selected',String(b.dataset.view===view))});$('#report-view').classList.toggle('hidden',!job||view!=='report');$('#live-view').classList.toggle('hidden',!job||view!=='live');$('#results-view').classList.toggle('hidden',!job||view!=='results')}
++function renderOutput(){if(!selected)return;document.querySelector('.workspace').classList.add('has-inspector');$('#inspector-title').textContent=selected.category==='result'?'Task output':nodeLabel(selected);$('#inspector-meta').textContent=modelName(selected.model)+' · '+selected.status;let raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes,report:selected.report}: {})};if(outputMode==='raw')$('#output').innerHTML='<pre>'+esc(JSON.stringify(raw,null,2))+'</pre>';else if(selected.report){$('#output').innerHTML=reportDetails(selected.report);}else{$('#output').innerHTML=(selected.result?.error?'<p class="fail">'+esc(selected.result.error)+'</p>':'')+(selected.output!==null&&selected.output!==undefined?pretty(selected.output):'<p>No output received yet.</p>')+(selected.result?'<h4>Task checks</h4>'+(selected.result.checks||[]).map(c=>'<div class="check"><span>'+esc(human(c.type))+'</span><strong class="'+(c.passed?'pass':'fail')+'">'+(c.passed?'Passed':'Failed')+'</strong></div>').join(''):'');if(selected.result?.unexpected_changes?.length)$('#output').insertAdjacentHTML('beforeend','<h4>Unexpected changes</h4>'+pretty(selected.result.unexpected_changes));if(selected.arguments)$('#output').insertAdjacentHTML('beforeend','<h4>Input</h4>'+pretty(selected.arguments));}}
++function renderResults() {
++  if(!job)return;
++  const focused=document.activeElement?.dataset?.index;
++  const results=job.results, total=results.length, assessed=results.filter(r=>!String(r.termination||'').startsWith('infra:')), passed=assessed.filter(r=>r.passed).length;
++  const known=results.filter(r=>knownNumber(r.cost_usd)), cost=known.reduce((a,r)=>a+Number(r.cost_usd),0);
++  const unresolved=results.some(r=>!knownNumber(r.cost_usd)||r.flags?.includes('billing=unknown'));
++  $('#results-summary').innerHTML='<div class="result-stat"><strong>'+passed+' / '+assessed.length+'</strong><span>Evaluated attempts passed</span></div><div class="result-stat"><strong>'+money(known.length?cost:null)+'</strong><span>Known cost estimate'+(unresolved?' · incomplete billing':'')+'</span></div><div class="result-stat"><strong>'+job.completed+' / '+job.total+'</strong><span>Attempts finished'+(total-assessed.length?' · '+(total-assessed.length)+' execution issues':'')+'</span></div>';
++  $('#result-rows').innerHTML=results.map((r,i)=>'<tr><td><button class="result-link" data-index="'+i+'">'+esc(taskTitle(r.task))+'<small>'+esc(modelName(r.model))+'</small></button></td><td class="'+(String(r.termination||'').startsWith('infra:')?'neutral':r.passed?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Checks failed':esc(human(r.termination||'Not evaluated')))+'</td><td>'+(knownNumber(r.seconds)?Number(r.seconds).toFixed(1)+'s':'Not available')+'</td><td>'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td><td>'+(knownNumber(r.tool_calls)?r.tool_calls:'Not available')+'</td></tr>').join('')||'<tr><td colspan="5" class="results-empty"><strong>No finished attempts yet</strong><p>'+(['queued','running','cancelling'].includes(job.status)?'Results appear here as work finishes. Open Activity to follow the current task.':'This run ended before an attempt finished. Check the run message and activity for details.')+'</p></td></tr>';
++  $$('[data-index]').forEach(button=>button.onclick=()=>{
++    const r=results[Number(button.dataset.index)];taskId=r.task;$('#task-select').value=taskId;
++    selected={node:'result',model:r.model,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};
++    revealSelection();
++  });
++  if(focused!==undefined)$$('[data-index]').find(b=>b.dataset.index===focused)?.focus({preventScroll:true});
++}
++function switchView(next) {
++  view=next;
++  $$('[data-view]').forEach(b=>{
++    const active=b.dataset.view===view;
++    b.classList.toggle('active',active); b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;
++  });
++  for(const key of ['report','live','results'])$('#'+key+'-view').classList.toggle('hidden',!job||view!==key);
++  if(view==='live')renderGraph(); else if(view==='results')renderResults(); else renderReport();
++}
+ function taskTitle(id){return state.tasks.find(t=>t.id===id)?.title||human(id)}
+ function modelName(id){const arm=job?.settings?.arms?.find(a=>a.id===id);if(arm)return arm.name;const [base,effort]=id.split('@');return (state.models.find(m=>m.id===base)?.name||base)+(effort?' · '+effort+' reasoning':'')}
+ function armKind(id){const arm=job?.settings?.arms?.find(a=>a.id===id);return arm?arm.kind:state.models.find(m=>m.id===id.split('@')[0])?.kind||'Runner'}
+-function filteredTasks(){const q=$('#task-search').value.toLowerCase(),category=$('#task-category').value;return state.tasks.filter(t=>(!category||t.category===category)&&(!$('#task-difficulty').value||(t.difficulty?.level||'unrated')===$('#task-difficulty').value)&&(t.title+' '+t.brief+' '+(t.applications||[]).join(' ')).toLowerCase().includes(q))}
++function filteredTasks(){const q=$('#task-search').value.trim().toLowerCase(),category=$('#task-category').value;return state.tasks.filter(t=>(!category||t.category===category)&&(!$('#task-difficulty').value||(t.difficulty?.level||'unrated')===$('#task-difficulty').value)&&(t.title+' '+t.brief+' '+(t.applications||[]).join(' ')).toLowerCase().includes(q))}
+ function renderTaskOptions(){const filtered=filteredTasks();$('#task-options').innerHTML=filtered.length?filtered.map(t=>'<label class="task-option"><input type="checkbox" value="'+esc(t.id)+'" '+(selectedTasks.has(t.id)?'checked':'')+'><span><strong>'+esc(t.title)+'</strong><small>'+esc(t.category)+' · '+esc((t.applications||[]).join(' + '))+'</small></span>'+difficultyBadge(t)+'</label>').join(''):'<p class="jobs-empty">No requests match these filters.</p>';$$('#task-options input').forEach(i=>i.onchange=()=>{i.checked?selectedTasks.add(i.value):selectedTasks.delete(i.value);launchSize()});launchSize()}
+-function armCount(){const without=$('#without-monarch')?.checked;const versionsChecked=$$('#architecture-options input:checked').filter(i=>i.value!=='without-monarch').length;return (without?selectedModels.size:0)+versionsChecked}
+-function requestFloor(){const without=$('#without-monarch')?.checked;let floor=0;if(without)for(const id of selectedModels){const m=state.models.find(x=>x.id===id.split('@')[0]);floor=Math.max(floor,Number(m?.request_ceiling_usd||0))}for(const i of $$('#architecture-options input:checked')){const v=state.capabilities?.versions?.find(v=>v.id===i.value);floor=Math.max(floor,Number(v?.request_ceiling_usd||0))}return floor}
+-function launchSize(){$('#selected-count').textContent=selectedTasks.size+' of '+state.tasks.length+' selected';const arms=armCount();const without=$('#without-monarch')?.checked;const floor=requestFloor();const budgetValue=Number($('#run-budget').value||0);const low=floor>0&&budgetValue<floor;$('#launch-size').textContent=selectedTasks.size+' tasks × '+arms+' arms = '+selectedTasks.size*arms+' attempts'+(without&&!selectedModels.size?' · choose a runner for Without Monarch':'')+(floor?' · reserves up to '+money(floor)+' per request':'');$('#budget-floor').textContent=low?'Set at least '+money(floor)+': the dearest selected runner reserves that much for one request before it is admitted.':'';$('#launch-button').disabled=!selectedTasks.size||!arms||selectedTasks.size>800||arms>12||(without&&!selectedModels.size)||low}
++function armCount(){const without=$('#without-monarch')?.checked;const versionsChecked=$$('#architecture-options input:checked:not(:disabled)').filter(i=>i.value!=='without-monarch').length;return (without?selectedModels.size:0)+versionsChecked}
++function requestFloor(){const without=$('#without-monarch')?.checked;let floor=0;if(without)for(const id of selectedModels){const m=state.models.find(x=>x.id===id.split('@')[0]);floor=Math.max(floor,Number(m?.request_ceiling_usd||state.capabilities?.controls?.find(c=>c.id===m?.control)?.request_ceiling_usd||0))}for(const i of $$('#architecture-options input:checked')){const v=state.capabilities?.versions?.find(v=>v.id===i.value);floor=Math.max(floor,Number(v?.request_ceiling_usd||0))}return floor}
++function launchSize() {
++  if(!state)return;
++  $('#runner-choices').classList.toggle('hidden',!$('#without-monarch').checked);
++  $('#selected-count').textContent=selectedTasks.size+' of '+state.tasks.length+' selected';
++  const arms=armCount(), floor=requestFloor(), amount=Number($('#run-budget').value);
++  const low=floor>0&&amount<floor;
++  $('#launch-size').textContent=selectedTasks.size+' '+plural(selectedTasks.size,'task')+' × '+arms+' '+plural(arms,'approach')+' · '+selectedTasks.size*arms+' '+plural(selectedTasks.size*arms,'attempt');
++  $('#budget-floor').textContent=low?'Set at least '+money(floor)+' to cover the largest single request reservation.':knownNumber(state.budget?.available)&&amount>Number(state.budget.available)?'Only '+money(state.budget.available)+' remains in this week’s capacity.':'';
++  const error=launchIssue();
++  $('#launch-validation').textContent=launchStep===2?error:'';
++  $('#launch-button').disabled=launching||!!error;
++  $('#launch-button').textContent=launching?'Starting…':'Start run · '+money(amount)+' max';
++  $('#launch-next').disabled=launching||(launchStep===0?!selectedTasks.size||selectedTasks.size>800:!arms||arms>12||($('#without-monarch').checked&&!selectedModels.size));
++  $('#launch-back').disabled=launching;
++  $$('[data-launch-step]').forEach(b=>b.disabled=launching);
++  $('#clear-tasks').disabled=!selectedTasks.size;
++  const matching=filteredTasks(), all=matching.length&&matching.every(t=>selectedTasks.has(t.id));
++  $('#select-all').textContent=all?'Deselect matching':'Select matching';$('#select-all').disabled=!matching.length;
++  $('#task-match-count').textContent=matching.length+' matching · '+[...selectedTasks].filter(id=>!matching.some(t=>t.id===id)).length+' selected outside filters';
++  if(launchStep===2)renderLaunchReview();
++}
++const plural=(n,word)=>n===1?word:word+'s';
++function launchIssue() {
++  if(!selectedTasks.size)return 'Choose at least one task.';
++  if(selectedTasks.size>800)return 'Select no more than 800 tasks.';
++  const arms=armCount();if(!arms||($('#without-monarch').checked&&!selectedModels.size))return 'Choose a runner for Without Monarch, or select a published architecture.';
++  if(arms>12)return 'Compare no more than 12 approaches in one run.';
++  if(!$('#run-title').value.trim())return 'Name this run before starting.';
++  const amount=Number($('#run-budget').value);
++  if(!Number.isFinite(amount)||amount<=0||amount>300||!$('#run-budget').validity.valid)return 'Use a budget between $0.01 and $300, with at most two decimal places.';
++  if(amount<requestFloor())return 'Increase the budget to cover the largest request reservation.';
++  if(knownNumber(state.budget?.available)&&amount>Number(state.budget.available))return 'The budget exceeds this week’s available capacity.';
++  if(!$('#run-turns').value||!$('#run-turns').validity.valid)return 'Use a turn limit between 1 and 50.';
++  return '';
++}
++function renderLaunchReview() {
++  const names=selectedVersions().filter(v=>v!=='without-monarch').map(id=>state.capabilities.versions.find(v=>v.id===id)?.name||id);
++  if($('#without-monarch').checked)for(const id of selectedModels)names.push(modelName(id));
++  $('#launch-review').innerHTML='<dl><dt>Work</dt><dd>'+selectedTasks.size+' '+plural(selectedTasks.size,'task')+' · '+selectedTasks.size*armCount()+' '+plural(selectedTasks.size*armCount(),'attempt')+'</dd><dt>Approaches</dt><dd>'+names.map(esc).join('<br>')+'</dd><dt>Evaluation</dt><dd>One-off agentic requests</dd><dt>Weekly capacity</dt><dd>'+money(state.budget?.available)+' available</dd></dl>';
++}
++function setLaunchStep(step,focus=true) {
++  launchStep=Math.max(0,Math.min(2,step));
++  $$('[data-launch-panel]').forEach(p=>p.classList.toggle('hidden',Number(p.dataset.launchPanel)!==launchStep));
++  $$('[data-launch-step]').forEach(b=>{b.setAttribute('aria-current',Number(b.dataset.launchStep)===launchStep?'step':'false');b.disabled=launching;});
++  $('#launch-back').classList.toggle('hidden',launchStep===0);$('#launch-next').classList.toggle('hidden',launchStep===2);$('#launch-button').classList.toggle('hidden',launchStep!==2);
++  $('#launch-next').textContent=launchStep===0?'Choose approaches':'Review run';
++  launchSize();
++  $('#form-error').textContent='';
++  if(focus){const heading=$('[data-launch-panel="'+launchStep+'"] .step-heading');heading.tabIndex=-1;heading.focus();$('#launch-dialog').scrollTop=0;}
++}
+ $('#run-budget').oninput=launchSize;
+ function runnerOption(m){if(m.efforts&&m.efforts.length)return '<div class="model-option '+(!m.available?'unavailable':'')+'"><span>'+esc(m.name)+'<small class="unavailable-reason">'+esc(m.kind)+(m.rate_card?' · '+esc(m.rate_card):'')+(!m.available?' · '+esc(m.reason):'')+'</small></span></div><div class="effort-options">'+m.efforts.map(level=>'<label><input type="checkbox" value="'+esc(m.id+'@'+level)+'" '+(!m.available?'disabled':'')+' '+(selectedModels.has(m.id+'@'+level)?'checked':'')+'>'+level.charAt(0).toUpperCase()+level.slice(1)+(level===m.default_effort?' (default)':'')+'</label>').join('')+'</div>';return '<label class="model-option '+(!m.available?'unavailable':'')+'"><input type="checkbox" value="'+esc(m.id)+'" '+(!m.available?'disabled':'')+' '+(selectedModels.has(m.id)?'checked':'')+'><span>'+esc(m.name)+(!m.available?'<span class="unavailable-reason">'+esc(m.reason)+'</span>':'')+'</span><small>'+esc(m.kind)+'</small></label>'}
+-async function openLaunch(options={}){if(!state)return;try{const latest=await api('/api/state');state.models=latest.models.filter(m=>!['oracle','sloppy'].includes(m.id));selectedModels.delete('oracle');selectedModels.delete('sloppy');state.tasks=latest.tasks;state.token=latest.token;budget(latest.budget)}catch{toast('Connection unavailable');return;}$('#form-error').textContent='';$('#task-category').innerHTML='<option value="">All categories · '+state.tasks.length+' tasks</option>'+[...new Set(state.tasks.map(t=>t.category))].sort().map(c=>'<option value="'+esc(c)+'">'+esc(c)+' · '+state.tasks.filter(t=>t.category===c).length+'</option>').join('');await renderComparisonVersions(options.version);const groups=[['API controls',m=>m.kind==='API control'],['Native harnesses',m=>m.kind==='Native harness'],['Saved runner configurations',m=>m.configuration]];$('#model-options').innerHTML=groups.map(([title,filter])=>{const rows=state.models.filter(filter);return rows.length?'<div class="runner-group">'+title+'</div>'+rows.map(runnerOption).join(''):''}).join('');$$('#model-options input').forEach(i=>i.onchange=()=>{i.checked?selectedModels.add(i.value):selectedModels.delete(i.value);launchSize()});renderTaskOptions();$('#launch-dialog').showModal()}
+-
+-$('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('#close-dialog').onclick=()=>$('#launch-dialog').close();$('#task-search').oninput=renderTaskOptions;$('#select-all').onclick=()=>{const ids=filteredTasks().map(t=>t.id);const all=ids.every(id=>selectedTasks.has(id));ids.forEach(id=>all?selectedTasks.delete(id):selectedTasks.add(id));renderTaskOptions()};$('#task-select').onchange=e=>{taskId=e.target.value;clearSelection();renderGraph()};$('#fit-view').onclick=()=>$('#graph-scroll').scrollTo({top:0,left:0,behavior:'smooth'});$$('[data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-output]').forEach(b=>b.onclick=()=>{outputMode=b.dataset.output;$$('[data-output]').forEach(x=>x.classList.toggle('active',x===b));renderOutput();bindEvidence()});$('#copy-output').onclick=async()=>{if(!selected)return toast('Select an output first');await navigator.clipboard.writeText(typeof selected.output==='string'?selected.output:JSON.stringify(selected.output,null,2));toast('Output copied')};$('#cancel-run').onclick=async()=>{try{syncJob(await api('/api/jobs/'+job.id+'/cancel',{}));toast('Stopping after the current request')}catch(e){toast(e.message)}};
+-$('#launch-form').onsubmit=async e=>{e.preventDefault();$('#launch-button').disabled=true;$('#form-error').textContent='';try{const created=await api('/api/jobs',{request_id:crypto.randomUUID().replaceAll('-',''),title:$('#run-title').value,tasks:[...selectedTasks],models:[...selectedModels],architectures:selectedVersions(),maximum_usd:$('#run-budget').value,configuration:{prompt:$('#run-prompt').value,max_turns:Number($('#run-turns').value)}});$('#launch-dialog').close();$('#close-setup')?.click();await openJob(created.id)}catch(error){$('#form-error').textContent=error.message}finally{launchSize()}};
+-(async()=>{try{state=await api('/api/state');budget(state.budget);$('#connection').textContent='Connected';renderJobs();renderSetups();if(state.tasks.length)selectedTasks.add(state.tasks[0].id);if(state.jobs.length)await openJob(state.jobs[0].id)}catch(e){$('#connection').textContent='Connection unavailable';toast('Cannot reach AI Labs. Restart the local server and reload.')}})();
++async function openLaunch(options={}) {
++  if(!state||launchOpening||launching)return;
++  launchOpening=true;$('#new-comparison').disabled=true;
++  try {
++    const latest=await api('/api/state');
++    state.models=latest.models.filter(m=>!['oracle','sloppy'].includes(m.id));state.tasks=latest.tasks;state.token=latest.token;budget(latest.budget);
++    const available=new Set(state.models.filter(m=>m.available).flatMap(m=>m.efforts?.length?m.efforts.map(e=>m.id+'@'+e):[m.id]));
++    selectedModels=new Set([...selectedModels].filter(id=>available.has(id)));
++    selectedTasks=new Set([...selectedTasks].filter(id=>state.tasks.some(t=>t.id===id)));
++    $('#form-error').textContent='';
++    const category=$('#task-category').value;
++    $('#task-category').innerHTML='<option value="">All categories · '+state.tasks.length+' tasks</option>'+[...new Set(state.tasks.map(t=>t.category))].sort().map(c=>'<option value="'+esc(c)+'">'+esc(c)+' · '+state.tasks.filter(t=>t.category===c).length+'</option>').join('');
++    if([...$('#task-category').options].some(o=>o.value===category))$('#task-category').value=category;
++    await renderComparisonVersions(options.version);
++    const groups=[['API controls',m=>m.kind==='API control'],['Native harnesses',m=>m.kind==='Native harness'],['Saved runner configurations',m=>m.configuration]];
++    $('#model-options').innerHTML=groups.map(([title,filter])=>{const rows=state.models.filter(filter);return !rows.length?'':title==='Native harnesses'?'<details class="readiness-details"><summary>Native harnesses · unavailable</summary>'+rows.map(runnerOption).join('')+'</details>':'<div class="runner-group">'+title+'</div>'+rows.map(runnerOption).join('');}).join('');
++    $$('#model-options input').forEach(i=>i.onchange=()=>{i.checked?selectedModels.add(i.value):selectedModels.delete(i.value);launchSize();});
++    renderTaskOptions();
++    if(!$('#launch-dialog').open){setLaunchStep(0,false);$('#launch-dialog').showModal();$('#launch-title').focus();}
++  } catch(error) {toast('Run setup could not load. '+error.message);}
++  finally {launchOpening=false;$('#new-comparison').disabled=false;}
++}
++
++$('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('#close-dialog').onclick=()=>$('#launch-dialog').close();$('#task-search').oninput=renderTaskOptions;$('#select-all').onclick=()=>{const ids=filteredTasks().map(t=>t.id);const all=ids.every(id=>selectedTasks.has(id));ids.forEach(id=>all?selectedTasks.delete(id):selectedTasks.add(id));renderTaskOptions()};$('#task-select').onchange=e=>{taskId=e.target.value;clearSelection();renderGraph()};$('#fit-view').onclick=()=>$('#graph-scroll').scrollTo({top:0,left:0,behavior:'smooth'});$$('[data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-output]').forEach(b=>b.onclick=()=>{setOutputMode(b.dataset.output);renderOutput();bindEvidence()});$('#copy-output').onclick=async()=>{
++  if(!selected)return toast('Select an output first');
++  const raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes,report:selected.report}:{})};
++  try {await navigator.clipboard.writeText(outputMode==='raw'?JSON.stringify(raw,null,2):typeof selected.output==='string'?selected.output:JSON.stringify(selected.output??null,null,2));toast('Output copied');}
++  catch {toast('Clipboard access is unavailable. Select and copy the text in the evidence panel.');}
++};
++$('#cancel-run').onclick=async()=>{
++  if(!job||$('#cancel-run').disabled)return;
++  const id=job.id;$('#cancel-run').disabled=true;
++  try {const next=await api('/api/jobs/'+id+'/cancel',{});if(job?.id===id)syncJob(next);toast('Stopping after the current request');}
++  catch(error){toast(error.message);if(job?.id===id)$('#cancel-run').disabled=false;}
++};
++$('#launch-form').onsubmit=async e=>{
++  e.preventDefault();if(launching)return;
++  if(launchStep<2){if(!$('#launch-next').disabled)setLaunchStep(launchStep+1);return;}
++  const issue=launchIssue();if(issue){$('#form-error').textContent=issue;$('#form-error').focus();return;}
++  const payload={title:$('#run-title').value.trim(),tasks:[...selectedTasks],models:$('#without-monarch').checked?[...selectedModels]:[],architectures:selectedVersions(),maximum_usd:$('#run-budget').value,configuration:{prompt:$('#run-prompt').value,max_turns:Number($('#run-turns').value)}};
++  const fingerprint=JSON.stringify(payload);
++  if(launchRequest&&launchRequest.fingerprint!==fingerprint){$('#form-error').textContent='The previous start has an uncertain response. Restore those selections and retry, or reload the workspace to find the run before starting another.';return;}
++  if(!launchRequest)launchRequest={id:crypto.randomUUID().replaceAll('-',''),fingerprint};
++  launching=true;launchSize();$('#form-error').textContent='';
++  try {
++    const created=await api('/api/jobs',{...payload,request_id:launchRequest.id});
++    launchRequest=null;$('#launch-dialog').close();$('#close-setup')?.click();
++    await openJob(created.id);
++  } catch(error) {
++    if(!error.uncertain)launchRequest=null;
++    $('#form-error').textContent=error.message+(error.uncertain?' Retry with the same selections to recover this run without starting a duplicate.':'');$('#form-error').focus();
++  } finally {launching=false;launchSize();}
++};
++function setConnection(text,status){$('#connection').textContent=text;$('#connection').dataset.status=status;}
++function showConnectionError(message){setConnection('Connection unavailable','error');$('#connection-error-detail').textContent=message;$('#connection-error').classList.remove('hidden');}
++async function initialize() {
++  const button=$('#retry-connection');button.disabled=true;
++  try {
++    const latest=await api('/api/state');state=latest;budget(state.budget);setConnection('Connected','connected');$('#connection-error').classList.add('hidden');
++    renderJobs();renderSetups();
++    if(pendingJobId||state.jobs.length)await openJob(pendingJobId||state.jobs[0].id);
++  } catch(error){showConnectionError(error.message);}
++  finally {button.disabled=false;}
++}
++$('#retry-connection').onclick=initialize;
++$('#run-search').oninput=renderJobs;
++$('#close-inspector').onclick=()=>clearSelection(true);
++$('#launch-next').onclick=()=>setLaunchStep(launchStep+1);
++$('#launch-back').onclick=()=>setLaunchStep(launchStep-1);
++$$('[data-launch-step]').forEach(b=>b.onclick=()=>setLaunchStep(Number(b.dataset.launchStep)));
++$('#run-title').oninput=launchSize;$('#run-turns').oninput=launchSize;
++$('#clear-tasks').onclick=()=>{selectedTasks.clear();renderTaskOptions();};
++$('#reset-task-filters').onclick=()=>{$('#task-search').value='';$('#task-category').value='';$('#task-difficulty').value='';renderTaskOptions();$('#task-search').focus();};
++$('.tabs').addEventListener('keydown',e=>{
++  const tabs=$$('[data-view]'),index=tabs.indexOf(document.activeElement);
++  if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
++  e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
++  tabs[next].click();tabs[next].focus();
++});
++initialize();
+ function actionSummary(node){const account=report?.attempts.find(a=>a.task===taskId&&a.model===node.model);return account?.actions.find(a=>a.node===node.node)?.detail||(node.category==='model'?'Considering the request and the evidence collected so far.':node.status==='running'?'This action is in progress.':'Open the recorded response for this action.')}
+ function reportDetails(a){return '<h3>'+esc(a.title)+'</h3><p>'+esc(a.summary)+'</p><h4>Requirements</h4>'+a.requirements.map(c=>'<div class="check"><span>'+esc(c.title)+'</span><strong class="'+(c.passed?'pass':'fail')+'">'+(c.passed?'Met':'Missed')+'</strong></div>').join('')+(a.unexpected_changes.length?'<h4>Changes outside the request</h4>'+(a.change_summaries||[]).map(c=>'<p>'+esc(c)+'</p>').join(''):'')+'<h4>What happened</h4><ol class="evidence-story">'+a.actions.map(x=>'<li><strong>'+esc(x.title)+'</strong><p>'+esc(x.detail)+'</p><button class="text-button" data-evidence="'+x.event_id+'">Open evidence #'+x.event_id+'</button></li>').join('')+'</ol><h4>Next question</h4><p>'+esc(a.next_question)+'</p><p class="report-caveat">'+esc(a.limitations)+'</p>'}
+-function selectReport(index){outputMode='formatted';$$('[data-output]').forEach(b=>b.classList.toggle('active',b.dataset.output==='formatted'));const a=report.attempts[index];taskId=a.task;$('#task-select').value=taskId;const result=job.results.find(r=>r.task===a.task&&r.model===a.model);selected={node:'result',category:'result',model:a.model,status:a.passed?'completed':'error',output:result.output,result,report:a};renderOutput();bindEvidence();if(innerWidth<980)$('#inspector').scrollIntoView({behavior:'smooth',block:'start'})}
+-function bindEvidence(){$$('[data-evidence]').forEach(b=>b.onclick=()=>{const e=events.find(e=>e.id===Number(b.dataset.evidence));if(!e)return toast('Evidence is still loading');taskId=e.task;selected=nodeList(e.model).find(n=>n.node===e.node);outputMode='raw';$$('[data-output]').forEach(x=>x.classList.toggle('active',x.dataset.output==='raw'));renderOutput()})}
+-function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;const attempts=report.attempts,valid=attempts.filter(a=>!a.infrastructure);const modelRows=job.settings.models.map(m=>{const rows=attempts.filter(a=>a.model===m),measured=rows.filter(a=>!a.infrastructure),passed=measured.filter(a=>a.passed).length;return '<div class="comparison-bar"><strong>'+esc(modelName(m))+'</strong><div class="outcome-track"><div data-width="'+ (measured.length?passed/measured.length*100:0)+'"></div></div><span>'+passed+' / '+measured.length+' met</span><small>'+rows.filter(a=>a.infrastructure).length+' execution issues</small></div>'}).join('');const analysis=report.analysis;$('#report-view').innerHTML='<div class="report-intro"><h3>'+ (attempts.length?'What this run tells us':'The work is underway')+'</h3><p>'+(attempts.length?valid.filter(a=>a.passed).length+' of '+valid.length+' evaluated attempts met the task requirements. '+(attempts.length-valid.length?attempts.length-valid.length+' attempts could not be evaluated.':'Open an outcome to see which requirements and actions made the difference.'):'Task outcomes appear as each attempt finishes. You can follow the activity while they run.')+'</p></div><div class="comparison-bars">'+modelRows+'</div><div class="outcomes-heading"><h3>Task outcomes</h3><span>'+job.settings.tasks.length+' selected requests</span></div><div class="outcome-list">'+attempts.map((a,i)=>'<button class="outcome-card" data-report="'+i+'"><div class="outcome-top"><span class="outcome-label '+(a.infrastructure?'neutral':a.passed?'pass':'fail')+'">'+(a.infrastructure?'Execution issue':a.passed?'Requirements met':'Needs investigation')+'</span><small>'+esc(modelName(a.model))+'</small></div><h4>'+esc(taskTitle(a.task))+'</h4><p>'+esc(a.summary)+'</p><div class="requirement-strip">'+a.requirements.slice(0,3).map(c=>'<span class="'+(c.passed?'pass':'fail')+'">'+icon(c.passed?'check':'tool')+esc(c.title)+'</span>').join('')+(a.requirements.length>3?'<span>+'+(a.requirements.length-3)+' more requirements</span>':'')+'</div><div class="outcome-link">Read findings &amp; evidence <span aria-hidden="true">→</span></div></button>').join('')+'</div><section class="analysis-section"><div><h3>Reasoning review</h3><p>A separate reading of the execution: supported explanations, uncertainty, and the next experiment.</p></div>'+(analysis?.status==='completed'?'<p>'+esc(analysis.summary)+'</p>'+analysis.findings.map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+f.event_ids.map(i=>'<button class="text-button" data-evidence="'+i+'">Evidence #'+i+'</button>').join('')+'</article>').join('')+'<h4>Next experiment</h4><p>'+esc(analysis.next_experiment)+'</p><p class="report-caveat">'+esc(analysis.limitations)+' · '+esc(analysis.model)+' / '+esc(analysis.effort)+'</p>':analysis?.status==='failed'?'<p class="fail">'+esc(analysis.error)+'</p>':'<button class="button" id="analyze-run" '+(!attempts.length||['queued','running','cancelling'].includes(job.status)?'disabled':'')+'>Analyze this run · Gemini medium</button><p class="report-caveat">Uses the remaining run budget and the shared weekly limit. Sol medium analysis is not connected yet. Model interpretations retain the original task verdict.</p>')+'</section>';$$('[data-width]').forEach(b=>b.style.width=b.dataset.width+'%');$$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));bindEvidence();if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});if($('#analyze-run'))$('#analyze-run').onclick=async()=>{const reviewId=job.id;const button=$('#analyze-run');button.disabled=true;button.textContent='Reading the execution…';try{const analysis=await api('/api/jobs/'+reviewId+'/analyze',{});if(job.id!==reviewId)return;report.analysis=analysis;budget((await api('/api/state')).budget);renderReport()}catch(e){toast(e.message);button.textContent='Analysis unavailable'}};}
++function selectReport(index) {
++  const a=report?.attempts[index];if(!a)return;
++  const result=job.results.find(r=>r.task===a.task&&r.model===a.model);
++  if(!result)return toast('The result is still arriving. Try again shortly.');
++  setOutputMode('formatted');taskId=a.task;$('#task-select').value=taskId;
++  selected={node:'result',category:'result',model:a.model,status:a.passed?'completed':'error',output:result.output,result,report:a};
++  revealSelection();
++}
++function setOutputMode(mode) {
++  outputMode=mode;
++  $$('[data-output]').forEach(b=>{b.classList.toggle('active',b.dataset.output===mode);b.setAttribute('aria-pressed',String(b.dataset.output===mode));});
++}
++function bindEvidence() {
++  $$('[data-evidence]').forEach(b=>b.onclick=()=>{
++    const event=events.find(e=>e.id===Number(b.dataset.evidence));
++    if(!event)return toast('Evidence is still loading. Try again shortly.');
++    if(event.task){taskId=event.task;$('#task-select').value=taskId;}
++    selected=nodeList(event.model).find(n=>n.node===event.node)||{node:'event:'+event.id,model:event.model,category:'evidence',label:'Evidence #'+event.id,status:event.status||event.type,output:event};
++    setOutputMode('raw');revealSelection();
++  });
++}
++function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;const attempts=report.attempts,valid=attempts.filter(a=>!a.infrastructure);const modelRows=job.settings.models.map(m=>{const rows=attempts.filter(a=>a.model===m),measured=rows.filter(a=>!a.infrastructure),passed=measured.filter(a=>a.passed).length;return '<div class="comparison-bar"><strong>'+esc(modelName(m))+'</strong><div class="outcome-track"><div data-width="'+ (measured.length?passed/measured.length*100:0)+'"></div></div><span>'+passed+' / '+measured.length+' met</span><small>'+rows.filter(a=>a.infrastructure).length+' execution issues</small></div>'}).join('');const analysis=report.analysis;$('#report-view').innerHTML='<div class="report-intro"><h3>'+ (attempts.length?'What this run tells us':['queued','running','cancelling'].includes(job.status)?'The work is underway':'No evaluated outcomes')+'</h3><p>'+(attempts.length?valid.filter(a=>a.passed).length+' of '+valid.length+' evaluated attempts met the task requirements. '+(attempts.length-valid.length?attempts.length-valid.length+' attempts could not be evaluated.':'Open an outcome to see which requirements and actions made the difference.'):(['queued','running','cancelling'].includes(job.status)?'Task outcomes appear as each attempt finishes. You can follow the activity while they run.':'This run ended before any task could be evaluated. Check the run message and Activity for what happened.'))+'</p></div><div class="comparison-bars">'+modelRows+'</div><div class="outcomes-heading"><h3>Task outcomes</h3><span>'+job.settings.tasks.length+' selected '+plural(job.settings.tasks.length,'request')+'</span></div><div class="outcome-list">'+attempts.map((a,i)=>'<button class="outcome-card" data-report="'+i+'"><div class="outcome-top"><span class="outcome-label '+(a.infrastructure?'neutral':a.passed?'pass':'fail')+'">'+(a.infrastructure?'Execution issue':a.passed?'Requirements met':'Needs investigation')+'</span><small>'+esc(modelName(a.model))+'</small></div><h4>'+esc(taskTitle(a.task))+'</h4><p>'+esc(a.summary)+'</p><div class="requirement-strip">'+a.requirements.slice(0,3).map(c=>'<span class="'+(c.passed?'pass':'fail')+'">'+icon(c.passed?'check':'tool')+esc(c.title)+'</span>').join('')+(a.requirements.length>3?'<span>+'+(a.requirements.length-3)+' more requirements</span>':'')+'</div><div class="outcome-link">Read findings &amp; evidence <span aria-hidden="true">→</span></div></button>').join('')+'</div><section class="analysis-section"><div><h3>Reasoning review</h3><p>A separate reading of the execution: supported explanations, uncertainty, and the next experiment.</p></div>'+(analysis?.status==='completed'?'<p>'+esc(analysis.summary)+'</p>'+analysis.findings.map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+f.event_ids.map(i=>'<button class="text-button" data-evidence="'+i+'">Evidence #'+i+'</button>').join('')+'</article>').join('')+'<h4>Next experiment</h4><p>'+esc(analysis.next_experiment)+'</p><p class="report-caveat">'+esc(analysis.limitations)+' · '+esc(analysis.model)+' / '+esc(analysis.effort)+'</p>':analysis?.status==='failed'?'<p class="fail">'+esc(analysis.error)+'</p>':'<button class="button" id="analyze-run" '+(!attempts.length||analysisPending.has(job.id)||['queued','running','cancelling'].includes(job.status)?'disabled':'')+'>Analyze this run · Gemini medium</button><p class="report-caveat">Uses the remaining run budget and the shared weekly limit. Sol medium analysis is not connected yet. Model interpretations retain the original task verdict.</p>')+'</section>';$$('[data-width]').forEach(b=>b.style.width=b.dataset.width+'%');$$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));bindEvidence();if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});if($('#analyze-run'))$('#analyze-run').onclick=async()=>{
++  const reviewId=job.id;if(analysisPending.has(reviewId))return;
++  analysisPending.add(reviewId);const button=$('#analyze-run');button.disabled=true;button.textContent='Reading the execution…';
++  try {
++    const analysis=await api('/api/jobs/'+reviewId+'/analyze',{});
++    if(job?.id===reviewId)report.analysis=analysis;
++    budget((await api('/api/state')).budget);
++  } catch(error) {toast(error.message);}
++  finally {analysisPending.delete(reviewId);if(job?.id===reviewId)renderReport();}
++};}
+ $('#task-category').onchange=renderTaskOptions;
+ function renderSetups(){}
+ 
+-function difficultyBadge(task){const d=task.difficulty||{level:'unrated',attempts:0,description:'No comparable scored attempts yet.'};const heights=[5,9,14];const filled={easy:1,medium:2,hard:3,unrated:0}[d.level];return '<span class="difficulty-badge '+esc(d.level)+'" title="'+esc(d.description)+'" aria-label="'+esc(d.level+' difficulty. '+d.description)+'"><svg viewBox="0 0 22 18" aria-hidden="true">'+heights.map((h,i)=>'<rect x="'+(i*7)+'" y="'+(17-h)+'" width="5" height="'+h+'" rx="1" class="'+(i<filled?'filled':'')+'"/>').join('')+'</svg><span>'+esc(d.level)+(d.provisional&&d.attempts?'*':'')+'<small>'+d.attempts+' attempts</small></span></span>'}
++function difficultyBadge(task){const d=task.difficulty||{level:'unrated',attempts:0,description:'No comparable scored attempts yet.'};const heights=[5,9,14];const filled={easy:1,medium:2,hard:3,unrated:0}[d.level];return '<span class="difficulty-badge '+esc(d.level)+'" title="'+esc(d.description)+'" aria-label="'+esc(d.level+' difficulty. '+d.description)+'"><svg viewBox="0 0 22 18" aria-hidden="true">'+heights.map((h,i)=>'<rect x="'+(i*7)+'" y="'+(17-h)+'" width="5" height="'+h+'" rx="1" class="'+(i<filled?'filled':'')+'"/>').join('')+'</svg><span>'+esc(d.level)+(d.provisional&&d.attempts?'*':'')+'<small>'+d.attempts+' '+plural(d.attempts,'attempt')+'</small></span></span>'}
+ $('#task-difficulty').onchange=renderTaskOptions;
+ 
+ function readinessText(r){return ({adapter_required:'Execution integration pending',blocked:'Blocked',unsupported:'Unsupported configuration',source_required:'Historical source not recovered'}[r.runtime]||r.runtime)+(r.reasons&&r.reasons.length?' · '+r.reasons[0]:'')}
+-async function renderComparisonVersions(preselect){const matrix=await api('/api/capabilities');state.capabilities=matrix;$$('[data-comparison-version]').forEach(e=>e.remove());for(const v of matrix.versions){if(v.id==='without-monarch')continue;const row=document.createElement('label');row.className='model-option'+(v.readiness.launchable?'':' unavailable');row.dataset.comparisonVersion=v.id;const checked=preselect===v.id;row.innerHTML='<input type="checkbox" value="'+esc(v.id)+'" '+(v.readiness.launchable?'':'disabled')+(checked?' checked':'')+'><span>'+esc(v.name)+'<span class="unavailable-reason">'+esc(v.readiness.launchable?(v.kind==='custom'?'Published architecture · runs its own steps and runners · graph '+(v.sha256||'').slice(0,8):v.description):readinessText(v.readiness))+'</span></span>';$('#architecture-options').append(row);}if(preselect&&!selectedModels.size)$('#without-monarch').checked=false;$$('#architecture-options input').forEach(i=>i.onchange=launchSize);const blocked=matrix.versions.filter(v=>!v.readiness.launchable);$('#comparison-readiness').textContent=(blocked.length?blocked.length+' of '+matrix.versions.length+' versions cannot launch yet. ':'')+'Native Claude Code and Codex runners: '+(matrix.native_preflight.status==='blocked'?'blocked ('+matrix.native_preflight.contract+'; missing '+matrix.native_preflight.missing_checks.join(', ')+').':matrix.native_preflight.status+'.')+' Rate-carded API controls and ready published architectures run today.';launchSize()}
+-function selectedVersions(){return $$('#architecture-options input:checked').map(i=>i.value)}
+-$('#without-monarch').onchange=launchSize;
++async function renderComparisonVersions(preselect) {
++  const previous=new Set(selectedVersions()),matrix=await api('/api/capabilities');state.capabilities=matrix;
++  $$('[data-comparison-version],#unavailable-versions').forEach(e=>e.remove());
++  const blocked=matrix.versions.filter(v=>v.id!=='without-monarch'&&!v.readiness.launchable);
++  const details=document.createElement('details');details.id='unavailable-versions';details.className='readiness-details';
++  details.innerHTML='<summary>Unavailable versions ('+blocked.length+')</summary>';
++  for(const v of matrix.versions) {
++    if(v.id==='without-monarch')continue;
++    const row=document.createElement('label');row.className='model-option'+(v.readiness.launchable?'':' unavailable');row.dataset.comparisonVersion=v.id;
++    const checked=v.readiness.launchable&&(preselect?preselect===v.id:previous.has(v.id));
++    row.innerHTML='<input type="checkbox" value="'+esc(v.id)+'" '+(v.readiness.launchable?'':'disabled')+(checked?' checked':'')+'><span>'+esc(v.name)+'<span class="unavailable-reason">'+esc(v.readiness.launchable?(v.kind==='custom'?'Published architecture · uses its saved steps and runners':v.description):readinessText(v.readiness))+'</span></span>';
++    (v.readiness.launchable?$('#architecture-options'):details).append(row);
++  }
++  if(blocked.length)$('#architecture-options').append(details);
++  if(preselect)$('#without-monarch').checked=false;
++  $$('#architecture-options input').forEach(i=>i.onchange=launchSize);
++  $('#comparison-readiness').textContent=(blocked.length?blocked.length+' versions cannot launch yet. ':'')+'Native Claude Code and Codex runners: '+(matrix.native_preflight.status==='blocked'?'blocked pending verified isolation and trace capture.':matrix.native_preflight.status+'.')+' Ready API controls and published architectures remain available.';
++  launchSize();
++}
++
++function selectedVersions(){return $$('#architecture-options input:checked:not(:disabled)').map(i=>i.value)}
++$('#without-monarch').onchange=()=>{launchSize();$('#runner-choices').classList.toggle('not-used',!$('#without-monarch').checked);};
++
+--- before/graph.css
++++ after/graph.css
+@@ -295,3 +295,183 @@
+ @media(max-width:1100px){.builder-workspace{grid-template-columns:160px minmax(0,1fr)}.builder-inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);max-height:420px}.builder-meta{grid-template-columns:auto 1fr}.builder-meta .builder-problems{grid-column:1/-1}}
+ @media(max-width:680px){.builder-bar{padding:12px 14px}.builder-actions select{max-width:100%;width:100%}.builder-workspace{display:flex;flex-direction:column}.builder-palette{border-right:0;border-bottom:1px solid var(--line)}#node-palette{display:flex;overflow:auto}#node-palette button{min-width:130px}.palette-help,.palette-foot{display:none}.builder-viewport{min-height:380px}.version-row{grid-template-columns:1fr}.version-actions{justify-content:flex-start}.difficulty-badge{min-width:66px;font-size:10px}.difficulty-badge svg{width:18px}.catalog-filters select{max-width:100%;width:100%}.bp-tools{opacity:1;pointer-events:auto}.bp-add{opacity:1}}
+ @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
++/* Navigation stays quiet; findings own the workspace. */
++:root{--warning:#805319;--focus:var(--blue)}
++body{overflow-wrap:break-word}
++button,input,select,textarea{font-family:inherit}
++button:focus-visible,a:focus-visible,summary:focus-visible,[tabindex]:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
++input::placeholder,textarea::placeholder{color:#65727c;opacity:1}
++textarea{caret-color:var(--accent)}
++.skip-link{position:fixed;top:12px;left:16px;padding:12px 18px;background:var(--accent);color:white;z-index:100;transform:translateY(-160%);border-radius:6px}
++.skip-link:focus{transform:translateY(0)}
++.connection[data-status=error]:before{background:var(--red)}
++.connection[data-status=loading]:before{background:var(--warning)}
++.connection-error{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 20px;margin-bottom:20px;background:#fff4e6;border:1px solid #ddc59e;border-radius:8px;font-size:14px}
++.connection-error p{margin:5px 0 0;line-height:1.5}
++.connection-error .button{flex-shrink:0}
++.topbar{height:68px}
++main{padding-top:24px}
++.page-heading{margin-bottom:22px}
++.page-heading h1{font-size:26px}
++.page-heading p{line-height:1.6}
++.budget{flex-shrink:0;width:250px}
++.workspace{min-height:600px;height:calc(100dvh - 207px);grid-template-columns:228px minmax(0,1fr)}
++.workspace.has-inspector{grid-template-columns:200px minmax(0,1fr) 370px}
++.sidebar{overflow:hidden}
++.sidebar-heading{padding:20px 18px 12px}
++.run-search{display:block;padding:0 14px 14px}
++.run-search input[type=search]{font-size:13px;padding:9px 10px;background:var(--surface)}
++.jobs{min-height:0;overflow:auto;padding-bottom:10px}
++.job strong{overflow-wrap:anywhere;font-size:13px}
++.job small{line-height:1.5}
++.job[data-status=failed] .dot,.job[data-status=interrupted] .dot{background:var(--red)}
++.job[data-status=running] .dot,.job[data-status=queued] .dot{background:var(--blue)}
++.job[data-status=cancelled] .dot,.job[data-status=cancelling] .dot{background:var(--warning)}
++.setup-open{flex-shrink:0;margin:12px 14px}
++.sidebar-bottom{padding:16px;font-size:12px}
++.comparison-header{padding:20px 26px;min-height:90px}
++.comparison-header>div:first-child{min-width:0}
++.comparison-header h2{overflow-wrap:anywhere;line-height:1.4}
++.comparison-actions{flex-shrink:0}
++.status.failed,.status.interrupted{color:var(--red);background:#fceeed}
++.status.cancelled,.status.cancelling{color:var(--warning);background:#fff4e6}
++.tabs{gap:24px}.tabs button{min-height:46px}
++#report-view{padding:26px 30px 36px}
++.report-intro h3{font-size:23px;line-height:1.35}
++.report-intro p{max-width:72ch;font-size:14px;line-height:1.65}
++.comparison-bars{margin:22px 0 28px}
++.comparison-bar{grid-template-columns:minmax(120px,1fr) minmax(65px,1.2fr) auto;gap:12px 20px}
++.comparison-bar strong{overflow-wrap:anywhere}
++.comparison-bar small{grid-column:1/-1;margin-top:-6px}
++.outcome-card:only-child{grid-column:1/-1}
++.outcome-card{padding:20px;background:var(--surface)}
++.outcome-card h4{max-width:68ch;font-size:18px;line-height:1.5;overflow-wrap:anywhere}
++.outcome-card p{max-width:72ch}
++.outcome-top{flex-wrap:wrap;font-size:12px}
++.outcome-top small{font-size:12px;overflow-wrap:anywhere}
++.outcome-link{font-size:13px}
++.inspector-heading{gap:12px;padding:18px 18px 8px}
++.inspector-heading h2{line-height:1.4;overflow-wrap:anywhere}
++.inspector-actions{display:flex;flex-shrink:0}
++.inspector-actions #close-inspector{order:2}
++.inspector-tabs button{font-size:13px;min-height:44px}
++.icon-button{min-width:36px;min-height:36px}
++.result-link{display:block;width:100%;padding:0;border:0;background:transparent;text-align:left;color:var(--ink);font:inherit;line-height:1.5}
++.result-link:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
++.results-table th{position:sticky;top:0;background:var(--surface);z-index:1}
++.results-table td:first-child{min-width:230px;max-width:560px}
++.results-empty{padding:36px!important;color:var(--muted);line-height:1.6}
++.results-empty strong{color:var(--ink);font-size:16px}
++.results-empty p{max-width:65ch;margin:10px 0 0}
++.result-stat{min-width:0}.result-stat strong{font-size:20px}
++#results-summary{flex-wrap:wrap;gap:22px;padding:24px}
++.analysis-section{margin-top:30px}
++.lane-step{border:1px solid var(--line);border-radius:6px}
++.lane-heading>div{min-width:0}.lane-heading strong{overflow-wrap:anywhere}
++.lane-step small{display:block;overflow-wrap:anywhere;line-height:1.5}
++.builder-title{flex-wrap:wrap}.builder-title h2{white-space:normal}
++.builder-bar{gap:16px}.builder-actions{flex-wrap:wrap}
++.builder-state{white-space:normal;overflow-wrap:anywhere}
++.builder-meta input,.builder-actions select{min-width:0}
++.builder-problems{overflow-wrap:anywhere}
++.builder-palette h3,.runner-group{text-transform:none;letter-spacing:normal;font-size:13px}
++.builder-inspector .inspector-head{flex-wrap:wrap;gap:8px}
++.pg-bar{flex-wrap:wrap;gap:12px}.pg-meta input,.pg-editor,.pg-versions{min-width:0}
++.pg-plan,.pg-products,.version-row,.version-detail{overflow-wrap:anywhere}
++/* Task scope, approaches, then explicit spend review. */
++#launch-dialog{width:880px;max-height:min(92dvh,1000px);overflow:auto;scrollbar-gutter:stable}
++#launch-form{padding:26px 28px 0}
++#launch-dialog .dialog-heading{margin-bottom:20px}
++#launch-dialog .dialog-heading p{max-width:60ch;line-height:1.5}
++.launch-steps{display:flex;gap:8px;padding-bottom:20px;border-bottom:1px solid var(--line);margin-bottom:24px}
++.launch-steps button{display:flex;align-items:center;gap:9px;flex:1;background:var(--paper);border:1px solid transparent;border-radius:7px;padding:10px 12px;font-size:14px;color:var(--muted)}
++.launch-steps button span{font-variant-numeric:tabular-nums;font-size:12px;display:grid;place-items:center;width:22px;height:22px;border:1px solid #afbeb6;border-radius:50%}
++.launch-steps button[aria-current=step]{color:var(--accent);background:var(--accent-light);border-color:#adcdbb;font-weight:600}
++.launch-steps button[aria-current=step] span{background:var(--accent);color:var(--surface);border-color:var(--accent)}
++.step-heading{font-size:19px;font-weight:600;line-height:1.4;margin:0 0 8px}
++.section-description{font-size:14px;color:var(--muted);line-height:1.6;max-width:70ch;margin:0 0 22px}
++#launch-dialog fieldset{margin:20px 0 24px}
++#launch-dialog legend{font-size:15px;padding-bottom:6px}
++.catalog-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
++.catalog-filters select{max-width:100%;width:100%;font-size:14px;min-height:40px}
++.catalog-filters input{grid-column:1/-1;min-width:0}
++.task-selection-tools{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin:8px 0;font-size:12px;color:var(--muted)}
++#task-match-count{margin-right:auto}
++#launch-dialog .task-options{max-height:330px;min-height:120px}
++.task-option{padding:13px;align-items:flex-start}.task-option input{margin-top:4px}
++.task-option:has(input:checked){background:#f0f7f3}
++.task-option strong{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
++.task-option small{font-size:12px;line-height:1.5}
++.difficulty-note{font-size:12px}.difficulty-badge{padding-top:2px}.difficulty-badge small{font-size:11px}
++.model-option{padding:12px 0;align-items:flex-start}.model-option input{margin-top:3px}
++.model-option>span{line-height:1.5;min-width:0;overflow-wrap:anywhere}
++.model-option .unavailable-reason{font-size:12px;line-height:1.5}
++.model-option small.unavailable-reason{margin-left:0;text-align:left;max-width:none}
++.effort-options{margin:0 0 16px;gap:7px;flex-wrap:wrap}
++.effort-options label{min-height:38px;display:inline-flex;align-items:center;font-size:13px}
++.readiness-details{margin:12px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
++.readiness-details summary{cursor:pointer;padding:8px 0}.readiness-details .limit-note{margin-top:8px}
++.launch-review{margin:22px 0;padding:20px;background:var(--paper);border-radius:8px}
++.launch-review dl{display:grid;grid-template-columns:140px minmax(0,1fr);gap:14px 18px;margin:0;font-size:14px;line-height:1.6}
++.launch-review dt{color:var(--muted)}.launch-review dd{margin:0;overflow-wrap:anywhere}
++.launch-footer{position:sticky;bottom:0;background:var(--surface);padding:18px 0 22px;margin-top:18px;z-index:2;gap:16px}
++.launch-footer>span{max-width:none;font-variant-numeric:tabular-nums;line-height:1.5}
++.launch-footer-actions{display:flex;gap:8px;flex-shrink:0}
++#form-error:empty{display:none}
++#form-error:not(:empty){padding:12px 14px;background:#fceeed;border:1px solid #e2bdb9;border-radius:6px;line-height:1.5}
++.budget-entry{gap:20px}.budget-entry>div:first-child{min-width:0}.money-input{flex-shrink:0}
++.toast{max-width:calc(100vw - 32px);width:max-content;line-height:1.5;pointer-events:none}
++@media(max-width:1100px){
++  .workspace,.workspace.has-inspector{grid-template-columns:190px minmax(0,1fr);height:auto}
++  .workspace.has-inspector>.inspector{grid-column:1/-1;border-top:1px solid var(--line);border-left:0;max-height:650px;min-height:300px}
++  .outcome-list{grid-template-columns:minmax(0,1fr)}
++  .comparison-bar{grid-template-columns:minmax(100px,1fr) minmax(60px,1fr) auto}
++  #report-view{padding:24px}.comparison{min-height:550px}
++}
++@media(max-width:680px){
++  .topbar{padding:0 16px;height:64px}main{padding:20px 12px}
++  .page-heading h1{font-size:24px}.page-heading{display:block}.budget{width:100%;margin-top:20px}
++  .workspace,.workspace.has-inspector{display:flex;flex-direction:column;height:auto;min-height:0}
++  .sidebar{display:grid;grid-template-columns:minmax(0,1fr) auto;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
++  .sidebar-heading{padding:14px 16px 8px}.run-search{grid-column:1;grid-row:2;padding:0 12px 10px}
++  .setup-open{grid-column:2;grid-row:1/3;align-self:center;margin:12px}
++  .jobs{grid-column:1/-1;display:flex;gap:6px;overflow:auto;padding:0 12px 12px;max-height:108px;min-height:50px}
++  .job{min-width:165px;max-width:210px;flex-shrink:0;padding:8px 10px;margin-bottom:0}.job strong{white-space:nowrap}
++  .sidebar-bottom{display:none}.comparison-header{padding:18px;align-items:flex-start;flex-wrap:wrap}
++  .comparison-header h2{font-size:18px}.comparison-actions{gap:8px}.tabs{gap:22px;padding:0 18px}
++  #report-view{padding:22px 18px 28px}.report-intro h3{font-size:21px}
++  .outcome-card{padding:18px}.outcome-card h4{font-size:17px}
++  .outcome-top{display:block}.outcome-top small{display:block;margin-top:7px}
++  .outcomes-heading{align-items:flex-start}.outcomes-heading span{text-align:right}
++  .comparison-bar{grid-template-columns:minmax(0,1fr) auto;gap:10px}.comparison-bar strong{grid-column:1/-1}.comparison-bar small{margin-top:0}
++  .result-stat strong{font-size:18px}.builder-title{gap:12px}.builder-title h2{width:100%}
++  .builder-bar,.builder-actions{gap:10px}.builder-meta{padding:16px;grid-template-columns:1fr;gap:8px}
++  .builder-meta label:not(:first-child){margin-top:8px}.builder-meta .builder-problems{margin-top:8px}
++  .canvas-controls{flex-wrap:wrap;gap:8px}.canvas-tools{margin-left:auto}#canvas-hint{flex-basis:100%;font-size:13px}
++  .builder-palette{padding:14px}.builder-palette h3{margin-top:0}.pg-bar{padding:14px}
++  .pg-bar select{width:100%;max-width:100%}.pg-meta{grid-template-columns:1fr;gap:8px}
++  .fields-row.pg-row{grid-template-columns:minmax(0,1fr) 100px 36px}
++  .pg-row [data-pg-field=description]{grid-column:1/3;grid-row:2}.pg-row .bp-chip{grid-column:1/3;grid-row:3;justify-self:start}
++  .pg-row [data-pg-remove]{grid-column:3;grid-row:1/3}
++  #launch-dialog{width:calc(100vw - 16px);max-width:calc(100vw - 16px);max-height:96dvh;border-radius:10px;scrollbar-gutter:auto}
++  #launch-form{padding:20px 16px 0}.launch-steps{gap:4px;margin-bottom:20px;padding-bottom:16px}
++  .launch-steps button{gap:6px;padding:9px 7px;font-size:12px}.launch-steps button span{width:20px;height:20px;flex-shrink:0}
++  .launch-review{padding:16px}.launch-review dl{grid-template-columns:1fr;gap:4px}.launch-review dd:not(:last-child){margin-bottom:12px}
++  .launch-footer{flex-wrap:wrap;padding-bottom:16px}.launch-footer>span{flex-basis:100%}
++  .launch-footer-actions{width:100%;justify-content:flex-end}.launch-footer-actions .primary{flex:1;justify-content:center}
++  .button{min-height:40px;font-size:13px}.icon-button{min-width:40px;min-height:40px}
++  input:not([type=checkbox]),select,textarea,#run-title,input[type=search],.catalog-filters select{font-size:16px}
++  .task-option{padding:12px 10px;gap:8px}.task-option strong{font-size:14px}.task-option small{font-size:12px}
++  .difficulty-badge{min-width:62px;font-size:11px;gap:4px}.difficulty-badge small{font-size:10px}
++  .connection-error{align-items:flex-start;flex-direction:column}
++}
++@media(forced-colors:active){
++  .outcome-track,.budget-track,.launch-steps button[aria-current=step],.job.active,.task-option:has(input:checked){border:1px solid Highlight}
++  .outcome-track>div,.budget-track>div{background:Highlight;forced-color-adjust:none}
++}
++
++
++.pg-editor h3,.pg-versions h3{text-transform:none;letter-spacing:normal;font-size:14px}
++#launch-validation:empty{display:none}
++#launch-validation:not(:empty){margin:18px 0 0;line-height:1.5}
++.model-option>span{color:inherit}
+--- before/graph.js
++++ after/graph.js
+@@ -47,6 +47,7 @@
+ let camera = {x: 40, y: 40, k: 1};
+ const editHistory = {undo: [], redo: []};
+ const typing = {key: null, at: 0};
++let validationSequence = 0, blueprintSavePromise = null, blueprintSavingTarget = null;
+ let validateTimer = null, connectPreview = null, gesture = null, pendingPort = null, menuState = null;
+ let nodeEls = new Map();
+ let productGraphs = [];   // filled by pg.js
+@@ -103,28 +104,34 @@
+ function markDirty() {
+   dirty = true;
+   $('#builder-state').textContent = 'Unsaved edits';
+-  $('#builder-state').className = 'builder-state dirty';
++  $('#builder-state').className = 'builder-state dirty arch-only';
+   try { localStorage.setItem('ailabs-architecture-draft', JSON.stringify(blueprint)); } catch {}
+   scheduleValidate(); updateRunButton();
+ }
+-function markSaved(text) { dirty = false; $('#builder-state').textContent = text; $('#builder-state').className = 'builder-state'; localStorage.removeItem('ailabs-architecture-draft'); updateRunButton(); }
++function markSaved(text) { dirty = false; $('#builder-state').textContent = text; $('#builder-state').className = 'builder-state arch-only'; try { localStorage.removeItem('ailabs-architecture-draft'); } catch {} updateRunButton(); }
+ 
+ // ------------------------------------------------------------------ validation
+ function scheduleValidate() { clearTimeout(validateTimer); validateTimer = setTimeout(validateNow, 300); }
+ async function validateNow() {
++  const sequence=++validationSequence, target=blueprint, graph=JSON.stringify(blueprint.graph);
+   try {
+-    const result = await api('/api/blueprints/validate', {graph: blueprint.graph});
+-    problems = result.problems; capabilities = result.capabilities;
+-  } catch (e) { problems = [{node: null, message: e.message}]; capabilities = []; }
+-  renderProblems(); renderNodes(); renderInspector(true);
+-}
++    const result=await api('/api/blueprints/validate',{graph:JSON.parse(graph)});
++    if(sequence!==validationSequence||target!==blueprint||graph!==JSON.stringify(blueprint.graph))return;
++    problems=result.problems;capabilities=result.capabilities;
++  } catch(error) {
++    if(sequence!==validationSequence||target!==blueprint||graph!==JSON.stringify(blueprint.graph))return;
++    problems=[{node:null,message:error.message}];capabilities=[];
++  }
++  renderProblems();renderNodes();renderInspector(true);
++}
++
+ function renderProblems() {
+   const box = $('#builder-problems');
+   const count = problems.length;
+   box.className = 'builder-problems' + (count ? ' has-problems' : ' ok');
+   box.innerHTML = count
+     ? '<strong>' + count + (count === 1 ? ' problem' : ' problems') + ' before publishing</strong>' + problems.slice(0, 6).map((p, i) => p.node ? '<button type="button" class="problem-link" data-problem="' + i + '">' + esc(labelOf(p.node)) + ': ' + esc(p.message) + '</button>' : '<span>' + esc(p.message) + '</span>').join('') + (count > 6 ? '<span>… and ' + (count - 6) + ' more, marked on the canvas</span>' : '')
+-    : (blueprint.graph.nodes.length ? '<strong>Publishable</strong><span>Every step validates. ' + readinessPreview() + '</span>' : '');
++    : (blueprint.graph.nodes.length ? (blueprint.name.trim()?'<strong>Publishable</strong><span>Every step validates. '+readinessPreview()+'</span>':'<strong>Graph validates</strong><span>Name this architecture to save and publish it.</span>') : '');
+   $$('[data-problem]').forEach(b => b.onclick = () => focusProblem(problems[Number(b.dataset.problem)]));
+   const publish = $('#blueprint-publish');
+   publish.classList.toggle('is-disabled', count > 0);
+@@ -737,7 +744,7 @@
+   return () => { button.disabled = false; button.removeAttribute('aria-busy'); button.textContent = text; };
+ }
+ function setBlueprint(value, note) {
+-  localStorage.removeItem('ailabs-architecture-draft');
++  try { localStorage.removeItem('ailabs-architecture-draft'); } catch {}
+   blueprint = structuredClone(value); selection = new Set(); selectedEdge = null; editHistory.undo = []; editHistory.redo = []; live = {}; typing.key = null;
+   $('#blueprint-name').value = blueprint.name || ''; $('#blueprint-notes').value = blueprint.notes || '';
+   markSaved(note || (blueprint.id ? 'Draft revision ' + blueprint.revision : 'New from template'));
+@@ -751,15 +758,25 @@
+ async function loadBlueprints() { const response = await api('/api/blueprints'); blueprints = response.items; renderLibrary(); }
+ async function loadControls() { try { const matrix = await api('/api/capabilities'); controls = matrix.controls || []; state.capabilities = matrix; } catch (e) { toast(e.message); } }
+ async function saveDraft() {
+-  blueprint.name = $('#blueprint-name').value; blueprint.notes = $('#blueprint-notes').value;
+-  const sent = structuredClone({id: blueprint.id, revision: blueprint.revision, name: blueprint.name, notes: blueprint.notes, graph: blueprint.graph});
+-  const saved = await api('/api/blueprints/draft', sent);
+-  const unchanged = JSON.stringify([blueprint.graph, blueprint.name, blueprint.notes]) === JSON.stringify([sent.graph, sent.name, sent.notes]);
+-  blueprint.id = saved.id; blueprint.revision = saved.revision;
+-  if (unchanged) markSaved('Draft saved · revision ' + saved.revision); else markDirty();
+-  await loadBlueprints(); $('#blueprint-library').value = saved.id; renderVersions();
+-  return saved;
+-}
++  if(blueprintSavePromise){if(blueprintSavingTarget!==blueprint)throw Error('Wait for the previous draft to finish saving.');return blueprintSavePromise;}
++  const target=blueprint;
++  target.name=$('#blueprint-name').value;target.notes=$('#blueprint-notes').value;
++  const sent=structuredClone({id:target.id,revision:target.revision,name:target.name,notes:target.notes,graph:target.graph});
++  blueprintSavingTarget=target;
++  blueprintSavePromise=(async()=>{
++    const saved=await api('/api/blueprints/draft',sent);
++    if(target===blueprint) {
++      const unchanged=JSON.stringify([target.graph,target.name,target.notes])===JSON.stringify([sent.graph,sent.name,sent.notes]);
++      target.id=saved.id;target.revision=saved.revision;
++      if(unchanged)markSaved('Draft saved · revision '+saved.revision);else markDirty();
++    }
++    await loadBlueprints();
++    if(target===blueprint){$('#blueprint-library').value=saved.id;renderVersions();}
++    return saved;
++  })();
++  try{return await blueprintSavePromise;}finally{blueprintSavePromise=null;blueprintSavingTarget=null;}
++}
++
+ function readinessLabel(r) { return {ready: 'Ready to run', adapter_required: 'Needs the Enterprise adapter', blocked: 'On hold', unsupported: 'Unsupported configuration', preparation_required: 'Prepare knowledge first', source_required: 'Historical source missing'}[r?.runtime] || (r?.runtime || ''); }
+ function latestVersion() { return blueprints.find(x => x.id === blueprint.id)?.versions?.at(-1) || null; }
+ function runRefusal() {
+@@ -825,7 +842,7 @@
+   else { renderNodes(); renderInspector(true); renderVersions(); fitView(); }
+ }
+ $$('.studio-tabs [data-mode]').forEach(b => b.onclick = () => setStudioMode(b.dataset.mode));
+-$('.studio-tabs').addEventListener('keydown', e => { if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return; const tabs = $$('.studio-tabs [data-mode]'); const i = tabs.indexOf(document.activeElement); const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next.focus(); setStudioMode(next.dataset.mode); });
++$('.studio-tabs').addEventListener('keydown', e => { if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return; e.preventDefault(); const tabs = $$('.studio-tabs [data-mode]'); const i = tabs.indexOf(document.activeElement); const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next.focus(); setStudioMode(next.dataset.mode); });
+ 
+ // ------------------------------------------------------------------ live overlay from the open run
+ window.builderLive = function (currentJob, currentEvents) {
+@@ -880,13 +897,19 @@
+ });
+ $('#blueprint-publish').onclick = async () => {
+   const button = $('#blueprint-publish');
++  if(!blueprint.name.trim()){hint('Name this architecture before publishing.');$('#blueprint-name').focus();return;}
+   if (problems.length) { const first = problems.find(p => p.node) || problems[0]; hint('Fix ' + problems.length + (problems.length === 1 ? ' problem' : ' problems') + ' before publishing'); if (first.node) focusProblem(first); return; }
+   const release = busy(button, 'Publishing…');
++  const target=blueprint;
+   try {
+     if (dirty || !blueprint.id) await saveDraft();
++    if(target!==blueprint)throw Error('The selected architecture changed. Review it before publishing.');
+     if (dirty) throw Error('New edits arrived while saving. Review and publish again.');
++    const publishedDraft=JSON.stringify(blueprint);
+     const version = await api('/api/blueprints/publish', {id: blueprint.id, revision: blueprint.revision});
+-    markSaved('Version ' + version.version + ' published · ' + readinessLabel(version.readiness));
++    if(target!==blueprint){await loadBlueprints();return;}
++    if(publishedDraft===JSON.stringify(blueprint))markSaved('Version ' + version.version + ' published · ' + readinessLabel(version.readiness));
++    else hint('Version '+version.version+' published. Your newer draft edits remain unsaved.');
+     await loadBlueprints(); renderVersions();
+     hint('Version ' + version.version + ' published: ' + readinessLabel(version.readiness) + (version.readiness?.launchable ? ' · Run version ' + version.version + ' is ready' : ''));
+     $('.builder-versions')?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+@@ -916,19 +939,24 @@
+   setBlueprint(record ? {id: record.id, revision: record.revision, name: record.name, notes: record.notes, graph: record.graph} : {id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()});
+ };
+ $('#open-setup').onclick = async () => {
++  if(!state)return toast('Wait for Studio to connect, then open the editor.');
++  if($('#open-setup').disabled)return;
++  $('#open-setup').disabled=true;
+   $('#setup-panel').classList.remove('hidden'); $('.workspace').classList.add('hidden'); $('.page-heading').classList.add('hidden');
+   try {
+     await loadControls(); await loadProductGraphs(); await loadBlueprints();
+     if (!opened) {
+       let cached; try { cached = JSON.parse(localStorage.getItem('ailabs-architecture-draft')); } catch {}
++      if(cached&&(!cached.graph||!Array.isArray(cached.graph.nodes)||!Array.isArray(cached.graph.edges)))cached=null;
+       setBlueprint(cached || {id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()});
+       if (cached) { markDirty(); hint('Restored the unsaved draft from this browser'); }
+       opened = true;
+     } else { renderVersions(); renderNodes(); fitView(); }
+     if (typeof job !== 'undefined' && job) builderLive(job, events);
+-  } catch (e) { toast(e.message); }
++  } catch (e) { toast('The editor could not load. Return to runs and try again. '+e.message); }
++  finally {$('#open-setup').disabled=false;}
+ };
+-$('#close-setup').onclick = () => { closeMenu(false); $('#setup-panel').classList.add('hidden'); $('.workspace').classList.remove('hidden'); $('.page-heading').classList.remove('hidden'); };
++$('#close-setup').onclick = () => { closeMenu(false); $('#setup-panel').classList.add('hidden'); $('.workspace').classList.remove('hidden'); $('.page-heading').classList.remove('hidden'); $('#open-setup').focus({preventScroll:true}); };
+ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+ window.addEventListener('resize', () => { if (opened && !$('#setup-panel').classList.contains('hidden')) renderWires(); });
+ $('#configure-runner').onclick = () => { const editor = $('#runner-editor'); editor.classList.toggle('hidden'); $('#configure-runner').setAttribute('aria-expanded', String(!editor.classList.contains('hidden'))); if (!editor.classList.contains('hidden')) $('#runner-provider').focus(); };
+--- before/index.html
++++ after/index.html
+@@ -1,20 +1,23 @@
+ <!doctype html>
+-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath fill=%27%23135c48%27 d=%27M4 28 16 4 28 28h-6l-6-14-6 14z%27/%3E%3C/svg%3E"><title>AI Labs — Run outcomes</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/graph.js" defer></script><script src="/pg.js" defer></script><link rel="stylesheet" href="/graph.css"></head>
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath fill=%27%23135c48%27 d=%27M4 28 16 4 28 28h-6l-6-14-6 14z%27/%3E%3C/svg%3E"><meta name="description" content="Private AI Labs workspace for comparing agent outcomes, inspecting execution evidence and composing experiment architectures."><title>AI Labs — Run outcomes</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/graph.js" defer></script><script src="/pg.js" defer></script><link rel="stylesheet" href="/graph.css"></head>
+ <body>
+-<header class="topbar"><a class="brand" href="/" aria-label="AI Labs home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 25 16 5l10 20M10 18h12M16 5v20"/></svg>AI Labs<span class="private">Private workspace</span></a><div class="top-actions"><span class="connection" id="connection">Connecting</span><button class="button primary" id="new-comparison">New run <span aria-hidden="true">+</span></button></div></header>
++<a class="skip-link" href="#comparison-title">Skip to run workspace</a>
++<noscript><p class="run-message">AI Labs Studio needs JavaScript to load runs and edit architectures.</p></noscript>
++<header class="topbar"><a class="brand" href="/" aria-label="AI Labs home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 25 16 5l10 20M10 18h12M16 5v20"/></svg>AI Labs<span class="private">Private workspace</span></a><div class="top-actions"><span class="connection" id="connection" role="status" data-status="loading">Connecting</span><button class="button primary" id="new-comparison">New run <span aria-hidden="true">+</span></button></div></header>
+ <main>
+-<section class="page-heading"><div><h1>Understand what actually worked.</h1><p>Judge the outcome. Trace the difference. Test the next idea.</p></div><div class="budget"><div><span>Weekly capacity</span><strong id="budget-available">—</strong></div><div class="budget-track"><div id="budget-fill"></div></div><small id="budget-detail">$300 weekly limit</small></div></section>
++<div id="connection-error" class="connection-error hidden" role="alert"><div><strong>Studio could not load</strong><p id="connection-error-detail"></p></div><button class="button" id="retry-connection">Try again</button></div>
++<section class="page-heading"><div><h1>Run workspace</h1><p>Compare outcomes, follow the evidence, and shape the next experiment.</p></div><div class="budget"><div><span>Weekly capacity</span><strong id="budget-available">—</strong></div><div class="budget-track"><div id="budget-fill"></div></div><small id="budget-detail">$300 weekly limit</small></div></section>
+ <div class="workspace">
+-<aside class="sidebar"><div class="sidebar-heading"><h2>Runs</h2><span id="job-count">0</span></div><div id="jobs" class="jobs"></div><button class="button setup-open" id="open-setup">Monarch setups</button><div class="sidebar-bottom"><span class="live-dot"></span>Evidence stays with every run<p>API and scripted controls are labeled. Native comparisons require isolated runners.</p></div></aside>
++<aside class="sidebar"><div class="sidebar-heading"><h2>Runs</h2><span id="job-count">0</span></div><label class="run-search"><span class="sr-only">Find a run</span><input id="run-search" type="search" placeholder="Find a run…" autocomplete="off"></label><div id="jobs" class="jobs"></div><button class="button setup-open" id="open-setup">Monarch setups</button><div class="sidebar-bottom"><span class="live-dot"></span>Evidence stays with every run<p>API and scripted controls are labeled. Native comparisons require isolated runners.</p></div></aside>
+ <section class="comparison" aria-label="Comparison workspace">
+-<div class="comparison-header"><div><h2 id="comparison-title">Your next run</h2><p id="comparison-meta">Choose tasks and runners to begin.</p></div><div class="comparison-actions"><span class="status" id="job-status">Ready</span><button class="button danger hidden" id="cancel-run">Stop run</button></div></div>
++<div class="comparison-header"><div><h2 id="comparison-title" tabindex="-1">Your next run</h2><p id="comparison-meta">Choose tasks and runners to begin.</p></div><div class="comparison-actions"><span class="status" id="job-status">Ready</span><button class="button danger hidden" id="cancel-run">Stop run</button></div></div>
+ <div id="run-message" class="run-message hidden" role="status"></div>
+-<div class="tabs" role="tablist" aria-label="Comparison views"><button role="tab" class="active" aria-selected="true" data-view="report">Overview</button><button role="tab" aria-selected="false" data-view="live">Activity</button><button role="tab" aria-selected="false" data-view="results">Results <span id="result-count">0</span></button><div class="trace-note"><span class="live-dot"></span><span id="stream-note">Waiting for a run</span></div></div>
++<div class="tabs" role="tablist" aria-label="Comparison views"><button role="tab" class="active" aria-selected="true" data-view="report" id="tab-report" aria-controls="report-view" tabindex="0">Overview</button><button role="tab" aria-selected="false" data-view="live" id="tab-live" aria-controls="live-view" tabindex="-1">Activity</button><button role="tab" aria-selected="false" data-view="results" id="tab-results" aria-controls="results-view" tabindex="-1">Results <span id="result-count">0</span></button><div class="trace-note"><span class="live-dot"></span><span id="stream-note">Waiting for a run</span></div></div>
+ <div id="empty" class="empty"><svg class="empty-graph" viewBox="0 0 360 110" aria-hidden="true"><path d="M90 55h55m70 0h55"/><rect x="10" y="25" width="80" height="60" rx="12"/><rect x="145" y="15" width="70" height="80" rx="12"/><rect x="270" y="25" width="80" height="60" rx="12"/><circle cx="50" cy="55" r="7"/><path d="m168 54 9 9 15-18m98 10h39"/></svg><h3>A result is only part of the story.</h3><p>Run the same task with different runners. Watch their actions unfold, then compare what actually changed.</p><button class="button primary" id="empty-start">Start a run</button></div>
+-<div id="report-view" class="hidden"></div><div id="live-view" class="hidden"><div class="task-toolbar"><label for="task-select">Task</label><select id="task-select"></select><span id="task-progress"></span><button class="icon-button" id="fit-view" title="Return to the start of the graph" aria-label="Return to graph start"><svg viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></svg></button></div><p class="task-brief" id="task-brief"></p><div class="graph-scroll" id="graph-scroll"><div class="lanes" id="lanes"></div></div><div class="graph-footer"><span><i class="key running"></i>Running</span><span><i class="key completed"></i>Completed</span><span><i class="key error"></i>Needs attention</span><span class="footer-end">Observed execution · select a node to inspect</span></div></div>
+-<div id="results-view" class="hidden"><div id="results-summary"></div><div class="table-scroll"><table class="results-table"><thead><tr><th>Task / runner</th><th>Outcome</th><th>Time</th><th>Cost estimate</th><th>Actions</th></tr></thead><tbody id="result-rows"></tbody></table></div></div>
++<div id="report-view" class="hidden" role="tabpanel" aria-labelledby="tab-report" tabindex="0"></div><div id="live-view" class="hidden" role="tabpanel" aria-labelledby="tab-live" tabindex="0"><div class="task-toolbar"><label for="task-select">Task</label><select id="task-select"></select><span id="task-progress"></span><button class="icon-button" id="fit-view" title="Return to the start of the graph" aria-label="Return to graph start"><svg viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></svg></button></div><p class="task-brief" id="task-brief"></p><div class="graph-scroll" id="graph-scroll"><div class="lanes" id="lanes"></div></div><div class="graph-footer"><span><i class="key running"></i>Running</span><span><i class="key completed"></i>Completed</span><span><i class="key error"></i>Needs attention</span><span class="footer-end">Observed execution · select a node to inspect</span></div></div>
++<div id="results-view" class="hidden" role="tabpanel" aria-labelledby="tab-results" tabindex="0"><div id="results-summary"></div><div class="table-scroll"><table class="results-table"><thead><tr><th>Task / runner</th><th>Outcome</th><th>Time</th><th>Cost estimate</th><th>Actions</th></tr></thead><tbody id="result-rows"></tbody></table></div></div>
+ </section>
+-<aside class="inspector" id="inspector"><div class="inspector-heading"><h2 id="inspector-title">Output</h2><button class="icon-button" id="copy-output" aria-label="Copy selected output" title="Copy output"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button></div><div id="inspector-meta" class="inspector-meta">Select an action or result</div><div class="inspector-tabs"><button class="active" data-output="formatted">Findings</button><button data-output="raw">Raw evidence</button></div><div id="output" class="output"><div class="output-empty"><svg viewBox="0 0 48 48"><path d="M12 6h18l8 8v28H12zm18 0v10h8M18 24h14m-14 7h10"/></svg><h3>Open a task outcome</h3><p>Read the findings first. Follow their evidence when you need the detail.</p></div></div><div class="inspector-foot">Outputs are observed evidence. Task checks determine success.</div></aside>
++<aside class="inspector" id="inspector"><div class="inspector-heading"><h2 id="inspector-title" tabindex="-1">Output</h2><div class="inspector-actions"><button class="icon-button" id="close-inspector" aria-label="Close evidence panel" title="Close evidence panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><button class="icon-button" id="copy-output" aria-label="Copy selected output" title="Copy output"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button></div></div><div id="inspector-meta" class="inspector-meta">Select an action or result</div><div class="inspector-tabs"><button class="active" data-output="formatted">Findings</button><button data-output="raw">Raw evidence</button></div><div id="output" class="output"><div class="output-empty"><svg viewBox="0 0 48 48"><path d="M12 6h18l8 8v28H12zm18 0v10h8M18 24h14m-14 7h10"/></svg><h3>Open a task outcome</h3><p>Read the findings first. Follow their evidence when you need the detail.</p></div></div><div class="inspector-foot">Outputs are observed evidence. Task checks determine success.</div></aside>
+ </div>
+ <section id="setup-panel" class="hidden builder" aria-labelledby="builder-heading" data-mode="architectures">
+ <header class="builder-bar"><div class="builder-title"><h2 id="builder-heading">Architecture studio</h2><div class="studio-tabs" role="tablist" aria-label="Studio sections"><button role="tab" data-mode="architectures" aria-selected="true">Architectures</button><button role="tab" data-mode="graphs" aria-selected="false" tabindex="-1">Product graphs</button></div><span class="builder-state arch-only" id="builder-state">New from template</span></div><div class="builder-actions arch-only"><label for="blueprint-library" class="sr-only">Saved architecture</label><select id="blueprint-library"><option value="">New architecture…</option></select><button class="button" id="blueprint-new" aria-haspopup="menu" aria-expanded="false">New from template…</button><button class="button" id="blueprint-save" title="Save draft (Ctrl+S)">Save draft</button><button class="button primary" id="blueprint-publish" aria-describedby="builder-problems">Publish version</button><button class="button" id="builder-run">Run latest version</button><button class="button" id="close-setup">Back to runs</button></div><div class="builder-actions pg-only" id="pg-actions"><button class="button" id="close-setup-graphs">Back to runs</button></div></header>
+@@ -32,7 +35,7 @@
+ <div class="pg-workspace">
+ <div class="pg-editor"><div class="pg-meta"><label for="pg-name">Name</label><input id="pg-name" maxlength="100" placeholder="Name the product graph" autocomplete="off"><label for="pg-notes">Notes</label><input id="pg-notes" maxlength="2000" placeholder="What this graph is for" autocomplete="off"></div>
+ <h3>Fields</h3><p class="node-help">Each field is a typed slot on every product's record. Describe what the researcher should find; that description is the prompt.</p><div id="pg-fields" class="fields-table"></div><button class="text-button" id="pg-add-field" type="button">Add field</button><p id="pg-plan" class="pg-plan" role="status" aria-live="polite"></p>
+-<h3>Research instructions</h3><textarea id="pg-instructions" rows="4" maxlength="4000" placeholder="How the researcher should work: which catalog actions to inspect, what to prefer, what to leave unknown"></textarea>
++<h3><label for="pg-instructions">Research instructions</label></h3><textarea id="pg-instructions" rows="4" maxlength="4000" placeholder="How the researcher should work: which catalog actions to inspect, what to prefer, what to leave unknown"></textarea>
+ <h3>Researcher</h3><div id="pg-runner"></div><p id="pg-products" class="pg-products"></p></div>
+ <aside class="pg-versions"><h3>Versions</h3><p class="node-help">A version is prepared once and never rewritten. The next version researches only the new or changed fields and carries the rest.</p><div id="pg-versions"></div></aside>
+ </div>
+@@ -46,6 +49,6 @@
+ <section><h3>Studio</h3><dl><dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> redo</dd><dt><kbd>Ctrl</kbd>+<kbd>S</kbd></dt><dd>Save draft</dd><dt><kbd>?</kbd></dt><dd>This list</dd></dl></section>
+ </div></div></dialog>
+ </section></main>
+-<dialog id="launch-dialog"><form id="launch-form"><div class="dialog-heading"><div><h2>New run</h2><p>Choose the work, then the approaches to test.</p></div><button type="button" class="icon-button" id="close-dialog" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><label class="field-label" for="run-title">Name</label><input id="run-title" name="title" value="Untitled experiment" maxlength="100" required><fieldset><legend>Comparison versions</legend><div id="architecture-options"><label class="model-option"><input type="checkbox" checked value="without-monarch" id="without-monarch"><span>Without Monarch<span class="unavailable-reason">The runner works directly with the task and application tools. No Monarch or product graph.</span></span></label></div><p id="comparison-readiness" class="limit-note">Version readiness loads with the capability matrix. Native Claude Code and Codex comparisons stay blocked until verified sandbox execution and native trace capture exist.</p></fieldset><fieldset><legend>Models and harnesses</legend><button class="text-button" type="button" id="configure-runner">Add runner configuration</button><div id="runner-editor" class="hidden"><label class="field-label" for="runner-provider">Runner</label><select id="runner-provider"><option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="gemini">Gemini API</option><option value="fireworks">Fireworks</option><option value="moonshot">Moonshot</option><option value="zai">Z.ai</option><option value="claude-code">Claude Code (native)</option><option value="codex">Codex (native)</option></select><label class="field-label" for="runner-model">Model</label><input id="runner-model" list="fireworks-model-list" placeholder="Model ID"><datalist id="fireworks-model-list"></datalist><button type="button" class="text-button" id="runner-refresh">Refresh Fireworks models</button><p id="runner-catalog-status" role="status"></p><label class="field-label" for="runner-effort">Reasoning</label><select id="runner-effort"><option>default</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select><button type="button" class="button" id="runner-save">Save runner configuration</button><p>Configurations can be prepared now. Launch availability depends on runner integration and credentials.</p></div><div id="model-options"></div></fieldset><div class="field-row"><label class="field-label" for="task-search">Tasks <span id="selected-count">0 selected</span></label><button type="button" class="text-button" id="select-all">Select category</button></div><div class="catalog-filters"><select id="task-category" aria-label="Task category"><option value="">All categories</option></select><select id="task-difficulty" aria-label="Task difficulty"><option value="">Any difficulty</option><option value="hard">Hard</option><option value="medium">Medium</option><option value="easy">Easy</option><option value="unrated">Unrated</option></select><input id="task-search" type="search" placeholder="Search requests or applications"></div><p class="difficulty-note">Difficulty uses scored run history. * Early signal; Unrated means no comparable attempts yet.</p><div id="task-options" class="task-options"></div><details class="execution-settings"><summary>Prompt &amp; execution settings</summary><label class="field-label" for="run-prompt">Additional instructions</label><textarea id="run-prompt" rows="4" maxlength="12000" placeholder="The exact instruction change you want to test"></textarea><label class="field-label" for="run-turns">Maximum model turns</label><input id="run-turns" type="number" value="20" min="1" max="50"><p>These settings apply to API controls and to every agent step of a published architecture that has no turn limit of its own. Scripted controls do not interpret prompts.</p></details><div class="budget-entry"><div><label class="field-label" for="run-budget">Maximum spend</label><p>Shared across every selected task and runner.</p></div><div class="money-input"><span>$</span><input id="run-budget" type="number" min="0.01" max="300" step=".01" value="5" required></div></div><p id="budget-floor" class="form-error" role="status"></p><p class="limit-note">Each paid request reserves its maximum possible cost before dispatch. Uncertain charges remain held. API controls are separate from native benchmarks.</p><p id="form-error" class="form-error" role="alert"></p><div class="dialog-footer"><span id="launch-size">Choose tasks and runners</span><button type="submit" class="button primary" id="launch-button" aria-describedby="launch-size budget-floor">Start run <span aria-hidden="true">→</span></button></div></form></dialog>
++<dialog id="launch-dialog" aria-labelledby="launch-title" aria-describedby="launch-subtitle"><form id="launch-form" novalidate><div class="dialog-heading"><div><h2 id="launch-title" tabindex="-1">New run</h2><p id="launch-subtitle">Choose the work, compare approaches, then review the spend.</p></div><button type="button" class="icon-button" id="close-dialog" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><nav class="launch-steps" aria-label="Run setup steps"><button type="button" data-launch-step="0" aria-current="step"><span>1</span>Tasks</button><button type="button" data-launch-step="1" aria-current="false"><span>2</span>Approaches</button><button type="button" data-launch-step="2" aria-current="false"><span>3</span>Review</button></nav><section data-launch-panel="0" aria-label="Choose tasks"><h3 class="step-heading">What work should they complete?</h3><p class="section-description">Every selected approach receives the same tasks and starting conditions.</p><div class="field-row"><label class="field-label" for="task-search">Tasks <span id="selected-count">0 selected</span></label><button type="button" class="text-button" id="select-all">Select matching</button></div><div class="catalog-filters"><select id="task-category" aria-label="Task category"><option value="">All categories</option></select><select id="task-difficulty" aria-label="Task difficulty"><option value="">Any difficulty</option><option value="hard">Hard</option><option value="medium">Medium</option><option value="easy">Easy</option><option value="unrated">Unrated</option></select><input id="task-search" type="search" placeholder="Search requests or applications"></div><p class="difficulty-note">Difficulty uses scored run history. * Early signal; Unrated means no comparable attempts yet.</p><div class="task-selection-tools"><span id="task-match-count" role="status"></span><button type="button" class="text-button" id="clear-tasks">Clear selection</button><button type="button" class="text-button" id="reset-task-filters">Reset filters</button></div><div id="task-options" class="task-options"></div></section><section data-launch-panel="1" class="hidden" aria-label="Choose approaches"><h3 class="step-heading">Which approaches should we compare?</h3><fieldset><legend>Comparison versions</legend><div id="architecture-options"><label class="model-option"><input type="checkbox" checked value="without-monarch" id="without-monarch"><span>Without Monarch<span class="unavailable-reason">The runner works directly with the task and application tools. No Monarch or product graph.</span></span></label></div><details class="readiness-details"><summary>Integration readiness</summary><p id="comparison-readiness" class="limit-note">Version readiness loads with the capability matrix. Native Claude Code and Codex comparisons stay blocked until verified sandbox execution and native trace capture exist.</p></details></fieldset><fieldset id="runner-choices"><legend>Models and harnesses</legend><p class="section-description">Choose a reasoning level for each runner to compare. Published architectures use their own saved runners.</p><button class="text-button" type="button" id="configure-runner">Add runner configuration</button><div id="runner-editor" class="hidden"><label class="field-label" for="runner-provider">Runner</label><select id="runner-provider"><option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="gemini">Gemini API</option><option value="fireworks">Fireworks</option><option value="moonshot">Moonshot</option><option value="zai">Z.ai</option><option value="claude-code">Claude Code (native)</option><option value="codex">Codex (native)</option></select><label class="field-label" for="runner-model">Model</label><input id="runner-model" list="fireworks-model-list" placeholder="Model ID"><datalist id="fireworks-model-list"></datalist><button type="button" class="text-button" id="runner-refresh">Refresh Fireworks models</button><p id="runner-catalog-status" role="status"></p><label class="field-label" for="runner-effort">Reasoning</label><select id="runner-effort"><option>default</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select><button type="button" class="button" id="runner-save">Save runner configuration</button><p>Configurations can be prepared now. Launch availability depends on runner integration and credentials.</p></div><div id="model-options"></div></fieldset></section><section data-launch-panel="2" class="hidden" aria-label="Review run"><h3 class="step-heading">Review before starting</h3><label class="field-label" for="run-title">Name</label><input id="run-title" name="title" value="Untitled experiment" maxlength="100" required><div id="launch-review" class="launch-review"></div><details class="execution-settings"><summary>Prompt &amp; execution settings</summary><label class="field-label" for="run-prompt">Additional instructions</label><textarea id="run-prompt" rows="4" maxlength="12000" placeholder="The exact instruction change you want to test"></textarea><label class="field-label" for="run-turns">Maximum model turns</label><input id="run-turns" type="number" value="20" min="1" max="50"><p>These settings apply to API controls and to every agent step of a published architecture that has no turn limit of its own. Scripted controls do not interpret prompts.</p></details><div class="budget-entry"><div><label class="field-label" for="run-budget">Maximum spend</label><p>Shared across every selected task and runner.</p></div><div class="money-input"><span>$</span><input id="run-budget" type="number" min="0.01" max="300" step=".01" value="5" required></div></div><p id="budget-floor" class="form-error" role="status"></p><p class="limit-note">Each paid request reserves its maximum possible cost before dispatch. Uncertain charges remain held. API controls are separate from native benchmarks.</p></section><p id="launch-validation" class="limit-note" role="status"></p><p id="form-error" class="form-error" role="alert" tabindex="-1"></p><div class="dialog-footer launch-footer"><span id="launch-size" role="status">Choose tasks and runners</span><div class="launch-footer-actions"><button type="button" class="button" id="launch-back">Back</button><button type="button" class="button primary" id="launch-next">Choose approaches</button><button type="submit" class="button primary hidden" id="launch-button" aria-describedby="launch-size budget-floor launch-validation">Start run</button></div></div></form></dialog>
+ <div id="toast" class="toast hidden" role="status"></div>
+ </body></html>
+--- before/pg.js
++++ after/pg.js
+@@ -11,6 +11,7 @@
+ const PG_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
+ const PG_PROVIDERS = ['gemini', 'anthropic', 'openai', 'fireworks', 'moonshot', 'zai'];
+ const PG_DEFAULT_FIELDS = () => [{path: 'product.summary', type: 'string', description: 'What this product is for and which kinds of records it holds.'}];
++let pgSavePromise=null, pgSavingTarget=null, pgPreparing=false;
+ let pg = null, pgDirty = false, pgProducts = [], pgOpenRecords = new Set();
+ const pgTyping = {key: null, at: 0};
+ 
+@@ -91,7 +92,7 @@
+   const pos = active?.selectionStart;
+   $('#pg-fields').innerHTML = pg.fields.map((f, i) => {
+     const state = pgFieldState(f);
+-    return '<div class="fields-row pg-row" data-row="' + i + '"><input data-pg-field="path" data-index="' + i + '" value="' + esc(f.path) + '" placeholder="product.summary" aria-label="Field path" autocomplete="off"' + (f.path ? '' : ' aria-invalid="true"') + '><select data-pg-field="type" data-index="' + i + '" aria-label="Field type">' + PG_TYPES.map(t => option(t, t, t === f.type)).join('') + '</select><input data-pg-field="description" data-index="' + i + '" value="' + esc(f.description || '') + '" placeholder="What the agent should find and write here" aria-label="Field description" autocomplete="off"><span class="bp-chip ' + state[0] + '" title="' + esc(state[1]) + '">' + state[0] + '</span><button class="icon-button" data-pg-remove="' + i + '" type="button" aria-label="Remove field ' + esc(f.path || i + 1) + '" title="Remove field">×</button></div>';
++    return '<div class="fields-row pg-row" data-row="' + i + '"><input data-pg-field="path" data-index="' + i + '" value="' + esc(f.path) + '" placeholder="product.summary" maxlength="120" aria-label="Field path" autocomplete="off"' + (f.path ? '' : ' aria-invalid="true"') + '><select data-pg-field="type" data-index="' + i + '" aria-label="Field type">' + PG_TYPES.map(t => option(t, t, t === f.type)).join('') + '</select><input data-pg-field="description" data-index="' + i + '" value="' + esc(f.description || '') + '" placeholder="What the agent should find and write here" maxlength="600" aria-label="Field description" autocomplete="off"><span class="bp-chip ' + state[0] + '" title="' + esc(state[1]) + '">' + state[0] + '</span><button class="icon-button" data-pg-remove="' + i + '" type="button" aria-label="Remove field ' + esc(f.path || i + 1) + '" title="Remove field">×</button></div>';
+   }).join('') || '<p class="node-help">No fields yet. Add one below.</p>';
+   $$('[data-pg-field]').forEach(el => { const handler = () => { const i = Number(el.dataset.index); pg.fields[i][el.dataset.pgField] = el.value; pgMarkDirty(); if (el.dataset.pgField === 'path') el.setAttribute('aria-invalid', String(!el.value)); const chip = el.closest('.pg-row')?.querySelector('.bp-chip'); if (chip) { const state = pgFieldState(pg.fields[i]); chip.className = 'bp-chip ' + state[0]; chip.textContent = state[0]; chip.title = state[1]; } }; if (el.tagName === 'SELECT') el.onchange = handler; else el.oninput = handler; });
+   $$('[data-pg-remove]').forEach(b => b.onclick = () => { const removed = pg.fields.splice(Number(b.dataset.pgRemove), 1)[0]; pgMarkDirty(); renderPgFields(); $('#pg-add-field').focus(); hint('Removed field ' + (removed?.path || '')); });
+@@ -143,13 +144,26 @@
+ // ------------------------------------------------------------------ save and prepare
+ function pgPayload() { return {id: pg.id, revision: pg.revision, name: pg.name, notes: pg.notes, fields: pg.fields, instructions: pg.instructions, runner: pg.runner}; }
+ async function savePg() {
+-  const saved = await api('/api/product-graphs/draft', pgPayload());
+-  pg.id = saved.id; pg.revision = saved.revision; pg.fields = structuredClone(saved.fields); pgDirty = false;
+-  await loadProductGraphs(); renderPg(); pgState('Draft saved · revision ' + saved.revision);
+-  return saved;
+-}
++  if(pgSavePromise){if(pgSavingTarget!==pg)throw Error('Wait for the previous draft to finish saving.');return pgSavePromise;}
++  const target=pg,sent=structuredClone(pgPayload());
++  pgSavingTarget=target;
++  pgSavePromise=(async()=>{
++    const saved=await api('/api/product-graphs/draft',sent);
++    if(target===pg) {
++      const unchanged=JSON.stringify(pgPayload())===JSON.stringify(sent);
++      pg.id=saved.id;pg.revision=saved.revision;
++      if(unchanged){pg.fields=structuredClone(saved.fields);pgDirty=false;}else pgMarkDirty();
++    }
++    await loadProductGraphs();
++    if(target===pg){renderPg();if(!pgDirty)pgState('Draft saved · revision '+saved.revision);}
++    return saved;
++  })();
++  try{return await pgSavePromise;}finally{pgSavePromise=null, pgSavingTarget=null;}
++}
++
+ $('#pg-save').onclick = async () => { const release = busy($('#pg-save'), 'Saving…'); try { await savePg(); hint('Product graph draft saved'); } catch (e) { toast(e.message); } finally { release(); } };
+ $('#pg-prepare').onclick = () => {
++  if(!pg||pgPreparing)return;
+   const p = pgPlan();
+   if (!pg.fields.length || !p.research.length) { hint($('#pg-plan').textContent); $('#pg-add-field').focus(); return; }
+   if (!pg.name.trim()) { hint('Name the product graph first'); $('#pg-name').focus(); return; }
+@@ -166,19 +180,24 @@
+ };
+ $('#prepare-cancel').onclick = () => $('#prepare-dialog').close();
+ $('#prepare-form').onsubmit = async e => {
+-  e.preventDefault(); if (!pg) return;
++  e.preventDefault(); if (!pg||pgPreparing) return;
++  if(!$('#prepare-form').reportValidity())return;
++  const target=pg;pgPreparing=true;
+   const release = busy($('#prepare-start'), 'Preparing…'); $('#prepare-error').textContent = '';
+   try {
+     if (pgDirty || !pg.id) await savePg();
++    if(target!==pg||pgDirty)throw Error('The draft changed while saving. Review it before preparing a paid version.');
+     const version = await api('/api/product-graphs/prepare', {id: pg.id, revision: pg.revision, maximum_usd: $('#prepare-budget').value});
+     $('#prepare-dialog').close();
+-    await loadProductGraphs(); pgOpenRecords.add(version.version); renderPg(); pgState('Version ' + version.version + ' ' + version.status);
++    await loadProductGraphs();
++    if(target!==pg){toast('Product graph version '+version.version+' prepared. Open its graph to inspect it.');return;}
++    pgOpenRecords.add(version.version); renderPg(); pgState('Version ' + version.version + ' ' + version.status);
+     hint('Version ' + version.version + ' ' + version.status + ' · $' + version.cost_usd + ' · ' + Object.keys(version.records || {}).length + ' products');
+     try { budget((await api('/api/state')).budget); } catch {}
+     if (typeof renderNodes === 'function') { renderNodes(); renderInspector(true); }
+     $$('[data-pg-version]').find(a => a.dataset.pgVersion === String(version.version))?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+-  } catch (error) { $('#prepare-error').textContent = error.message; }
+-  finally { release(); }
++  } catch (error) { $('#prepare-error').textContent = error.message;if(!$('#prepare-dialog').open)toast(error.message); }
++  finally { pgPreparing=false;release(); }
+ };
+ 
+ // ------------------------------------------------------------------ chrome
+@@ -186,7 +205,7 @@
+ $('#pg-name').oninput = e => { pg.name = e.target.value; pgMarkDirty(); };
+ $('#pg-notes').oninput = e => { pg.notes = e.target.value; pgMarkDirty(); };
+ $('#pg-instructions').oninput = e => { pg.instructions = e.target.value; pgMarkDirty(); };
+-$('#pg-add-field').onclick = () => { pg.fields.push({path: '', type: 'string', description: ''}); pgMarkDirty(); renderPgFields(); $$('[data-pg-field="path"]').at(-1)?.focus(); };
++$('#pg-add-field').onclick = () => { if(pg.fields.length>=60)return toast('A product graph supports up to 60 fields.'); pg.fields.push({path: '', type: 'string', description: ''}); pgMarkDirty(); renderPgFields(); $$('[data-pg-field="path"]').at(-1)?.focus(); };
+ $('#pg-new').onclick = () => { if (pgDirty && !confirm('Start a new product graph and discard the unsaved edits?')) return; setProductGraph(null); $('#pg-library').value = ''; $('#pg-name').focus(); };
+ $('#pg-library').onchange = e => { if (pgDirty && !confirm('Discard the unsaved edits and open this product graph?')) { e.target.value = pg?.id || ''; return; } setProductGraph(productGraphs.find(g => g.id === e.target.value) || null); };
+ window.addEventListener('beforeunload', e => { if (pgDirty) { e.preventDefault(); e.returnValue = ''; } });
+--- before/style.css
++++ after/style.css
+@@ -1,5 +1,6 @@
+ :root{color-scheme:light;--ink:#202b35;--muted:#5c6975;--paper:#f5f7f9;--surface:#fff;--line:#dce3e8;--accent:#135c48;--accent-light:#e4f2eb;--blue:#356cbd;--red:#ac3c3c;--radius:10px;font-family:"Segoe UI Variable","Segoe UI",sans-serif;font-size:16px;color:var(--ink);background:var(--paper)}*{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}button,select,input{outline-offset:4px}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--blue)}::selection{background:#c5e5d5;color:#163e30}input{caret-color:var(--accent)}::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-thumb{background:#bbc7ce;border-radius:6px}a{color:inherit;text-decoration:none}.topbar{height:76px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 32px}.brand{display:flex;gap:11px;align-items:center;font-size:21px;font-weight:650;letter-spacing:-.025em}.brand svg{width:30px;height:30px;stroke:var(--accent);stroke-width:2.7;fill:none;stroke-linecap:round;stroke-linejoin:round}.private{border-left:1px solid var(--line);padding-left:18px;margin-left:12px;color:var(--muted);font-size:13px;font-weight:400;letter-spacing:0}.top-actions{display:flex;gap:24px;align-items:center}.connection{font-size:13px;color:var(--muted)}.connection:before,.live-dot{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:8px}.button{border:1px solid var(--line);background:var(--surface);padding:10px 16px;border-radius:7px;display:inline-flex;align-items:center;gap:18px;font-weight:600;font-size:14px;white-space:nowrap;transition:background .18s ease}.button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.button.primary:hover{background:#0d4636}.button.danger{color:var(--red);border-color:#e6caca}.button.danger:hover{background:#fff0f0}.icon-button{width:32px;height:32px;display:inline-grid;place-items:center;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--muted);font-size:26px}.icon-button:hover{background:var(--paper);border-color:var(--line)}.icon-button svg{height:17px;width:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}main{max-width:2000px;margin:auto;padding:30px 28px 24px}.page-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:26px;gap:24px}h1{font-size:28px;letter-spacing:-.035em;line-height:1.25;font-weight:600;margin:0 0 7px}h2{font-size:16px;margin:0;font-weight:600;letter-spacing:-.015em}h3{letter-spacing:-.02em}.page-heading p{color:var(--muted);font-size:14px;margin:0}.budget{width:230px}.budget>div:first-child{display:flex;justify-content:space-between;font-size:13px;align-items:baseline}.budget strong{font-variant-numeric:tabular-nums;font-size:17px;font-weight:600}.budget-track{height:4px;background:#dce6e0;border-radius:3px;margin:9px 0}.budget-track>div{height:100%;background:var(--accent);width:0;border-radius:3px}.budget small{font-size:12px;color:var(--muted)}.workspace{display:grid;grid-template-columns:208px minmax(400px,1fr) 320px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface);min-height:690px;height:calc(100vh - 225px)}.sidebar{display:flex;flex-direction:column;background:#f9fafb;border-right:1px solid var(--line);overflow:auto}.sidebar-heading{display:flex;justify-content:space-between;align-items:center;padding:24px 18px}.sidebar-heading h2{font-size:14px}.sidebar-heading>span{font-size:12px;color:var(--muted)}.jobs{padding:0 9px;flex:1}.job{width:100%;text-align:left;padding:13px 11px;border:1px solid transparent;border-radius:7px;margin-bottom:5px;background:transparent;color:var(--ink)}.job:hover{background:#edf1f4}.job.active{background:white;border-color:var(--line);box-shadow:0 2px 5px #203b4810}.job strong{display:block;font-size:14px;font-weight:600;line-height:1.5;overflow:hidden;text-overflow:ellipsis}.job small{display:block;color:var(--muted);font-size:12px;margin-top:5px}.job .dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:5px}.sidebar-bottom{padding:22px 17px;border-top:1px solid var(--line);font-size:12px;line-height:1.5}.sidebar-bottom p{color:var(--muted);margin:9px 0 0}.comparison{display:flex;flex-direction:column;min-width:0;overflow:hidden}.comparison-header{min-height:91px;padding:23px 25px;display:flex;justify-content:space-between;align-items:center;gap:10px}.comparison-header h2{font-size:19px}.comparison-header p{margin:7px 0 0;color:var(--muted);font-size:13px}.comparison-actions{display:flex;gap:12px;align-items:center}.status{font-size:12px;background:#edf1f3;border-radius:5px;color:var(--muted);padding:5px 8px;text-transform:capitalize}.status.running{background:#e8effa;color:#245b9e}.status.completed{background:var(--accent-light);color:var(--accent)}.tabs{display:flex;align-items:center;gap:26px;padding:0 25px;border-bottom:1px solid var(--line)}.tabs button{border:0;border-bottom:2px solid transparent;padding:13px 0;background:transparent;font-size:14px;color:var(--muted);font-weight:500}.tabs button.active{border-color:var(--accent);color:var(--accent);font-weight:600}.tabs button span{font-size:11px;padding:2px 5px;background:#edf1f3;border-radius:4px;margin-left:4px}.trace-note{font-size:12px;color:var(--muted);margin-left:auto}.run-message{padding:12px 25px;background:#fff4e6;color:#805319;font-size:14px;line-height:1.5}.empty{display:flex;flex:1;align-items:center;justify-content:center;text-align:center;flex-direction:column;padding:36px}.empty-graph{width:270px;stroke:#9aada5;stroke-width:1.2;fill:#f7faf8}.empty h3{font-size:22px;font-weight:550;margin:25px 0 10px}.empty p{max-width:360px;line-height:1.65;color:var(--muted);font-size:14px;margin:0 0 24px}#live-view{display:flex;flex-direction:column;min-height:0;flex:1}.task-toolbar{padding:15px 25px;display:flex;align-items:center;gap:12px;font-size:13px}.task-toolbar label{color:var(--muted)}select{color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:7px 28px 7px 10px;max-width:75%;font-size:13px}#task-progress{margin-left:auto;color:var(--muted);white-space:nowrap}.task-brief{font-size:13px;line-height:1.6;color:var(--muted);margin:0;padding:0 25px 16px;max-height:110px;overflow:auto;border-bottom:1px solid var(--line)}.graph-scroll{flex:1;overflow:auto;background-color:#f8fafb;background-image:radial-gradient(#cbd4dc 0.7px,transparent .7px);background-size:18px 18px;min-height:280px}.lanes{display:flex;min-height:100%;align-items:stretch}.lane{flex:1;min-width:230px;border-right:1px solid #dce3e888;padding:0 24px 24px;position:relative}.lane:last-child{border:0}.lane-heading{position:sticky;top:0;background:#f8fafbf5;border-bottom:1px solid var(--line);margin:0 -24px;padding:18px 20px;z-index:2;display:flex;align-items:center;gap:10px;min-height:70px}.model-icon{width:30px;height:30px;background:white;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;color:var(--accent)}.model-icon svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.5}.lane-heading strong{font-size:14px;display:block;font-weight:600}.lane-heading small{display:block;font-size:11px;color:var(--muted);margin-top:3px}.lane-nodes{padding-top:24px}.node{display:block;position:relative;width:100%;padding:13px;background:white;border:1px solid #cbd7dd;border-radius:9px;text-align:left;margin:0 0 30px;color:var(--ink);box-shadow:0 2px 4px #163d4b08;transition:border-color .16s,box-shadow .16s}.node:after{content:"";position:absolute;height:30px;width:1px;background:#b7c9c1;top:100%;left:50%}.node:last-child:after{display:none}.node:hover,.node.selected{border-color:var(--accent);box-shadow:0 3px 12px #183d4218}.node.running{border-color:var(--blue);background:#fbfdff}.node.error{border-color:#d99898}.node-head{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600}.node-head svg{width:16px;height:16px;stroke:var(--accent);fill:none;stroke-width:1.8;flex-shrink:0}.node.running .node-head svg{stroke:var(--blue)}.node.error .node-head svg{stroke:var(--red)}.node p{font-size:12px;color:var(--muted);line-height:1.5;margin:8px 0 0;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.node .node-foot{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;margin-top:10px}.node.running:before{content:"";position:absolute;inset:-1px;border:1px solid var(--blue);border-radius:9px;animation:working 1.8s ease-out infinite}@keyframes working{50%{box-shadow:0 0 0 4px #356cbd15}}.lane-waiting{font-size:13px;color:var(--muted);text-align:center;padding:35px 0}.graph-footer{font-size:11px;color:var(--muted);padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:14px}.key{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px}.key.running{background:var(--blue)}.key.completed{background:var(--accent)}.key.error{background:var(--red)}.footer-end{margin-left:auto}.inspector{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}.inspector-heading{display:flex;align-items:center;justify-content:space-between;padding:21px 20px 7px}.inspector-meta{color:var(--muted);font-size:12px;padding:0 20px 18px}.inspector-tabs{padding:0 20px;display:flex;gap:18px;border-bottom:1px solid var(--line)}.inspector-tabs button{border:0;border-bottom:2px solid transparent;background:none;padding:12px 0;font-size:12px;color:var(--muted)}.inspector-tabs button.active{border-color:var(--accent);color:var(--accent)}.output{overflow:auto;padding:22px 20px;flex:1;line-height:1.6;font-size:14px;overflow-wrap:anywhere}.output-empty{margin:45px 0;color:var(--muted);text-align:center}.output-empty svg{width:40px;height:40px;stroke:#94a6ad;stroke-width:1.2;fill:none}.output-empty h3{color:var(--ink);font-size:15px;font-weight:550;margin-top:19px}.output-empty p{font-size:13px}.inspector-foot{border-top:1px solid var(--line);font-size:11px;color:var(--muted);padding:14px 20px;line-height:1.5}.output pre{white-space:pre-wrap;font:12px/1.65 Consolas,monospace;background:#f5f7f9;padding:14px;border-radius:6px;margin:0}.output h3{font-size:17px;margin:0 0 12px}.output h4{font-size:14px;margin:19px 0 8px}.output p{margin:0 0 13px}.output .record{border-bottom:1px solid var(--line);padding:0 0 18px;margin:0 0 18px}.output dl{margin:0;display:grid;grid-template-columns:minmax(65px,.4fr) minmax(0,1fr);gap:8px 13px;font-size:13px}.output dt{color:var(--muted)}.output dd{margin:0}.output table{border-collapse:collapse;font-size:12px;min-width:100%}.output th,.output td{text-align:left;border-bottom:1px solid var(--line);padding:8px;vertical-align:top}.output th{color:var(--muted);font-weight:500}.output .collection-label{font-size:12px;color:var(--muted);margin-bottom:15px}.output .check{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}.pass{color:var(--accent)}.fail{color:var(--red)}#results-view{overflow:auto;flex:1}#results-summary{display:flex;padding:25px;gap:35px;border-bottom:1px solid var(--line)}.result-stat span{display:block;font-size:12px;color:var(--muted);margin-top:4px}.result-stat strong{font-size:21px;font-weight:550;font-variant-numeric:tabular-nums}.table-scroll{overflow:auto}.results-table{width:100%;border-collapse:collapse;font-size:13px}.results-table th{font-size:12px;font-weight:500;text-align:left;color:var(--muted);padding:15px;border-bottom:1px solid var(--line);white-space:nowrap}.results-table td{padding:16px 15px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}.results-table tr[data-index]{cursor:pointer}.results-table tr[data-index]:hover{background:#f5f9f7}.results-table td small{display:block;color:var(--muted);margin-top:5px;font-size:11px}dialog{border:1px solid var(--line);padding:0;border-radius:14px;width:620px;max-width:calc(100vw - 30px);max-height:90vh;box-shadow:0 22px 70px #142c3a35;color:var(--ink)}dialog::backdrop{background:#13273260}form{padding:26px}.dialog-heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px}.dialog-heading h2{font-size:24px}.dialog-heading p{font-size:14px;color:var(--muted);margin:7px 0}.field-label{font-size:14px;font-weight:550;display:block;margin-bottom:8px}input[type=text],input:not([type]),input[type=search],#run-title{width:100%;padding:10px 12px;border:1px solid #cbd6dd;border-radius:6px;background:#fff;color:var(--ink);font-size:14px}fieldset{border:0;padding:0;margin:22px 0}legend{font-size:14px;font-weight:550;padding:0 0 12px}.model-option{display:flex;align-items:center;gap:10px;padding:10px 0}.model-option input,.task-option input{accent-color:var(--accent);height:16px;width:16px;flex-shrink:0}.model-option span{font-size:14px}.model-option small{font-size:12px;color:var(--muted);margin-left:auto}.model-option.unavailable{color:var(--muted)}.model-option .unavailable-reason{display:block;font-size:11px;margin-top:4px;font-weight:400}.field-row{display:flex;justify-content:space-between;align-items:center}.field-row span{font-weight:400;color:var(--muted);font-size:12px;margin-left:8px}.text-button{border:0;background:transparent;color:var(--accent);font-size:12px;padding:7px}.task-options{margin-top:10px;max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:7px}.task-option{display:flex;align-items:center;gap:10px;padding:11px 12px;border-bottom:1px solid #edf1f3;font-size:13px;line-height:1.4}.task-option:last-child{border:0}.task-option:hover{background:#f6f9f7}.budget-entry{display:flex;align-items:center;justify-content:space-between;margin-top:23px}.budget-entry p{font-size:12px;color:var(--muted);margin:0}.money-input{display:flex;align-items:center;border:1px solid #cbd6dd;border-radius:6px;padding:8px 10px;gap:6px}.money-input input{width:70px;border:0;color:var(--ink);font-variant-numeric:tabular-nums;background:transparent}.limit-note{font-size:12px;line-height:1.6;color:var(--muted);margin:15px 0}.form-error{color:var(--red);font-size:13px}.dialog-footer{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:20px;margin-top:22px;gap:10px}.dialog-footer>span{font-size:12px;color:var(--muted)}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:white;border-radius:8px;padding:12px 20px;font-size:14px;box-shadow:0 5px 20px #0002;z-index:20}.hidden{display:none!important}@media(min-width:1700px){.workspace{grid-template-columns:220px minmax(500px,1fr) 380px}.lane{min-width:260px}}@media(max-width:1250px){.workspace{grid-template-columns:170px minmax(350px,1fr) 280px}.sidebar-heading{padding:23px 13px}.graph-footer .footer-end{display:none}.trace-note{display:none}.lane{min-width:210px;padding-left:17px;padding-right:17px}.lane-heading{margin-left:-17px;margin-right:-17px;padding:17px}.private{display:none}}@media(max-width:980px){main{padding:24px 16px}.workspace{grid-template-columns:155px minmax(350px,1fr);height:auto;min-height:700px}.inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);min-height:260px;max-height:500px}.comparison{min-height:600px}.output-empty{margin:10px 0}.topbar{padding:0 20px}.graph-scroll{max-height:500px}}@media(max-width:620px){.topbar{height:64px;padding:0 16px}.brand{font-size:18px}.brand svg{width:24px;height:24px}.connection{display:none}.button{padding:9px 12px;font-size:12px;gap:10px}.top-actions{gap:10px}main{padding:23px 12px}.page-heading{align-items:flex-start;flex-direction:column;margin-bottom:21px;gap:20px}h1{font-size:25px}.page-heading p{font-size:13px}.budget{width:100%;max-width:none}.budget>div:first-child{font-size:12px}.budget strong{font-size:15px}.budget small{font-size:11px}.workspace{display:flex;flex-direction:column;min-height:600px;height:auto}.sidebar{border-right:0;border-bottom:1px solid var(--line);max-height:145px}.sidebar-heading{padding:13px 15px}.sidebar-bottom{display:none}.jobs{display:flex;gap:5px;overflow:auto;padding:0 8px 8px;min-height:50px}.job{min-width:160px;max-width:200px;padding:8px}.job strong{font-size:12px}.job small{font-size:11px}.comparison{min-height:550px}.comparison-header{padding:19px 16px;min-height:80px}.comparison-header h2{font-size:17px}.comparison-header p{font-size:12px}.tabs{padding:0 16px}.task-toolbar{padding:14px 15px;gap:7px}.task-toolbar select{max-width:70%;font-size:12px}.task-brief{padding:0 15px 13px;font-size:12px;max-height:90px}#task-progress{display:none}.lane{min-width:220px}.graph-scroll{max-height:440px}.graph-footer{font-size:10px;padding:11px 15px;gap:12px}.inspector{max-height:450px}.dialog-heading h2{font-size:22px}form{padding:20px}.model-option small{max-width:100px;text-align:right;font-size:10px}.limit-note{font-size:11px}.budget-entry p{max-width:180px}.dialog-footer{align-items:flex-end}.dialog-footer>span{max-width:120px;line-height:1.5}.empty{padding:25px 20px}.empty h3{font-size:20px}.empty-graph{width:240px}#results-summary{gap:24px;padding:20px}.result-stat strong{font-size:18px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+ .jobs-empty{padding:0 10px;font-size:13px;color:var(--muted)}
+ /* Outcome reporting extends the daylight workspace. */
+-.workspace{grid-template-columns:208px minmax(0,1fr)}.workspace>.inspector{display:none}.workspace.has-inspector{grid-template-columns:180px minmax(0,1fr) 370px}.workspace.has-inspector>.inspector{display:flex}.setup-open{margin:16px;justify-content:center}.page-heading{margin-bottom:30px}#report-view{overflow:auto;padding:30px 36px 40px;flex:1;background:#fff}.report-intro{max-width:72ch}.report-intro h3{font-size:26px;font-weight:550;margin:0 0 10px;letter-spacing:-.03em}.report-intro p{font-size:15px;line-height:1.7;color:var(--muted);margin:0}.comparison-bars{margin:26px 0 34px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:grid;gap:18px}.comparison-bar{display:grid;grid-template-columns:minmax(160px,1fr) minmax(90px,1.3fr) 85px 110px;align-items:center;gap:18px;font-size:13px}.comparison-bar strong{font-weight:550}.comparison-bar span{font-variant-numeric:tabular-nums;text-align:right}.comparison-bar small{color:var(--muted);font-size:11px}.outcome-track{height:8px;border-radius:2px;background:#e9edeb;overflow:hidden}.outcome-track div{height:100%;background:var(--accent);transition:width .7s cubic-bezier(.16,1,.3,1)}.outcomes-heading{display:flex;justify-content:space-between;align-items:baseline;gap:15px;margin-bottom:16px}.outcomes-heading h3{font-size:18px;margin:0;font-weight:600}.outcomes-heading span{color:var(--muted);font-size:12px}.outcome-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.outcome-card{font:inherit;text-align:left;background:#fbfcfb;border:1px solid var(--line);border-radius:10px;padding:22px;color:var(--ink);transition:background .2s,border-color .2s,box-shadow .2s}.outcome-card:hover{background:#f3f8f5;border-color:#9bbcaf;box-shadow:0 5px 16px #19352c0d}.outcome-top{display:flex;justify-content:space-between;gap:12px;align-items:start;margin-bottom:15px;font-size:11px}.outcome-top small{color:var(--muted);text-align:right;font-size:11px}.outcome-label{font-weight:650}.outcome-card h4{font-size:19px;font-weight:550;letter-spacing:-.02em;line-height:1.4;margin:0 0 12px;text-wrap:balance}.outcome-card p{font-size:13px;line-height:1.65;color:var(--muted);margin:0 0 18px}.requirement-strip{display:grid;gap:8px;font-size:12px}.requirement-strip span{display:flex;gap:7px;align-items:center;line-height:1.5}.requirement-strip svg{width:14px;height:14px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:1.8}.outcome-link{margin-top:22px;font-size:12px;font-weight:600;color:var(--accent);display:flex;justify-content:space-between}.analysis-section{margin-top:35px;padding-top:25px;border-top:1px solid var(--line)}.analysis-section h3{font-size:18px;margin:0 0 8px}.analysis-section p{color:var(--muted);font-size:14px;line-height:1.65;max-width:70ch}.analysis-section .button{margin:4px 0}.report-caveat{font-size:12px!important;color:var(--muted);line-height:1.6}.analysis-finding{padding:16px 0;border-bottom:1px solid var(--line)}.analysis-finding h4{margin:0;font-size:16px}.analysis-finding small{font-size:11px;color:var(--muted);font-weight:400;margin-left:8px}.evidence-story{padding-left:19px}.evidence-story li{padding:0 0 15px 5px}.evidence-story strong{font-size:13px}.evidence-story p{font-size:13px;margin:4px 0}.graph-scroll{background-image:none;background:#f6f9f7}.node.running:before{display:none}.node.running .node-head svg{animation:activity 2s ease-in-out infinite}@keyframes activity{50%{transform:rotate(90deg)}}dialog{width:880px}.task-options{max-height:310px}.task-option{align-items:flex-start;padding:14px}.task-option strong{font-size:13px;font-weight:500;display:block;line-height:1.55}.task-option small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.catalog-filters{display:flex;gap:10px}.catalog-filters select{max-width:45%;width:250px}.catalog-filters input{flex:1;min-width:0}.effort-options{display:flex;gap:8px;flex-wrap:wrap}.effort-options label{border:1px solid var(--line);padding:8px 12px;border-radius:6px;display:flex;gap:7px;font-size:13px;align-items:center}.effort-options label:has(input:checked){background:var(--accent-light);border-color:#9bbcaf}.effort-options input{accent-color:var(--accent)}.execution-settings{margin-top:22px;border-top:1px solid var(--line);padding:15px 0}.execution-settings summary{cursor:pointer;font-size:14px;font-weight:550;margin-bottom:16px}.execution-settings p{font-size:12px;color:var(--muted)}textarea{font:inherit;font-size:14px;line-height:1.6;resize:vertical;width:100%;border:1px solid #cbd6dd;border-radius:6px;padding:11px;color:var(--ink);background:white;caret-color:var(--accent)}textarea:focus-visible{outline:2px solid var(--blue);outline-offset:3px}.execution-settings label{margin-top:15px}input[type=number]{padding:8px;border:1px solid var(--line);border-radius:6px;max-width:100%}.setup-panel{max-width:1120px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px}.setup-panel .dialog-heading{margin-bottom:12px}.setup-panel h2{font-size:26px}.setup-layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:32px}.setup-layout form{padding:0}.setup-layout aside{border-left:1px solid var(--line);padding-left:25px}.setup-layout .field-label{margin-top:22px}.setup-layout select{max-width:100%;width:100%;font-size:14px;padding:10px}.setup-fields{display:grid;grid-template-columns:1fr 150px;gap:18px}.setup-help,.setup-boundary{font-size:13px;line-height:1.7;color:var(--muted)}.setup-boundary{background:#f5f7f9;padding:14px;border-radius:6px}.saved-setup{display:block;width:100%;background:white;border:0;border-bottom:1px solid var(--line);text-align:left;padding:16px 0;color:var(--ink)}.saved-setup strong,.saved-setup span,.saved-setup small{display:block}.saved-setup strong{font-size:14px}.saved-setup span{font-size:12px;margin-top:7px}.saved-setup small{font-size:11px;color:var(--muted);margin-top:6px}.architecture-flow{display:flex;align-items:center;gap:12px;justify-content:space-between;margin:20px 0;padding:20px 0;font-size:12px;border-block:1px solid var(--line)}.architecture-flow strong{color:var(--accent);font-weight:550}.architecture-flow svg{width:28px;min-width:18px;stroke:#8aab9b;fill:none;stroke-width:1.5}.architecture-flow span{max-width:110px}.setup-panel:not(.hidden){animation:reveal-workspace .5s cubic-bezier(.16,1,.3,1)}@keyframes reveal-workspace{from{clip-path:inset(0 0 6% 0);transform:translateY(8px)}to{clip-path:inset(0);transform:translateY(0)}}.has-inspector .outcome-list{grid-template-columns:1fr}.has-inspector .comparison-bar{grid-template-columns:1fr 85px}.has-inspector .comparison-bar small{display:none}.has-inspector .outcome-track{grid-row:2;grid-column:1/-1}.neutral{color:var(--muted)}@media(max-width:1100px){.workspace.has-inspector{grid-template-columns:160px minmax(0,1fr)}.workspace.has-inspector>.inspector{grid-column:1/-1;max-height:600px}.comparison-bar{grid-template-columns:1fr 90px}.comparison-bar small{display:none}.outcome-track{grid-row:2;grid-column:1/-1}.outcome-list{grid-template-columns:1fr}.setup-layout{grid-template-columns:minmax(0,1fr) 240px}}@media(max-width:680px){.workspace,.workspace.has-inspector{display:flex}.workspace>.inspector{display:none}.workspace.has-inspector>.inspector{display:flex}#report-view{padding:24px 18px}.report-intro h3{font-size:23px}.report-intro p{font-size:14px}.outcome-card{padding:18px}.outcome-card h4{font-size:18px}.outcome-top{flex-direction:column;gap:5px}.outcomes-heading span{display:none}.setup-panel{padding:20px}.setup-layout{display:block}.setup-layout aside{border-left:0;border-top:1px solid var(--line);padding:15px 0;margin-top:30px}.setup-fields{grid-template-columns:1fr 100px}.setup-open{margin:8px 15px;width:max-content}.sidebar{max-height:200px}.catalog-filters{flex-direction:column}.catalog-filters select{max-width:100%;width:100%}.dialog-footer{flex-wrap:wrap}.setup-panel .dialog-heading{gap:15px}.setup-panel .dialog-heading h2{font-size:22px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
++.workspace{grid-template-columns:208px minmax(0,1fr)}.workspace>.inspector{display:none}.workspace.has-inspector{grid-template-columns:180px minmax(0,1fr) 370px}.workspace.has-inspector>.inspector{display:flex}.setup-open{margin:16px;justify-content:center}.page-heading{margin-bottom:30px}#report-view{overflow:auto;padding:30px 36px 40px;flex:1;background:#fff}.report-intro{max-width:72ch}.report-intro h3{font-size:26px;font-weight:550;margin:0 0 10px;letter-spacing:-.03em}.report-intro p{font-size:15px;line-height:1.7;color:var(--muted);margin:0}.comparison-bars{margin:26px 0 34px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:grid;gap:18px}.comparison-bar{display:grid;grid-template-columns:minmax(160px,1fr) minmax(90px,1.3fr) 85px 110px;align-items:center;gap:18px;font-size:13px}.comparison-bar strong{font-weight:550}.comparison-bar span{font-variant-numeric:tabular-nums;text-align:right}.comparison-bar small{color:var(--muted);font-size:11px}.outcome-track{height:8px;border-radius:2px;background:#e9edeb;overflow:hidden}.outcome-track div{height:100%;background:var(--accent);transition:background-color .2s ease}.outcomes-heading{display:flex;justify-content:space-between;align-items:baseline;gap:15px;margin-bottom:16px}.outcomes-heading h3{font-size:18px;margin:0;font-weight:600}.outcomes-heading span{color:var(--muted);font-size:12px}.outcome-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.outcome-card{font:inherit;text-align:left;background:#fbfcfb;border:1px solid var(--line);border-radius:10px;padding:22px;color:var(--ink);transition:background .2s,border-color .2s,box-shadow .2s}.outcome-card:hover{background:#f3f8f5;border-color:#9bbcaf;box-shadow:0 5px 16px #19352c0d}.outcome-top{display:flex;justify-content:space-between;gap:12px;align-items:start;margin-bottom:15px;font-size:11px}.outcome-top small{color:var(--muted);text-align:right;font-size:11px}.outcome-label{font-weight:650}.outcome-card h4{font-size:19px;font-weight:550;letter-spacing:-.02em;line-height:1.4;margin:0 0 12px;text-wrap:balance}.outcome-card p{font-size:13px;line-height:1.65;color:var(--muted);margin:0 0 18px}.requirement-strip{display:grid;gap:8px;font-size:12px}.requirement-strip span{display:flex;gap:7px;align-items:center;line-height:1.5}.requirement-strip svg{width:14px;height:14px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:1.8}.outcome-link{margin-top:22px;font-size:12px;font-weight:600;color:var(--accent);display:flex;justify-content:space-between}.analysis-section{margin-top:35px;padding-top:25px;border-top:1px solid var(--line)}.analysis-section h3{font-size:18px;margin:0 0 8px}.analysis-section p{color:var(--muted);font-size:14px;line-height:1.65;max-width:70ch}.analysis-section .button{margin:4px 0}.report-caveat{font-size:12px!important;color:var(--muted);line-height:1.6}.analysis-finding{padding:16px 0;border-bottom:1px solid var(--line)}.analysis-finding h4{margin:0;font-size:16px}.analysis-finding small{font-size:11px;color:var(--muted);font-weight:400;margin-left:8px}.evidence-story{padding-left:19px}.evidence-story li{padding:0 0 15px 5px}.evidence-story strong{font-size:13px}.evidence-story p{font-size:13px;margin:4px 0}.graph-scroll{background-image:none;background:#f6f9f7}.node.running:before{display:none}.node.running .node-head svg{animation:activity 2s ease-in-out infinite}@keyframes activity{50%{transform:rotate(90deg)}}dialog{width:880px}.task-options{max-height:310px}.task-option{align-items:flex-start;padding:14px}.task-option strong{font-size:13px;font-weight:500;display:block;line-height:1.55}.task-option small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.catalog-filters{display:flex;gap:10px}.catalog-filters select{max-width:45%;width:250px}.catalog-filters input{flex:1;min-width:0}.effort-options{display:flex;gap:8px;flex-wrap:wrap}.effort-options label{border:1px solid var(--line);padding:8px 12px;border-radius:6px;display:flex;gap:7px;font-size:13px;align-items:center}.effort-options label:has(input:checked){background:var(--accent-light);border-color:#9bbcaf}.effort-options input{accent-color:var(--accent)}.execution-settings{margin-top:22px;border-top:1px solid var(--line);padding:15px 0}.execution-settings summary{cursor:pointer;font-size:14px;font-weight:550;margin-bottom:16px}.execution-settings p{font-size:12px;color:var(--muted)}textarea{font:inherit;font-size:14px;line-height:1.6;resize:vertical;width:100%;border:1px solid #cbd6dd;border-radius:6px;padding:11px;color:var(--ink);background:white;caret-color:var(--accent)}textarea:focus-visible{outline:2px solid var(--blue);outline-offset:3px}.execution-settings label{margin-top:15px}input[type=number]{padding:8px;border:1px solid var(--line);border-radius:6px;max-width:100%}.setup-panel{max-width:1120px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px}.setup-panel .dialog-heading{margin-bottom:12px}.setup-panel h2{font-size:26px}.setup-layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:32px}.setup-layout form{padding:0}.setup-layout aside{border-left:1px solid var(--line);padding-left:25px}.setup-layout .field-label{margin-top:22px}.setup-layout select{max-width:100%;width:100%;font-size:14px;padding:10px}.setup-fields{display:grid;grid-template-columns:1fr 150px;gap:18px}.setup-help,.setup-boundary{font-size:13px;line-height:1.7;color:var(--muted)}.setup-boundary{background:#f5f7f9;padding:14px;border-radius:6px}.saved-setup{display:block;width:100%;background:white;border:0;border-bottom:1px solid var(--line);text-align:left;padding:16px 0;color:var(--ink)}.saved-setup strong,.saved-setup span,.saved-setup small{display:block}.saved-setup strong{font-size:14px}.saved-setup span{font-size:12px;margin-top:7px}.saved-setup small{font-size:11px;color:var(--muted);margin-top:6px}.architecture-flow{display:flex;align-items:center;gap:12px;justify-content:space-between;margin:20px 0;padding:20px 0;font-size:12px;border-block:1px solid var(--line)}.architecture-flow strong{color:var(--accent);font-weight:550}.architecture-flow svg{width:28px;min-width:18px;stroke:#8aab9b;fill:none;stroke-width:1.5}.architecture-flow span{max-width:110px}.setup-panel:not(.hidden){animation:reveal-workspace .5s cubic-bezier(.16,1,.3,1)}@keyframes reveal-workspace{from{clip-path:inset(0 0 6% 0);transform:translateY(8px)}to{clip-path:inset(0);transform:translateY(0)}}.has-inspector .outcome-list{grid-template-columns:1fr}.has-inspector .comparison-bar{grid-template-columns:1fr 85px}.has-inspector .comparison-bar small{display:none}.has-inspector .outcome-track{grid-row:2;grid-column:1/-1}.neutral{color:var(--muted)}@media(max-width:1100px){.workspace.has-inspector{grid-template-columns:160px minmax(0,1fr)}.workspace.has-inspector>.inspector{grid-column:1/-1;max-height:600px}.comparison-bar{grid-template-columns:1fr 90px}.comparison-bar small{display:none}.outcome-track{grid-row:2;grid-column:1/-1}.outcome-list{grid-template-columns:1fr}.setup-layout{grid-template-columns:minmax(0,1fr) 240px}}@media(max-width:680px){.workspace,.workspace.has-inspector{display:flex}.workspace>.inspector{display:none}.workspace.has-inspector>.inspector{display:flex}#report-view{padding:24px 18px}.report-intro h3{font-size:23px}.report-intro p{font-size:14px}.outcome-card{padding:18px}.outcome-card h4{font-size:18px}.outcome-top{flex-direction:column;gap:5px}.outcomes-heading span{display:none}.setup-panel{padding:20px}.setup-layout{display:block}.setup-layout aside{border-left:0;border-top:1px solid var(--line);padding:15px 0;margin-top:30px}.setup-fields{grid-template-columns:1fr 100px}.setup-open{margin:8px 15px;width:max-content}.sidebar{max-height:200px}.catalog-filters{flex-direction:column}.catalog-filters select{max-width:100%;width:100%}.dialog-footer{flex-wrap:wrap}.setup-panel .dialog-heading{gap:15px}.setup-panel .dialog-heading h2{font-size:22px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+ .architecture-source{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:10px 0 18px}.architecture-source p{flex-basis:100%;margin:0;font-size:13px;color:var(--muted);line-height:1.6}.architecture-source span{font-size:12px;color:var(--muted)}.architecture-source a{text-decoration:underline;text-underline-offset:3px}.architecture-flow strong{max-width:200px;text-align:center}#custom-architecture{margin-bottom:18px}
++

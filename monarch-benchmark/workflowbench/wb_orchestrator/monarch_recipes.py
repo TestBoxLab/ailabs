@@ -11,8 +11,8 @@ the last attempt's reason, and `wb run` excludes it from every competitor's task
 set (feature 004, FR-029).
 
 This is the only path of feature 004 that spends model money, so it refuses to
-start without an explicit yes or an approved plan, and it is idempotent: a task
-that already has a recipe for the current knowledge base costs nothing.
+start without an explicit yes, and it is idempotent: a task that already has a
+recipe for the current knowledge base costs nothing.
 
 `# ponytail: it drives the create + run arm as-is rather than factoring out an
 "author one workflow" helper; the ceiling is that a change to that lifecycle is
@@ -105,9 +105,10 @@ def run(product_path, harness_path, tasks_dir=None, plan_path=None, attempts=DEF
           f"(create + run pilot measured US$ {USD_PER_ATTEMPT_HIGH:.2f} per attempt)",
           file=stdout)
     print(f"tasks already covered for this knowledge base: {len(covered)}", file=stdout)
-    if not yes and not (plan and plan.approved_by):
-        say("stop", "this command spends model money; rerun with --yes, or give it a "
-                    "--plan whose approved_by is set")
+    # `approved_by` in a plan file approves nothing since decision D5 (8 Sep 2026):
+    # approvals are records in the results store. Only an explicit --yes proceeds.
+    if not yes:
+        say("stop", "this command spends model money; rerun with --yes")
         return 5
 
     return _make(product_path, harness_path, tasks, tasks_name, kb_path, kb_sha, out_path,

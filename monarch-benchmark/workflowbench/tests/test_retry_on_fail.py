@@ -201,12 +201,12 @@ def test_retry_on_fail_moves_the_hash_only_when_it_is_set(site):
     assert _oracle_plan(site, "retry_on_fail: 1\n", repetitions=1).hash != h1
 
 
-def test_the_gate_counts_retries_as_attempts(site):
-    """The approval gate is for what the round could cost, not its best case."""
-    _oracle_plan(site, repetitions=2)                     # 10 x 2 = 20, at smoke scale
-    with pytest.raises(ConfigError) as exc:
-        _oracle_plan(site, "retry_on_fail: 1\n", repetitions=2)   # 10 x 3 = 30
-    assert exc.value.field == "approved_by" and "30" in str(exc.value)
+def test_the_size_counts_retries_as_attempts(site):
+    """The launch gate (an approval record above smoke scale, decision D5) judges
+    what the round could cost, not its best case: retries count."""
+    assert _oracle_plan(site, repetitions=2).attempts_per_competitor == 20        # at smoke scale
+    rc = _oracle_plan(site, "retry_on_fail: 1\n", repetitions=2)                  # 10 x 3 = 30
+    assert rc.attempts_per_competitor == 30 > config_mod.SMOKE_SCALE_ATTEMPTS
 
 
 # -- the size line -------------------------------------------------------------

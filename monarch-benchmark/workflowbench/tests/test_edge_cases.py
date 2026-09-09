@@ -44,7 +44,10 @@ def test_spend_accumulates_across_retry_attempts(tmp_path, mock_server):
     assert r["tokens"]["prompt"] == 4300
     assert "spend_includes_failed_attempts" in r["flags"]
     turns = Path(store.artifacts(r["episode_id"])["turns"]).read_text().strip().splitlines()
-    assert len(turns) == 5                      # failed attempt's turns in the artifact
+    events = [json.loads(line) for line in turns]
+    assert len(events) == 6  # five answered requests plus the observed failed request
+    assert sum(event["status"] == "completed" for event in events) == 5
+    assert sum(event["status"] == "error" for event in events) == 1
 
 
 def test_spend_survives_exhausted_infra(tmp_path, mock_server):

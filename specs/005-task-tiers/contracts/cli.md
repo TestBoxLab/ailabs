@@ -45,6 +45,82 @@ uv run wb corpus declare corpus/imported-finance --overwrite --product simulated
 uv run wb corpus validate corpus/imported-finance
 ```
 
+### World revisions: `--revision LABEL` and `--out DIR` (added 8 Sep 2026, milestone M1)
+
+```
+wb corpus import-ab --domains NAME[,NAME…]|all [--out DIR | --dest DIR] [--revision LABEL]
+```
+
+- `--out DIR` names the folder that holds one `imported-<domain>/` folder per
+  domain. With neither `--out` nor `--dest` the folders land under `corpus/`,
+  exactly as before. `--dest` keeps its old meaning (a pattern with
+  `{domain}`); `--out` and `--dest` together are refused (exit 2).
+- `--revision LABEL` (letters, digits, `.`, `_`, `-`) records the world the
+  tasks were imported under: every task gets `info.world` with the package
+  name (`automation-bench`), the installed package version and the label, and
+  that block is part of `contract_sha256`. Rows recorded on such a set carry the
+  suite id `workflowbench-synthetic@<version>`; sets that record no world keep
+  `workflowbench-synthetic@0.1`. `wb report` and `wb summary` refuse to pool
+  rounds of different suite ids.
+- Without `--revision`, the import is refused (exit 2) when the installed
+  package is not the upstream `1.0.6`, so a repaired world never lands in
+  `corpus/` unlabelled.
+- With `--revision`, `DIR/MANIFEST.yaml` is written after the import.
+
+```
+$ uv run wb corpus import-ab --domains all --revision evalrepair10 --out corpus-evalrepair10
+simple:     200 written, 0 unchanged
+finance:    100 written, 0 unchanged
+…
+total: 800 tasks in 7 folders
+revision: evalrepair10 (automation-bench 1.0.6+evalrepair.10); manifest: corpus-evalrepair10/MANIFEST.yaml
+services seeded by these domains and NOT listed by product simulated-apps: none
+```
+
+Then declare and validate per folder as above, and refresh the manifest.
+
+## `wb corpus manifest DIR` (new, 8 Sep 2026)
+
+```
+wb corpus manifest DIR
+```
+
+Rewrites `DIR/MANIFEST.yaml` from the `imported-*` folders under `DIR` as they
+are now: the revision label and world version the tasks record (a folder set
+that mixes worlds is refused, exit 1), what `vendor/automation-bench/VENDORED-FROM.txt`
+says about the installed copy, the import date kept from the previous manifest,
+per-folder task counts, whether the folder's rules are declared, usable counts
+(a non-empty approval rule and a matching hash, the two checks `wb corpus tiers`
+applies), the totals and the list of tasks without a rule with their reasons.
+Offline; writes only the manifest.
+
+```
+$ uv run wb corpus manifest corpus-evalrepair10
+corpus-evalrepair10: revision evalrepair10, world automation-bench 1.0.6+evalrepair.10
+  finance      100 tasks, 100 usable, declared
+  …
+total: 800 tasks, 795 usable, 5 without a rule
+[ok] write corpus-evalrepair10/MANIFEST.yaml
+```
+
+Exit codes: 0 written; 1 no `imported-*` folder under DIR, or the folders mix worlds.
+
+## `wb run` (changed: the installed world must be the recorded one)
+
+`wb run` and `wb resume` refuse a task set whose recorded world version is not
+the installed `automation-bench` version, naming both, before anything is
+spent:
+
+```
+config error in config/plans/tier-simple.yaml: tasks: this task set was imported
+under automation-bench 1.0.6, but the installed world is automation-bench
+1.0.6+evalrepair.10; …
+```
+
+A set that records no world counts as `1.0.6`, the only world the bench had
+before it recorded one. The frozen sets under `tasks/` therefore do not run on
+the repaired world; new sets are drawn from the corpus imported under it.
+
 ## `wb corpus tiers` (new)
 
 ```
