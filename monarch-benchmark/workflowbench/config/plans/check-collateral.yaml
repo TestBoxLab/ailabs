@@ -1,0 +1,26 @@
+name: check-collateral
+description: >
+  A four-prompt check that the collateral judge works, not a measurement.
+  Three Airtable prompts whose approval rule was a whole-service wildcard until
+  9 Sep, plus one complex prompt from the Hard round where every competitor
+  scored 0 because the collateral half rejected the changes the task itself
+  demands. Prompts: 4; attempts per prompt: 1, no retry; competitors: 7;
+  attempts in the round: 28. Internal, and too small to draw a conclusion from.
+tasks: tasks/check-collateral
+mode: create-run
+repetitions: 1
+retry_on_fail: 0               # a check, not a measurement: one attempt each
+timeout_s: 1800
+concurrency: 4
+competitors:
+  - {harness: oracle}
+  - {model: kimi-k3-fireworks, harness: api}
+  - {model: glm-5.3-fireworks, harness: api}
+  - {model: claude-opus-5, harness: api}
+  - {model: gpt-5.6-terra, harness: api}
+  - {model: gpt-5.6-sol, harness: api}
+  - {harness: monarch}
+cost_ceiling_usd: 25
+baseline: claude-opus-5/api
+audience: internal
+approved_by: Carlos Mattos     # approved 9 Sep 2026: a 28-attempt check, not a measurement
