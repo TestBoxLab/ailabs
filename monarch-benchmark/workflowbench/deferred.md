@@ -83,6 +83,7 @@ than 30 days (warning, never a gate).
   schemas; the seeds derive body fields from the AutomationBench data model
   and the corpus. When the documents gain schemas, prefer them.
 - The conformance gate stops on any product service; buffer, canva and twitter (outside the four task sets) block a 47-app import. Gate should take the plan's services or an allowlist. Imported with --no-conform on 8 Sep.
+- The public front door (ngrok tunnel to 9105) was down on 8 Sep and every Monarch dispatch got a 404 from ngrok; wb doctor must check the public URL answers with the shim's headers before a round (start a shim, curl the public URL).
 
 ## Stock Monarch Enterprise in the Studio: what the adapter cannot verify (8 Sep 2026)
 
