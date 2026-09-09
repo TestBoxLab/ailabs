@@ -12,13 +12,14 @@
 
 const STEP_TYPES = {
   'input': {name: 'Task input', symbol: 'input', description: 'The benchmark request and its starting context. Every flow starts here.'},
-  'product-graph': {name: 'Product graph', symbol: 'fields', description: 'A prepared product graph version: typed fields filled once by an agent for every product in the corpus. Its records are delivered to every step downstream of it.'},
+  'product-graph': {name: 'Product graph', symbol: 'fields', description: 'A prepared product graph version: typed fields filled once by an agent for every product in the corpus. Connect its output to the agents that need this knowledge. It has no input.'},
   'agent': {name: 'Agent step', symbol: 'agent', description: 'One agent loop on the task. Act mode calls application tools; Advise mode answers in text for a later step.'},
   'monarch': {name: 'Monarch Enterprise', symbol: 'monarch', description: 'The official product, pinned to a GitHub revision on publication. It runs its own Bedrock Claude brain; no per-run model or effort override exists.'},
+  'workflow': {name: 'Run workflow', symbol: 'agent', description: 'Validate and save the JSON workflow produced by the preceding builder, then execute its dependency-ordered actions. Supported tools: api_search, api_fetch and base64_encode. This is the experimental Studio runtime, separate from Monarch recipes.'},
   'merge': {name: 'Join branches', symbol: 'merge', description: 'Joins the outputs of the connected steps into one text for the next step.'},
-  'output': {name: 'Result output', symbol: 'output', description: 'The final answer handed to the evaluator. Every flow ends here.'}
+  'output': {name: 'Result Output', symbol: 'output', description: 'Fixed endpoint. Request architectures return the final answer. Workflow architectures return the workflow artifact, which the benchmark saves and executes.'}
 };
-const PALETTE = ['agent', 'product-graph', 'merge', 'monarch'];
+const PALETTE = ['agent', 'product-graph', 'merge'];
 const FIXED = ['input', 'output'];
 const PROVIDER_LABELS = {anthropic: 'Anthropic API', openai: 'OpenAI API', gemini: 'Gemini API', fireworks: 'Fireworks', moonshot: 'Moonshot', zai: 'Z.ai',
   'claude-code': 'Claude Code (native harness)', codex: 'Codex (native harness)', bedrock: 'Monarch Enterprise brain (Bedrock)'};
@@ -27,9 +28,10 @@ const NATIVE_DEFAULTS = {'claude-code': 'sonnet', codex: 'gpt-5.6-sol'};
 const ALL_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'];
 const NODE_W = 240, PORT_Y = 46, GRID = 20, NODE_H_GUESS = 120;
 const TEMPLATES = {
-  'single': {name: 'Single agent', hint: 'One acting agent with the application tools', build: () => ({nodes: [mk('input', 'input', 80, 180), mk('worker', 'agent', 400, 180, {mode: 'act', instructions: 'Complete the request using the application tools. Verify the record you change before writing.', runner: runnerFor('gemini')}, 'Worker'), mk('output', 'output', 720, 180)], edges: E(['input', 'worker'], ['worker', 'output'])})},
+  'workflow': {name:'Workflow configuration',hint:'Discover and author a workflow, save it, then execute it',build:()=>({nodes:[mk('input','input',60,180),mk('builder','agent',350,180,{mode:'act',instructions:'Inspect the application catalog and relevant records. Author a JSON workflow that completes the request. Put all writes in the workflow, with explicit dependencies and references to earlier outputs.',runner:runnerFor('gemini')},'Workflow builder'),mk('output','output',650,180,{},'Result Output')],edges:E(['input','builder'],['builder','output'])})},
+  'single': {name: 'Agentic request · single agent', hint: 'One acting agent with the application tools', build: () => ({nodes: [mk('input', 'input', 80, 180), mk('worker', 'agent', 400, 180, {mode: 'act', instructions: 'Complete the request using the application tools. Verify the record you change before writing.', runner: runnerFor('gemini')}, 'Worker'), mk('output', 'output', 720, 180)], edges: E(['input', 'worker'], ['worker', 'output'])})},
   'planner': {name: 'Planner then worker', hint: 'An advising planner writes the plan, an acting worker executes it', build: () => ({nodes: [mk('input', 'input', 60, 180), mk('planner', 'agent', 340, 180, {mode: 'advise', instructions: 'Read the request and write a short numbered plan: which records to find, what to change, what to check afterwards. Prefer exact record identity over name matches. Change only what the request asks for.', runner: runnerFor('anthropic')}, 'Planner'), mk('worker', 'agent', 640, 180, {mode: 'act', instructions: 'Execute the plan with the application tools and report what you changed.', runner: runnerFor('gemini')}, 'Worker'), mk('output', 'output', 940, 180)], edges: E(['input', 'planner'], ['planner', 'worker'], ['worker', 'output'])})},
-  'informed': {name: 'Product graph, then act', hint: 'Deliver a prepared product graph to an acting worker', build: () => ({nodes: [mk('input', 'input', 60, 180), mk('knowledge', 'product-graph', 340, 40, latestGraphRef(), 'Product graph'), mk('worker', 'agent', 640, 180, {mode: 'act', instructions: 'Complete the request. Use the product graph to choose the right actions and verify before writing.', runner: runnerFor('gemini')}, 'Worker'), mk('output', 'output', 940, 180)], edges: E(['input', 'knowledge'], ['knowledge', 'worker'], ['worker', 'output'])})},
+  'informed': {name: 'Agent with product knowledge', hint: 'Deliver a prepared product graph to an acting worker', build: () => ({nodes: [mk('input', 'input', 60, 180), mk('knowledge', 'product-graph', 340, 40, latestGraphRef(), 'Product graph'), mk('worker', 'agent', 640, 180, {mode: 'act', instructions: 'Complete the request. Use the product graph to choose the right actions and verify before writing.', runner: runnerFor('gemini')}, 'Worker'), mk('output', 'output', 940, 180)], edges: E(['input', 'worker'], ['knowledge', 'worker'], ['worker', 'output'])})},
   'monarch': {name: 'Stock Monarch Enterprise', hint: 'The official product as a definition; runs once its adapter exists', build: () => ({nodes: [mk('input', 'input', 80, 180), mk('monarch', 'monarch', 400, 180, {runner: {provider: 'bedrock', model: 'claude-opus-4-8', effort: 'default'}}), mk('output', 'output', 720, 180)], edges: E(['input', 'monarch'], ['monarch', 'output'])})}
 };
 
@@ -79,6 +81,8 @@ function canConnect(from, to) {
   if (from === to) return 'A step cannot connect to itself';
   const a = byId(from), b = byId(to);
   if (!a || !b) return 'Unknown step';
+  if (b.type === 'product-graph') return 'Product graphs provide knowledge; they do not receive connections';
+  if (a.type === 'product-graph' && b.type !== 'agent') return 'Connect product knowledge to an agent';
   if (a.type === 'output') return 'The result output ends the flow';
   if (b.type === 'input') return 'The task input starts the flow';
   if (blueprint.graph.edges.some(e => e.from === from && e.to === to)) return 'These steps are already connected';
@@ -93,11 +97,11 @@ function hint(text) { $('#canvas-hint').textContent = text; }
 function labelOf(id) { return byId(id)?.label || id; }
 
 // ------------------------------------------------------------------ history / dirty
-function snapshot() { return JSON.stringify({graph: blueprint.graph, name: blueprint.name, notes: blueprint.notes}); }
+function snapshot() { return JSON.stringify({graph: blueprint.graph, name: blueprint.name, notes: blueprint.notes, track:blueprint.track}); }
 function commit() { typing.key = null; editHistory.undo.push(snapshot()); if (editHistory.undo.length > 80) editHistory.undo.shift(); editHistory.redo = []; updateHistoryButtons(); }
 // One undo entry per field while typing: a new entry only when the field changes or after a pause.
 function commitTyping(key) { const now = Date.now(); if (typing.key !== key || now - typing.at > 1500) { commit(); typing.key = key; } typing.at = now; }
-function restore(text) { const value = JSON.parse(text); blueprint.graph = value.graph; blueprint.name = value.name; blueprint.notes = value.notes; $('#blueprint-name').value = blueprint.name; $('#blueprint-notes').value = blueprint.notes; selection = new Set([...selection].filter(id => byId(id))); if (selectedEdge !== null && !blueprint.graph.edges[selectedEdge]) selectedEdge = null; markDirty(); render(); renderInspector(); }
+function restore(text) { const value = JSON.parse(text); blueprint.graph = value.graph; blueprint.name = value.name; blueprint.notes = value.notes;blueprint.track=value.track||'agentic-request';$('#blueprint-track').value=blueprint.track;$('#architecture-track-note').textContent=blueprint.track==='create-and-run'?'Configure a workflow. Result Output receives the artifact; the benchmark saves and executes it.':'Complete an agentic request. Result Output returns the final response for evaluation.'; $('#blueprint-name').value = blueprint.name; $('#blueprint-notes').value = blueprint.notes; selection = new Set([...selection].filter(id => byId(id))); if (selectedEdge !== null && !blueprint.graph.edges[selectedEdge]) selectedEdge = null; markDirty(); render(); renderInspector(); }
 function undo() { if (!editHistory.undo.length) return hint('Nothing to undo'); editHistory.redo.push(snapshot()); restore(editHistory.undo.pop()); typing.key = null; updateHistoryButtons(); hint('Undone'); }
 function redo() { if (!editHistory.redo.length) return hint('Nothing to redo'); editHistory.undo.push(snapshot()); restore(editHistory.redo.pop()); typing.key = null; updateHistoryButtons(); hint('Redone'); }
 function updateHistoryButtons() { $('#builder-undo').disabled = !editHistory.undo.length; $('#builder-redo').disabled = !editHistory.redo.length; }
@@ -131,7 +135,7 @@ function renderProblems() {
   box.className = 'builder-problems' + (count ? ' has-problems' : ' ok');
   box.innerHTML = count
     ? '<strong>' + count + (count === 1 ? ' problem' : ' problems') + ' before publishing</strong>' + problems.slice(0, 6).map((p, i) => p.node ? '<button type="button" class="problem-link" data-problem="' + i + '">' + esc(labelOf(p.node)) + ': ' + esc(p.message) + '</button>' : '<span>' + esc(p.message) + '</span>').join('') + (count > 6 ? '<span>… and ' + (count - 6) + ' more, marked on the canvas</span>' : '')
-    : (blueprint.graph.nodes.length ? (blueprint.name.trim()?'<strong>Ready to publish</strong>':'<strong>Graph validates</strong><span>Name this architecture to save and publish it.</span>') : '');
+    : (blueprint.graph.nodes.length ? (blueprint.name.trim()?'<strong>Ready to publish</strong>':'<strong>Graph validates</strong>') : '');
   $$('[data-problem]').forEach(b => b.onclick = () => focusProblem(problems[Number(b.dataset.problem)]));
   const publish = $('#blueprint-publish');
   publish.classList.toggle('is-disabled', count > 0);
@@ -179,7 +183,7 @@ function nodeBody(n) {
   if (n.type === 'product-graph') { const v = graphVersion(c); const g = graphRecord(c.graph); parts.push(chip(g ? g.name + ' · v' + (c.version || '?') : 'no product graph chosen', v ? (v.status === 'complete' ? 'ok' : 'warn') : 'unsupported')); if (v) { parts.push(chip(v.fields.length + ' field' + (v.fields.length === 1 ? '' : 's'))); parts.push(chip(Object.keys(v.records || {}).length + ' products')); } }
   if (c.max_turns) parts.push(chip(c.max_turns + ' turns'));
   if (n.type === 'monarch') parts.push(chip(c.baseline?.commit ? 'pinned ' + c.baseline.commit.slice(0, 7) : 'pinned on publish'));
-  const text = n.type === 'agent' ? (c.instructions || '') : n.type === 'product-graph' && graphVersion(c) ? 'Delivers ' + graphVersion(c).fields.map(f => f.path).join(', ') + ' for every product to each step after it.' : STEP_TYPES[n.type].description;
+  const text = n.type === 'output' ? (blueprint.track==='create-and-run'?'Return the workflow artifact here. The benchmark saves it, executes it, and checks the result.':'Return the final response here. The benchmark checks the resulting application state.') : n.type === 'agent' ? (c.instructions || '') : n.type === 'product-graph' && graphVersion(c) ? 'Delivers ' + graphVersion(c).fields.map(f => f.path).join(', ') + ' to connected agents.' : STEP_TYPES[n.type].description;
   return '<div class="bp-chips">' + parts.join('') + '</div>' + (text ? '<p>' + esc(text.length > 110 ? text.slice(0, 107) + '…' : text) + '</p>' : '');
 }
 function nodeBadge(n) {
@@ -202,7 +206,7 @@ function renderNodes() {
   const nodes = blueprint.graph.nodes;
   const focused = document.activeElement?.closest?.('#builder-nodes [data-node]')?.dataset.node;
   $('#builder-nodes').innerHTML = nodes.map(n => '<div class="bp-node type-' + esc(n.type) + (selection.has(n.id) ? ' selected' : '') + (live[n.id] ? ' live-' + esc(live[n.id]) : '') + (nodeProblems(n.id).length ? ' invalid' : '') + '" data-node="' + esc(n.id) + '" tabindex="0" role="button" aria-label="' + esc(n.label) + ', ' + esc(STEP_TYPES[n.type].name) + (nodeProblems(n.id).length ? ', ' + nodeProblems(n.id).length + ' problems' : '') + '">'
-    + (n.type !== 'input' ? '<button type="button" class="bp-port in" data-in="' + esc(n.id) + '" aria-label="Connect into ' + esc(n.label) + '" title="Drag to a step that should feed this one" tabindex="-1"></button>' : '')
+    + (!['input', 'product-graph'].includes(n.type) ? '<button type="button" class="bp-port in" data-in="' + esc(n.id) + '" aria-label="Connect into ' + esc(n.label) + '" title="Drag to a step that should feed this one" tabindex="-1"></button>' : '')
     + '<div class="bp-head">' + stepIcon(n.type) + '<div class="bp-title"><strong>' + esc(n.label) + '</strong><small>' + esc(STEP_TYPES[n.type].name) + '</small></div>' + nodeBadge(n) + '</div>'
     + nodeBody(n) + nodeTools(n)
     + (n.type !== 'output' ? '<button type="button" class="bp-port out" data-out="' + esc(n.id) + '" aria-label="Connect from ' + esc(n.label) + '" title="Drag to the next step, or to empty space for a new one" tabindex="-1"></button><button type="button" class="bp-add" data-add-from="' + esc(n.id) + '" aria-label="Add a step after ' + esc(n.label) + '" title="Add a connected step" aria-haspopup="menu">+</button>' : '')
@@ -228,7 +232,7 @@ function renderWires() {
     if (!a || !b) return '';
     const mid = {x: (a.x + b.x) / 2, y: (a.y + b.y) / 2};
     const active = selectedEdge === i;
-    return '<g class="bp-wire' + (active ? ' selected' : '') + (live[e.to] || live[e.from] ? ' live' : '') + '" data-wire="' + i + '" tabindex="0" role="button" aria-label="Connection from ' + esc(labelOf(e.from)) + ' to ' + esc(labelOf(e.to)) + '"><path class="hit" d="' + wirePath(a, b) + '"/><path class="line" d="' + wirePath(a, b) + '"/><g class="bp-wire-delete" transform="translate(' + mid.x + ',' + mid.y + ')" role="button" aria-label="Remove this connection"><title>Remove connection</title><circle class="hit-area" r="14"/><circle class="face" r="9"/><path d="M-3 -3 3 3M3 -3-3 3"/></g></g>';
+    return '<g class="bp-wire' + (byId(e.from)?.type === 'product-graph' ? ' knowledge-wire' : '') + (active ? ' selected' : '') + (live[e.to] || live[e.from] ? ' live' : '') + '" data-wire="' + i + '" tabindex="0" role="button" aria-label="Connection from ' + esc(labelOf(e.from)) + ' to ' + esc(labelOf(e.to)) + '"><path class="hit" d="' + wirePath(a, b) + '"/><path class="line" d="' + wirePath(a, b) + '"/><g class="bp-wire-delete" transform="translate(' + mid.x + ',' + mid.y + ')" role="button" aria-label="Remove this connection"><title>Remove connection</title><circle class="hit-area" r="14"/><circle class="face" r="9"/><path d="M-3 -3 3 3M3 -3-3 3"/></g></g>';
   }).join('');
   const preview = connectPreview ? '<path class="bp-wire-preview' + (connectPreview.snapped ? ' snapped' : '') + (connectPreview.refused ? ' refused' : '') + '" d="' + wirePath(connectPreview.from, connectPreview.to) + '"/>' : '';
   svg.innerHTML = wires + preview;
@@ -250,7 +254,7 @@ function fitView() {
   const nodes = blueprint.graph.nodes; if (!nodes.length) return;
   const r = viewport.getBoundingClientRect();
   const x1 = Math.min(...nodes.map(n => n.x)), y1 = Math.min(...nodes.map(n => n.y)), x2 = Math.max(...nodes.map(n => n.x + NODE_W)), y2 = Math.max(...nodes.map(n => n.y + nodeHeight(n.id)));
-  camera.k = Math.max(.35, Math.min(1.25, Math.min((r.width - 100) / (x2 - x1), (r.height - 80) / (y2 - y1))));
+  camera.k = Math.max(.02, Math.min(1.25, Math.min((r.width - 60) / (x2 - x1), (r.height - 80) / (y2 - y1))));
   camera.x = (r.width - (x2 - x1) * camera.k) / 2 - x1 * camera.k; camera.y = (r.height - (y2 - y1) * camera.k) / 2 - y1 * camera.k; worldTransform();
 }
 function centerOn(id) {
@@ -520,7 +524,12 @@ window.addEventListener('resize', () => closeMenu(false));
 window.addEventListener('blur', () => closeMenu(false));
 
 function quickAddItems(at, link) {
-  return PALETTE.map(type => ({label: STEP_TYPES[type].name, title: STEP_TYPES[type].description, icon: stepIcon(type), action: () => addNode(type, at, link)}));
+  return PALETTE.filter(type => {
+    if (link?.from) return byId(link.from)?.type === 'product-graph' ? type === 'agent' : type !== 'product-graph';
+    if (link?.to) return type !== 'product-graph' || byId(link.to)?.type === 'agent';
+    if (link?.insert !== undefined) return type !== 'product-graph' && (byId(blueprint.graph.edges[link.insert]?.from)?.type !== 'product-graph' || type === 'agent');
+    return true;
+  }).map(type => ({label: STEP_TYPES[type].name, title: STEP_TYPES[type].description, icon: stepIcon(type), action: () => addNode(type, at, link)}));
 }
 function openQuickAdd(x, y, at, link) {
   const heading = link?.from ? 'Add a step after ' + labelOf(link.from) : link?.to ? 'Add a step before ' + labelOf(link.to) : link?.insert !== undefined ? 'Insert a step here' : 'Add a step here';
@@ -591,6 +600,8 @@ function freeSpot(at) {
   return p;
 }
 function addNode(type, at, link) {
+  if (type === 'product-graph' && (link?.from || link?.insert !== undefined)) { hint('Drop product knowledge beside the flow, then connect it to an agent.'); return; }
+  if (link?.from && byId(link.from)?.type === 'product-graph' && type !== 'agent') { hint('Product knowledge connects only to agents.'); return; }
   commit();
   const id = newId();
   const config = {};
@@ -654,15 +665,15 @@ function runnerFields(n) {
   let models;
   if (r.provider === 'bedrock') models = ENTERPRISE_MODELS.map(m => option(m, m, r.model === m));
   else if (['claude-code', 'codex'].includes(r.provider)) models = null;
-  else models = controls.filter(c => c.provider === r.provider).map(c => option(c.model, c.name + ' · $' + c.prices_per_million.input + ' in / $' + c.prices_per_million.output + ' out per M', r.model === c.model || r.model === c.id));
+  else models = controls.filter(c => c.provider === r.provider).map(c => option(c.model, c.name, r.model === c.model || r.model === c.id));
   if (models && !models.some(m => m.includes(' selected')) && r.model) models.unshift(option(r.model, r.model + ' (no rate card)', true));
   const efforts = r.provider === 'bedrock' ? ['default'] : control ? ['default', ...control.efforts] : ALL_EFFORTS;
   const cap = nodeCapability(n.id);
-  return '<div class="field"><label for="node-provider">Runner</label><select id="node-provider">' + providers.map(p => option(p, PROVIDER_LABELS[p], p === r.provider)).join('') + '</select></div>'
+  return '<div class="field"><label for="node-provider">Provider</label><select id="node-provider">' + providers.map(p => option(p, PROVIDER_LABELS[p], p === r.provider)).join('') + '</select></div>'
     + '<div class="field"><label for="node-model">Model</label>' + (models ? '<select id="node-model"' + invalidAttr(n, 'rate-carded', 'model') + '>' + models.join('') + (r.provider === 'fireworks' ? option('__custom__', 'Other Fireworks model…', false) : '') + '</select>' : '<input id="node-model" value="' + esc(r.model || '') + '" placeholder="Model alias for the native harness" autocomplete="off">')
     + (r.provider === 'fireworks' ? '<div class="field-tools"><input id="node-model-custom" list="fireworks-model-list" class="' + (models.some(m => m.includes(' selected')) ? 'hidden' : '') + '" value="' + esc(r.model || '') + '" placeholder="accounts/fireworks/models/…" autocomplete="off"><button class="text-button" id="node-load-models" type="button">Load Fireworks catalog</button><small id="node-model-status"></small></div>' : '') + '</div>'
     + '<div class="field"><label for="node-effort">Reasoning effort</label><select id="node-effort">' + efforts.map(e => option(e, e === 'default' ? 'Default' + (control?.default_effort ? ' (' + control.default_effort + ')' : '') : e, e === r.effort)).join('') + '</select>' + (control && !control.efforts.length ? '<small class="node-help">This API has no reasoning-effort control.</small>' : '') + '</div>'
-    + (cap ? '<div class="capability ' + (cap.supported ? (cap.launch_block ? 'hold' : 'ok') : 'bad') + '">' + esc(cap.supported ? (cap.launch_block ? 'Valid runner, on hold: ' + cap.launch_block : cap.reason) : cap.reason) + '</div>' : '');
+    + (cap ? '<div class="capability ' + (cap.supported ? (cap.launch_block ? 'hold' : 'ok') : 'bad') + '">' + esc(cap.supported ? (cap.launch_block ? 'Valid provider, on hold: ' + cap.launch_block : cap.reason) : cap.reason) + '</div>' : '');
 }
 function graphFields(n) {
   const c = n.config;
@@ -671,9 +682,9 @@ function graphFields(n) {
   const g = graphRecord(c.graph);
   const usable = (g?.versions || []).filter(v => ['complete', 'incomplete'].includes(v.status));
   const v = graphVersion(c);
-  return '<div class="field"><label for="node-graph">Product graph</label><select id="node-graph"' + (g ? '' : ' aria-invalid="true"') + '><option value="">Choose a product graph…</option>' + graphs.map(x => option(x.id, x.name + ' · ' + x.versions.length + (x.versions.length === 1 ? ' version' : ' versions'), x.id === c.graph)).join('') + '</select></div>'
-    + (g ? '<div class="field"><label for="node-graph-version">Version</label><select id="node-graph-version"' + (v ? '' : ' aria-invalid="true"') + '>' + (v ? '' : '<option value="">Choose a version…</option>') + usable.slice().reverse().map(x => option(x.version, 'v' + x.version + ' · ' + x.status + ' · ' + x.fields.length + ' fields · ' + Object.keys(x.records || {}).length + ' products · $' + x.cost_usd, x.version === c.version)).join('') + '</select></div>' : '')
-    + (v ? '<div class="capability ' + (v.status === 'complete' ? 'ok' : 'hold') + '"><strong>Delivered to every step downstream</strong><ul class="graph-field-list">' + v.fields.map(f => '<li><code>' + esc(f.path) + '</code> <small>' + esc(f.type) + (f.since ? ' · since v' + f.since : '') + '</small>' + (f.description ? '<br><span>' + esc(f.description) + '</span>' : '') + '</li>').join('') + '</ul><small>' + Object.keys(v.records || {}).length + ' products · prepared ' + esc(new Date(v.prepared_at).toLocaleString()) + ' · ' + esc(v.sha256.slice(0, 12)) + (v.problems?.length ? ' · ' + v.problems.length + ' notes' : '') + '</small> <button class="text-button" type="button" data-open-graphs="' + esc(c.graph) + '">Open in Product graphs</button></div>' : '');
+  return '<div class="field"><label for="node-graph">Product graph</label><select id="node-graph"' + (g ? '' : ' aria-invalid="true"') + '><option value="">Choose a product graph…</option>' + graphs.map(x => option(x.id, x.name, x.id === c.graph)).join('') + '</select></div>'
+    + (g ? '<div class="field"><label for="node-graph-version">Version</label><select id="node-graph-version"' + (v ? '' : ' aria-invalid="true"') + '>' + (v ? '' : '<option value="">Choose a version…</option>') + usable.slice().reverse().map(x => option(x.version, 'Version ' + x.version, x.version === c.version)).join('') + '</select></div>' : '')
+    + (v ? '<section class="knowledge-details"><p class="knowledge-coverage">' + Object.keys(v.records || {}).length + ' products available' + (v.status === 'incomplete' ? ' — some fields are missing' : '') + '</p><details><summary>View fields</summary><dl class="knowledge-fields">' + v.fields.map(f => '<div><dt><code>' + esc(f.path) + '</code><span>' + esc(f.type) + '</span></dt>' + (f.description ? '<dd>' + esc(f.description) + '</dd>' : '') + '</div>').join('') + '</dl></details><details class="knowledge-provenance"><summary>Preparation details</summary><dl><dt>Prepared</dt><dd>' + esc(new Date(v.prepared_at).toLocaleString()) + '</dd><dt>Status</dt><dd>' + esc(v.status) + '</dd><dt>Version fingerprint</dt><dd><code>' + esc(v.sha256) + '</code></dd></dl></details><button class="text-button" type="button" data-open-graphs="' + esc(c.graph) + '">Review product graph</button></section>' : '');
 }
 function connectionsEditor(n) {
   const incoming = blueprint.graph.edges.map((e, i) => ({e, i})).filter(x => x.e.to === n.id);
@@ -682,7 +693,7 @@ function connectionsEditor(n) {
   const rows = [...incoming.map(x => '<li><i aria-hidden="true">←</i><span>' + esc(labelOf(x.e.from)) + '</span><button class="text-button" data-unlink="' + x.i + '" type="button" aria-label="Remove the connection from ' + esc(labelOf(x.e.from)) + '">Remove</button></li>'), ...outgoing.map(x => '<li><i aria-hidden="true">→</i><span>' + esc(labelOf(x.e.to)) + '</span><button class="text-button" data-unlink="' + x.i + '" type="button" aria-label="Remove the connection to ' + esc(labelOf(x.e.to)) + '">Remove</button></li>')];
   const options = (targets.length ? '<optgroup label="Send output to">' + targets.map(t => option('to:' + t.id, t.label, false)).join('') + '</optgroup>' : '') + (sources.length ? '<optgroup label="Receive from">' + sources.map(t => option('from:' + t.id, t.label, false)).join('') + '</optgroup>' : '');
   return '<div class="field"><label for="node-connect">Connections</label>' + (rows.length ? '<ul class="connections">' + rows.join('') + '</ul>' : '<small class="node-help">Not connected yet.</small>')
-    + (options ? '<div class="field-tools"><select id="node-connect" aria-label="Add a connection"><option value="">Add a connection…</option>' + options + '</select></div>' : '<small class="node-help">Every reachable step is already connected.</small>') + '</div>';
+    + (options ? '<div class="field-tools"><select id="node-connect" aria-label="Add a connection"><option value="">Add a connection…</option>' + options + '</select></div>' : '<small class="node-help">No other compatible connections.</small>') + '</div>';
 }
 function renderInspector(keepFocus = false) {
   const active = keepFocus ? document.activeElement : null;
@@ -745,14 +756,14 @@ function busy(button, label) {
 }
 function setBlueprint(value, note) {
   try { localStorage.removeItem('ailabs-architecture-draft'); } catch {}
-  blueprint = structuredClone(value); selection = new Set(); selectedEdge = null; editHistory.undo = []; editHistory.redo = []; live = {}; typing.key = null;
+  blueprint = structuredClone(value);blueprint.track=blueprint.track||'agentic-request';$('#blueprint-track').value=blueprint.track;$('#architecture-track-note').textContent=blueprint.track==='create-and-run'?'Configure a workflow. Result Output receives the artifact; the benchmark saves and executes it.':'Complete an agentic request. Result Output returns the final response for evaluation.'; selection = new Set(); selectedEdge = null; editHistory.undo = []; editHistory.redo = []; live = {}; typing.key = null;
   $('#blueprint-name').value = blueprint.name || ''; $('#blueprint-notes').value = blueprint.notes || '';
   markSaved(note || (blueprint.id ? 'Draft revision ' + blueprint.revision : 'New from template'));
   updateHistoryButtons(); render(); renderInspector(); renderVersions(); fitView(); validateNow();
 }
 function renderLibrary() {
   const value = $('#blueprint-library').value;
-  $('#blueprint-library').innerHTML = '<option value="">New architecture…</option>' + blueprints.map(b => option(b.id, b.name + ' · ' + (b.versions?.length ? 'v' + b.versions.length : 'draft'), false)).join('');
+  $('#blueprint-library').innerHTML = '<option value="">New architecture…</option>' + blueprints.map(b => option(b.id, b.name, false)).join('');
   if ([...$('#blueprint-library').options].some(o => o.value === value)) $('#blueprint-library').value = value;
 }
 async function loadBlueprints() { const response = await api('/api/blueprints'); blueprints = response.items; renderLibrary(); }
@@ -761,12 +772,12 @@ async function saveDraft() {
   if(blueprintSavePromise){if(blueprintSavingTarget!==blueprint)throw Error('Wait for the previous draft to finish saving.');return blueprintSavePromise;}
   const target=blueprint;
   target.name=$('#blueprint-name').value;target.notes=$('#blueprint-notes').value;
-  const sent=structuredClone({id:target.id,revision:target.revision,name:target.name,notes:target.notes,graph:target.graph});
+  const sent=structuredClone({id:target.id,revision:target.revision,name:target.name,notes:target.notes,track:target.track,graph:target.graph});
   blueprintSavingTarget=target;
   blueprintSavePromise=(async()=>{
     const saved=await api('/api/blueprints/draft',sent);
     if(target===blueprint) {
-      const unchanged=JSON.stringify([target.graph,target.name,target.notes])===JSON.stringify([sent.graph,sent.name,sent.notes]);
+      const unchanged=JSON.stringify([target.graph,target.name,target.notes,target.track])===JSON.stringify([sent.graph,sent.name,sent.notes,sent.track]);
       target.id=saved.id;target.revision=saved.revision;
       if(unchanged)markSaved('Draft saved · revision '+saved.revision);else markDirty();
     }
@@ -892,12 +903,12 @@ $('#blueprint-save').onclick = async () => { const release = busy($('#blueprint-
 $('#shortcuts-open').onclick = () => $('#shortcuts-dialog').showModal();
 $('#shortcuts-close').onclick = () => $('#shortcuts-dialog').close();
 document.addEventListener('keydown', e => {
-  if (!opened || $('#setup-panel').classList.contains('hidden')) return;
+  if (!opened || $('#setup-panel').classList.contains('hidden') || $('#setup-panel').dataset.screen==='library') return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); ($('#setup-panel').dataset.mode === 'graphs' ? $('#pg-save') : $('#blueprint-save')).click(); }
 });
 $('#blueprint-publish').onclick = async () => {
   const button = $('#blueprint-publish');
-  if(!blueprint.name.trim()){hint('Name this architecture before publishing.');$('#blueprint-name').focus();return;}
+  if(!blueprint.name.trim()&&!await ensureStudioName('architectures'))return;
   if (problems.length) { const first = problems.find(p => p.node) || problems[0]; hint('Fix ' + problems.length + (problems.length === 1 ? ' problem' : ' problems') + ' before publishing'); if (first.node) focusProblem(first); return; }
   const release = busy(button, 'Publishing…');
   const target=blueprint;
@@ -926,9 +937,9 @@ $('#builder-run').onclick = () => {
 $('#blueprint-new').onclick = event => {
   const button = event.currentTarget; const r = button.getBoundingClientRect();
   button.setAttribute('aria-expanded', 'true');
-  openMenu({x: r.left, y: r.bottom + 6, heading: 'Start from a template', opener: button, items: Object.entries(TEMPLATES).map(([key, t]) => ({label: t.name, hint: t.hint, action: () => {
+  openMenu({x: r.left, y: r.bottom + 6, heading: 'Choose an architecture type', opener: button, items: Object.entries(TEMPLATES).filter(([key])=>key!=='monarch').map(([key, t]) => ({label: t.name, hint: t.hint, action: () => {
     if (dirty && !confirm('Start a new architecture and discard the unsaved edits?')) return;
-    template = key; setBlueprint({id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()}, 'New from template: ' + TEMPLATES[template].name); $('#blueprint-library').value = ''; $('#blueprint-name').focus();
+    template = key; setBlueprint({id: null, revision: 0, name: '', notes: '', track:key==='workflow'?'create-and-run':'agentic-request', graph: TEMPLATES[template].build()}, 'New from template: ' + TEMPLATES[template].name); $('#blueprint-library').value = '';showStudioEditor();$('#builder-viewport').focus();
   }}))});
   const observer = new MutationObserver(() => { if (menu.classList.contains('hidden')) { button.setAttribute('aria-expanded', 'false'); observer.disconnect(); } });
   observer.observe(menu, {attributes: true, attributeFilter: ['class']});
@@ -936,13 +947,14 @@ $('#blueprint-new').onclick = event => {
 $('#blueprint-library').onchange = e => {
   if (dirty && !confirm('Discard the unsaved edits and open this architecture?')) { e.target.value = blueprint.id || ''; return; }
   const record = blueprints.find(b => b.id === e.target.value);
-  setBlueprint(record ? {id: record.id, revision: record.revision, name: record.name, notes: record.notes, graph: record.graph} : {id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()});
+  setBlueprint(record ? {id: record.id, revision: record.revision, name: record.name, notes: record.notes, track:record.track, graph: record.graph} : {id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()});
 };
 $('#open-setup').onclick = async () => {
   if(!state)return toast('Wait for Studio to connect, then open the editor.');
   if($('#open-setup').disabled)return;
   $('#open-setup').disabled=true;
-  $('#setup-panel').classList.remove('hidden'); $('.workspace').classList.add('hidden'); $('.page-heading').classList.add('hidden');
+  $('#blueprint-new').disabled=true;
+  window.showWorkspaceSurface('studio');
   try {
     await loadControls(); await loadProductGraphs(); await loadBlueprints();
     if (!opened) {
@@ -953,14 +965,28 @@ $('#open-setup').onclick = async () => {
       opened = true;
     } else { renderVersions(); renderNodes(); fitView(); }
     if (typeof job !== 'undefined' && job) builderLive(job, events);
-  } catch (e) { toast('The editor could not load. Return to runs and try again. '+e.message); }
-  finally {$('#open-setup').disabled=false;}
+  } catch (e) { console.error(e); toast('The editor could not load. Return to runs and try again. '+e.message); }
+  finally {$('#open-setup').disabled=false;$('#blueprint-new').disabled=false;}
 };
-$('#close-setup').onclick = () => { closeMenu(false); $('#setup-panel').classList.add('hidden'); $('.workspace').classList.remove('hidden'); $('.page-heading').classList.remove('hidden'); $('#open-setup').focus({preventScroll:true}); };
+$('#close-setup').onclick = () => { closeMenu(false);window.showWorkspaceSurface('runs');$('#nav-runs').focus({preventScroll:true}); };
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 window.addEventListener('resize', () => { if (opened && !$('#setup-panel').classList.contains('hidden')) renderWires(); });
 $('#configure-runner').onclick = () => { const editor = $('#runner-editor'); editor.classList.toggle('hidden'); $('#configure-runner').setAttribute('aria-expanded', String(!editor.classList.contains('hidden'))); if (!editor.classList.contains('hidden')) $('#runner-provider').focus(); };
 $('#runner-provider').onchange = () => { if ($('#runner-provider').value === 'fireworks') loadFireworks(false); };
 $('#runner-refresh').onclick = () => loadFireworks(true);
-$('#runner-save').onclick = async () => { const release = busy($('#runner-save'), 'Saving…'); try { await api('/api/runners/config', {provider: $('#runner-provider').value, model: $('#runner-model').value, effort: $('#runner-effort').value}); await openLaunch(); $('#runner-editor').classList.add('hidden'); toast('Runner configuration saved'); } catch (e) { $('#runner-catalog-status').textContent = e.message; } finally { release(); } };
+$('#runner-save').onclick = async () => { const release = busy($('#runner-save'), 'Saving…'); try { await api('/api/runners/config', {provider: $('#runner-provider').value, model: $('#runner-model').value, effort: $('#runner-effort').value}); state.models=(await api('/api/state')).models; $('#runner-editor').classList.add('hidden'); toast('Model configuration saved'); } catch (e) { $('#runner-catalog-status').textContent = e.message; } finally { release(); } };
 updateHistoryButtons();
+
+$('#builder-expand').onclick = () => {
+  const expanded = $('#setup-panel').classList.toggle('editor-expanded');
+  $('#builder-expand').textContent = expanded ? 'Exit expanded view' : 'Expand editor';
+  $('#builder-expand').setAttribute('aria-pressed', String(expanded));
+  document.body.classList.toggle('editor-open', expanded);
+  $('#builder-expand').closest('details').open = false;
+  requestAnimationFrame(fitView);
+};
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && $('#setup-panel').classList.contains('editor-expanded') && !event.defaultPrevented) $('#builder-expand').click();
+});
+
+new MutationObserver(() => { if ($('#setup-panel').classList.contains('hidden') && ($('#setup-panel').classList.contains('editor-expanded') || document.body.classList.contains('editor-open'))) { $('#setup-panel').classList.remove('editor-expanded'); document.body.classList.remove('editor-open'); $('#builder-expand').textContent='Expand editor'; $('#builder-expand').setAttribute('aria-pressed','false'); } }).observe($('#setup-panel'), {attributes:true,attributeFilter:['class']});

@@ -141,6 +141,13 @@ def cmd_studio(args) -> int:
     return 0
 
 
+def cmd_genesis_index(args) -> int:
+    from wb_studio.app import Studio
+    from wb_studio.code_index import refresh
+    print(json.dumps(refresh(Studio()), indent=2, default=str))
+    return 0
+
+
 def cmd_budget_status(args) -> int:
     from wb_orchestrator import reconcile
     from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
@@ -893,8 +900,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, default=None, help="import only the first N run dirs")
     p.set_defaults(fn=cmd_legacy)
 
+    p = sub.add_parser("genesis", help="Genesis, the lab scientist: its code index of the Monarch checkout")
+    gsub = p.add_subparsers(dest="genesis_cmd", required=True)
+    gi = gsub.add_parser("index", help="rebuild the Monarch code index now (free; the daily job does the same at 04:00)")
+    gi.set_defaults(fn=cmd_genesis_index)
+
     p = sub.add_parser("studio", help="private live comparison UI with bounded paid API controls")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=int(os.environ.get("PORT") or os.environ.get("STUDIO_PORT") or 8765),
+                   help="listening port; PORT or STUDIO_PORT in the environment sets the default (8765)")
     p.set_defaults(fn=cmd_studio)
 
     args = ap.parse_args(argv)

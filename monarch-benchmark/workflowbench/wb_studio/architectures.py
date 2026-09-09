@@ -37,7 +37,7 @@ def resolve_default():
                 'patch_sha256':None,'lockfile':lockfile,'image_digest':None},
         runtime={'entrypoint':None,'dependency_closure':[{'path':LOCKFILE,'git_blob':blob}],
                  'note':'No benchmark build recipe exists yet; upstream docker-compose mounts host paths and the Docker socket and must be reduced to the benchmark boundary first.'},
-        evaluation={'track':'agentic-request','provider':'bedrock','model':'claude-opus-4-8','effort':'default',
+        evaluation={'track':'create-and-run','provider':'bedrock','model':'claude-opus-4-8','effort':'default',
                     'harness':'monarch-enterprise-operator','harness_version':commit,
                     'settings':{'note':'Stock defaults (ANTHROPIC_MODEL=claude-opus-4-8, OPERATOR_MAX_STEPS=40); the deployed environment decides, no per-run override exists.'}},
         readiness_record=rm.readiness('resolved','not_applicable','adapter_required',
@@ -77,3 +77,20 @@ def normalize_architecture(studio,value):
     if name.strip().casefold()=='default monarch enterprise': raise ValueError('Choose a distinct name for your custom architecture')
     if not isinstance(definition,str) or not definition.strip() or len(definition)>30000: raise ValueError('Describe your architecture in up to 30,000 characters')
     return {'kind':'custom','name':name.strip(),'definition':definition}
+
+
+def sync_default(studio):
+    """Resolve upstream main and retain source identity metadata per commit, without mutating deployments."""
+    value = resolve_default()
+    with studio.lock:
+        previous = cached_default(studio)
+        if previous and previous.get('commit') == value['commit']:
+            return {'changed': False, 'message': 'Already up to date with GitHub main.', 'baseline': previous}
+        history = studio.directory / 'enterprise-source-versions'
+        history.mkdir(parents=True, exist_ok=True)
+        for record in (previous, value):
+            if record and SHA.fullmatch(record.get('commit', '')):
+                target = history / (record['commit'] + '.json')
+                if not target.exists():write_json(target, record)
+        write_json(studio.directory / 'enterprise-baseline.json', value)
+        return {'changed': True, 'message': 'Source synced to ' + value['commit'][:12] + '. Verify the deployed runtime before launching.', 'baseline': value}

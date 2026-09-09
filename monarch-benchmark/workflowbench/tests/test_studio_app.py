@@ -98,7 +98,7 @@ def test_scripted_comparison_retains_real_verdicts_tool_nodes_and_verified_evide
 
 def test_cancellation_before_execution_prevents_any_attempt(studio):
     job = studio.create(payload(studio), start=False)
-    assert studio.cancel(job["id"])["status"] == "cancelling"
+    assert studio.cancel(job["id"])["status"] == "cancelled"
     studio.execute(job["id"])
     complete = studio.job(job["id"])
     assert complete["status"] == "cancelled"
@@ -107,18 +107,33 @@ def test_cancellation_before_execution_prevents_any_attempt(studio):
     assert not any(e["type"] == "attempt_started" for e in studio.events(job["id"]))
 
 
-@pytest.mark.parametrize("status", ["queued", "running", "cancelling"])
-def test_restart_interrupts_unfinished_work_without_replay(studio, status):
+@pytest.mark.parametrize("status, claimed, expected", [
+    pytest.param("queued", False, "queued", id="unclaimed-queued"),
+    pytest.param("queued", True, "interrupted", id="claimed-queued"),
+    pytest.param("running", False, "interrupted", id="running"),
+    pytest.param("cancelling", False, "interrupted", id="cancelling"),
+])
+def test_restart_recovers_unfinished_work_without_replay(studio, monkeypatch, status, claimed, expected):
     job = studio.create(payload(studio), start=False)
     job["status"] = status
     studio.save(job)
+    if claimed:
+        (studio.directory / job["id"] / "execution.claimed").write_text("prior-process")
     before = studio.events(job["id"])
+
+    def forbidden_dispatch(*args, **kwargs):
+        pytest.fail("Restart or duplicate request attempted to dispatch existing work")
+
+    monkeypatch.setattr("wb_studio.app.threading.Thread", forbidden_dispatch)
     restarted = Studio(studio.directory, tasks=list(studio.tasks.values()), gateway_factory=studio.gateway_factory)
-    assert restarted.job(job["id"])["status"] == "interrupted"
-    assert restarted.job(job["id"])["completed"] == 0
+    recovered = restarted.job(job["id"])
+    assert recovered["status"] == expected
+    assert recovered["completed"] == 0
+    assert recovered["results"] == []
     assert restarted.events(job["id"]) == before
-    assert restarted.create(payload(restarted))["status"] == "interrupted"
+    assert restarted.create(payload(restarted))["status"] == expected
     assert restarted.events(job["id"]) == before
+    assert not (studio.directory / job["id"] / "results.sqlite3").exists()
 
 
 @contextmanager
@@ -179,7 +194,7 @@ def test_http_rejects_foreign_origin_host_and_missing_session_before_mutation(st
         status, _, _ = request(port, "POST", endpoint, "{}", {
             "X-Studio-Token": studio.token, "Origin": f"http://127.0.0.1:{port}"})
         assert status == 200
-        assert studio.job(job["id"])["status"] == "cancelling"
+        assert studio.job(job["id"])["status"] == "cancelled"
 
 
 def test_static_allowlist_never_exposes_secrets_or_evidence(studio, tmp_path, monkeypatch):

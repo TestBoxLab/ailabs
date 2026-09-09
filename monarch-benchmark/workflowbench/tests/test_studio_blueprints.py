@@ -66,26 +66,28 @@ def test_publish_is_idempotent_and_versions_are_immutable(studio):
         blueprints.publish(studio, {'id': 'design', 'revision': 1})
 
 
-def test_monarch_publication_pins_verified_baseline_without_mutating_draft(studio, monkeypatch):
+def test_legacy_monarch_publication_is_rejected_without_mutating_draft(studio, monkeypatch):
     calls = []
     def default(studio, refresh=False):
         calls.append(refresh)
         return {'id': 'default-monarch-enterprise', 'commit': 'a' * 40, 'ref': 'main'}
     monkeypatch.setattr(blueprints, 'default_status', default)
     save(studio, graph=graph(monarch=True))
-    first = blueprints.publish(studio, {'id': 'design', 'revision': 1})
-    assert first['graph']['nodes'][1]['config']['baseline']['commit'] == 'a' * 40
-    assert 'baseline' not in blueprints.listing(studio)[0]['graph']['nodes'][1]['config']
-    assert blueprints.publish(studio, {'id': 'design', 'revision': 1}) == first
-    assert calls == [True]
+    path = studio.directory / 'blueprints' / 'design' / 'draft.json'
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match='separate reference implementation'):
+        blueprints.publish(studio, {'id': 'design', 'revision': 1})
+    assert path.read_bytes() == original
+    assert blueprints.listing(studio)[0]['versions'] == []
+    assert calls == []
 
 
-def test_unverifiable_monarch_baseline_cannot_publish_partial_version(studio, monkeypatch):
+def test_legacy_monarch_rejection_never_attempts_baseline_verification(studio, monkeypatch):
     save(studio, graph=graph(monarch=True))
     def unavailable(*args, **kwargs):
-        raise ValueError('Cannot verify revision')
+        pytest.fail('Legacy node rejection attempted baseline verification')
     monkeypatch.setattr(blueprints, 'default_status', unavailable)
-    with pytest.raises(ValueError, match='verify'):
+    with pytest.raises(ValueError, match='configure the reference under Runtime'):
         blueprints.publish(studio, {'id': 'design', 'revision': 1})
     assert blueprints.listing(studio)[0]['versions'] == []
 
@@ -108,9 +110,9 @@ def test_cycle_cannot_be_saved_even_as_draft(studio):
 
 
 def test_product_graph_step_needs_a_version_reference():
-    source = {'nodes': [node('input', 'input'), node('knowledge', 'product-graph', graph='catalog', version=2), node('output', 'output')],
-              'edges': [{'from': 'input', 'to': 'knowledge'}, {'from': 'knowledge', 'to': 'output'}]}
-    assert blueprints.validate_graph(source) == ['input', 'knowledge', 'output']
+    source = {'nodes': [node('input', 'input'), node('knowledge', 'product-graph', graph='catalog', version=2), graph()['nodes'][1], node('output', 'output')],
+              'edges': [{'from': 'input', 'to': 'worker'}, {'from': 'knowledge', 'to': 'worker'}, {'from': 'worker', 'to': 'output'}]}
+    assert blueprints.validate_graph(source) == ['input', 'knowledge', 'worker', 'output']
     for broken in ({}, {'graph': 'catalog'}, {'graph': 'catalog', 'version': 0}, {'graph': 'bad id!', 'version': 1}):
         missing = deepcopy(source)
         missing['nodes'][1]['config'] = broken

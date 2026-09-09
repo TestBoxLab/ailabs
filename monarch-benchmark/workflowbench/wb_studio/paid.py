@@ -89,15 +89,33 @@ class PaidGateway:
         if not status['configured']:
             raise PaidGatewayError('Google API credential is not configured')
         key = os.environ[status['source']].strip()
+        streaming = operation == 'generateContent' and bool(getattr(self,'on_text',None))
+        endpoint = 'streamGenerateContent?alt=sse' if streaming else operation
         request = Request(
-            f'https://generativelanguage.googleapis.com/v1beta/models/{self.model}:{operation}',
+            f'https://generativelanguage.googleapis.com/v1beta/models/{self.model}:{endpoint}',
             data=json.dumps(payload, allow_nan=False).encode('utf-8'),
             headers={'Content-Type': 'application/json', 'x-goog-api-key': key},
             method='POST',
         )
         try:
             with build_opener(_NoRedirect()).open(request, timeout=120) as response:
-                data = json.loads(response.read(32 * 1024 * 1024))
+                if not streaming:
+                    data = json.loads(response.read(32 * 1024 * 1024))
+                else:
+                    data={};parts=[];candidate={};size=0
+                    for line in response:
+                        size+=len(line)
+                        if size>32*1024*1024: raise ValueError('Response too large')
+                        if not line.startswith(b'data:'): continue
+                        chunk=json.loads(line[5:].strip())
+                        if chunk.get('usageMetadata'): data['usageMetadata']=chunk['usageMetadata']
+                        for row in chunk.get('candidates',[]):
+                            candidate.update({k:v for k,v in row.items() if k!='content'})
+                            for part in row.get('content',{}).get('parts',[]):
+                                parts.append(part)
+                                if part.get('text') and not part.get('thought'): self.on_text(part['text'])
+                    candidate['content']={'role':'model','parts':parts}
+                    data['candidates']=[candidate]
             if not isinstance(data, dict):
                 raise ValueError('Invalid response')
             return data

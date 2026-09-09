@@ -161,7 +161,7 @@ def parse_runner(studio, selection) -> dict:
         control = controls[base]
         return {"id": selection, "provider": control["provider"], "model": control["model"], "effort": effort or "default", "kind": "api-control", "control": base}
     if base in ("claude-code", "codex"):
-        return {"id": selection, "provider": base, "model": None, "effort": effort or "default", "kind": "native"}
+        return {"id": selection, "provider": base, "model": "claude-opus-5" if base == "claude-code" else "gpt-5.6-sol", "effort": effort or "default", "kind": "native"}
     if base.startswith("config-") and studio is not None:
         path = Path(studio.directory) / "runner-configs" / (base[len("config-"):] + ".json")
         if path.exists():
@@ -170,10 +170,15 @@ def parse_runner(studio, selection) -> dict:
     return {"id": selection, "provider": None, "model": base, "effort": effort or "default", "kind": "unknown"}
 
 
-def _native_reason() -> str:
+def _native_reason(studio=None) -> str | None:
+    if studio is not None:
+        from wb_studio.native import status
+        report = status(studio)
+        if report["launchable"]:
+            return None
+        return "Native isolation requires verification (native-isolation-v1; acceptance native-isolation-v2): " + report["reason"] + "; missing checks: " + ", ".join(preflight().missing_checks)
     report = preflight()
-    return (f"Isolated native runtime is not implemented ({report.contract_version}); "
-            f"missing checks: {', '.join(report.missing_checks)}")
+    return f"Native runtime requires a verified Studio container ({report.contract_version}); missing checks: {', '.join(report.missing_checks)}"
 
 
 def _api_control_support(runner: dict) -> dict:
@@ -227,7 +232,13 @@ def runner_support(studio, version_id: str, selection, track: str = "agentic-req
         if runner["kind"] == "api-control":
             return _api_control_support(runner)
         if runner["kind"] == "native":
-            return {**runner, "supported": True, "reason": "Native harness for this model family", "launch_block": _native_reason()}
+            blocked = _native_reason(studio)
+            row = {**runner, "supported": True, "reason": "Native harness for this model family"}
+            if blocked:
+                return {**row, "launch_block": blocked}
+            family = "anthropic" if runner["provider"] == "claude-code" else "openai"
+            control = _api_control_support({**runner, "provider": family})
+            return {**control, "provider": runner["provider"], "kind": "native", "reason": "Verified isolated native harness" if control["supported"] else control["reason"]}
         if runner["provider"] == "bedrock":
             return {**runner, "supported": False, "reason": "Bedrock models are the stock Enterprise brain, not a Without Monarch runner."}
         return {**runner, "supported": False, "reason": "Unknown runner"}
@@ -255,6 +266,8 @@ def node_support(studio, node: dict, track: str = "agentic-request") -> dict | N
         row = runner_support(studio, "without-monarch", runner or {}, track)
     else:
         return None
+    if row.get("kind") == "native" and not row.get("launch_block"):
+        row["launch_block"] = "Native harnesses currently run as standalone controls; native execution inside architecture nodes is not implemented"
     return {"node": node.get("id"), "label": node.get("label"), "type": kind, **row}
 
 
@@ -350,11 +363,11 @@ def bridge_status(studio) -> dict:
 def versions(studio) -> list[dict]:
     from wb_studio.architectures import cached_default
     from wb_studio.blueprints import listing
-    native = _native_reason()
+    native = _native_reason(studio)
     items = [{"id": "without-monarch", "name": VERSION_NAMES["without-monarch"], "kind": "control",
               "description": "The runner works directly with the task and application tools. No Monarch graph, contract, gates or memory.",
               "readiness": rm.readiness("not_applicable", "not_applicable", "ready"),
-              "notes": [f"Rate-carded API controls run today. Native harnesses: {native}"]}]
+              "notes": [f"Rate-carded API controls run today. Native harnesses: {native or 'container and native CLI acceptance verified'}"]}]
     baseline = cached_default(studio)
     from wb_studio.enterprise import version_record
     record = version_record(studio)
@@ -383,7 +396,7 @@ def versions(studio) -> list[dict]:
     for record in annotate_listing(studio, listing(studio)):
         for version in record.get("versions", []):
             items.append({"id": f"blueprint.{record['id']}.v{version['version']}", "name": f"{record['name']} / v{version['version']}",
-                          "kind": "custom", "blueprint": record["id"], "version": version["version"],
+                          "kind": "custom", "track": version.get("track", "agentic-request"), "blueprint": record["id"], "version": version["version"],
                           "description": version.get("notes") or "Published architecture definition",
                           "sha256": version.get("sha256"), "knowledge_sha256": _graphs_sha(version.get("graphs") or {}), "graphs": version.get("graphs") or {},
                           "request_ceiling_usd": version_request_ceiling(version),
@@ -409,7 +422,8 @@ def capability_matrix(studio) -> dict:
                           "launchable": support["supported"] and version["readiness"]["launchable"] and not support.get("launch_block") and runner.get("available", False),
                           "reason": support.get("launch_block") or support["reason"] if support["supported"] else support["reason"]})
     return {"schema_version": "ailabs-capability-matrix-v1", "versions": rows, "cells": cells, "controls": list(api_controls().values()),
-            "native_preflight": {"contract": preflight().contract_version, "status": preflight().status, "missing_checks": list(preflight().missing_checks)}}
+            "native_preflight": {"contract": "native-isolation-v2", "status": "blocked" if _native_reason(studio) else "ready",
+                                 "missing_checks": list(preflight().missing_checks) if _native_reason(studio) else []}}
 
 
 def check_launch(studio, architectures, selected, track: str = "agentic-request") -> list[dict]:
@@ -424,6 +438,9 @@ def check_launch(studio, architectures, selected, track: str = "agentic-request"
         version = by_id.get(identity)
         if version is None:
             raise ValueError("Unknown comparison version")
+        purpose = version.get("track", "create-and-run" if identity == "default-monarch-enterprise" else "agentic-request")
+        if identity != "without-monarch" and purpose != track:
+            raise ValueError(f"{version['name']} belongs to the {purpose} track. Choose a matching architecture.")
         if not version["readiness"]["launchable"]:
             raise ValueError(f"{version['name']} cannot launch yet: " + " ".join(version["readiness"]["reasons"]))
         if identity == "without-monarch":

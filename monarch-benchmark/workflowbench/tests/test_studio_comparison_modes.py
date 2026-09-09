@@ -11,10 +11,15 @@ def test_without_monarch_selection_is_frozen_in_run_settings(tmp_path):
     assert j['settings']['architectures']==['without-monarch']
     assert s.job(j['id'])['settings']==j['settings']
 
-@pytest.mark.parametrize('architecture',[[],['default-monarch-enterprise'],['without-monarch','default-monarch-enterprise'],['bridge-v2-v9.12']])
-def test_unimplemented_comparison_cannot_dispatch_or_create_job(tmp_path,architecture):
+@pytest.mark.parametrize('architecture, reason', [
+    ([], 'cannot launch yet'),
+    (['default-monarch-enterprise'], 'belongs to the create-and-run track'),
+    (['without-monarch','default-monarch-enterprise'], 'belongs to the create-and-run track'),
+    (['bridge-v2-v9.12'], 'cannot launch yet'),
+])
+def test_unimplemented_comparison_cannot_dispatch_or_create_job(tmp_path,architecture,reason):
     s=fixture_studio(tmp_path)
-    with pytest.raises(ValueError,match='cannot launch yet'):
+    with pytest.raises(ValueError,match=reason):
         s.create({'models':['oracle'],'tasks':list(s.tasks),'architectures':architecture})
     assert s.jobs()==[]
 

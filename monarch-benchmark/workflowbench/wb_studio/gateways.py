@@ -135,6 +135,7 @@ class ProviderGateway:
         self.ledger.reserve(request_id, maximum, scope_id=scope_id, scope_limit_usd=scope_limit_usd, metadata=metadata)
         self.ledger.claim(request_id)
         try:
+            self.adapter.on_text = getattr(self,"on_text",None)
             turn = self.adapter.turn(messages, timeout=timeout)
         except InfraError as exc:
             # Provider messages can carry URLs, ids or key fragments: never forwarded.
@@ -177,6 +178,7 @@ class GeminiGateway:
         return [{"role": "user", "parts": [{"text": brief}]}]
 
     def turn(self, contents, *, scope_id: str, scope_limit_usd, request_id: str, timeout: float | None = None) -> dict:
+        self.paid.on_text = getattr(self,"on_text",None)
         reply = self.paid.request(contents, self.system, self.tools, scope_id=scope_id, scope_limit_usd=scope_limit_usd, request_id=request_id)
         usage = reply.get("usageMetadata", {}) or {}
         candidate = (reply.get("candidates") or [{}])[0]

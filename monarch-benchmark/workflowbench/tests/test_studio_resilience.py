@@ -71,3 +71,44 @@ def test_http_graph_validation_returns_json_instead_of_dropping_connection(studi
         server.server_close()
         worker.join(timeout=3)
 
+
+
+def test_parallel_failure_cancels_slow_sibling_before_it_finishes(studio, monkeypatch):
+    from types import SimpleNamespace
+    import wb_studio.app as app
+    started = threading.Event()
+    observed = []
+    job = studio.create({'models': ['oracle', 'sloppy'], 'tasks': list(studio.tasks),
+                         'concurrency': 2}, start=False)
+
+    def arm(job, selection, task, cancel):
+        if selection['id'] == 'sloppy':
+            assert started.wait(3)
+            raise RuntimeError('Synthetic setup failure')
+        return SimpleNamespace(cancel=cancel)
+
+    def episode(self, identity, live, task, repetition):
+        started.set()
+        observed.append(live.cancel.wait(3))
+        raise RuntimeError('Synthetic sibling stopped')
+
+    monkeypatch.setattr(studio, '_arm', arm)
+    monkeypatch.setattr(app.Orchestrator, '_run_episode', episode)
+    studio.execute(job['id'])
+    saved = studio.job(job['id'])
+    assert observed == [True], 'Failure must cancel the sibling before its wait expires'
+    assert saved['status'] == 'failed'
+    assert saved['results'] == []
+    assert studio.runtime.active_agents == 0
+    assert studio.events(job['id'])[-1]['type'] == 'finished'
+
+
+@pytest.mark.parametrize('status', ['completed', 'failed', 'cancelled', 'interrupted'])
+def test_terminal_run_without_claim_is_never_replayed(studio, monkeypatch, status):
+    job = studio.create({'models': ['oracle'], 'tasks': list(studio.tasks)}, start=False)
+    job['status'] = status
+    studio.save(job)
+    monkeypatch.setattr(studio, '_arm', lambda *args: pytest.fail('Terminal run replayed'))
+    studio.execute(job['id'])
+    assert studio.job(job['id']) == job
+    assert not (studio.directory / job['id'] / 'execution.claimed').exists()

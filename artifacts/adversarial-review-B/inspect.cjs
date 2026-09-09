@@ -1,0 +1,3 @@
+const {chromium}=require('C:/Users/Lucas Wakigawa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const fs=require('fs');
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});await page.goto('http://localhost:8766');await page.waitForTimeout(1500);console.log(await page.locator('body').innerText());console.log(await page.locator('a').evaluateAll(es=>es.map(e=>({text:e.innerText,href:e.getAttribute('href')}))));await page.screenshot({path:'artifacts/adversarial-review-B/initial.png'});await browser.close()})()

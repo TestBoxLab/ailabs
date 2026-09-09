@@ -1,0 +1,6 @@
+from pathlib import Path
+p=Path('monarch-benchmark/workflowbench/tests/test_studio_outcomes.py');s=p.read_text(encoding='utf8');s=s.replace("    job['status'] = 'completed'\n    studio.save(job)\n    return job", "    job['status'] = 'completed'\n    studio.ledger.finish_run(job['id'])\n    studio.save(job)\n    return job")
+s=s.replace("    result = analysis.review(studio, job['id'])\n    assert result['status'] == 'failed'\n    assert [op for op, _ in calls] == ['countTokens']", "    from wb_orchestrator.budget import BudgetExceeded\n    with pytest.raises(BudgetExceeded):\n        analysis.review(studio, job['id'])\n    assert calls == []\n    assert not (studio.directory / job['id'] / 'analysis.claimed').exists()")
+s=s.replace("    assert Decimal(studio.budget()['held']) == 0\n\n\ndef test_interrupted_analysis", "    assert Decimal(studio.budget()['held']) == Decimal(job['settings']['maximum_usd'])\n\n\ndef test_interrupted_analysis")
+s=s.replace("    assert len(calls) == 2\n\n\n@pytest.mark.parametrize('bad'", "    assert len(calls) == 2\n    envelope=studio.ledger.run_reservation(job['id']+'-analysis-v1')\n    assert envelope.closed_at is not None\n    assert envelope.maximum_usd==Decimal(job['settings']['maximum_usd'])\n\n\n@pytest.mark.parametrize('bad'")
+p.write_text(s,encoding='utf8')

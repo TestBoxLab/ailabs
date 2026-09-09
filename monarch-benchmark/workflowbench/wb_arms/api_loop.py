@@ -172,10 +172,34 @@ class _OpenAIAdapter:
     def turn(self, messages: list[dict], timeout: float | None = None) -> dict:
         kwargs = {"timeout": timeout} if timeout is not None else {}
         try:
-            raw = self.client.chat.completions.with_raw_response.create(
-                model=self.provider.model_id, messages=messages, tools=self.tools, **kwargs)
-            resp = raw.parse()
-            headers = dict(raw.headers)
+            if getattr(self,'on_text',None):
+                raw=self.client.chat.completions.with_raw_response.create(model=self.provider.model_id,messages=messages,tools=self.tools,stream=True,stream_options={'include_usage':True},**kwargs)
+                headers=dict(raw.headers);message={'role':'assistant','content':''};calls={};usage=None;finish=None
+                with raw.parse() as stream:
+                    for chunk in stream:
+                        if chunk.usage: usage=chunk.usage.model_dump()
+                        for choice in chunk.choices:
+                            if choice.finish_reason: finish=choice.finish_reason
+                            delta=choice.delta
+                            if delta.content: message['content']+=delta.content;self.on_text(delta.content)
+                            # Some compatible providers require their returned reasoning on tool continuations.
+                            reasoning=getattr(delta,'reasoning_content',None)
+                            if reasoning: message['reasoning_content']=message.get('reasoning_content','')+reasoning
+                            for call in delta.tool_calls or []:
+                                item=calls.setdefault(call.index,{'id':'','type':'function','function':{'name':'','arguments':''}})
+                                if call.id:item['id']=call.id
+                                if call.function and call.function.name:item['function']['name']+=call.function.name
+                                if call.function and call.function.arguments:item['function']['arguments']+=call.function.arguments
+                if usage is None or finish not in ('stop','tool_calls'):
+                    raise InfraError('infra:harness_crash','Stream ended without a complete response and usage receipt',retryable=False)
+                if calls:message['tool_calls']=list(calls.values())
+                from openai.types.chat import ChatCompletion
+                resp=ChatCompletion.model_validate({'id':'streamed','object':'chat.completion','created':0,'model':self.provider.model_id,'choices':[{'index':0,'message':message,'finish_reason':finish}],'usage':usage})
+            else:
+                raw = self.client.chat.completions.with_raw_response.create(
+                    model=self.provider.model_id, messages=messages, tools=self.tools, **kwargs)
+                resp = raw.parse()
+                headers = dict(raw.headers)
         except self._openai.RateLimitError as e:
             raise InfraError("infra:rate_limit", str(e), _retry_after(e)) from e
         except self._openai.NotFoundError as e:
@@ -308,10 +332,15 @@ class _OpenAIResponsesAdapter:
         o = self._openai
         client = self.client.with_options(timeout=timeout) if timeout is not None else self.client
         try:
-            resp = client.responses.create(
-                model=self.provider.model_id, instructions=self.instructions,
-                input=items, tools=self.tools, reasoning={"effort": self.effort},
-                max_output_tokens=16000)
+            params = dict(model=self.provider.model_id, instructions=self.instructions,
+                input=items, tools=self.tools, reasoning={"effort": self.effort}, max_output_tokens=16000)
+            if getattr(self,"on_text",None):
+                resp = None
+                for event in client.responses.create(**params,stream=True):
+                    if event.type == "response.output_text.delta": self.on_text(event.delta)
+                    elif event.type == "response.completed": resp=event.response
+                if resp is None: raise ValueError("Missing terminal response")
+            else: resp=client.responses.create(**params)
         except o.RateLimitError as e:
             raise InfraError("infra:rate_limit", str(e), _retry_after(e)) from e
         except o.NotFoundError as e:
@@ -385,12 +414,15 @@ class _AnthropicAdapter:
             # tokens) is under Opus 4.8's 1024-token cache minimum, so the
             # per-block breakpoints on tools/system only pay off once history
             # is appended; this one makes every turn cache the previous turn.
-            resp = client.messages.create(
-                model=self.provider.model_id, max_tokens=16000,
+            params = dict(model=self.provider.model_id, max_tokens=16000,
                 system=self.system, tools=self.tools, messages=messages,
-                cache_control={"type": "ephemeral"},
-                thinking={"type": "adaptive"},
+                cache_control={"type": "ephemeral"}, thinking={"type": "adaptive"},
                 output_config={"effort": self.effort})
+            if getattr(self,"on_text",None):
+                with client.messages.stream(**params) as stream:
+                    for text in stream.text_stream: self.on_text(text)
+                    resp=stream.get_final_message()
+            else: resp=client.messages.create(**params)
         except a.RateLimitError as e:
             raise InfraError("infra:rate_limit", str(e), _retry_after(e)) from e
         except a.NotFoundError as e:

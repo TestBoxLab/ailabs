@@ -1,0 +1,134 @@
+"""Codex subprocess with a scoped model broker and scientist-only MCP tools."""
+from __future__ import annotations
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from decimal import Decimal
+from wb_arms import providers
+from wb_studio.gateways import ceiling_cost, _money, EFFORTS
+from wb_studio.genesis_provider import complete, response_events
+from wb_studio.library import now_sao_paulo
+
+
+def freshness(now=None):
+    """The clock and the recency rule every Genesis turn receives."""
+    now=now or now_sao_paulo()
+    return 'Current date and time: '+now.strftime('%Y-%m-%d %H:%M')+' (America/Sao_Paulo). Prefer sources from the last six months; keep foundational and contradicting work.'
+
+
+def codex_binary():
+    explicit=os.environ.get('STUDIO_CODEX_BINARY')
+    if explicit: return explicit if Path(explicit).is_file() else None
+    npm=Path(os.environ.get('APPDATA',''))/'npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+    return str(npm) if npm.is_file() else shutil.which('codex')
+
+
+def model_routes():
+    return [{'id':p.key,'name':p.model_id,'provider':p.family or p.adapter,'harness':'Codex','available':bool(codex_binary() and providers.api_key(p)), 'verification':'Live provider route not yet verified', 'efforts':list(EFFORTS[p.adapter]) or ['default']} for p in providers.REGISTRY.values()]
+
+
+def build_prompt(genesis,turn):
+    """Protocol, freshness, core memory (LAB.md, MONARCH.md, the card's notes), the previous exchange and the request."""
+    protocol=(Path(__file__).with_name('GENESIS.md')).read_text(encoding='utf8')
+    history=[];parent_id=turn.get('parent');seen=set();history_size=0
+    while parent_id and parent_id not in seen and len(history)<8:
+        seen.add(parent_id)
+        try:
+            parent=genesis.read('turns',parent_id)
+            exchange={'user':parent['message'],'genesis':parent['answer']}
+            history_size+=len(json.dumps(exchange))
+            if history_size>64000: break
+            history.insert(0,exchange);parent_id=parent.get('parent')
+        except (ValueError,FileNotFoundError): break
+    memory=getattr(genesis,'memory',None)
+    core=memory.prompt_block(turn.get('card')) if memory else ''
+    return protocol+'\n\n'+freshness()+core+'\n\nPrevious exchange:\n'+json.dumps(history)+'\n\nUser request:\n'+turn['message']
+
+
+def start_turn(genesis,turn):
+    identity=turn['id'];scope='genesis-'+identity;maximum=Decimal(turn['maximum_usd']);studio=genesis.studio
+    token=secrets.token_urlsafe(32);provider=providers.get(turn['model']);counter=0;request_lock=threading.Lock();provider_state={}
+    class Broker(BaseHTTPRequestHandler):
+        def log_message(self,*args): pass
+        def reply(self,status,value,content='application/json'):
+            raw=value if isinstance(value,bytes) else json.dumps(value).encode()
+            self.send_response(status);self.send_header('Content-Type',content);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+        def do_POST(self):
+            nonlocal counter
+            if not secrets.compare_digest(self.headers.get('Authorization',''),'Bearer '+token): return self.reply(403,{'error':'Scoped authorization required'})
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=2_000_000: raise ValueError('Genesis request is too large')
+                body=json.loads(self.rfile.read(size))
+                if self.path=='/tool':
+                    genesis.event(identity,'tool_started',action=body['action'])
+                    result=genesis.tool(body['action'],body.get('payload',{}))
+                    genesis.event(identity,'tool_completed',action=body['action'])
+                    return self.reply(200,result)
+                if self.path!='/v1/responses': return self.reply(404,{'error':'Unknown route'})
+                with request_lock:
+                    counter+=1
+                    if counter>24: raise ValueError('Genesis reached its request limit')
+                    request_id=scope+'-'+str(counter)
+                    # Byte count bounds tokenizer input conservatively; budget assumes no cache savings.
+                    upper=size+4096;output=81536 if provider.adapter=='gemini' else 16000
+                    ceiling=ceiling_cost(provider,upper,output)
+                    studio.ledger.reserve(request_id,ceiling,scope_id=scope,scope_limit_usd=maximum,metadata={'purpose':'Genesis','provider':provider.key,'model':provider.model_id,'harness':'codex-cross-provider'})
+                    with studio.runtime.provider(provider.family or provider.adapter,timeout=180,tokens=upper+output):
+                        studio.ledger.claim(request_id)
+                        genesis.event(identity,'model_started',request=counter,model=provider.model_id)
+                        body['_provider_state']=provider_state
+                        body['reasoning']={'effort':turn.get('effort','medium' if provider.adapter!='openai' else 'default')}
+                        result=complete(provider,body,lambda text:genesis.event(identity,'text_delta',text=text))
+                    u=result['usage']
+                    if any(type(v) is not int or v<0 for v in u.values()): raise ValueError('Provider usage could not be verified')
+                    genesis.event(identity,'provider_receipt',request=counter,usage=u,finish_reason=result.get('finish_reason'))
+                    actual=_money(str(providers.cost_usd(provider,u['prompt_tokens'],u['cached_tokens'],u['output_tokens'],u['cache_write_tokens'])))
+                    studio.ledger.settle(request_id,actual)
+                    genesis.event(identity,'usage',usage=u,cost_usd=str(actual),finish_reason=result.get('finish_reason'))
+                    if result.get('incomplete'): raise ValueError('Provider stopped without completing its response')
+                    return self.reply(200,response_events(result,body.get('model',provider.model_id)),'text/event-stream')
+            except Exception as exc:
+                # Do not expose SDK errors, request bodies, credentials or arbitrary provider text.
+                frames=traceback.extract_tb(exc.__traceback__)
+                location=Path(frames[-1].filename).name+':'+str(frames[-1].lineno) if frames else None
+                genesis.event(identity,'request_error',message='Request stopped. Any uncertain charge remains reserved.',error_type=type(exc).__name__,location=location,reason=str(exc) if str(exc) in ('Provider stopped without completing its response','No provider usage receipt','Provider usage could not be verified','No terminal provider receipt') else 'Inspect the provider receipt and routing configuration')
+                return self.reply(400,{'error':{'message':'Genesis request stopped; inspect the recorded event.','type':'request_failed'}})
+    server=ThreadingHTTPServer(('127.0.0.1',0),Broker)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+    folder=genesis.root/'sessions'/identity;folder.mkdir(parents=True,exist_ok=True)
+    (folder/'codex').mkdir(exist_ok=True)
+    prompt=build_prompt(genesis,turn)
+    (folder/'prompt.txt').write_text(prompt,encoding='utf8')
+    env={k:v for k,v in os.environ.items() if k.upper() in ('SYSTEMROOT','WINDIR','PATH','PATHEXT','TEMP','TMP','COMSPEC','APPDATA','LOCALAPPDATA','USERPROFILE')}
+    env.update(CODEX_HOME=str(folder/'codex'),GENESIS_BROKER='http://127.0.0.1:'+str(server.server_port),GENESIS_TOKEN=token)
+    cmd=[codex_binary(),'exec','--json','--ephemeral','--skip-git-repo-check','--ignore-user-config','--ignore-rules','--sandbox','read-only','-C',str(folder),'-m','genesis-scientist']
+    config={'model_provider':'genesis','model_providers.genesis.name':'Genesis model broker','model_providers.genesis.base_url':env['GENESIS_BROKER']+'/v1','model_providers.genesis.env_key':'GENESIS_TOKEN','model_providers.genesis.wire_api':'responses','model_providers.genesis.request_max_retries':0,'model_providers.genesis.stream_max_retries':0,'model_reasoning_effort':('high' if turn.get('effort')=='max' else turn.get('effort')) if turn.get('effort') not in (None,'default') else 'medium','features.shell_tool':False,'features.code_mode_host':False,'features.code_mode':False,'features.skip_host_skill_discovery':True,'features.plugins':False,'features.content_item_kinds':False,'features.multi_agent':False,'features.view_image':False,'skills.include_instructions':False,'project_doc_max_bytes':0,'mcp_servers.lab.tools.lab_action.approval_mode':'approve','web_search':'disabled','mcp_servers.lab.command':sys.executable,'mcp_servers.lab.args':[str(Path(__file__).with_name('genesis_mcp.py'))],'mcp_servers.lab.env_vars':['GENESIS_BROKER','GENESIS_TOKEN']}
+    for key,value in config.items(): cmd+=['-c',key+'='+json.dumps(value)]
+    cmd+=['-']
+    process=None
+    try:
+        genesis.event(identity,'harness_started',harness='Codex',model=provider.model_id)
+        process=subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',env=env,cwd=folder,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        genesis.active[identity]=process
+        # communicate drains both pipes and bounds the scientist turn; public deltas arrive through the broker.
+        stdout,stderr=process.communicate(prompt,timeout=600)
+        if process.returncode: raise RuntimeError('Codex stopped before completing its turn')
+        genesis.event(identity,'completed',message='Genesis finished this turn.')
+        memory=getattr(genesis,'memory',None)
+        if memory:
+            from wb_studio.memory import tags
+            try: memory.touch(tags(genesis.read('turns',identity)['answer']))
+            except Exception: pass  # citation bookkeeping never fails a finished turn
+    except Exception as exc:
+        if process and process.poll() is None: process.kill();process.communicate()
+        genesis.event(identity,'failed',message='Genesis could not complete this turn. No experiment was launched.',error_type=type(exc).__name__)
+    finally:
+        genesis.active.pop(identity,None);server.shutdown();server.server_close();studio.ledger.finish_run(scope)

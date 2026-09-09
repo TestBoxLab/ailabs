@@ -12,7 +12,7 @@ from wb_studio.architectures import default_status, pinned
 from wb_studio.runners import runner_config
 from wb_studio.runtime_registry import blueprint_readiness, resolve_api_control
 
-KINDS={'input','monarch','product-graph','agent','merge','output'}
+KINDS={'input','monarch','product-graph','agent','merge','workflow','output'}
 MODES=('act','advise')
 ID=re.compile(r'^[a-zA-Z0-9_-]{1,80}$')
 FIELD_PATH=re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*')
@@ -51,9 +51,12 @@ def problems(graph,strict=True):
             if n['id'] in ids:found.append({'node':n['id'],'message':'Node IDs must be unique'})
             ids.add(n['id'])
     if any(p['node'] is None for p in found):return found
+    by_id={n['id']:n for n in nodes}
     outgoing={i:[] for i in ids};incoming={i:[] for i in ids};pairs=set()
     for e in edges:
         if not isinstance(e,dict) or not isinstance(e.get('from'),str) or not isinstance(e.get('to'),str) or e.get('from') not in ids or e.get('to') not in ids or e['from']==e['to']:found.append({'node':None,'message':'Connections must join two existing nodes'});continue
+        if by_id[e['to']]['type']=='product-graph':found.append({'node':e['to'],'message':'Product graphs provide knowledge and cannot receive connections'})
+        if by_id[e['from']]['type']=='product-graph' and by_id[e['to']]['type']!='agent':found.append({'node':e['from'],'message':'Connect product knowledge only to agents'})
         pair=(e['from'],e['to'])
         if pair in pairs:found.append({'node':e['to'],'message':'Duplicate connection'});continue
         pairs.add(pair);outgoing[e['from']].append(e['to']);incoming[e['to']].append(e['from'])
@@ -78,7 +81,7 @@ def problems(graph,strict=True):
                 return reached
             forward=visit(starts[0],outgoing);backward=visit(ends[0],incoming)
             for i in sorted(ids):
-                if i not in forward or i not in backward:found.append({'node':i,'message':'Connect this node between the task input and the result output'})
+                if (i not in forward and by_id[i]['type']!='product-graph') or i not in backward:found.append({'node':i,'message':'Connect this node between the task input and the result output'})
     return found
 
 def validate_graph(graph,strict=True):
@@ -119,13 +122,15 @@ def save_draft(studio,payload):
     name=payload.get('name','')
     if not isinstance(name,str) or not name.strip() or len(name)>100:raise ValueError('Name your architecture in up to 100 characters')
     if name.strip().casefold()=='default monarch enterprise':raise ValueError('Give your variation its own name; the default baseline stays unchanged')
+    track=payload.get('track','agentic-request')
+    if track not in ('agentic-request','create-and-run'):raise ValueError('Choose agentic requests or workflow building')
     validate_graph(payload.get('graph'),strict=False)
     if len(json.dumps(payload))>120000:raise ValueError('Architecture definition is too large')
     with studio.lock:
         file=folder/'draft.json';old=json.loads(file.read_text(encoding='utf-8')) if file.exists() else None
         revision=old['revision'] if old else 0
         if payload.get('revision',0)!=revision:raise ValueError('This draft changed in another editor. Reload it before saving.')
-        data={'id':identity,'name':name.strip(),'graph':deepcopy(payload['graph']),'revision':revision+1,'status':'draft',
+        data={'id':identity,'track':track,'name':name.strip(),'graph':deepcopy(payload['graph']),'revision':revision+1,'status':'draft',
               'updated_at':datetime.now(timezone.utc).isoformat(),'notes':str(payload.get('notes',''))[:2000]}
         folder.mkdir(parents=True,exist_ok=True);write_json(file,data)
     return data
@@ -136,6 +141,10 @@ def publish(studio,payload):
         draft=json.loads((folder/'draft.json').read_text(encoding='utf-8'))
         if payload.get('revision')!=draft['revision']:raise ValueError('Save your latest edits before publishing')
         order=validate_graph(draft['graph'])
+        if any(n['type']=='monarch' for n in draft['graph']['nodes']):
+            raise ValueError('Monarch Enterprise is a separate reference implementation. Remove the legacy Monarch node and configure the reference under Runtime.')
+        if any(n['type']=='workflow' for n in draft['graph']['nodes']):
+            raise ValueError('Remove the legacy Run workflow node. Workflow architectures deliver their workflow through Result Output; the benchmark executes it.')
         previous=[json.loads(p.read_text(encoding='utf-8')) for p in sorted(folder.glob('v????.json'))]
         if previous and previous[-1]['draft_revision']==draft['revision']:return previous[-1]
         baseline=pinned(default_status(studio,refresh=True)) if any(n['type']=='monarch' for n in draft['graph']['nodes']) else None
@@ -143,7 +152,7 @@ def publish(studio,payload):
         for n in graph['nodes']:
             if n['type']=='monarch':n['config']['baseline']=baseline
         fingerprint=hashlib.sha256(json.dumps(graph,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        version={'id':draft['id'],'name':draft['name'],'version':len(previous)+1,'draft_revision':draft['revision'],
+        version={'id':draft['id'],'track':draft.get('track','agentic-request'),'name':draft['name'],'version':len(previous)+1,'draft_revision':draft['revision'],
                  'graph':graph,'sha256':fingerprint,'order':order,'notes':draft['notes'],
                  'published_at':datetime.now(timezone.utc).isoformat(),'parent_version':previous[-1]['version'] if previous else None}
         state=blueprint_readiness(studio,version)
@@ -169,7 +178,7 @@ def version_manifest(version,baseline):
             source={**source,'kind':'git','repository':baseline['repository'],'directory':baseline['directory'],'commit':baseline['commit'],'lockfile':baseline.get('lockfile')}
     return rm.build('blueprint',source=source,
         runtime={'entrypoint':'wb_studio.execution.ArchitectureArm','dependency_closure':[],'nodes':[{'id':n['id'],'type':n['type']} for n in nodes],'order':version['order']},
-        evaluation={'track':'agentic-request','provider':None,'model':None,'effort':'default','harness':'studio-node-runtime','harness_version':None,'settings':{'runners':runners}},
+        evaluation={'track':version.get('track','agentic-request'),'provider':None,'model':None,'effort':'default','harness':'studio-node-runtime','harness_version':None,'settings':{'runners':runners}},
         artifacts=artifacts,readiness_record=version['readiness'],
         parent=f"v{version['parent_version']}" if version.get('parent_version') else None,
         notes=f"{version['name']} v{version['version']}: published definition; execution binds to this version hash, never to the draft.")

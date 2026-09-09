@@ -41,3 +41,11 @@ attempt crashed or the week changed.
 Current engineering evidence: ../specs/007-lab-foundation/implementation.md.
 Dependency candidate validation is engineering validation, not a measured model
 improvement or a completed scientific hypothesis experiment.
+
+Daily evidence-driven R&D is scheduled for 10:00 America/Sao_Paulo (automation
+`ai-labs-evidence-driven-r-d`). It acts only on newly indexed evidence, preserves
+parent links, and stays quiet when there is no actionable change. Its first
+scheduled execution has not been observed. The weekly pipeline includes a
+separate frontier/interaction section, explicit three-pass reading status,
+`synthesis-matrix.csv`, and `glossary.md`. Neither schedule grants an exception
+to the shared spending, isolation, or publication rules.

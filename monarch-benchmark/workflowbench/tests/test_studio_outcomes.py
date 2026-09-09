@@ -121,7 +121,7 @@ def test_outcome_report_separates_infrastructure_scope_and_observed_actions():
     scope, infra = report['attempts']
     assert scope['title'] == 'Requested work changed more than allowed'
     assert scope['scope_respected'] is False
-    assert scope['requirements'] == [{'title': 'Phone should be 123', 'passed': True, 'check_index': 0}]
+    assert scope['requirements'] == [{'title': 'Phone should be 123', 'passed': True, 'check_index': 0, 'record': None, 'field': 'phone', 'expected': '123'}]
     assert scope['actions'][0]['status'] == 'observed'
     assert scope['actions'][0]['event_id'] == 1
     assert scope['causal_claim'] is None
@@ -135,6 +135,7 @@ def ready_for_analysis(studio):
     studio.emit(job['id'], 'node_started', model=job['settings']['models'][0], task=list(studio.tasks)[0], node='tool-1', label='api_search', arguments={'query': 'contacts'})
     studio.emit(job['id'], 'node_finished', model=job['settings']['models'][0], task=list(studio.tasks)[0], node='tool-1', output='found', status='completed')
     job['status'] = 'completed'
+    studio.ledger.finish_run(job['id'])
     studio.save(job)
     return job
 
@@ -155,12 +156,15 @@ def test_analysis_uses_blinded_citations_real_budget_and_single_dispatch(studio)
     assert len(generated) == 1
     assert generated[0]['generationConfig']['thinkingConfig']['thinkingLevel'] == 'medium'
     payload = json.loads(generated[0]['contents'][0]['parts'][0]['text'])
-    assert {e['model'] for e in payload['events']} == {'Approach 1'}
+    assert {e['model'] for e in payload['events']} == {'Setup 1'}
     assert 'assertions' not in payload and 'initial_state' not in payload
     assert 'not a replacement' in report['basis'] or 'interpretation' in report['basis']
     assert Decimal(studio.budget()['actual']) > 0 and Decimal(studio.budget()['held']) == 0
     assert analysis.review(studio, job['id']) == report
     assert len(calls) == 2
+    envelope=studio.ledger.run_reservation(job['id']+'-analysis-v1')
+    assert envelope.closed_at is not None
+    assert envelope.maximum_usd==Decimal(job['settings']['maximum_usd'])
 
 
 @pytest.mark.parametrize('bad', [
@@ -185,9 +189,11 @@ def test_analysis_does_not_dispatch_when_shared_budget_cannot_admit(studio):
     studio.ledger.reserve('other-work', Decimal('300'), scope_id='other-work')
     calls = []
     studio.gateway_factory = lambda ledger, model: PaidGateway(ledger, model=model, transport=transport_for(valid_analysis(), calls))
-    result = analysis.review(studio, job['id'])
-    assert result['status'] == 'failed'
-    assert [op for op, _ in calls] == ['countTokens']
+    from wb_orchestrator.budget import BudgetExceeded
+    with pytest.raises(BudgetExceeded):
+        analysis.review(studio, job['id'])
+    assert calls == []
+    assert not (studio.directory / job['id'] / 'analysis.claimed').exists()
     assert Decimal(studio.budget()['held']) == 300
 
 
@@ -196,7 +202,7 @@ def test_analysis_rejects_running_jobs_before_reserving_or_dispatch(studio):
     with pytest.raises(ValueError, match='finish'):
         analysis.review(studio, job['id'])
     assert not (studio.directory / job['id'] / 'analysis.claimed').exists()
-    assert Decimal(studio.budget()['held']) == 0
+    assert Decimal(studio.budget()['held']) == Decimal(job['settings']['maximum_usd'])
 
 
 def test_interrupted_analysis_claim_is_never_automatically_replayed(studio):

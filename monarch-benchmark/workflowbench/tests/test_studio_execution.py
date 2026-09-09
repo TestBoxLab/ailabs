@@ -211,7 +211,7 @@ def test_published_planner_worker_architecture_is_ready_and_executes_step_by_ste
     assert "You cannot call tools in this step" in planner.system
     events = studio.events(job["id"])
     steps = [(e["step"], e["status"]) for e in events if e["type"] == "step_finished"]
-    assert steps == [("planner", "completed"), ("worker", "completed"), ("output", "completed")]
+    assert steps == [("input", "completed"), ("planner", "completed"), ("worker", "completed"), ("output", "completed")]
     assert all(e.get("step") == "worker" for e in events if e["type"] in ("node_started", "node_finished"))
     assert [e["runner"]["adapter"] for e in events if e["type"] == "step_runner"] == ["anthropic", "gemini"]
 
@@ -252,7 +252,7 @@ def save_catalog(studio, fields, revision=0, **extra):
 def knowledge_graph(version=1):
     return {"nodes": [node("input", "input"), node("knowledge", "product-graph", 150, graph="catalog", version=version),
                       node("worker", "agent", 450, instructions="Do the work.", runner=GEMINI), node("output", "output", 600)],
-            "edges": edges(("input", "knowledge"), ("knowledge", "worker"), ("worker", "output"))}
+            "edges": edges(("input", "worker"), ("knowledge", "worker"), ("worker", "output"))}
 
 
 def test_product_graph_is_prepared_once_and_its_records_flow_into_scored_attempts(studio):
@@ -286,7 +286,7 @@ def test_product_graph_is_prepared_once_and_its_records_flow_into_scored_attempt
     studio.execute(job["id"])
     done = studio.job(job["id"])
     assert done["status"] == "completed", done
-    steps = [(e["step"], e["status"], e.get("output", "")) for e in studio.events(job["id"]) if e["type"] == "step_finished"]
+    steps = [(e["step"], e["status"], e.get("output", "")) for e in studio.events(job["id"]) if e["type"] == "step_finished" and e["step"] != "input"]
     assert steps[0][0] == "knowledge" and steps[0][1] == "completed" and steps[0][2].startswith("Delivered 2 products × 2 fields from 'Catalog' v1 (product.summary, product.risk) to Worker")
     evidence = sorted((studio.directory / job["id"] / "evidence").rglob("*.jsonl"))
     joined = "\n".join(p.read_text(encoding="utf-8") for p in evidence)
@@ -314,10 +314,10 @@ def test_failed_preparation_is_recorded_blocks_launch_and_can_be_retried(studio)
     save_catalog(studio, CATALOG_FIELDS)
     class Broken(FakeGemini):
         def request(self, contents, system, tools, **kw):
-            raise RuntimeError("provider down key=abc")
+            raise RuntimeError("provider down key=fixture-secret-token")
     working, studio.gateway_factory = studio.gateway_factory, Broken
     failed = product_graphs.prepare(studio, "catalog", maximum_usd="2.00")
-    assert failed["status"] == "failed" and failed["records"] == {} and "abc" not in json.dumps(failed)
+    assert failed["status"] == "failed" and failed["records"] == {} and "fixture-secret-token" not in json.dumps(failed)
     from wb_studio.runtime_registry import blueprint_readiness
     state = blueprint_readiness(studio, publish(studio, "informed", knowledge_graph()))
     assert state["readiness"]["runtime"] == "preparation_required" and "failed" in state["readiness"]["reasons"][0]
@@ -356,12 +356,15 @@ def test_monarch_nodes_never_execute_and_are_reported_before_launch(studio, monk
     monkeypatch.setattr(blueprints, "default_status", lambda s, refresh=False: {"id": "default-monarch-enterprise", "repository": "https://github.com/TestBoxLab/monarch", "directory": "monarch-enterprise", "commit": "a" * 40})
     graph = {"nodes": [node("input", "input"), node("monarch", "monarch", 300, runner={"provider": "bedrock", "model": "claude-opus-4-8", "effort": "default"}), node("output", "output", 600)],
              "edges": edges(("input", "monarch"), ("monarch", "output"))}
-    version = publish(studio, "stock", graph)
-    assert version["readiness"]["runtime"] == "adapter_required"
-    plan = execution.compile_version(version)
+    with pytest.raises(ValueError, match="separate reference implementation"):
+        publish(studio, "stock", graph)
+    assert blueprints.listing(studio)[0]["versions"] == []
+    # Historical definitions still receive a concrete unsupported-node diagnostic.
+    plan = execution.compile_version({"id": "stock", "version": 1, "graph": graph})
     assert plan["problems"] and "not executed by the node runtime" in plan["problems"][0]["message"]
-    with pytest.raises(ValueError, match="cannot launch yet"):
+    with pytest.raises(ValueError, match="Unknown comparison version"):
         studio.create({"architectures": ["blueprint.stock.v1"], "tasks": list(studio.tasks)}, start=False)
+    assert studio.jobs() == []
 
 
 def test_problems_lists_every_defect_and_diff_reads_node_changes(studio):
@@ -385,3 +388,94 @@ def test_problems_lists_every_defect_and_diff_reads_node_changes(studio):
     assert diff["changed"][0]["id"] == "planner" and diff["changed"][0]["fields"][0]["field"] == "instructions"
     assert {"from": "Worker", "to": "Reviewer"} in diff["edges_added"] and {"from": "Worker", "to": "Output"} in diff["edges_removed"]
     assert blueprints.diff_versions(first, first)["identical"] is True
+
+"""Offline regression checks for one architecture with several model settings."""
+from copy import deepcopy
+from wb_studio import execution
+
+def test_comparison_freezes_each_model_without_mutating_published_graph(studio):
+    original = publish(studio, 'comparison', planner_worker_graph())
+    job = studio.create({'architectures':['blueprint.comparison.v1'], 'comparison_models':True,
+                         'models':['claude-opus-5@medium','claude-opus-5@high'],
+                         'tasks':list(studio.tasks), 'maximum_usd':'5'}, start=False)
+    arms = job['settings']['arms']
+    assert len(arms) == 2
+    assert [a['runner_override']['effort'] for a in arms] == ['medium','high']
+    assert job['total'] == len(studio.tasks)*2
+    assert execution.load_version(studio,'comparison',1)['graph'] == original['graph']
+    manifests = job['execution_manifests']
+    assert manifests[arms[0]['id']]['identity_sha256'] != manifests[arms[1]['id']]['identity_sha256']
+    for arm in arms:
+        bound = studio._arm(job,arm,next(iter(studio.tasks)),studio.cancelled[job['id']])
+        assert all(s['config']['runner']['effort']==arm['runner_override']['effort'] for s in bound.plan['steps'] if s['type']=='agent')
+
+def test_binding_changes_every_agent_but_preserves_roles_and_edges():
+    version = {'id':'x','version':1,'sha256':'original','graph':planner_worker_graph()}
+    before=deepcopy(version)
+    bound=execution.bind_comparison_model(version,{'provider':'anthropic','model':'claude-opus-5','effort':'high'})
+    assert version==before
+    assert bound['graph']['edges']==version['graph']['edges']
+    assert [n['config'].get('mode') for n in bound['graph']['nodes']]==[n['config'].get('mode') for n in version['graph']['nodes']]
+    assert {n['config']['runner']['model'] for n in bound['graph']['nodes'] if n['type']=='agent'}=={'claude-opus-5'}
+
+
+def test_workflow_result_output_saves_and_executes_without_workflow_node(studio):
+    plan = {'steps':[{'id':'encode','tool':'base64_encode','arguments':{'text':'hello'},'after':[]}]}
+    studio.adapter_factory = lambda provider,tools: FakeAdapter(provider,False,answer=json.dumps(plan))
+    graph = {'nodes':[node('input','input'),node('builder','agent',mode='advise',instructions='Author a workflow.',runner={'provider':'anthropic','model':'claude-opus-5','effort':'medium'}),node('output','output')], 'edges':edges(('input','builder'),('builder','output'))}
+    draft=blueprints.save_draft(studio,{'id':'workflow-output','name':'Workflow output','track':'create-and-run','graph':graph})
+    version=blueprints.publish(studio,{'id':draft['id'],'revision':draft['revision']})
+    assert [n['type'] for n in version['graph']['nodes']]==['input','agent','output']
+    job=studio.create({'architectures':['blueprint.workflow-output.v1'],'tasks':list(studio.tasks),'track':'create-and-run','maximum_usd':'5'},start=False)
+    studio.execute(job['id'])
+    events=studio.events(job['id'])
+    assert any(e['type']=='workflow_recipe' for e in events)
+    from wb_results.evidence import _long  # the evidence tree is deeper than Windows allows without the extended prefix
+    evidence='\n'.join(p.read_text(encoding='utf8') for p in _long(studio.directory/job['id']/'evidence'/('x'*200)).parent.rglob('*.jsonl'))
+    assert 'workflow_action' in evidence and 'aGVsbG8=' in evidence
+    finish=next(e for e in events if e['type']=='step_finished' and e.get('step')=='output')
+    assert finish['status']=='completed'
+
+
+def test_bare_coverage_requires_matching_task_model_and_thinking(studio):
+    from wb_studio.bare_coverage import coverage
+    from wb_world.episode import contract_hash
+    task=next(iter(studio.tasks))
+    history={'id':'history','settings':{'track':'agentic-request','arms':[{'id':'native','kind':'native','version':'without-monarch','runner':{'model':'claude-opus-5','effort':'medium'}}]},'runner_manifests':{'native':dict.fromkeys(['harness_version','model_version','tools_sha256','world_sha256'],'pinned')},'task_hashes':{task:contract_hash(studio.tasks[task])},'results':[{'task':task,'model':'native','termination':'completed','passed':False}]}
+    studio.jobs=lambda:[history]
+    payload={'models':['claude-opus-5@medium'],'tasks':[task]}
+    assert coverage(studio,payload)['items'][0]['completed']==1
+    assert coverage(studio,{**payload,'models':['claude-opus-5@high']})['items'][0]['missing']==[task]
+    history['task_hashes'][task]='old-definition'
+    assert coverage(studio,payload)['items'][0]['missing']==[task]
+
+
+def test_product_knowledge_is_a_source_only_agent_plugin():
+    graph = knowledge_graph()
+    assert blueprints.problems(graph) == []
+    for source, target, message in [('input', 'knowledge', 'cannot receive'), ('knowledge', 'output', 'only to agents')]:
+        invalid = json.loads(json.dumps(graph))
+        invalid['edges'].append({'from': source, 'to': target})
+        assert any(message in p['message'] for p in blueprints.problems(invalid))
+
+
+def test_connected_knowledge_and_previous_output_have_separate_delivery(studio, monkeypatch):
+    from types import SimpleNamespace
+    from wb_studio.execution import ArchitectureArm
+    import wb_studio.execution as execution
+    graph = planner_worker_graph()
+    graph['nodes'].append(node('knowledge', 'product-graph', graph='catalog', version=1))
+    graph['edges'].append({'from':'knowledge','to':'planner'})
+    version = {'id':'separate','version':1,'sha256':'offline','graph':graph,'order':blueprints.validate_graph(graph)}
+    arm = ArchitectureArm(studio,'offline','arm','task',None,Decimal('2'),version,{'knowledge':{}},{})
+    arm.graphs['knowledge'] = {'sentinel':True}
+    monkeypatch.setattr(execution, 'render', lambda _: 'EXACT PRODUCT KNOWLEDGE')
+    ep = SimpleNamespace(task={'prompt':[{'content':'Stable task system'},{'content':'Task brief'}]})
+    steps = {s['id']:s for s in arm.plan['steps']}
+    planner = arm._system(ep,steps['planner'],{})
+    worker = arm._system(ep,steps['worker'],{'planner':'Exact earlier answer'})
+    assert 'EXACT PRODUCT KNOWLEDGE' in planner
+    assert 'EXACT PRODUCT KNOWLEDGE' not in worker
+    assert worker.endswith('Exact earlier answer')
+    assert worker.index('Your role in this step') < worker.index('Exact earlier answer')
+    assert 'Stable task system' in planner and 'Stable task system' in worker

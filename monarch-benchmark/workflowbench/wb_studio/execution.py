@@ -8,7 +8,7 @@ Step semantics at run time, in topological order:
 
     input         the task brief and system prompt
     product-graph the records of a prepared product graph version, delivered to
-                  every step downstream of it
+                  agents directly connected to it
     agent         one agent loop; ``mode`` "act" executes tools against the
                   episode world, "advise" answers in text only
     merge         the joined outputs of its direct predecessors
@@ -25,9 +25,10 @@ import re
 from wb_arms import runtime_manifest as rm
 from wb_arms.api_loop import ArmResult
 from wb_studio.agents import episode_executor, run_loop
+from wb_studio.workflows import WORKFLOW_GUIDE, discovery_executor, execute_workflow
 from wb_studio.product_graphs import load_version as load_graph_version, render
 
-RUNTIME_KINDS = {"input", "product-graph", "agent", "merge", "output"}
+RUNTIME_KINDS = {"input", "product-graph", "agent", "merge", "workflow", "output"}
 
 
 def version_path(studio, identity: str, number: int, suffix: str = ".json") -> Path:
@@ -89,6 +90,18 @@ def bound_graphs(studio, version: dict) -> dict:
     return bound
 
 
+def bind_comparison_model(version, runner):
+    """Bind every experimental agent to the selected model without changing the published version."""
+    from copy import deepcopy
+    bound = deepcopy(version)
+    for node in bound['graph']['nodes']:
+        if node['type'] == 'agent':
+            node.setdefault('config', {})['runner'] = dict(runner)
+    bound['source_sha256'] = version['sha256']
+    bound['sha256'] = rm.sha256_json({'graph': bound['graph'], 'track': bound.get('track', 'agentic-request')})
+    return bound
+
+
 def execution_manifest(version: dict, graphs: dict) -> dict:
     """What a run of this version binds to: the graph hash and every referenced product graph version."""
     pinned = {step: {"graph": g["id"], "version": g["version"], "sha256": g["sha256"]} for step, g in sorted(graphs.items())}
@@ -123,16 +136,19 @@ class ArchitectureArm:
         if self.config.get("prompt"):
             parts.append("Experiment instructions:\n" + self.config["prompt"])
         for ancestor in self.plan["order"]:
-            if ancestor in step["ancestors"] and by_id[ancestor]["type"] == "product-graph" and self.graphs.get(ancestor):
+            if ancestor in step["upstream"] and by_id[ancestor]["type"] == "product-graph" and self.graphs.get(ancestor):
                 parts.append(render(self.graphs[ancestor]))
-        for parent in step["upstream"]:
-            if by_id[parent]["type"] in ("agent", "merge") and outputs.get(parent):
-                parts.append(f"Output of the previous step '{by_id[parent]['label']}':\n" + outputs[parent])
         instructions = str(step["config"].get("instructions", "")).strip()
         if instructions:
             parts.append(f"Your role in this step ('{step['label']}'):\n" + instructions)
         if step["config"].get("mode") == "advise":
             parts.append("You cannot call tools in this step. Answer in text only; a later step acts on your answer.")
+        if self.version.get("track") == "create-and-run":
+            parts.append(WORKFLOW_GUIDE)
+        # Reusable instructions precede per-attempt outputs for prefix caching.
+        for parent in step["upstream"]:
+            if by_id[parent]["type"] not in ("input", "product-graph") and outputs.get(parent):
+                parts.append(f"Output of the previous step '{by_id[parent]['label']}':\n" + outputs[parent])
         return "\n\n".join(parts)
 
     def run(self, ep, deadline=None) -> ArmResult:
@@ -158,6 +174,8 @@ class ArchitectureArm:
         for step in self.plan["steps"]:
             kind = step["type"]
             if kind == "input":
+                outputs[step["id"]] = ep.task["prompt"][1]["content"]
+                self.emit("step_finished", step=step["id"], label=step["label"], status="completed", output=outputs[step["id"]])
                 continue
             self.step = step["id"]
             self.emit("step_started", step=step["id"], label=step["label"], step_type=kind)
@@ -171,6 +189,19 @@ class ArchitectureArm:
                     total.termination, total.error = "error", f"{step['label']}: no prepared product graph version"
                     break
                 continue
+            if kind == "workflow" or (kind == "output" and self.version.get("track") == "create-and-run" and not any(s["type"] == "workflow" for s in self.plan["steps"])):
+                authored = "\n\n".join(outputs[p] for p in step["upstream"] if outputs.get(p))
+                result = execute_workflow(authored, execute=self.studio.component(self.identity, "action_builder")(ep),
+                                          emit=self.emit, record=ep.record_agent_event, cancel=self.cancel, deadline=deadline)
+                outputs[step["id"]] = result.final_text or ""
+                if kind == "output":
+                    final = result.final_text or ""
+                total.tool_calls += result.tool_calls
+                self.emit("step_finished", step=step["id"], label=step["label"], status="completed" if result.termination == "completed" else "error", output=result.final_text or result.error)
+                if result.termination != "completed":
+                    total.termination, total.error = result.termination, result.error
+                    break
+                continue
             if kind == "merge":
                 outputs[step["id"]] = "\n\n".join(outputs[p] for p in step["upstream"] if outputs.get(p))
                 self.emit("step_finished", step=step["id"], label=step["label"], status="completed", output=outputs[step["id"]])
@@ -182,8 +213,16 @@ class ArchitectureArm:
             mode = step["config"].get("mode", "act")
             gateway = self.studio.gateway_for(step["config"]["runner"], with_tools=mode != "advise")
             self.emit("step_runner", step=step["id"], runner=gateway.describe())
-            result = run_loop(gateway, system=self._system(ep, step, outputs), brief=ep.task["prompt"][1]["content"],
-                              execute_tool=episode_executor(ep), emit=self.emit, scope_id=self.identity, scope_limit_usd=self.maximum,
+            execute = self.studio.component(self.identity, "action_builder")(ep)
+            if self.version.get("track") == "create-and-run":
+                execute = discovery_executor(execute)
+            for source in step["upstream"]:
+                if source in self.graphs:
+                    self.emit("knowledge_delivered", step=step["id"], source=source,
+                              label=self.graphs[source].get("name","Product knowledge"),
+                              products=len(self.graphs[source].get("records",{})))
+            result = self.studio.component(self.identity, "brain")(gateway, system=self._system(ep, step, outputs), brief=ep.task["prompt"][1]["content"],
+                              execute_tool=execute, emit=self.emit, scope_id=self.identity, scope_limit_usd=self.maximum,
                               request_prefix=f"{self.identity}-{self.task_id}-{self.name}-{step['id']}",
                               max_turns=int(step["config"].get("max_turns") or self.config.get("max_turns", 20)),
                               cancel=self.cancel, deadline=deadline, step=step["id"], record=ep.record_agent_event, budget=self.studio.budget)

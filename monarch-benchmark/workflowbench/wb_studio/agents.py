@@ -40,6 +40,7 @@ def run_loop(gateway, *, system: str, brief: str, execute_tool, emit, scope_id: 
             # constant for the loop, so it is journaled once with the first request.
             record({"type": "agent_request", "turn": turn, "step": step,
                     "request": {"messages": messages, **({"system": system, "brief": brief} if turn == 0 else {})}})
+            gateway.on_text = lambda text: emit("model_delta", node=f"{prefix}model-{turn}", text=text, turn=turn, **tag)
             reply = gateway.turn(messages, scope_id=scope_id, scope_limit_usd=scope_limit_usd,
                                  request_id=f"{request_prefix}-{turn}", timeout=None if not deadline else max(deadline - time.monotonic(), 1.0))
             billing = reply.get("_billing", {})

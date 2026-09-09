@@ -179,7 +179,7 @@ class Orchestrator:
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None,
                  tasks: list[dict] | None = None, retry_on_fail: int = 0,
-                 ledger=None, operator: str | None = None):
+                 ledger=None, operator: str | None = None, grader=None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         if retry_on_fail < 0:
@@ -189,6 +189,7 @@ class Orchestrator:
         for a in arms:
             _validate_arm_key(a)
         self.store = store
+        self.grader = grader or grade
         self.run_config: config_mod.RunConfig | None = None
         self.suite_dir = str(suite_dir)
         self.tasks = tasks if tasks is not None else load_suite(suite_dir)
@@ -458,7 +459,7 @@ class Orchestrator:
         """Run one attempt and record its row. Returns whether it earned a retry."""
         task_id = task["task"]
         eid = f"{run_id}/{task_id}/{arm.name.replace('/', '_')}/t{trial}"
-        ep_dir = self._run_dir(run_id) / "episodes" / task_id / arm.name.replace("/", "_") / f"t{trial}"
+        ep_dir = evidence._long(self._run_dir(run_id) / "episodes" / task_id / arm.name.replace("/", "_") / f"t{trial}")
         ep_dir.mkdir(parents=True, exist_ok=True)
         prior = next((r for r in self.store.episodes(run=run_id, arm=arm.name)["rows"]
                       if r["episode_id"] == eid), None)
@@ -587,7 +588,7 @@ class Orchestrator:
             (ep_dir / "snapshot1.json").write_text(json.dumps(snap1))
             (ep_dir / "turns.jsonl").write_text(
                 "\n".join(json.dumps(t) for t in result.turn_log) + ("\n" if result.turn_log else ""))
-            g = grade(task, ep.snapshot0, snap1)
+            g = self.grader(task, ep.snapshot0, snap1)
         except Exception as e:
             termination = "infra:harness_crash"
             crash = f"grade/record failed: {e}"

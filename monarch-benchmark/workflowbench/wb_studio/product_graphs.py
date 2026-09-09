@@ -87,14 +87,79 @@ def listing(studio) -> list[dict]:
         if not draft.is_file():
             continue
         record = _read(draft)
-        record["versions"] = [summary(_read(p)) for p in sorted(graph_dir.glob("v????.json"))]
+        versions = _versions(graph_dir)
+        by_number = {v["version"]: v for v in versions}
+        record["versions"] = [summary(v, by_number.get(v.get("parent_version"))) for v in versions]
         items.append(record)
     return items
 
 
-def summary(version: dict) -> dict:
-    """A version without the raw model answer; records stay (they are the point)."""
-    return {k: v for k, v in version.items() if k != "final_text"}
+def summary(version: dict, parent: dict | None = None) -> dict:
+    """A version without the raw model answer, plus its sentence; records stay (they are the point)."""
+    return {k: v for k, v in version.items() if k != "final_text"} | {"summary": describe(version, parent)}
+
+
+def _unknown(value) -> bool:
+    return isinstance(value, str) and value.strip().lower() == "unknown"
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}{'' if number == 1 else 's'}"
+
+
+def describe(version: dict, parent: dict | None) -> str:
+    """One or two sentences from the diff counts against the parent, never from a model."""
+    if version.get("status") == "failed":
+        return "Failed before any field was filled."
+    fields = [f["path"] for f in version.get("fields", [])]
+    products = version.get("products") or sorted(version.get("records", {}))
+    before, after = (parent or {}).get("records", {}), version.get("records", {})
+    filled = changed = unknown = missing = 0
+    for product in products:
+        for path in fields:
+            old, new = before.get(product, {}), after.get(product, {})
+            if path not in new:
+                missing += 1
+            elif _unknown(new[path]):
+                unknown += 1
+            elif path not in old:
+                filled += 1
+            elif old[path] != new[path]:
+                changed += 1
+    slots, dropped = len(products) * len(fields), len(version.get("removed") or [])
+    tail = ([f"changed {_count(changed, 'value')}"] if changed else []) + ([f"{unknown} stayed unknown"] if unknown else [])         + ([f"{missing} still missing"] if missing else []) + ([f"dropped {_count(dropped, 'field')}"] if dropped else [])
+    if parent and not (filled or changed or unknown or missing):
+        return "; ".join([f"Nothing new: all {_count(slots, 'field')} match version {parent['version']}"] + tail) + "."
+    return "; ".join([f"Filled {filled} of {_count(slots, 'field')} across {_count(len(products), 'product')}"] + tail) + "."
+
+
+def drilldown(studio, identity: str, number: int) -> dict:
+    """Every product's values in a version, each with the research events (of the version that researched it) that produced it."""
+    version = load_version(studio, identity, number)
+    graph_dir, logs = folder(studio, identity), {}
+
+    def events_of(since: int) -> list[dict]:
+        if since not in logs:
+            path = graph_dir / f"v{since:04d}.events.jsonl"
+            logs[since] = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.is_file() else []
+        return logs[since]
+
+    products = []
+    for product in version.get("products") or sorted(version.get("records", {})):
+        record, fields = version.get("records", {}).get(product, {}), []
+        for field in version.get("fields", []):
+            path, since, present = field["path"], field.get("since", number), field["path"] in record
+            fields.append({"path": path, "type": field["type"], "value": record.get(path), "present": present, "unknown": present and _unknown(record[path]),
+                           "since": since, "events": {"version": since, "ids": [e["id"] for e in events_of(since) if present and _produced(e, product)]}})
+        products.append({"product": product, "fields": fields})
+    return {"id": identity, "version": number, "products": products}
+
+
+def _produced(event: dict, product: str) -> bool:
+    """A catalog search that names the product, or a completed model answer that carries its record."""
+    if event.get("type") == "node_started":
+        return product.lower() in json.dumps(event.get("arguments", {})).lower()
+    return event.get("type") == "model_finished" and event.get("status") == "completed" and f'"{product}"' in (event.get("output") or "")
 
 
 def load_version(studio, identity: str, number: int) -> dict:
@@ -211,13 +276,23 @@ def prepare(studio, identity: str, *, maximum_usd, revision=None) -> dict:
     parent = load_version(studio, identity, work["parent_version"]) if work["parent_version"] else None
     products, fields = work["products"], work["to_research"]
     emit("step_started", step="research", label=draft["name"], step_type="product-graph", version=number, fields=[f["path"] for f in fields])
+    searches = {"n": 0}
+
+    def research_tool(name, args):
+        """Catalog searches go to the research log, like tool calls in an attempt, so a value can point back at them."""
+        node = f"research:tool-{searches['n']}"
+        searches["n"] += 1
+        emit("node_started", node=node, label=name, arguments=args, step="research")
+        value = _catalog_tool(name, args)
+        emit("node_finished", node=node, label=name, output=value, status="completed", step="research")
+        return value
     gateway = studio.gateway_for(draft["runner"], with_tools=True)
     brief = ("Products in the benchmark corpus: " + ", ".join(products) + "\n\nFields to fill for every product:\n"
              + "\n".join(f"- {f['path']} ({f['type']}): {f['description'] or 'no description'}" for f in fields)
              + ("\n\nResearch instructions from the author:\n" + draft["instructions"].strip() if draft["instructions"].strip() else "")
              + "\n\nReturn only a JSON object of the form {\"<product>\": {\"<field name without the product. prefix>\": value}} covering every product.")
     scope = f"product-graph-{identity}-v{number}"
-    result = run_loop(gateway, system=RESEARCH_SYSTEM, brief=brief, execute_tool=_catalog_tool, emit=emit, scope_id=scope,
+    result = run_loop(gateway, system=RESEARCH_SYSTEM, brief=brief, execute_tool=research_tool, emit=emit, scope_id=scope,
                       scope_limit_usd=maximum, request_prefix=scope, max_turns=MAX_PREPARE_TURNS, step="research", budget=studio.budget)
     researched, problems = parse_knowledge(result.final_text or "", products, fields)
     answered = result.termination == "completed" and not any(p.startswith("The preparation answer") for p in problems)

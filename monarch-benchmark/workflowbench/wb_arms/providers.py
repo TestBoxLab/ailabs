@@ -1,8 +1,8 @@
 """Provider registry + cached-token normalization.
 
 Providers come from the model files in `config/models/` (prices, adapter,
-cache fields, provenance notes); see `load_models`. All providers cache
-automatically on prefix match; nothing here creates caches. The registry's
+cache fields, provenance notes); see `load_models`. Caching policy is provider-specific: Anthropic uses explicit markers;
+OpenAI and Gemini support automatic prefix caching. Nothing here creates caches. The registry's
 job is to say where each provider reports cached tokens and what they cost,
 so EpisodeRow.tokens.cached is comparable across arms.
 """

@@ -148,20 +148,22 @@ def test_blueprint_readiness_distinguishes_unsupported_from_not_yet_executable(s
     assert native["capabilities"][0]["supported"] is True
 
 
-def test_published_versions_carry_readiness_capabilities_and_a_manifest(studio, monkeypatch):
-    monkeypatch.setattr(blueprints, "default_status", lambda studio, refresh=False: baseline())
-    graph = {"nodes": [node("input", "input"), node("monarch", "monarch", runner={"provider": "bedrock", "model": "claude-opus-4-8", "effort": "default"}), node("output", "output")],
-             "edges": [{"from": "input", "to": "monarch"}, {"from": "monarch", "to": "output"}]}
-    blueprints.save_draft(studio, {"id": "stock", "name": "Stock as a node", "graph": graph})
-    published = blueprints.publish(studio, {"id": "stock", "revision": 1})
-    assert published["execution_status"] == "adapter_required"
+def test_published_versions_carry_readiness_capabilities_and_a_manifest(studio):
+    graph = {"nodes": [node("input", "input"), node("worker", "agent", instructions="Complete the task.", runner={"provider": "claude-code", "model": "sonnet", "effort": "high"}), node("output", "output")],
+             "edges": [{"from": "input", "to": "worker"}, {"from": "worker", "to": "output"}]}
+    blueprints.save_draft(studio, {"id": "native", "name": "Native agent", "graph": graph})
+    published = blueprints.publish(studio, {"id": "native", "revision": 1})
+    assert published["execution_status"] == "blocked"
     assert published["readiness"]["launchable"] is False
     assert published["capabilities"][0]["supported"] is True
+    assert any("native-isolation-v1" in reason for reason in published["readiness"]["reasons"])
     manifest = rm.validate(published["runtime_manifest"])
-    assert manifest["source"]["commit"] == "a" * 40 and manifest["artifacts"]["graph"]["sha256"] == published["sha256"]
-    assert "baseline" in published["graph"]["nodes"][1]["config"] and "runtime_manifest" not in published["graph"]["nodes"][1]["config"]["baseline"]
-    listed = {v["id"]: v for v in rr.versions(studio)}["blueprint.stock.v1"]
-    assert listed["readiness"]["runtime"] == "adapter_required" and listed["sha256"] == published["sha256"]
+    assert manifest["source"]["kind"] == "local" and manifest["source"]["commit"] is None
+    assert manifest["artifacts"]["graph"]["sha256"] == published["sha256"]
+    assert manifest["artifacts"]["prompts"]["sha256"] == rm.sha256_json({"worker": "Complete the task."})
+    assert manifest["evaluation"]["track"] == "agentic-request"
+    listed = {v["id"]: v for v in rr.versions(studio)}["blueprint.native.v1"]
+    assert listed["readiness"]["runtime"] == "blocked" and listed["sha256"] == published["sha256"]
 
 
 def test_legacy_published_versions_get_live_readiness_without_file_mutation(studio):
@@ -191,7 +193,7 @@ def test_capability_matrix_marks_every_cell_and_the_native_preflight(studio):
 
 @pytest.mark.parametrize("architectures,selected,fragment", [
     ([], ["oracle"], "cannot launch yet"),
-    (["default-monarch-enterprise"], ["oracle"], "cannot launch yet"),
+    (["default-monarch-enterprise"], ["oracle"], "belongs to the create-and-run track"),
     (["bridge-v2-v9.12"], ["oracle"], "cannot launch yet"),
     (["without-monarch", "without-monarch"], ["oracle"], "cannot launch yet"),
     (["without-monarch"], ["claude-code"], "native-isolation-v1"),

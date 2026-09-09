@@ -1,3 +1,8 @@
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from tests.mock_openai import MockOpenAIServer
@@ -27,3 +32,20 @@ def mock_server(monkeypatch):
     yield server
     server.shutdown()
     providers.REGISTRY.pop("mock", None)
+
+
+def pytest_configure(config):
+    """Windows refuses paths past 260 characters. Evidence folders are deep and pytest's
+    default temp root ("pytest-of-<user>/pytest-NNN/<long test name>") pushes them past
+    the limit, so a short per-process root is used instead and removed at the end."""
+    if os.name == "nt" and not config.option.basetemp:
+        root = Path(tempfile.gettempdir()) / "wb" / str(os.getpid())
+        shutil.rmtree(root, ignore_errors=True)
+        config.option.basetemp = str(root)
+        config._wb_basetemp = root
+
+
+def pytest_sessionfinish(session, exitstatus):
+    root = getattr(session.config, "_wb_basetemp", None)
+    if root:
+        shutil.rmtree(root, ignore_errors=True)

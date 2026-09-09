@@ -35,8 +35,26 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _long(path: Path) -> Path:
+    """Windows refuses paths past 260 characters unless they carry the extended prefix; evidence folders are deep."""
+    text = str(path)
+    if os.name == "nt" and len(text) > 230 and not text.startswith("\\\\?\\"):
+        return Path("\\\\?\\" + os.path.abspath(text))
+    return path
+
+
+def _plain(path: Path) -> str:
+    """One comparable form for a path with or without the extended prefix."""
+    text = str(path)
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return os.path.normcase(os.path.abspath(text))
+
+
 def _atomic_text(path: Path, text: str) -> None:
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    path = _long(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(text)
@@ -72,7 +90,7 @@ class AttemptJournal:
     """Append-only observations for one new attempt, never reused on resume."""
 
     def __init__(self, directory: Path, snapshot0: dict):
-        self.directory = Path(directory)
+        self.directory = _long(Path(directory))
         self.directory.mkdir(parents=True, exist_ok=False)
         self._lock = threading.RLock()
         self._next_id = 0
@@ -125,9 +143,10 @@ def write_attempt(root: Path, index: int, ep, result, termination: str, error: s
     directory = root / f"attempt-{index:03d}"
     journal = getattr(ep, "_journal", None)
     if journal is None:
+        directory = _long(directory)
         directory.mkdir(exist_ok=False)
         write_json(directory / "snapshot0.json", ep.snapshot0)
-    elif journal.directory.resolve() != directory.resolve() or journal.closed:
+    elif _plain(journal.directory) != _plain(directory) or journal.closed:
         raise EvidenceIntegrityError("attempt finalization does not match its open journal")
     write_json(directory / "snapshot1.json", ep.snapshot())
     write_events(directory / "events.jsonl", ep.events)

@@ -95,9 +95,9 @@ def test_unverified_or_misconfigured_enterprise_cannot_launch(tmp_path, site, re
     assert version["served"]["version"] == f"monarch@{git(repo, 'rev-parse', '--short', 'HEAD')}" and version["served"]["stock"] is True
     assert version["request_ceiling_usd"] == CEILING
     with pytest.raises(ValueError, match="cannot launch yet"):
-        check_launch(app, ["default-monarch-enterprise"], [])
+        check_launch(app, ["default-monarch-enterprise"], [], track="create-and-run")
     with pytest.raises(ValueError, match="cannot launch yet"):
-        app.create({"architectures": ["default-monarch-enterprise"], "tasks": [TASK], "maximum_usd": "1.00"}, start=False)
+        app.create({"architectures": ["default-monarch-enterprise"], "track": "create-and-run", "tasks": [TASK], "maximum_usd": "1.00"}, start=False)
     assert app.jobs() == [] and Decimal(app.budget()["held"]) == 0
 
     app.enterprise_env = {"MONARCH_ATTEMPT_CEILING_USD": "abc"}
@@ -137,7 +137,7 @@ def test_verify_records_every_check_and_a_passing_probe_makes_the_version_launch
         assert version["manifest"]["frozen"] is True and version["manifest"]["source"]["commit"] == git(repo, "rev-parse", "HEAD")
         assert version["manifest"]["evaluation"]["settings"]["provider_declared_not_observed"] is True
         assert version["name"].startswith("Monarch Enterprise · monarch@")
-        assert check_launch(app, ["default-monarch-enterprise"], [])[0]["id"] == "default-monarch-enterprise"
+        assert check_launch(app, ["default-monarch-enterprise"], [], track="create-and-run")[0]["id"] == "default-monarch-enterprise"
 
         # A wrong knowledge base blocks the version and says which service drifted.
         (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(KB.replace("9b1f0c4a5e77", "deadbeef0000"))
@@ -167,7 +167,7 @@ def test_a_branch_or_a_dirty_checkout_is_a_custom_build_never_stock(tmp_path, si
 def run_enterprise(tmp_path, site, repo, port, fake, fd, lf, request_id="enterprise-run"):
     app = studio_for(tmp_path, configured(site, repo, port, fake.url, fd.url, lf.url))
     assert enterprise.verify(app)["ok"] is True
-    job = app.create({"request_id": request_id, "architectures": ["default-monarch-enterprise"], "tasks": [TASK],
+    job = app.create({"request_id": request_id, "architectures": ["default-monarch-enterprise"], "track": "create-and-run", "tasks": [TASK],
                       "maximum_usd": "1.00", "title": "Stock Monarch on one task"}, start=False)
     assert job["settings"]["arms"][0]["kind"] == "enterprise" and job["settings"]["models"] == ["default-monarch-enterprise"]
     assert job["execution_manifests"]["default-monarch-enterprise"]["identity_sha256"]
@@ -232,7 +232,7 @@ def test_a_run_budget_below_the_attempt_ceiling_is_refused_before_any_job(tmp_pa
         app = studio_for(tmp_path, configured(site, repo, port, fake.url, fd.url, lf.url))
         assert enterprise.verify(app)["ok"] is True
         with pytest.raises(ValueError, match="Run budget too low"):
-            app.create({"architectures": ["default-monarch-enterprise"], "tasks": [TASK], "maximum_usd": "0.25"}, start=False)
+            app.create({"architectures": ["default-monarch-enterprise"], "track": "create-and-run", "tasks": [TASK], "maximum_usd": "0.25"}, start=False)
     assert app.jobs() == []
 
 
