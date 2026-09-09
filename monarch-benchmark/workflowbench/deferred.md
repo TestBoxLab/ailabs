@@ -84,3 +84,10 @@ than 30 days (warning, never a gate).
   and the corpus. When the documents gain schemas, prefer them.
 - The conformance gate stops on any product service; buffer, canva and twitter (outside the four task sets) block a 47-app import. Gate should take the plan's services or an allowlist. Imported with --no-conform on 8 Sep.
 - The public front door (ngrok tunnel to 9105) was down on 8 Sep and every Monarch dispatch got a 404 from ngrok; wb doctor must check the public URL answers with the shim's headers before a round (start a shim, curl the public URL).
+- Two `test_monarch_client.py` tests are flaky against the fake SSE server:
+  `test_cancel_ends_a_run_waiting_on_a_reply` and
+  `test_reply_reaches_the_stream_gate` fail about one run in three, always
+  after ~20 s, when the first frame does not arrive before the read timeout.
+  The same code passes on a re-run, so a round is not affected; the fake
+  server's frame delivery needs a handshake rather than a sleep. Seen on
+  9 Sep 2026.

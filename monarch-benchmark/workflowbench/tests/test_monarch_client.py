@@ -27,6 +27,21 @@ def header(request: dict, name: str) -> str | None:
     return next((v for k, v in request["headers"].items() if k.lower() == name), None)
 
 
+def next_frame(stream, tries: int = 5) -> dict:
+    """The next real frame, skipping the reader's empty beats.
+
+    `stream()` yields `None` for "still open, nothing said" so the caller can
+    watch its deadline while the server is quiet. A test asking for a frame has
+    to skip those, or it reads a beat as a frame whenever the fake server has
+    not written yet — which is a race, not a failure.
+    """
+    for _ in range(tries):
+        frame = next(stream)
+        if frame is not None:
+            return frame
+    raise AssertionError(f"no frame after {tries} beats")
+
+
 def logged_in(fake) -> MonarchClient:
     c = MonarchClient(fake.url)
     c.login("dev-root@testbox.com", "monarch-dev")
@@ -95,10 +110,10 @@ def test_reply_reaches_the_stream_gate(fake):
     c = logged_in(fake)
     run_id = c.start_authoring("goal", "ep-1")
     stream = c.stream(run_id, deadline=time.monotonic() + 30)
-    first = next(stream)
+    first = next_frame(stream)
     assert first["status"] == "awaiting_input"
     c.reply(run_id, "q1", [{"id": "a", "text": "the first one"}])
-    assert next(stream)["status"] == "done"
+    assert next_frame(stream)["status"] == "done"
     assert fake.replies_received == [
         {"requestId": "q1", "answers": [{"id": "a", "text": "the first one"}]}]
 
@@ -110,9 +125,9 @@ def test_cancel_ends_a_run_waiting_on_a_reply(fake):
     c = logged_in(fake)
     run_id = c.start_authoring("goal", "ep-1")
     stream = c.stream(run_id, deadline=time.monotonic() + 30)
-    assert next(stream)["status"] == "awaiting_input"
+    assert next_frame(stream)["status"] == "awaiting_input"
     c.cancel(run_id)
-    assert next(stream) == {"status": "error", "error": "cancelled"}
+    assert next_frame(stream) == {"status": "error", "error": "cancelled"}
 
 
 def test_a_deadline_inside_the_stream_raises_episode_timeout(fake):
