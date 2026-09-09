@@ -41,6 +41,12 @@ def grade(task: dict[str, Any], snapshot0: dict[str, Any], snapshot1: dict[str, 
     # the wildcard above makes the invariant vacuous there, and we flag it.
     invariant_declared = bool(info.get("expected_changes"))
 
+    # How much this attempt touched that it was not asked to touch. Reported as a
+    # number, not folded into pass/fail: a competitor that finishes more tasks by
+    # making a bigger mess should be visible next to one that takes the safe path.
+    collateral = len(inv["unexpected_changes"]) + sum(
+        max(0, v["got"] - v["want"]) for v in inv.get("count_violations", []))
+
     return {
         "passed": assertions_passed and inv["passed"],
         "assertions_passed": assertions_passed,
@@ -48,4 +54,5 @@ def grade(task: dict[str, Any], snapshot0: dict[str, Any], snapshot1: dict[str, 
         "invariant": inv,
         "invariant_declared": invariant_declared,
         "n_changes": inv["n_changes"],
+        "collateral_damage": collateral,
     }

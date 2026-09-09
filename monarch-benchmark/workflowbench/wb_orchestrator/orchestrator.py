@@ -459,6 +459,7 @@ class Orchestrator:
             invariant_declared=g["invariant_declared"],
             check_results=[{k: r[k] for k in ("type", "passed")} for r in g["assertion_results"]],
             unexpected_changes=g["invariant"]["unexpected_changes"],
+            count_violations=g["invariant"].get("count_violations", []),
             n_changes=g["n_changes"], tool_calls=result.tool_calls,
             tokens=TokenUsage(prompt=result.tokens_prompt, cached=result.tokens_cached,
                               cache_write=result.tokens_cache_write,
@@ -525,6 +526,7 @@ def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
         row.invariant_declared = g["invariant_declared"]
         row.check_results = [{k: x[k] for k in ("type", "passed")} for x in g["assertion_results"]]
         row.unexpected_changes = g["invariant"]["unexpected_changes"]
+        row.count_violations = g["invariant"].get("count_violations", [])
         row.n_changes = g["n_changes"]
         store.record_episode(row)
         regraded += 1

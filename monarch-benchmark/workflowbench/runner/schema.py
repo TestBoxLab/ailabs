@@ -50,6 +50,7 @@ class EpisodeRow(BaseModel):
     invariant_declared: bool
     check_results: list[dict[str, Any]] = Field(default_factory=list)
     unexpected_changes: list[dict[str, Any]] = Field(default_factory=list)
+    count_violations: list[dict[str, Any]] = Field(default_factory=list)  # {want, got}: the right write, done too many times
     n_changes: int = 0
     phases: dict[str, PhaseMetrics] = Field(default_factory=dict)
     tool_calls: int = 0

@@ -1883,10 +1883,11 @@ def test_technical_page_shows_the_answer_key_as_na(tmp_path):
     # the sentence under the success table, and the reason on every oracle cell
     assert NA_REASON in page
     assert page.count(f'title="{NA_REASON}"') >= 3
-    # the success table's oracle row shows n/a for every result column; the
-    # attempt and infrastructure counts stay real
+    # the success table's oracle row shows n/a for every result column, the two
+    # collateral columns included: a task the answer key cannot act on has no
+    # collateral either. The attempt and infrastructure counts stay real.
     row = re.search(r"<tr><td>oracle</td>.*?</tr>", page, re.S).group(0)
-    assert row.count(f'title="{NA_REASON}">n/a<') == 7
+    assert row.count(f'title="{NA_REASON}">n/a<') == 9
     # the matrix cell for the oracle is n/a, and the charts show no oracle bar
     assert '<td class="num" title="' + NA_REASON + '">n/a</td>' in page
     # the paired comparison against the answer key is skipped, with the reason

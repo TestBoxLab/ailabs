@@ -1131,7 +1131,8 @@ def _overview_section(report: dict) -> str:
 
 def _success_table(report: dict) -> str:
     headers = ["competitor", "attempts", "passed", "strict pass", "of",
-               "first try", "after retry", "retries", "pass over reps", "infra",
+               "first try", "after retry", "retries", "pass over reps",
+               "attempts with collateral", "collateral changes", "infra",
                "infra rate", "agent errors", "timeouts"]
     # The attempt counts are real for every competitor; only the results are
     # replaced by `n/a` where the answer key had nothing to act on.
@@ -1142,7 +1143,11 @@ def _success_table(report: dict) -> str:
                          _fmt(m["first_try_pass"], "rate"),
                          _fmt(m["pass_after_retry"], "rate"),
                          _fmt(m["retries"]["count"]),
-                         _fmt(m["pass_over_repetitions"], "rate")])
+                         _fmt(m["pass_over_repetitions"], "rate"),
+                         # what it touched that nobody asked for: a competitor
+                         # can pass more prompts by making a bigger mess
+                         _fmt(m["collateral_attempts"]),
+                         _fmt(m["collateral_changes"])])
             + [_fmt(m["infra"]), _fmt(m["infra_rate"], "rate"),
                _fmt(m["agent_errors"]), _fmt(m["timeouts"])]
             for m in report["metrics"]]
