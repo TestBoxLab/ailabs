@@ -40,9 +40,20 @@ def _matches(m: dict[str, Any], c: dict[str, Any]) -> bool:
         if not (isinstance(after, str) and m["after_contains"] in after):
             return False
     for field, want in (m.get("where") or {}).items():
-        if _dig(c.get("after"), field) != want:
+        if not _same(_dig(c.get("after"), field), want):
             return False
     return True
+
+
+def _same(got: Any, want: Any) -> bool:
+    """Equal, or equal once both are read as text.
+
+    An AutomationBench assertion writes `"Value": "1200000"` where the mock
+    stores the number, and the vendor's own checker forgives that
+    (`str(a) != str(b)`). A rule derived from such an assertion has to be as
+    forgiving, or it rejects the correct answer.
+    """
+    return got == want or (got is not None and str(got) == str(want))
 
 
 def _dig(value: Any, dotted: str) -> Any:

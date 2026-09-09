@@ -20,7 +20,10 @@ def diff_snapshots(s0: dict[str, Any], s1: dict[str, Any]) -> list[dict[str, Any
 
 
 def _identity(item: Any, idx: int) -> str:
-    if isinstance(item, dict) and "id" in item:
+    # A null id is not an identity: the AutomationBench fixtures give every
+    # Slack message `id: None`, and keying them all as `[id=None]` collapses the
+    # list onto one entry, so an added record reads as edits to the first one.
+    if isinstance(item, dict) and item.get("id") is not None:
         return f"[id={item['id']}]"
     return f"[{idx}]"
 

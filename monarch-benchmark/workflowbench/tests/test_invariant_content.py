@@ -78,3 +78,27 @@ def test_a_rule_without_where_or_count_behaves_as_before():
     inv = check_invariant(changes, [{"service": "airtable", "op": "added",
                                      "path": "airtable.*"}])
     assert inv["passed"]
+
+
+def test_where_compares_a_number_and_its_string_as_equal():
+    """AutomationBench writes `"Value": "1200000"` in an assertion while the mock
+    stores 1200000. The vendor's own checker compares `str(a) != str(b)`; a rule
+    derived from that assertion has to be as forgiving, or it rejects the
+    correct answer -- which is the failure that zeroed the Hard round."""
+    changes = diff_snapshots(_airtable({}), _airtable({"createRecord": [
+        {"id": "a1", "action_key": "createRecord",
+         "params": {"tableName": "NDA Log", "fields": {"Value": 1200000}}}]}))
+    rule = {"service": "airtable", "op": "added",
+            "path": "airtable.actions.createRecord*",
+            "where": {"params.fields.Value": "1200000"}, "count": 1}
+    assert check_invariant(changes, [rule])["passed"]
+
+
+def test_where_still_rejects_a_different_value():
+    changes = diff_snapshots(_airtable({}), _airtable({"createRecord": [
+        {"id": "a1", "action_key": "createRecord",
+         "params": {"tableName": "NDA Log", "fields": {"Value": 999}}}]}))
+    rule = {"service": "airtable", "op": "added",
+            "path": "airtable.actions.createRecord*",
+            "where": {"params.fields.Value": "1200000"}, "count": 1}
+    assert not check_invariant(changes, [rule])["passed"]

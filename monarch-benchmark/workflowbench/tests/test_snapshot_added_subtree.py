@@ -56,3 +56,26 @@ def test_a_removed_subtree_addresses_each_entry():
     s1 = _airtable({})
     paths = [c["path"] for c in diff_snapshots(s0, s1)]
     assert paths == ["airtable.actions.createRecord[id=a1]"]
+
+
+def test_records_without_a_usable_id_do_not_collide():
+    """Slack messages in the AutomationBench fixtures all carry `id: None`.
+
+    Addressing every one of them as `[id=None]` collapses the whole list onto a
+    single key, so adding the twelfth message reads as five field changes to the
+    first — and a rule expecting `slack.messages[*]` to be *added* never matches.
+    Judge B then fails every competitor on a task they got right.
+    """
+    s0 = {"slack": {"messages": [{"id": None, "text": "one"}]}}
+    s1 = {"slack": {"messages": [{"id": None, "text": "one"},
+                                 {"id": None, "text": "two"}]}}
+    changes = diff_snapshots(s0, s1)
+    assert [c["op"] for c in changes] == ["added"], changes
+    assert check_invariant(changes, [{"service": "slack", "op": "added",
+                                      "path": "slack.messages[*]"}])["passed"]
+
+
+def test_a_real_id_still_addresses_the_record():
+    s0 = {"svc": {"items": [{"id": "a1", "x": 1}]}}
+    s1 = {"svc": {"items": [{"id": "a1", "x": 2}]}}
+    assert [c["path"] for c in diff_snapshots(s0, s1)] == ["svc.items[id=a1].x"]
