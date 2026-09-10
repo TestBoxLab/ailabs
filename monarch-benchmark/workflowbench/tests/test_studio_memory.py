@@ -296,3 +296,12 @@ def test_identity_file_is_written_whole_by_a_person_only(genesis):
     assert not any('soul' in name for name in MEMORY_TOOLS)
     memory.add('A fact', 'turn:t2', now=T0)
     assert memory.read()['soul'] == '# Genesis\n\nShort and dry.\n'
+
+
+def test_a_person_pins_from_the_interface_without_writing_the_tag(memory):
+    """The Memory form sends the sentence alone (or a bare kind); the write names the person's record."""
+    memory.edit({'op': 'pin', 'text': 'A one-task smoke run costs about $0.07'})
+    memory.edit({'op': 'pin', 'text': 'Pinned with a bare kind', 'record': 'human'})
+    lab = memory.read()['lab']
+    assert '[rec:human:studio]' in lab and 'A one-task smoke run costs about $0.07' in lab and 'Pinned with a bare kind' in lab
+

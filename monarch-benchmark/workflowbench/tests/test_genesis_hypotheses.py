@@ -65,7 +65,8 @@ def test_green_needs_every_condition_at_once():
 
 
 @pytest.fixture
-def genesis(tmp_path):
+def genesis(tmp_path, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # feature 022's Reviewer gate has its own tests
     studio = SimpleNamespace(directory=tmp_path, create=Mock(return_value={'id': 'run-1'}), jobs=Mock(return_value=[]),
                              job=Mock(), events=Mock(return_value=[]), ledger=Mock())
     return Genesis(studio)

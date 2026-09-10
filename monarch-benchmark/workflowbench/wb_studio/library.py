@@ -205,7 +205,22 @@ class Library:
                 raise ValueError('Attach the analysis text to mark this source Analyzed')
             if 'contradicts' in payload:
                 record['contradicts'] = self._contradicts(payload['contradicts'], identity)
+            if payload.get('columns') is not None:
+                # feature 022: the extraction columns, each with the quote it rests on (`genesis_ingest`).
+                record['columns'] = payload['columns']
             record.update(analysis=analysis, status='analyzed', analyzed_at=datetime.now(timezone.utc).isoformat())
+            write_json(self.path(identity), record)
+            return record
+
+    def set_original(self, identity, text):
+        """Store a source's fetched full text. The ingest path: the record stays Saved until an
+        analysis of that text is attached."""
+        text = str(text or '')
+        if not text.strip():
+            raise ValueError('There is no text to store as the original of this source')
+        with self.lock:
+            record = self.read(identity)
+            record.update(original=text, full_text_available=True)
             write_json(self.path(identity), record)
             return record
 

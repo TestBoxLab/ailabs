@@ -184,15 +184,18 @@ class PaidGateway:
                                    http_status=exc.http_status, provider_status=exc.provider_status, provider_reason=exc.provider_reason) from None
         except Exception:
             raise PaidGatewayError('Token preflight failed; generation was not dispatched') from None
-        # CountTokens can differ from billed input, so use model hard limits, not
-        # an arbitrary percentage margin. Candidate and thinking ceilings are
-        # reserved separately even if the provider combines their output limit.
-        maximum = _cost(INPUT_CEILING, THINKING_CEILING + self.max_output_tokens)
+        # Input is reserved at twice the preflight count (Google bills text input at
+        # that count; the doubling covers any drift), capped by the model's hard limit;
+        # reserving the full 1M-token ceiling made every small-budget request fail.
+        # Candidate and thinking ceilings are reserved separately even if the
+        # provider combines their output limit.
+        input_bound = min(INPUT_CEILING, input_tokens * 2 + 2048)
+        maximum = _cost(input_bound, THINKING_CEILING + self.max_output_tokens)
         metadata = {'provider': 'google', 'model': self.model, 'harness': 'api-control',
                     'request_sha256': digest, 'preflight_input_tokens': input_tokens,
                     'rate_card': 'google-gemini-3.7-flash-2026-09-08',
                     'input_rate_per_million': str(INPUT_RATE), 'output_rate_per_million': str(OUTPUT_RATE),
-                    'input_token_ceiling': INPUT_CEILING, 'thinking_token_ceiling': THINKING_CEILING,
+                    'input_token_ceiling': input_bound, 'thinking_token_ceiling': THINKING_CEILING,
                     'candidate_token_ceiling': self.max_output_tokens}
         self.ledger.reserve(request_id, maximum, scope_id=scope_id, scope_limit_usd=scope_limit_usd, metadata=metadata)
         self.ledger.claim(request_id)

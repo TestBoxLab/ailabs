@@ -42,7 +42,8 @@ def test_a_matching_bare_run_becomes_the_baseline_and_is_named(studio):
     report = report_data.run_report(studio, "subject")
     assert report["baseline"] == "without-monarch"
     assert report["baseline_source"] == {"run": "bare-latest", "title": "Bare, 9 Sep", "finished_at": "2026-09-09T10:00:00+00:00"}
-    assert report["grade"]["grade"] == "Improvement"
+    # one task differs out of two: a direction the sign test cannot support is not a grade
+    assert report["grade"]["grade"] == "Undecided" and "better than Bare on 1 task" in report["grade"]["reason"]
     assert "Bare, 9 Sep" in report["verdict"] and "recorded earlier" in report["verdict"]
     assert any("reused from the run \"Bare, 9 Sep\"" in c for c in report["caveats"])
     assert "without-monarch" in report["order"] and report["setups"]["without-monarch"]["is_baseline"]
@@ -66,3 +67,14 @@ def test_no_match_means_not_comparable_with_the_reason(studio):
     assert report["baseline"] is None and report["baseline_source"] is None
     assert report["grade"]["grade"] == "Not comparable"
     assert any("no earlier run recorded one" in c for c in report["caveats"])
+
+
+def test_a_bare_only_run_is_not_compared_with_itself(studio):
+    tasks = list(studio.tasks)
+    bare = arm("without-monarch", "native", {"model": MODEL, "effort": "default"}, version="without-monarch", name="Bare Gemini 3.7 Flash")
+    write_run(studio, "bare-only", [bare], rows("without-monarch", {tasks[0]: False}), title="Bare alone")
+
+    report = report_data.run_report(studio, "bare-only")
+    assert report["grade"] == {"grade": "Not comparable", "reason": "only the Bare baseline ran"}
+    assert report["verdict"].count("Bare Gemini 3.7 Flash") == 1 and "against" not in report["verdict"]
+

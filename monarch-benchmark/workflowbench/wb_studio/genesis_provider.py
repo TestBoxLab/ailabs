@@ -32,8 +32,11 @@ def response_inputs(body):
 
 
 def complete(provider,body,on_text):
-    """Yield only public answer text; retain provider usage, never infer a cache hit."""
+    """Yield only public answer text; retain provider usage, never infer a cache hit.
+
+    `_max_output` in the body is the output cap the broker paid for; every adapter sends it."""
     system,messages,tools=response_inputs(body)
+    max_output=int(body.get('_max_output') or 16000)
     effort=(body.get('reasoning') or {}).get('effort','medium')
     calls=[];text='';usage={};finish='completed';incomplete=False
     if provider.adapter=='anthropic':
@@ -48,7 +51,7 @@ def complete(provider,body,on_text):
             else: converted.append(value)
         atools=[{'name':t['function']['name'],'description':t['function'].get('description',''),'input_schema':t['function'].get('parameters',{'type':'object'})} for t in tools]
         if atools: atools[-1]['cache_control']={'type':'ephemeral'}
-        with client.messages.stream(model=provider.model_id,system=[{'type':'text','text':system,'cache_control':{'type':'ephemeral'}}],messages=converted,tools=atools,max_tokens=16000,cache_control={'type':'ephemeral'},thinking={'type':'adaptive'},output_config={'effort':effort}) as stream:
+        with client.messages.stream(model=provider.model_id,system=[{'type':'text','text':system,'cache_control':{'type':'ephemeral'}}],messages=converted,tools=atools,max_tokens=max_output,cache_control={'type':'ephemeral'},thinking={'type':'adaptive'},output_config={'effort':effort}) as stream:
             for delta in stream.text_stream: text+=delta;on_text(delta)
             result=stream.get_final_message()
         finish=result.stop_reason;incomplete=finish not in ('end_turn','tool_use')
@@ -65,7 +68,7 @@ def complete(provider,body,on_text):
             elif m.get('tool_calls'):
                 request['input'] += [{'type':'function_call','call_id':c['id'],'name':c['function']['name'],'arguments':c['function']['arguments']} for c in m['tool_calls']]
             else: request['input'].append({'role':m['role'],'content':m['content']})
-        request.update(model=provider.model_id,stream=True,max_output_tokens=16000,store=False)
+        request.update(model=provider.model_id,stream=True,max_output_tokens=max_output,store=False)
         result=None
         for event in client.responses.create(**request):
             if event.type=='response.output_text.delta': text+=event.delta;on_text(event.delta)
@@ -90,7 +93,7 @@ def complete(provider,body,on_text):
                 contents.append(types.Content(role='model',parts=parts))
             elif m['role']=='tool': contents.append(types.Content(role='user',parts=[types.Part.from_function_response(name=names[m['tool_call_id']],response={'result':m['content']})]))
             else: contents.append(types.Content(role='model' if m['role']=='assistant' else 'user',parts=[types.Part.from_text(text=m['content'] or '')]))
-        config=types.GenerateContentConfig(system_instruction=system,max_output_tokens=16000,thinking_config=types.ThinkingConfig(thinking_level=effort),tools=[types.Tool(function_declarations=[types.FunctionDeclaration(name=t['function']['name'],description=t['function'].get('description',''),parameters_json_schema=t['function'].get('parameters',{'type':'object'})) for t in tools])] if tools else None)
+        config=types.GenerateContentConfig(system_instruction=system,max_output_tokens=max_output,thinking_config=types.ThinkingConfig(thinking_level=effort),tools=[types.Tool(function_declarations=[types.FunctionDeclaration(name=t['function']['name'],description=t['function'].get('description',''),parameters_json_schema=t['function'].get('parameters',{'type':'object'})) for t in tools])] if tools else None)
         client=genai.Client(api_key=providers.api_key(provider))
         meta=None;finish=None
         for chunk in client.models.generate_content_stream(model=provider.model_id,contents=contents,config=config):
@@ -110,7 +113,7 @@ def complete(provider,body,on_text):
         import openai
         client=openai.OpenAI(api_key=providers.api_key(provider),base_url=provider.base_url,max_retries=0,timeout=120)
         collected={};meta=None;finish=None
-        for chunk in client.chat.completions.create(model=provider.model_id,messages=[{'role':'system','content':system}]+messages,tools=tools or None,max_tokens=16000,stream=True,stream_options={'include_usage':True}):
+        for chunk in client.chat.completions.create(model=provider.model_id,messages=[{'role':'system','content':system}]+messages,tools=tools or None,max_tokens=max_output,stream=True,stream_options={'include_usage':True}):
             if chunk.usage: meta=chunk.usage.model_dump()
             for choice in chunk.choices:
                 if choice.finish_reason: finish=choice.finish_reason

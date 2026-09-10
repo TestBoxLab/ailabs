@@ -6,24 +6,72 @@ const knownNumber=n=>n!==null&&n!==undefined&&n!==''&&Number.isFinite(Number(n))
 const money=n=>!knownNumber(n)?'Not available':Number(n).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:Number(n)>0&&Number(n)<.01?4:2});
 const human=s=>String(s).replaceAll('_',' ').replaceAll('.',' / ');
 const icon=(kind='check')=>'<svg class="icon" aria-hidden="true"><use href="/vendor/lucide/sprite.svg#'+(kind==='check'?'check':kind==='tool'?'zap':'sparkles')+'"/></svg>';
-const emptyOutput=$('#output').innerHTML;
-function clearSelection(restoreFocus=false) {
-  selected=null; $('.workspace').classList.remove('has-inspector');
-  $('#inspector-title').textContent='Output'; $('#inspector-meta').textContent='Select an action or result';
-  $('#output').innerHTML=emptyOutput; setOutputMode('output');
+const emptyOutput='';
+function clearSelection(restoreFocus=false, keepHistory=false) {
+  selected=null; selectedEvent=null; const dialog=$('#attempt-dialog');
+  if(dialog.open)dialog.close();
+  document.body.classList.remove('sheet-open');
+  $('#output').innerHTML=emptyOutput; setOutputMode('output'); markCurrent();
+  if(!keepHistory&&job&&location.hash.startsWith('#run/'+encodeURIComponent(job.id)+'/'))history.pushState(null,'','#run/'+encodeURIComponent(job.id));
   if(restoreFocus) {
     const opener=selectionOpener?.isConnected?selectionOpener:$('#comparison-title');
     opener.focus({preventScroll:true});
   }
 }
-function revealSelection() {
-  if(!$('#inspector').contains(document.activeElement))selectionOpener=document.activeElement;
-  if(!$('.workspace').classList.contains('has-inspector')&&selected?.result?.passed===false)setOutputMode('checks');
-  renderOutput(); bindEvidence();
-  $('#inspector-title').focus({preventScroll:true});
-  if(innerWidth<=1100)$('#inspector').scrollIntoView({behavior:'smooth',block:'start'});
+let selectedEvent=null;
+function attemptHash(){
+  if(!job)return;
+  const base='#run/'+encodeURIComponent(job.id);
+  let next=base;
+  if(selected&&selected.category==='result'){next=base+'/'+encodeURIComponent(selected.task||taskId)+'/'+encodeURIComponent(selected.model);if(selectedEvent!==null&&outputMode==='trace')next+='/e'+selectedEvent;}
+  if(location.hash===next)return;
+  // The first open is a step in history so Back closes the sheet; moving between attempts replaces it.
+  if(location.hash===base||!location.hash.startsWith(base+'/'))history.pushState(null,'',next);else history.replaceState(null,'',next);
 }
-let report, openSequence=0, reportSequence=0, launchStep=0, launching=false, launchOpening=false, launchRequest=null;
+function syncAttemptFromHash(){
+  if(!job)return;
+  const base='#run/'+encodeURIComponent(job.id);
+  if(!location.hash.startsWith(base+'/')){if($('#attempt-dialog').open)clearSelection(true,true);return;}
+  const parts=location.hash.slice(base.length+1).split('/').map(decodeURIComponent);
+  const i=report?.attempts.findIndex(a=>a.task===parts[0]&&a.model===parts[1])??-1;
+  if(i<0)return;
+  const already=selected&&selected.category==='result'&&(selected.task||taskId)===parts[0]&&selected.model===parts[1];
+  if(!already)selectReport(i);
+  if(parts[2]&&/^e\d+$/.test(parts[2])){setOutputMode('trace');renderOutput();bindEvidence();selectTraceEvent(Number(parts[2].slice(1)),false);}
+}
+window.syncAttemptFromHash=syncAttemptFromHash;
+function attemptIndex(){if(!selected||!report)return -1;const task=selected.task||taskId;return report.attempts.findIndex(a=>a.task===task&&a.model===selected.model);}
+function moveAttempt(step){const i=attemptIndex();if(i<0)return;const next=i+step;if(next<0||next>=report.attempts.length)return;selectReport(next);}
+function markCurrent(){
+  const task=selected?.category==='result'?(selected.task||taskId):null,model=selected?.model;
+  $$('#report-view .matrix-cell').forEach(td=>{const b=td.querySelector('[data-report]');const a=b&&report?.attempts[Number(b.dataset.report)];td.classList.toggle('current',!!a&&a.task===task&&a.model===model);});
+  $$('.results-table tr[data-row]').forEach(tr=>{const r=job?.results[Number(tr.dataset.row)];tr.classList.toggle('current',!!r&&r.task===task&&r.model===model);});
+}
+function revealSelection() {
+  const dialog=$('#attempt-dialog');
+  if(!dialog.open){selectionOpener=document.activeElement;if(selected?.result?.passed===false)setOutputMode('checks');else if(selected?.category==='result')setOutputMode('output');}
+  selectedEvent=null;
+  renderOutput(); bindEvidence();
+  if(!dialog.open)dialog.show();
+  document.body.classList.add('sheet-open');
+  attemptHash(); markCurrent();
+  $('#inspector-title').focus({preventScroll:true});
+}
+function selectTraceEvent(id,writeHash=true){
+  selectedEvent=id;
+  const event=events.find(e=>e.id===Number(id));if(!event)return;
+  $$('#output .trace-event').forEach(b=>b.classList.toggle('current',Number(b.dataset.evidence)===Number(id)));
+  const detail=$('#trace-detail');if(!detail)return;
+  const action=report?.attempts.flatMap(a=>a.actions).find(a=>Number(a.event_id)===event.id);
+  const node=nodeList(event.model).find(n=>n.node===event.node);
+  const input=event.arguments!==undefined?event.arguments:node?.arguments;
+  const output=event.output!==undefined?event.output:node?.output;
+  detail.innerHTML='<h3>'+esc(action?.title||eventLabel(event))+'</h3><p class="meta">Event '+event.id+' · '+esc(new Date(event.at).toLocaleTimeString())+'</p>'+(action?.detail?'<p class="evidence-description">'+esc(action.detail)+'</p>':'')+(input!==undefined?'<h4>Input</h4>'+pretty(input):'')+(output!==undefined?'<h4>Output</h4>'+pretty(output):'')+'<details class="finding-section"><summary>Raw record</summary><pre>'+esc(JSON.stringify(event,null,2))+'</pre></details>';
+  detail.scrollTop=0;
+  if(writeHash)attemptHash();
+}
+function moveTraceEvent(step){const rows=$$('#output .trace-event');const i=rows.findIndex(b=>Number(b.dataset.evidence)===Number(selectedEvent));const next=rows[i+step]||(i<0?rows[0]:null);if(next){selectTraceEvent(Number(next.dataset.evidence));next.focus({preventScroll:true});next.scrollIntoView({block:'nearest'});}}
+let report, openSequence=0, reportSequence=0, launchStep=2, launching=false, launchOpening=false, launchRequest=null, budgetTouched=false, autoTitle='';
 let toastTimer, reportRefreshTimer, selectionOpener, pendingJobId=null, renderFrame=null;
 const analysisPending=new Set(), seenEvents=new Set();
 let state, job, events=[], stream, taskId, selected, outputMode='output', view='report', selectedTasks=new Set(), selectedModels=new Set(), selectedArchitectureIds=new Set(), launchTaskSets=[], runDraftLoaded=false, restoredTaskSet=null;
@@ -36,7 +84,8 @@ async function api(path,body,recovered=false) {
   const write=body!==undefined;
   let response;
   try {
-    response=await fetch(path,write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||''},body:JSON.stringify(body)}:{signal:AbortSignal.timeout(30000)});
+    const personKey=(()=>{try{return localStorage.getItem('ailabs-person-key')||'';}catch{return '';}})();
+    response=await fetch(path,write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||'',...(personKey?{'X-Person-Key':personKey}:{})},body:JSON.stringify(body)}:{headers:personKey?{'X-Person-Key':personKey}:{},signal:AbortSignal.timeout(30000)});
   } catch (error) {
     const issue=new Error(error.name==='TimeoutError'?'Studio took too long to respond. Try again.':'Cannot reach Studio. Check the local server and try again.');
     issue.uncertain=write; throw issue;
@@ -59,7 +108,7 @@ async function api(path,body,recovered=false) {
   return data;
 }
 function budget(data){state.budget=data;const chip=$('#budget-chip-value');if(chip){chip.textContent=knownNumber(data?.available)?money(data.available)+' left':'Not available';$('#nav-budget').classList.toggle('blocked',!!data?.blocked);}}
-const providerWords={anthropic:'Anthropic',openai:'OpenAI',gemini:'Gemini',fireworks:'Fireworks',zai:'Z.ai'};
+const providerWords={anthropic:'Anthropic',openai:'OpenAI',gemini:'Gemini',fireworks:'Fireworks',zai:'Z.ai',moonshot:'Moonshot','claude-code':'Claude Code',codex:'Codex'};
 function capacityNote(){
  const wanted=Number($('#run-concurrency').value)||1,runtime=state.runtime,hostMax=runtime?.max_agents;
  if(hostMax&&wanted>hostMax)return 'This host runs '+hostMax+' at once.';
@@ -79,10 +128,17 @@ function renderJobs() {
   $$('[data-job]').forEach(b=>b.onclick=()=>openJob(b.dataset.job));
   if(focusId)$$('[data-job]').find(b=>b.dataset.job===focusId)?.focus({preventScroll:true});
 }
-function syncJob(value){job=value;const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;renderJobs();$('#comparison-title').textContent=job.title;$('#run-details').classList.remove('hidden');$('#comparison-meta').innerHTML='<dt>Tasks</dt><dd>'+job.settings.tasks.length+'</dd><dt>Setups</dt><dd>'+job.settings.models.length+'</dd><dt>Spending limit</dt><dd>'+esc(money(job.settings.maximum_usd))+'</dd>';const paused=job.pause_requested&&['queued','running'].includes(job.status);$('#job-status').textContent=paused?(job.active_attempts?'Pausing…':'Paused'):job.status;$('#pause-run').classList.toggle('hidden',paused||!['queued','running'].includes(job.status));$('#resume-run').classList.toggle('hidden',!paused);$('#pause-run').disabled=false;$('#resume-run').disabled=false;$('#job-status').className='status '+job.status;$('#cancel-run').classList.toggle('hidden',!['queued','running','cancelling'].includes(job.status));$('#cancel-run').disabled=job.status==='cancelling';$('#result-count').textContent=job.results.length;$('#stream-note').textContent=runStatus(job)==='paused'?'Paused':['queued','running','cancelling'].includes(job.status)?'Live updates':'Recorded execution';const controlNote=paused?(job.active_attempts?'Pausing after active tasks finish. No new tasks will start.':'Paused. Resume to continue the remaining tasks.'):job.status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':'';$('#run-message').textContent=controlNote||job.error||'';$('#run-message').classList.toggle('hidden',!controlNote&&!job.error)}
+function syncJob(value){job=value;const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;renderJobs();$('#comparison-title').textContent=job.title;if(!$('.workspace').classList.contains('hidden'))document.title='AI Labs — '+job.title;$('#run-again').classList.toggle('hidden',!['completed','failed','cancelled','interrupted'].includes(job.status));$('#run-details').classList.remove('hidden');$('#comparison-meta').innerHTML=runFacts(job);const paused=job.pause_requested&&['queued','running'].includes(job.status);$('#job-status').textContent=paused?(job.active_attempts?'Pausing…':'Paused'):job.status;$('#pause-run').classList.toggle('hidden',paused||!['queued','running'].includes(job.status));$('#resume-run').classList.toggle('hidden',!paused);$('#pause-run').disabled=false;$('#resume-run').disabled=false;$('#job-status').className='status '+job.status;$('#cancel-run').classList.toggle('hidden',!['queued','running','cancelling'].includes(job.status));$('#cancel-run').disabled=job.status==='cancelling';$('#result-count').textContent=job.results.length;$('#stream-note').textContent=runStatus(job)==='paused'?'Paused':['queued','running','cancelling'].includes(job.status)?'Live updates':'Recorded execution';const controlNote=paused?(job.active_attempts?'Pausing after active tasks finish. No new tasks will start.':'Paused. Resume to continue the remaining tasks.'):job.status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':'';$('#run-message').textContent=controlNote||job.error||'';$('#run-message').classList.toggle('hidden',!controlNote&&!job.error)}
+function runFacts(j){
+  const started=j.created_at?new Date(j.created_at):null,ended=j.finished_at?new Date(j.finished_at):null;
+  const duration=started&&ended?((ended-started)/1000<90?Math.round((ended-started)/1000)+'s':Math.round((ended-started)/60000)+' min'):['queued','running','cancelling'].includes(j.status)?'running':'';
+  const cost=window.runCost?runCost(j):null;
+  const parts=[started?'started '+started.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+started.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}):'',duration,cost===null?'':money(cost),j.settings.tasks.length+(j.settings.tasks.length===1?' task':' tasks')+(j.benchmark?.id?' · '+j.benchmark.id:''),j.settings.models.length+(j.settings.models.length===1?' setup':' setups'),'ceiling '+money(j.settings.maximum_usd),j.operator||j.settings.operator?'by '+esc(j.operator||j.settings.operator):'',j.world_manifest?.version||j.world_manifest?.id?'world '+esc(String(j.world_manifest.version||j.world_manifest.id).slice(0,12)):''];
+  return parts.filter(Boolean).join('<span class="sep">·</span>');
+}
 async function openJob(id) {
   if(window.showWorkspaceSurface)window.showWorkspaceSurface('detail',false);
-  const runHash='#run/'+encodeURIComponent(id);if(location.hash!==runHash)history.pushState(null,'',runHash);
+  const runHash='#run/'+encodeURIComponent(id);const wanted=location.hash.startsWith(runHash+'/')?location.hash.slice(runHash.length+1).split('/').map(decodeURIComponent):null;if(location.hash!==runHash&&!wanted)history.pushState(null,'',runHash);
   const sequence=++openSequence;
   clearTimeout(reportRefreshTimer);
   if(stream)stream.close();
@@ -98,6 +154,7 @@ async function openJob(id) {
     $('#task-select').innerHTML=job.settings.tasks.map(t=>'<option value="'+esc(t)+'">'+esc(taskTitle(t))+'</option>').join('');
     $('#empty').classList.add('hidden'); switchView(view);
     renderGraph(); renderResults(); renderReport();
+    if(wanted&&wanted.length>=2)syncAttemptFromHash();
     setConnection('Connected','connected');
     const source=new EventSource('/api/jobs/'+id+'/events'); stream=source;
     source.onopen=()=>{if(sequence===openSequence)setConnection('Connected','connected');};
@@ -165,15 +222,17 @@ function pretty(value,depth=0){if(value&&typeof value==='object'&&!Array.isArray
 function textDocument(value){return value.split(/\n\s*\n/).map(block=>{if(/^#{1,3}\s/.test(block))return '<h3>'+esc(block.replace(/^#{1,3}\s/,''))+'</h3>';if(block.split('\n').every(l=>/^[-*]\s/.test(l)))return '<ul>'+block.split('\n').map(l=>'<li>'+esc(l.slice(2))+'</li>').join('')+'</ul>';return '<p>'+esc(block).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replaceAll('\n','<br>')+'</p>'}).join('')}
 function renderOutput(){
   if(!selected)return;
-  document.querySelector('.workspace').classList.add('has-inspector');
-  $('#inspector-title').textContent=selected.category==='result'?'Task output':nodeLabel(selected);
-  $('#inspector-meta').textContent=modelName(selected.model)+' · '+selected.status;
+  const isResult=selected.category==='result',verdict=$('#attempt-verdict');
+  $('#inspector-title').textContent=isResult?shortTaskLabel(selected.task||taskId):nodeLabel(selected);
+  $('#inspector-meta').textContent=modelName(selected.model)+(isResult?'':' · '+selected.status);
+  verdict.className='attempt-verdict '+(isResult?(selected.result?.passed?'pass':'fail'):'');verdict.textContent=isResult?(selected.result?.passed?'Passed':String(selected.result?.termination||'').startsWith('infra:')?'Execution issue':'Failed'):(selected.status==='error'?'Attention':selected.status==='running'?'Running':'Done');
+  const i=attemptIndex(),n=report?.attempts?.length||0;$('#attempt-position').textContent=isResult&&i>=0?(i+1)+' of '+n:'';$('#attempt-prev').hidden=!isResult||i<0;$('#attempt-next').hidden=!isResult||i<0;$('#attempt-prev').disabled=i<=0;$('#attempt-next').disabled=i<0||i>=n-1;
   const task=selected.task||taskId,model=selected.model,box=$('#output');
   const result=selected.result||job?.results.find(r=>r.task===task&&r.model===model)||null;
   const account=selected.report||report?.attempts.find(a=>a.task===task&&a.model===model)||null;
   box.setAttribute('aria-labelledby','inspector-tab-'+outputMode);
   if(outputMode==='checks')box.innerHTML=checksView(result,account);
-  else if(outputMode==='trace'){box.innerHTML=traceView(task,model);architectureFigure(box,task,model);}
+  else if(outputMode==='trace'){box.innerHTML=traceView(task,model);architectureFigure(box,task,model);if(selectedEvent!==null)selectTraceEvent(selectedEvent,false);}
   else if(outputMode==='timeline')box.replaceChildren(timelineView(task,model));
   else box.innerHTML=outputView(result,account);
 }
@@ -190,7 +249,7 @@ function changeValue(value){
 }
 function checkRow(title,expected,observed,record,field,passed){
   const state=passed===true?'passed':passed===false?'failed':'unknown';
-  return '<tr class="check-row '+state+'"><th scope="row">'+esc(title)+(record||field?'<small>'+esc([record,field].filter(Boolean).join(' · '))+'</small>':'')+'</th><td>'+esc(expected)+'</td><td>'+esc(observed)+'</td><td><span class="verdict '+state+'">'+(state==='passed'?'Passed':state==='failed'?'Failed':'Not evaluated')+'</span></td></tr>';
+  return '<tr class="check-row '+state+'"><th scope="row">'+esc(title)+(record||field?'<small title="'+esc([record,field].filter(Boolean).join(' · '))+'">'+esc([record,field].filter(Boolean).join(' · '))+'</small>':'')+'</th><td>'+esc(expected)+'</td><td>'+esc(observed)+'</td><td><span class="verdict '+state+'">'+(state==='passed'?'Passed':state==='failed'?'Failed':'Not evaluated')+'</span></td></tr>';
 }
 function checksView(result,account){
   if(!result)return '<p>No verdict recorded yet.</p>';
@@ -239,7 +298,7 @@ function traceView(task,model){
   const rows=attemptEvents(task,model);
   if(!rows.length)return '<p>No events recorded for this attempt.</p>';
   const start=Date.parse(rows[0].at);
-  return '<div class="trace-figure" data-trace-figure></div><ol class="trace-list">'+rows.map(e=>'<li><button class="trace-event" data-evidence="'+e.id+'"><span>'+esc(eventLabel(e))+'</span><time datetime="'+esc(e.at)+'">+'+((Date.parse(e.at)-start)/1000).toFixed(1)+'s</time></button></li>').join('')+'</ol>';
+  return '<div class="trace-figure" data-trace-figure></div><div class="trace-split"><ol class="trace-list" aria-label="Events">'+rows.map(e=>'<li><button class="trace-event" data-evidence="'+e.id+'"><span>'+esc(eventLabel(e))+'</span><time datetime="'+esc(e.at)+'">+'+((Date.parse(e.at)-start)/1000).toFixed(1)+'s</time></button></li>').join('')+'</ol><div class="trace-detail" id="trace-detail"><p class="meta">Choose an event to read its input and output. Up and down move through them.</p></div></div>';
 }
 function timelineView(task,model){
   const rows=attemptEvents(task,model),start=rows.length?Date.parse(rows[0].at):0,t=e=>(Date.parse(e.at)-start)/1000;
@@ -285,6 +344,8 @@ $('.inspector-tabs').addEventListener('keydown',e=>{
   e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
   tabs[next].click();tabs[next].focus();
 });
+let resultsFilter='';
+$$('[data-results-filter]').forEach(b=>b.onclick=()=>{resultsFilter=b.dataset.resultsFilter;$$('[data-results-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));renderResults();});
 function renderResults() {
   if(!job)return;
   const focused=document.activeElement?.dataset?.index;
@@ -292,7 +353,11 @@ function renderResults() {
   const known=results.filter(r=>knownNumber(r.cost_usd)), cost=known.reduce((a,r)=>a+Number(r.cost_usd),0);
   const unresolved=results.some(r=>!knownNumber(r.cost_usd)||r.flags?.includes('billing=unknown'));
   $('#results-summary').innerHTML='<div class="result-stat"><strong>'+passed+' / '+assessed.length+'</strong><span>Evaluated attempts passed</span></div><div class="result-stat"><strong>'+money(known.length?cost:null)+'</strong><span>Known cost estimate'+(unresolved?' · incomplete billing':'')+'</span></div><div class="result-stat"><strong>'+job.completed+' / '+job.total+'</strong><span>Attempts finished'+(total-assessed.length?' · '+(total-assessed.length)+' execution issues':'')+'</span></div>';
-  $('#result-rows').innerHTML=results.map((r,i)=>'<tr><td><button class="result-link" data-index="'+i+'">'+esc(taskTitle(r.task))+'<small>'+esc(modelName(r.model))+'</small></button></td><td class="'+(String(r.termination||'').startsWith('infra:')?'neutral':r.passed?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Checks failed':esc(human(r.termination||'Not evaluated')))+'</td><td>'+(knownNumber(r.seconds)?Number(r.seconds).toFixed(1)+'s':'Not available')+'</td><td>'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td><td>'+(knownNumber(r.tool_calls)?r.tool_calls:'Not available')+'</td></tr>').join('')||'<tr><td colspan="5" class="results-empty"><strong>No finished attempts yet</strong><p>'+(['queued','running','cancelling'].includes(job.status)?'Results appear here as work finishes. Open Activity to follow the current task.':'This run ended before an attempt finished. Check the run message and activity for details.')+'</p></td></tr>';
+  const kindOf=r=>String(r.termination||'').startsWith('infra:')?'infra':r.passed?'passed':'failed';
+  const shown=results.map((r,i)=>[r,i]).filter(([r])=>!resultsFilter||kindOf(r)===resultsFilter);
+  const finding=r=>{const a=report?.attempts.find(x=>x.task===r.task&&x.model===r.model);return a?outcomeFinding(a):'';};
+  $('#result-rows').innerHTML=shown.map(([r,i])=>'<tr data-row="'+i+'"><td><button class="result-link" data-index="'+i+'">'+esc(shortTaskLabel(r.task))+'<small>'+esc(modelName(r.model))+'</small></button></td><td><span class="matrix-word '+(kindOf(r)==='infra'?'neutral':kindOf(r)==='passed'?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Failed':esc(human(r.termination||'Not evaluated')))+'</span></td><td class="result-finding">'+esc(r.passed?'':finding(r))+'</td><td class="num">'+(knownNumber(r.seconds)?Number(r.seconds).toFixed(1)+'s':'—')+'</td><td class="num">'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td><td class="num">'+(knownNumber(r.tool_calls)?r.tool_calls:'—')+'</td></tr>').join('')||'<tr><td colspan="6" class="results-empty"><strong>'+(results.length?'No attempts match this filter':'No finished attempts yet')+'</strong>'+(results.length?'':'<p>'+(['queued','running','cancelling'].includes(job.status)?'Results appear here as work finishes. Open Activity to follow the current task.':'This run ended before an attempt finished. Check the run message and activity for details.')+'</p>')+'</td></tr>';
+  markCurrent();
   $$('[data-index]').forEach(button=>button.onclick=()=>{
     const r=results[Number(button.dataset.index)];taskId=r.task;$('#task-select').value=taskId;
     selected={node:'result',model:r.model,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};
@@ -313,7 +378,8 @@ function taskTitle(id){return state.tasks.find(t=>t.id===id)?.title||human(id)}
 function modelName(id){const arm=job?.settings?.arms?.find(a=>a.id===id);if(arm)return arm.name;const [base,effort]=id.split('@');return (state.models.find(m=>m.id===base)?.name||base)+(effort?' · '+effort+' reasoning':'')}
 function armKind(id){const arm=job?.settings?.arms?.find(a=>a.id===id);return arm?arm.kind:state.models.find(m=>m.id===id.split('@')[0])?.kind||'Setup'}
 function filteredTasks(){const q=$('#task-search').value.trim().toLowerCase(),category=$('#task-category').value;return state.tasks.filter(t=>(!category||t.category===category)&&(!$('#task-difficulty').value||(t.difficulty?.level||'unrated')===$('#task-difficulty').value)&&(t.title+' '+t.brief+' '+(t.applications||[]).join(' ')).toLowerCase().includes(q))}
-function renderTaskOptions(){const filtered=filteredTasks();$('#task-options').innerHTML=filtered.length?filtered.map(t=>'<label class="task-option"><input type="checkbox" value="'+esc(t.id)+'" '+(selectedTasks.has(t.id)?'checked':'')+'><span><strong>'+esc(t.title)+'</strong><small>'+esc(t.category)+' · '+esc((t.applications||[]).join(' + '))+'</small></span>'+'</label>').join(''):'<p class="jobs-empty">No requests match these filters.</p>';$$('#task-options input').forEach(i=>i.onchange=()=>{i.checked?selectedTasks.add(i.value):selectedTasks.delete(i.value);$('#task-set').value='custom';launchSize()});launchSize()}
+function renderTaskOptions(){const filtered=filteredTasks();const history=new Map();for(const j of state.jobs||[])for(const r of j.results||[]){const h=history.get(r.task)||{n:0,passed:0};h.n++;if(r.passed)h.passed++;history.set(r.task,h);}
+ $('#task-options').innerHTML=filtered.length?'<table class="table task-table"><thead><tr><th><span class="sr-only">Chosen</span></th><th>Task</th><th>Category</th><th>Applications</th><th>Difficulty</th><th class="num">Past runs</th></tr></thead><tbody>'+filtered.map(t=>{const h=history.get(t.id);return '<tr class="task-option"><td><input type="checkbox" value="'+esc(t.id)+'" '+(selectedTasks.has(t.id)?'checked':'')+' aria-label="'+esc(t.title)+'"></td><td><strong>'+esc(t.title)+'</strong></td><td>'+esc(t.category)+'</td><td>'+esc((t.applications||[]).join(', '))+'</td><td>'+esc(t.difficulty?.level||'unrated')+'</td><td class="num">'+(h?h.passed+' / '+h.n:'—')+'</td></tr>';}).join('')+'</tbody></table>':'<p class="jobs-empty">No requests match these filters.</p>';$$('#task-options input').forEach(i=>i.onchange=()=>{i.checked?selectedTasks.add(i.value):selectedTasks.delete(i.value);$('#task-set').value='custom';launchSize()});launchSize()}
 function preserveArchitectureModels(){return selectedArchitectureIds.size>0&&$('#architecture-choice').value!=='default-monarch-enterprise'&&$('#architecture-model-mode').value==='saved';}
 function armCount(){if(preserveArchitectureModels())return selectedArchitectureIds.size;return $('#architecture-choice').value==='default-monarch-enterprise'?1:selectedModels.size*(1+($('#include-bare').checked?1:0))}
 function requestFloor(){let floor=0;for(const id of preserveArchitectureModels()?[]:selectedModels){const m=state.models.find(x=>x.id===id.split('@')[0]);floor=Math.max(floor,Number(m?.request_ceiling_usd||state.capabilities?.controls?.find(c=>c.id===m?.control)?.request_ceiling_usd||0));}for(const id of selectedArchitectureIds){floor=Math.max(floor,Number(state.capabilities?.versions?.find(v=>v.id===id)?.request_ceiling_usd||0));}return floor;}
@@ -324,16 +390,20 @@ function launchSize() {
   renderTaskSelection();
   renderBareWarning();
   clearTimeout(bareCoverageTimer);bareCoverageTimer=setTimeout(checkBareCoverage,250);
-  const arms=armCount(), floor=requestFloor(), amount=Number($('#run-budget').value);
+  const arms=armCount(), floor=requestFloor();
+  const guess=expectedCost();
+  if(guess&&!budgetTouched){const want=Math.max(floor,Math.ceil(guess.usd*2*100)/100,0.5);const cap=knownNumber(state.budget?.available)?Number(state.budget.available):want;$('#run-budget').value=Math.min(want,Math.max(cap,0.01)).toFixed(2);}
+  if(selectedTasks.size&&arms&&(!$('#run-title').value.trim()||$('#run-title').value===autoTitle)){autoTitle=runName();$('#run-title').value=autoTitle;}else if(!selectedTasks.size||!arms){if($('#run-title').value===autoTitle){$('#run-title').value='';autoTitle='';}}
+  const amount=Number($('#run-budget').value);
   const low=floor>0&&amount<floor;
-  $('#launch-size').textContent=selectedTasks.size*arms?selectedTasks.size*arms+' '+plural(selectedTasks.size*arms,'attempt')+' planned':(selectedTasks.size?selectedTasks.size+' tasks selected · choose setups next':(launchStep===0?'Choose an architecture and models':'Choose the work to test'));
+  $('#launch-size').textContent=whatWillHappen(arms,amount);
   $('#budget-floor').textContent=low?'Set at least '+money(floor)+' to cover the largest single request reservation.':knownNumber(state.budget?.available)&&amount>Number(state.budget.available)?'Only '+money(state.budget.available)+' remains in this week’s capacity.':'';
   $('#run-capacity-note').textContent=capacityNote();
   const error=launchIssue();
   $('#launch-validation').textContent=launchStep===2?error:'';
-  $('#launch-button').disabled=launching||!!error;
+  $('#launch-button').disabled=launching;
   $('#launch-button').textContent=launching?'Starting…':'Start run · '+money(amount)+' max';
-  $('#launch-next').disabled=launching||(launchStep===0?!arms||!$('#architecture-choice').value||!!bareLaunchError():!selectedTasks.size||selectedTasks.size>800);
+  $('#launch-next').disabled=launching;
   $('#launch-back').disabled=launching;
   $$('[data-launch-step]').forEach(b=>b.disabled=launching||(Number(b.dataset.launchStep)>0&&(!armCount()||!$('#architecture-choice').value))||(Number(b.dataset.launchStep)>1&&!selectedTasks.size));
   $('#clear-tasks').disabled=!selectedTasks.size;
@@ -365,24 +435,44 @@ function launchSetupRows(){if(preserveArchitectureModels())return [...selectedAr
 
 function renderLaunchReview(){
  const rows=launchSetupRows();
- $('#launch-review').innerHTML='<div class="review-equation"><strong>'+selectedTasks.size+'</strong> '+plural(selectedTasks.size,'task')+' <span>×</span> <strong>'+rows.length+'</strong> '+plural(rows.length,'setup')+' <span>=</span> <strong>'+selectedTasks.size*rows.length+'</strong> '+plural(selectedTasks.size*rows.length,'attempt')+'</div><div class="review-line"><div><strong>'+esc(evaluationWords())+'</strong><p>'+esc(($('#task-set').value==='custom'?'Custom task selection':$('#task-set').selectedOptions[0]?.textContent)||'Custom task selection')+'</p></div><button type="button" class="text-button" data-review-edit="1">Edit tasks</button></div><div class="review-setups">'+rows.map(r=>'<div><strong>'+esc(r.name)+'</strong><span>'+esc(r.detail)+'</span></div>').join('')+'<button type="button" class="text-button" data-review-edit="0">Edit setup & models</button></div>';
+ $('#launch-review').innerHTML='<div class="review-equation"><strong>'+selectedTasks.size+'</strong> '+plural(selectedTasks.size,'task')+' <span>×</span> <strong>'+rows.length+'</strong> '+plural(rows.length,'setup')+' <span>=</span> <strong>'+selectedTasks.size*rows.length+'</strong> '+plural(selectedTasks.size*rows.length,'attempt')+'</div><div class="review-line"><div><strong>'+esc(evaluationWords())+'</strong><p>'+esc(!selectedTasks.size?'No tasks chosen yet':($('#task-set').value==='custom'||!$('#task-set').value?'Custom task selection':$('#task-set').selectedOptions[0]?.textContent)||'Custom task selection')+'</p></div><button type="button" class="text-button" data-review-edit="1">Edit tasks</button></div><div class="review-setups">'+rows.map(r=>'<div><strong>'+esc(r.name)+'</strong><span>'+esc(r.detail)+'</span></div>').join('')+'<button type="button" class="text-button" data-review-edit="0">Edit setup & models</button></div>';
  $$('[data-review-edit]').forEach(b=>b.onclick=()=>setLaunchStep(Number(b.dataset.reviewEdit)));
+ if(!$('#launch-review .review-line'))return;
 
 }
+function stepBlocker(step){if(step>0){if(!$('#architecture-choice').value)return 'Choose an architecture first.';if(bareLaunchError())return bareLaunchError();if(!armCount())return 'Add at least one model or setup first.';}if(step>1){if(!selectedTasks.size)return 'Choose at least one task first.';if(selectedTasks.size>800)return 'Choose at most 800 tasks.';}return '';}
 function setLaunchStep(step,focus=true) {
-  if(step>0&&(!armCount()||!$('#architecture-choice').value||bareLaunchError()))return;
-  if(step>1&&!selectedTasks.size)return;
-  launchStep=Math.max(0,Math.min(2,step));
-  if(launchStep===2&&!$('#run-title').value.trim())$('#run-title').value=selectedTasks.size+' '+plural(selectedTasks.size,'task')+' · '+evaluationWords();
-  $$('[data-launch-panel]').forEach(p=>p.classList.toggle('hidden',Number(p.dataset.launchPanel)!==launchStep));
-  $$('[data-launch-step]').forEach(b=>{b.setAttribute('aria-current',Number(b.dataset.launchStep)===launchStep?'step':'false');b.disabled=launching;});
-  $('#launch-back').classList.toggle('hidden',launchStep===0);$('#launch-next').classList.toggle('hidden',launchStep===2);$('#launch-button').classList.toggle('hidden',launchStep!==2);
-  $('#launch-next').textContent=launchStep===0?'Choose tasks':'Review run';
+  // The run is one page: the numbers above are its sections, not gates.
+  launchStep=2;
+  $$('[data-launch-panel]').forEach(p=>p.classList.remove('hidden'));
+  $$('[data-launch-step]').forEach(b=>{b.setAttribute('aria-current',Number(b.dataset.launchStep)===Math.max(0,Math.min(2,step))?'step':'false');b.disabled=false;});
+  $('#launch-back').classList.add('hidden');$('#launch-next').classList.add('hidden');$('#launch-button').classList.remove('hidden');
+  $('#launch-validation').classList.remove('blocker');
   launchSize();
   $('#form-error').textContent='';
-  if(focus){const heading=$('[data-launch-panel="'+launchStep+'"] .step-heading');heading.tabIndex=-1;heading.focus();window.scrollTo({top:0,behavior:'instant'});}
+  if(focus){const heading=$('[data-launch-panel="'+Math.max(0,Math.min(2,step))+'"] .step-heading');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});heading.scrollIntoView({behavior:'instant',block:'start'});}}
 }
-$('#run-budget').oninput=launchSize;$('#run-concurrency').oninput=launchSize;
+// The name says what it is, and never repeats: "Gemini 3.7 Flash on 3 tasks #2".
+function runName(){
+  const rows=launchSetupRows().filter(r=>!r.bare),names=rows.map(r=>r.name);
+  const who=names.length?names.slice(0,2).join(' and ')+(names.length>2?' and '+(names.length-2)+' more':''):'A run';
+  const base=who+' on '+selectedTasks.size+' '+plural(selectedTasks.size,'task');
+  const n=1+(state?.jobs||[]).filter(j=>String(j.title||'').startsWith(base)).length;
+  return base+' #'+n;
+}
+// What earlier attempts of these models cost, as a guide for the ceiling.
+function expectedCost(){
+  const tasks=selectedTasks.size;if(!tasks||!state?.jobs)return null;
+  let total=0,samples=0,covered=0;
+  for(const row of launchSetupRows()){
+    const base=String(row.id).split('@')[0].replace(/-bare$/,'');
+    const costs=[];
+    for(const j of state.jobs)for(const r of j.results||[]){if(String(r.model).split('@')[0]===base&&knownNumber(r.cost_usd)&&!(r.flags||[]).some(f=>['billing=unknown','cost_missing'].includes(f)))costs.push(Number(r.cost_usd));}
+    if(costs.length){total+=tasks*costs.reduce((a,b)=>a+b,0)/costs.length;samples+=costs.length;covered++;}
+  }
+  return covered?{usd:total,samples,covered,setups:launchSetupRows().length}:null;
+}
+$('#run-budget').oninput=()=>{budgetTouched=true;launchSize();};$('#run-concurrency').oninput=()=>{const box=$('#run-concurrency'),max=Number(box.max)||8;if(Number(box.value)>max)box.value=String(max);launchSize();};
 async function openLaunch(options={}) {
  if(!state||launching||(launchOpening&&workspaceSurface==='launch'))return;
  launchOpening=true;
@@ -391,7 +481,8 @@ async function openLaunch(options={}) {
  try{
   const [latest,matrix,sets,runtime]=await Promise.all([api('/api/state'),api('/api/capabilities'),api('/api/task-sets').catch(()=>({items:[]})),api('/api/runtime').catch(()=>null)]);
   state.models=latest.models.filter(m=>!['oracle','sloppy'].includes(m.id));state.tasks=latest.tasks;state.token=latest.token;state.capabilities=matrix;budget(latest.budget);state.runtime=runtime;if(runtime?.max_agents)$('#run-concurrency').max=runtime.max_agents;
-  restoreRunDraft();
+  const restored=restoreRunDraft();
+  const note=$('#launch-restored');if(note){note.hidden=!restored;note.innerHTML=restored?'Restored your unfinished run. <button type="button" class="text-button" id="launch-start-over">Start over</button>':'';$('#launch-start-over')?.addEventListener('click',()=>{try{localStorage.removeItem('ailabs-run-draft');}catch{}selectedTasks=new Set();selectedModels=new Set();selectedArchitectureIds=new Set();$('#run-title').value='';$('#include-bare').checked=false;budgetTouched=false;runDraftLoaded=true;note.hidden=true;renderComparisonVersions().then(()=>{renderTaskOptions();launchSize();});});}
   selectedModels=new Set([...selectedModels].filter(id=>state.models.some(m=>m.available&&m.id===id.split('@')[0])));
   selectedTasks=new Set([...selectedTasks].filter(id=>state.tasks.some(t=>t.id===id)));
   $('#task-category').innerHTML='<option value="">All categories</option>'+[...new Set(state.tasks.map(t=>t.category))].sort().map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');
@@ -404,13 +495,13 @@ async function openLaunch(options={}) {
   if(!sets.items.length){$('#task-set').value='custom';$('#task-browser').open=true;}
   $('#form-error').textContent='';
  }catch(error){$('#form-error').textContent='Could not load run choices. '+error.message;}
- finally{launchOpening=false;$('#launch-loading').classList.add('hidden');launchSize();}
+ finally{launchOpening=false;$('#launch-loading').classList.add('hidden');launchSize();if(options.focusStart){$('#launch-button').focus();$('#launch-button').scrollIntoView({block:'center'});}}
 }
 
 $('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('#close-dialog').onclick=cancelLaunch;$('#task-search').oninput=renderTaskOptions;$('#select-all').onclick=()=>{$('#task-set').value='custom';const ids=filteredTasks().map(t=>t.id);const all=ids.every(id=>selectedTasks.has(id));ids.forEach(id=>all?selectedTasks.delete(id):selectedTasks.add(id));renderTaskOptions()};$('#task-select').onchange=e=>{taskId=e.target.value;clearSelection();renderGraph()};$('#fit-view').onclick=()=>$('#graph-scroll').scrollTo({top:0,left:0,behavior:'smooth'});$$('[data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-output]').forEach(b=>b.onclick=()=>{setOutputMode(b.dataset.output);renderOutput();bindEvidence()});$('#copy-output').onclick=async()=>{
   if(!selected)return toast('Select an output first');
   const raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes,report:selected.report}:{})};
-  try {await navigator.clipboard.writeText(outputMode==='raw'?JSON.stringify(raw,null,2):typeof selected.output==='string'?selected.output:JSON.stringify(selected.output??null,null,2));toast('Output copied');}
+  try {await navigator.clipboard.writeText(outputMode==='output'?(typeof selected.output==='string'?selected.output:JSON.stringify(selected.output??null,null,2)):$('#output').innerText);toast(outputMode==='output'?'Output copied':'Copied the '+outputMode+' tab as text');}
   catch {toast('Clipboard access is unavailable. Select and copy the text in the evidence panel.');}
 };
 for(const action of ['pause','resume'])$('#'+action+'-run').onclick=async()=>{
@@ -421,13 +512,14 @@ for(const action of ['pause','resume'])$('#'+action+'-run').onclick=async()=>{
 };
 $('#cancel-run').onclick=async()=>{
   if(!job||$('#cancel-run').disabled)return;
+  if(!confirm('Cancel this run? Active requests finish first; nothing new starts.'))return;
   const id=job.id;$('#cancel-run').disabled=true;
   try {const next=await api('/api/jobs/'+id+'/cancel',{});if(job?.id===id)syncJob(next);toast(next.status==='cancelled'?'Run cancelled':'Cancelling active work');}
   catch(error){toast(error.message);if(job?.id===id)$('#cancel-run').disabled=false;}
 };
 $('#launch-form').onsubmit=async e=>{
   e.preventDefault();if(launching)return;
-  if(launchStep<2){if(!$('#launch-next').disabled)setLaunchStep(launchStep+1);return;}
+  if(launchStep<2){setLaunchStep(launchStep+1);return;}
   const issue=launchIssue();if(issue){$('#form-error').textContent=issue;$('#form-error').focus();return;}
   const payload={title:$('#run-title').value.trim(),tasks:[...selectedTasks],models:preserveArchitectureModels()?[]:[...selectedModels],architectures:selectedVersions(),comparison_models:!preserveArchitectureModels()&&selectedArchitectureIds.size>0&&$('#architecture-choice').value!=='default-monarch-enterprise',bare_models:$('#include-bare').checked?bareSelections().map(x=>x.selection):[],maximum_usd:$('#run-budget').value,track:$('#run-track').value,concurrency:Number($('#run-concurrency').value),components:Object.fromEntries($$('[data-component-role]').map(e=>[e.dataset.componentRole,e.value])),configuration:{prompt:$('#run-prompt').value,max_turns:Number($('#run-turns').value)}};
   const fingerprint=JSON.stringify(payload);
@@ -450,7 +542,7 @@ async function initialize() {
   try {
     const latest=await api('/api/state');state=latest;budget(state.budget);setConnection('Connected','connected');$('#connection-error').classList.add('hidden');
     renderJobs();renderSetups();
-    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5)));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis')await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio')await $('#open-setup').onclick();else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
+    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5).split('/')[0]));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis'||location.hash.startsWith('#genesis/'))await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio')await $('#open-setup').onclick();else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
   } catch(error){showConnectionError(error.message);}
   finally {button.disabled=false;}
 }
@@ -485,7 +577,7 @@ function outcomeFinding(a) {
 function criticalAnalysis(a) {
   const review=report?.analysis;
   const heading=a.passed?'Why it succeeded':'How it failed';
-  if(!review||review.status!=='completed')return '<section class="critical-analysis"><h3>'+heading+'</h3><p>'+(review?.status==='failed'?'Analysis could not complete. Review retained billing before retrying.':'The checks establish the verdict. The failure mechanism has not been reviewed yet.')+'</p><button type="button" class="button" data-review-run '+(analysisPending.has(job.id)||review?.status==='failed'?'disabled':'')+'>'+(analysisPending.has(job.id)?'Analyzing…':'Analyze evidence')+'</button><small>Paid review uses this run’s remaining budget.</small></section>';
+  if(!review||review.status!=='completed')return '<section class="critical-analysis"><h3>'+(review?heading:'Not reviewed yet')+'</h3><p>'+(review?.status==='failed'?'Analysis could not complete. Review retained billing before retrying.':'The checks establish the verdict. The mechanism has not been reviewed by a model.')+'</p><button type="button" class="button" data-review-run '+(analysisPending.has(job.id)||review?.status==='failed'?'disabled':'')+'>'+(analysisPending.has(job.id)?'Analyzing…':'Analyze evidence')+'</button><small>Paid review uses this run’s remaining budget.</small></section>';
   const ids=new Set(a.event_ids);
   const findings=review.findings.filter(f=>f.event_ids.some(id=>ids.has(id)));
   return '<section class="critical-analysis"><h3>'+heading+'</h3>'+(findings.length?findings.map((f,i)=>'<details class="finding-section" '+(i===0?'open':'')+'><summary>'+esc(f.title)+'</summary><span class="finding-kind">'+(f.kind==='fact'?'Observed evidence':'Hypothesis — untested')+'</span><p>'+esc(f.explanation)+'</p><div class="finding-evidence">'+f.event_ids.map(evidenceButton).join('')+'</div></details>').join(''):'<p>No cited finding covers this attempt.</p>')+'<details class="finding-section"><summary>Test the explanation</summary><p>'+esc(review.next_experiment)+'</p></details><details class="finding-section"><summary>Uncertainty</summary><p>'+esc(review.limitations)+'</p><small>'+esc(review.basis||'Model interpretation; citations require review')+'. The recorded verdict is unchanged.</small></details></section>';
@@ -510,7 +602,19 @@ function showEvidencePopup(title,html,back=null) {
 }
 $('#evidence-close').onclick=()=>$('#evidence-dialog').close();
 $('#evidence-dialog').addEventListener('close',()=>{if(evidenceReturn?.isConnected)evidenceReturn.focus({preventScroll:true});evidenceReturn=null;});
-$('#expand-output').onclick=()=>showEvidencePopup($('#inspector-title').textContent,$('#output').innerHTML);
+$('#attempt-prev').onclick=()=>moveAttempt(-1);$('#attempt-next').onclick=()=>moveAttempt(1);
+$('#attempt-copy-link').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast('Link copied');}catch{toast('Copy the address from the address bar.');}};
+$('#attempt-dialog').addEventListener('cancel',e=>{e.preventDefault();clearSelection(true);});
+$('#attempt-dialog').addEventListener('keydown',e=>{
+  if(e.key==='Escape'){e.preventDefault();clearSelection(true);return;}
+  if(e.target.closest('input,textarea,select,[role=tablist]'))return;
+  const inTrace=!!e.target.closest('.trace-list');
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if(inTrace)moveTraceEvent(e.key==='ArrowDown'?1:-1);else moveAttempt(e.key==='ArrowDown'?1:-1);}
+  else if(e.key==='j'){e.preventDefault();moveAttempt(1);}else if(e.key==='k'){e.preventDefault();moveAttempt(-1);}
+  else if(e.key==='.'){e.preventDefault();$('#attempt-copy-link').click();}
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#attempt-dialog').open&&!e.target.closest('dialog:not(#attempt-dialog)'))clearSelection(true);});
+window.addEventListener('popstate',()=>{if(job&&location.hash.startsWith('#run/'+encodeURIComponent(job.id)))syncAttemptFromHash();});
 function selectReport(index) {
   const a=report?.attempts[index];if(!a)return;
   const result=job.results.find(r=>r.task===a.task&&r.model===a.model);
@@ -528,6 +632,15 @@ function bindEvidence() {
   $$('[data-evidence]').forEach(b=>b.onclick=()=>{
     const event=events.find(e=>e.id===Number(b.dataset.evidence));
     if(!event)return toast('Evidence is still loading. Try again shortly.');
+    const attempt=report?.attempts.findIndex(a=>a.task===event.task&&a.model===event.model)??-1;
+    const result=attempt>=0&&job.results.find(r=>r.task===event.task&&r.model===event.model);
+    if(result){
+      // Every event has one home: the attempt sheet, on Trace, with the event selected.
+      const same=selected?.category==='result'&&(selected.task||taskId)===event.task&&selected.model===event.model;
+      if(!same)selectReport(attempt);
+      setOutputMode('trace');renderOutput();bindEvidence();selectTraceEvent(event.id);
+      return;
+    }
     const action=report?.attempts.flatMap(a=>a.actions).find(a=>Number(a.event_id)===event.id);
     const node=nodeList(event.model).find(n=>n.node===event.node);
     const input=event.arguments!==undefined?event.arguments:node?.arguments;
@@ -541,7 +654,17 @@ function bindEvidence() {
 
   });
 }
-function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;const reviewOpen=$('#reasoning-review')?.open;const attempts=report.attempts,valid=attempts.filter(a=>!a.infrastructure);const modelRows=job.settings.models.map(m=>{const rows=attempts.filter(a=>a.model===m),measured=rows.filter(a=>!a.infrastructure),passed=measured.filter(a=>a.passed).length;return '<div class="comparison-bar"><strong>'+esc(modelName(m))+'</strong><progress class="outcome-track" max="100" value="'+(measured.length?passed/measured.length*100:0)+'" aria-label="Requirements met"></progress><span>'+passed+' / '+measured.length+' met</span>'+(rows.some(a=>a.infrastructure)?'<small class="fail">'+rows.filter(a=>a.infrastructure).length+' execution issues</small>':'')+'</div>'}).join('');const analysis=report.analysis;$('#report-view').innerHTML='<div class="report-intro"><h3>'+ (attempts.length?'Task outcomes':['queued','running','cancelling'].includes(job.status)?'The work is underway':'No evaluated outcomes')+'</h3><p>'+(attempts.length?valid.filter(a=>a.passed).length+' of '+valid.length+' passed. '+(attempts.length-valid.length?attempts.length-valid.length+' attempts could not be evaluated.':''):(['queued','running','cancelling'].includes(job.status)?'Task outcomes appear as each attempt finishes. You can follow the activity while they run.':'This run ended before any task could be evaluated. Check the run message and Activity for what happened.'))+'</p></div>'+(job.settings.models.length>1?'<div class="comparison-bars">'+modelRows+'</div>':'')+'<div class="outcome-list">'+attempts.map((a,i)=>'<button class="outcome-card" data-report="'+i+'"><div class="outcome-top"><span class="outcome-label '+(a.infrastructure?'neutral':a.passed?'pass':'fail')+'">'+(a.infrastructure?'Execution issue':a.passed?'Requirements met':'Needs investigation')+'</span><small>'+esc(modelName(a.model))+'</small></div><h4>'+esc(shortTaskLabel(a.task))+'</h4><p>'+esc(outcomeFinding(a))+'</p><span class="outcome-arrow" aria-hidden="true">→</span></button>').join('')+'</div><details id="reasoning-review" class="analysis-section" '+(reviewOpen?'open':'')+'><summary>Reasoning review'+(analysis?.status==='completed'?' · Available':analysis?.status==='failed'?' · Failed':analysisPending.has(job.id)?' · Running':' · Optional')+'</summary>'+(analysis?.status==='completed'?'<p>'+esc(analysis.summary)+'</p>'+analysis.findings.map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+f.event_ids.map(evidenceButton).join('')+'</article>').join('')+'<h4>Next experiment</h4><p>'+esc(analysis.next_experiment)+'</p><p class="report-caveat">'+esc(analysis.limitations)+' · '+esc(analysis.model)+' / '+esc(analysis.effort)+'</p>':analysis?.status==='failed'?'<p class="fail">'+esc(analysis.error)+'</p>':'<button class="button" id="analyze-run" '+(!attempts.length||analysisPending.has(job.id)||['queued','running','cancelling'].includes(job.status)?'disabled':'')+'>Analyze this run · Gemini medium</button><p class="report-caveat">Paid analysis uses the remaining run budget and weekly limit. Interpretations do not change task verdicts.</p>')+'</details>';$$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));bindEvidence();if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});if($('#analyze-run'))$('#analyze-run').onclick=async()=>{
+function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;const reviewOpen=$('#reasoning-review')?.open;
+ const attempts=report.attempts,valid=attempts.filter(a=>!a.infrastructure),live=['queued','running','cancelling'].includes(job.status),setups=job.settings.models,tasks=job.settings.tasks,passed=valid.filter(a=>a.passed).length;
+ const perSetup=m=>{const rows=valid.filter(a=>a.model===m);return {passed:rows.filter(a=>a.passed).length,total:rows.length};};
+ const cell=(t,m)=>{const i=attempts.findIndex(a=>a.task===t&&a.model===m);if(i<0)return '<td class="matrix-cell pending"><span class="neutral">'+(live?'Waiting':'—')+'</span></td>';const a=attempts[i],cls=a.infrastructure?'neutral':a.passed?'pass':'fail';return '<td class="matrix-cell '+cls+'"><button type="button" data-report="'+i+'" title="'+esc(outcomeFinding(a))+'"><span class="matrix-word">'+(a.infrastructure?'Error':a.passed?'Passed':'Failed')+'</span>'+(a.passed?'':'<small>'+esc(outcomeFinding(a))+'</small>')+'</button></td>';};
+ const verdict=attempts.length?passed+' of '+valid.length+' passed':live?'The work is underway':'No evaluated outcomes';
+ const breakdown=setups.length>1?setups.map(m=>{const s=perSetup(m);return modelName(m)+' passed '+s.passed+' of '+s.total;}).join('; ')+'.':'';
+ const sentence=attempts.length?[breakdown,attempts.length-valid.length?(attempts.length-valid.length)+' attempts could not be evaluated.':'',live?'More arrive as attempts finish.':''].filter(Boolean).join(' '):live?'Outcomes appear as each attempt finishes. Follow the work under Activity.':'This run ended before any task could be evaluated. See the run message and Activity.';
+ const matrix=attempts.length||live?'<div class="table-scroll"><table class="table outcome-matrix"><thead><tr><th scope="col">Task</th>'+setups.map(m=>'<th scope="col">'+esc(modelName(m))+'</th>').join('')+'</tr></thead><tbody>'+tasks.map(t=>'<tr><th scope="row">'+esc(shortTaskLabel(t))+'</th>'+setups.map(m=>cell(t,m)).join('')+'</tr>').join('')+'</tbody>'+(tasks.length>1?'<tfoot><tr><th scope="row">Passed</th>'+setups.map(m=>{const s=perSetup(m);return '<td>'+(s.total?s.passed+' / '+s.total:'—')+'</td>';}).join('')+'</tr></tfoot>':'')+'</table></div>':'';
+ const analysis=report.analysis;
+ $('#report-view').innerHTML='<div class="report-intro"><h3>'+esc(verdict)+'</h3><p>'+esc(sentence)+'</p></div>'+matrix+'<div id="failure-slot"></div><details id="reasoning-review" class="analysis-section" '+(reviewOpen?'open':'')+'><summary>Reasoning review <span class="meta">'+(analysis?.status==='completed'?'available':analysis?.status==='failed'?'failed':(analysisPending.has(job.id)||analysis?.status==='pending')?'running':'optional, paid')+'</span></summary>'+(analysis?.status==='completed'?'<p>'+esc(analysis.summary)+'</p>'+analysis.findings.map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+f.event_ids.map(evidenceButton).join('')+'</article>').join('')+'<h4>Next experiment</h4><p>'+esc(analysis.next_experiment)+'</p><p class="report-caveat">'+esc(analysis.limitations)+' · '+esc(analysis.model)+' / '+esc(analysis.effort)+'</p>':analysis?.status==='failed'?'<p class="fail">'+esc(analysis.error)+'</p>':'<button class="button" id="analyze-run" '+(!attempts.length||analysisPending.has(job.id)||analysis?.status==='pending'||live?'disabled':'')+'>'+((analysisPending.has(job.id)||analysis?.status==='pending')?'Reading the execution…':'Analyze this run · Gemini medium')+'</button><p class="report-caveat">Paid analysis uses the remaining run budget and weekly limit. Interpretations do not change task verdicts.</p>')+'</details>';
+ $$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));bindEvidence();if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});if($('#analyze-run'))$('#analyze-run').onclick=async()=>{
   const reviewId=job.id;if(analysisPending.has(reviewId))return;
   analysisPending.add(reviewId);const button=$('#analyze-run');button.disabled=true;button.textContent='Reading the execution…';
   try {
@@ -565,7 +688,7 @@ async function renderComparisonVersions(preselect){
  selectedArchitectureIds=new Set([...selectedArchitectureIds].filter(id=>eligible.some(v=>v.id===id&&v.readiness.launchable)));
  if(preselect&&eligible.some(v=>v.id===preselect&&v.readiness.launchable))selectedArchitectureIds.add(preselect);
  const seen=new Set(),models=state.models.filter(m=>{const key=[m.provider,m.configuration?.model||m.name,m.configuration?.effort||'catalog'].join('|');if(seen.has(key))return false;seen.add(key);return true;});
- const modelOptions=kind=>models.filter(m=>kind==='native'?m.kind==='Native harness':m.kind!=='Native harness').map(m=>'<option value="model:'+esc(m.id)+'" '+(!m.available?'disabled':'')+'>'+esc(m.name)+(m.available?'':' — unavailable')+'</option>').join('');
+ const modelOptions=kind=>models.filter(m=>kind==='native'?m.kind==='Native harness':m.kind!=='Native harness').map(m=>'<option value="model:'+esc(m.id)+'" '+(!m.available?'disabled':'')+'>'+esc(m.name)+(m.available?'':' — '+(/key/i.test(m.reason||'')?'no key (Settings)':'unavailable'))+'</option>').join('');
  const selected=$('#setup-catalog').value;
  $('#setup-catalog').innerHTML='<option value="">Choose a model…</option>'+modelOptions('api');
  const chosen=[...selectedArchitectureIds][0]||$('#architecture-choice').value;$('#architecture-choice').innerHTML='<option value="">Choose an architecture…</option>'+eligible.map(v=>'<option value="'+esc(v.id)+'" '+(!v.readiness.launchable?'disabled':'')+'>'+esc(v.name)+(v.readiness.launchable?'':' — unavailable')+'</option>').join('')+'<option value="without-monarch">API control · no architecture</option>';if([...$('#architecture-choice').options].some(o=>o.value===chosen&&!o.disabled))$('#architecture-choice').value=chosen;
@@ -618,11 +741,10 @@ function renderTaskSelection(){
  $('#selected-task-preview').hidden=!tasks.length;
  $('#selected-task-summary').textContent='Inspect '+tasks.length+' selected '+(tasks.length===1?'request':'requests');
  $('#selected-task-list').innerHTML=tasks.map(t=>'<details class="selected-request"><summary>'+esc(t.title)+'<small>'+esc((t.applications||[]).join(' · '))+'</small></summary><p>'+esc(t.brief||'No task brief available.')+'</p></details>').join('');
- $$('[data-task-preset]').forEach(b=>{const id=b.dataset.taskPreset;const active=id==='custom'?$('#task-set').value==='custom':exact&&choice.id==='catalog-'+id;b.setAttribute('aria-pressed',String(!!active));b.disabled=id!=='custom'&&!launchTaskSets.some(t=>t.id==='catalog-'+id);});
+ $$('[data-task-preset]').forEach(b=>{const id=b.dataset.taskPreset;const active=id==='custom'?$('#task-set').value==='custom':exact&&choice.id==='catalog-'+id;b.setAttribute('aria-pressed',String(!!active));const missing=id!=='custom'&&!launchTaskSets.some(t=>t.id==='catalog-'+id);b.disabled=missing;b.title=missing?'No frozen '+id+'-task set on this host; draw one with wb corpus tiers':'';const why=b.querySelector('.preset-why');if(missing&&!why)b.insertAdjacentHTML('beforeend','<em class="preset-why">Not on this host: draw it with wb corpus tiers</em>');else if(!missing&&why)why.remove();});
 }
 $('#task-set').onchange=()=>chooseTaskSelection($('#task-set').value);
 $$('[data-task-preset]').forEach(b=>b.onclick=()=>chooseTaskSelection(b.dataset.taskPreset==='custom'?'custom':'catalog-'+b.dataset.taskPreset));
-$('#launch-panel').addEventListener('keydown',e=>{if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();cancelLaunch();}});
 
 function cancelLaunch(){
  // Cancel leaves the wizard; the selections stay on this browser and come back next time.
@@ -632,8 +754,8 @@ function cancelLaunch(){
  $('#new-comparison').focus();
 }
 function restoreRunDraft(){
- if(runDraftLoaded)return;runDraftLoaded=true;
- try{const draft=JSON.parse(localStorage.getItem('ailabs-run-draft')||'null');if(!draft)return;$('#include-bare').checked=!!draft.includeBare;selectedTasks=new Set(draft.tasks||[]);selectedModels=new Set(draft.models||[]);selectedArchitectureIds=new Set(draft.architectures||[]);restoredTaskSet=draft.fields?.['task-set']||null;for(const [id,value] of Object.entries(draft.fields||{})){if(['run-track','run-title','run-budget','run-concurrency','run-prompt','run-turns','architecture-choice'].includes(id))$('#'+id).value=value;} }catch{}
+ if(runDraftLoaded)return false;runDraftLoaded=true;
+ try{const draft=JSON.parse(localStorage.getItem('ailabs-run-draft')||'null');if(!draft)return false;$('#include-bare').checked=!!draft.includeBare;selectedTasks=new Set(draft.tasks||[]);selectedModels=new Set(draft.models||[]);selectedArchitectureIds=new Set(draft.architectures||[]);restoredTaskSet=draft.fields?.['task-set']||null;for(const [id,value] of Object.entries(draft.fields||{})){if(['run-track','run-title','run-budget','run-concurrency','run-prompt','run-turns','architecture-choice'].includes(id))$('#'+id).value=value;}budgetTouched=!!draft.fields?.['run-budget'];return true;}catch{return false;}
 }
 
 function bareSelections(){return [...selectedModels].map(id=>{const [base,level]=id.split('@'),model=state.models.find(m=>m.id===base),effort=level||model?.configuration?.effort||model?.default_effort;const native=state.models.find(m=>m.native_runner?.model===(model?.control||base)&&((m.efforts||[]).includes(effort)||m.native_runner.effort===effort));return {id,effort,native,selection:native?native.id+((native.efforts||[]).length?'@'+effort:''):null};});}
@@ -642,6 +764,8 @@ function renderBareWarning(){
  if(!state)return;const on=$('#include-bare').checked,rows=bareSelections();
  $('#bare-warning').textContent=!on?'':!rows.length?'Choose models to check their Bare comparisons.':rows.some(x=>!x.native?.available)?'Matching Bare is unavailable for '+rows.filter(x=>!x.native?.available).map(x=>modelName(x.id)).join(', ')+'. An API control is not a native Bare baseline.':'Bare runs the same tasks with the same model and thinking setting, without this architecture.';
  if(!on)$('#bare-coverage-note').textContent='';
+ const box=$('#include-bare');const noNative=rows.length>0&&rows.every(x=>!x.native?.available);box.disabled=!rows.length||noNative;box.closest('.bare-toggle')?.classList.toggle('is-disabled',box.disabled);if(box.disabled&&on){box.checked=false;}
+ const why=!rows.length?'Add a model first.':noNative?'No native harness on this host for these models, so Bare cannot run here.':'';box.title=why;let mark=box.closest('.bare-toggle')?.querySelector('.bare-why');if(why&&!mark){box.closest('.bare-toggle').insertAdjacentHTML('beforeend','<small class="bare-why"></small>');mark=box.closest('.bare-toggle').querySelector('.bare-why');}if(mark)mark.textContent=why;
 }
 function updateArchitectureNote(){const id=$('#architecture-choice').value,experimental=!!id&&!['default-monarch-enterprise','without-monarch'].includes(id);$('#architecture-model-mode').hidden=!experimental;$('#architecture-model-mode-label').hidden=!experimental;$('#comparison-model-section').hidden=!id||id==='default-monarch-enterprise'||preserveArchitectureModels();$('#architecture-choice-note').textContent=id==='default-monarch-enterprise'?'Monarch owns its model configuration. Change it in Monarch.':id==='without-monarch'?'Runs the lab API loop without an architecture. This is a control, not native Bare.':id?(preserveArchitectureModels()?'Uses each node\'s published model and thinking setting.':'Selected models replace the model in every agent node for this run.'):'Choose an architecture before adding models.';$('#setup-catalog').disabled=!id||id==='default-monarch-enterprise';}
 $('#architecture-choice').onchange=()=>{const id=$('#architecture-choice').value;selectedArchitectureIds=new Set(id&&id!=='without-monarch'?[id]:[]);if(id==='default-monarch-enterprise'){selectedModels.clear();$('#include-bare').checked=false;}updateArchitectureNote();renderSelectedSetups();launchSize();};
@@ -658,3 +782,29 @@ async function checkBareCoverage(){
  }catch{if(key===bareCoverageKey)bareCoverageText='Previous Bare coverage could not be verified. Do not assume a baseline already exists.';}
  if(key===bareCoverageKey){$('#bare-coverage-note').textContent=$('#include-bare').checked?bareCoverageText:'';}
 }
+
+// ---- Feature 021: the footer says what will happen, on every step of New run --------------
+function whatWillHappen(arms,amount){
+  const tasks=selectedTasks.size, attempts=tasks*arms, parts=[];
+  if(attempts){parts.push(attempts+' '+plural(attempts,'attempt')+': '+tasks+' '+plural(tasks,'task')+' × '+arms+' '+plural(arms,'setup'));
+    if(tasks>20)parts.push('above smoke scale (20 per setup), so it needs an approval record unless Lucas launches it');}
+  else if(tasks)parts.push(tasks+' '+plural(tasks,'task')+' chosen; add a setup to count attempts');
+  else if(arms)parts.push(arms+' '+plural(arms,'setup')+' chosen; choose tasks to count attempts');
+  else parts.push(launchStep===0?'Choose an architecture and at least one model':'Choose the work to test');
+  const guess=expectedCost();
+  if(guess&&attempts)parts.push('expected about '+money(guess.usd)+' from '+guess.samples+' earlier '+plural(guess.samples,'attempt')+(guess.covered<guess.setups?' ('+guess.covered+' of '+guess.setups+' setups have a history)':''));
+  if(Number.isFinite(amount)&&amount>0)parts.push('ceiling '+money(amount));
+  if(knownNumber(state.budget?.available)){const left=Number(state.budget.available)-(Number.isFinite(amount)?amount:0);parts.push(money(Math.max(0,left))+' of this week left after it');}
+  return parts.join(' · ');
+}
+function reviewRule(){const tasks=selectedTasks.size,arms=armCount(),amount=Number($('#run-budget').value);const week=knownNumber(state.budget?.available)?money(state.budget.available)+' of '+money(state.budget.weekly_limit||300)+' left this week; ':'';
+  return week+'the ceiling '+money(amount)+' is reserved before the first request and settled from receipts. '+(tasks>20?'Above smoke scale: a launch by anyone but Lucas creates an approval request and waits.':'Smoke scale: it runs at once, no approval record needed.');}
+
+// ---- Feature 021: Run again opens New run with this run's tasks and setups (Postman's "Run Again", GitHub's re-run) ----
+function runAgain(job){const s=job.settings||{};const arms=s.arms||[];
+  const draft={includeBare:arms.some(a=>a.kind==='bare'),tasks:s.tasks||[],models:(s.models||[]).filter(id=>!String(id).startsWith('blueprint.')&&id!=='default-monarch-enterprise'),architectures:s.architectures||[],
+    fields:{'run-track':s.track||'agentic-request','run-title':'','run-budget':s.maximum_usd||'1','run-concurrency':String(s.concurrency||1),'task-set':'custom','architecture-choice':(s.architectures||[])[0]||'without-monarch'}};
+  try{localStorage.setItem('ailabs-run-draft',JSON.stringify(draft));}catch{}
+  runDraftLoaded=false;openLaunch({focusStart:true});}
+window.runAgain=runAgain;
+$('#run-again').onclick=()=>{if(job)runAgain(job);};

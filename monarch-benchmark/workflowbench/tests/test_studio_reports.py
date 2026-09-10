@@ -66,6 +66,16 @@ def test_grade_rules():
     assert report_data.grade(setup(3, 1, cost=0.20), base)["grade"] == "Tradeoff"
     assert report_data.grade(setup(1, 3, cost=0.05), base)["grade"] == "Tradeoff"
     assert report_data.grade(setup(3, 1, comparable=False), base)["grade"] == "Not comparable"
+    # with a recorded sign test the word carries the same certainty as the sentence
+    weak = setup(3, 1); weak["paired"]["p_value"] = 0.625
+    assert report_data.grade(weak, base)["grade"] == "Undecided" and "p = 0.62" in report_data.grade(weak, base)["reason"]
+    strong = setup(9, 0); strong["paired"]["p_value"] = 0.004
+    assert report_data.grade(strong, base)["grade"] == "Improvement"
+    # with a recorded sign test the word carries the same certainty as the sentence
+    weak = setup(3, 1); weak["paired"]["p_value"] = 0.625
+    assert report_data.grade(weak, base)["grade"] == "Undecided" and "p = 0.62" in report_data.grade(weak, base)["reason"]
+    strong = setup(9, 0); strong["paired"]["p_value"] = 0.004
+    assert report_data.grade(strong, base)["grade"] == "Improvement"
     assert report_data.grade(setup(3, 1), None)["grade"] == "Not comparable"
 
 
@@ -92,7 +102,7 @@ def test_rounds_group_runs_on_the_same_frozen_set_and_pool_repetitions(studio):
     report = report_data.round_report(studio, cohort["id"])
     assert report["repetitions"] == 2 and report["standings"][0]["name"] == "Scripted reference" and report["standings"][0]["rank"] == 1
     assert report["standings"][0]["pass_k"]["k"] == 2 and report["standings"][1]["rank"] == 2
-    assert any("not the frozen 50-task benchmark" in c for c in report["caveats"])
+    assert any("not the frozen benchmark of 50 tasks" in c for c in report["caveats"])
     index = report_data.index(studio)
     assert index["rounds"][0]["id"] == cohort["id"] and index["rounds"][0]["best"]["name"] == "Scripted reference"
     assert len(index["rounds"][0]["runs"]) == 2

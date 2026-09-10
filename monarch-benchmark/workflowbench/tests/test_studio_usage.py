@@ -23,3 +23,22 @@ def test_comparison_uses_bound_model_instead_of_architecture_name():
 def test_unattributed_enterprise_usage_does_not_invent_a_model():
     row=report({'model':'enterprise','task':'t','cost_usd':1},{'id':'enterprise','kind':'enterprise'})['rows'][0]
     assert row['model']=='Mixed / unattributed models' and row['attribution']=='mixed'
+
+
+def test_ledger_lines_read_the_week_as_a_person_audits_it(tmp_path):
+    from datetime import datetime, timezone
+    from wb_orchestrator.budget import BudgetLedger
+    from wb_studio.usage import ledger_lines
+    now=datetime(2026,9,9,12,tzinfo=timezone.utc)
+    ledger=BudgetLedger(tmp_path/'budget.sqlite3')
+    ledger.reserve_run('run-1','2.00',now=now,metadata={'source':'studio','operator':'lucas'})
+    ledger.reserve('req-1','0.50',scope_id='run-1',now=now,metadata={})
+    ledger.settle('req-1','0.10',now=now)
+    ledger.reserve('genesis-x','0.25',scope_id='genesis',now=now,metadata={'purpose':'Genesis','model':'m'})
+    studio=SimpleNamespace(ledger=ledger,jobs=lambda:[{'id':'run-1','title':'Two tasks'}],budget=lambda:{'available':'297.65'})
+    out=ledger_lines(studio,now=now)
+    assert out['week_start']=='2026-09-07'
+    run=next(l for l in out['lines'] if l['kind']=='run')
+    assert run['what']=='Two tasks' and run['who']=='lucas' and run['maximum_usd']=='2.00' and run['actual_usd']=='0.10' and run['requests']==1 and run['state']=='open' and run['run']=='run-1'
+    req=next(l for l in out['lines'] if l['kind']=='request')
+    assert req['what']=='Genesis' and req['who']=='Genesis' and req['actual_usd'] is None and req['state']=='open'

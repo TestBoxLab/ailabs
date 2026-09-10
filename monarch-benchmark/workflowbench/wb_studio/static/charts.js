@@ -67,7 +67,35 @@ window.Charts = (() => {
     const plot = el('g', { transform: `translate(${margin.left},${margin.top})`, class: 'plot' }, svg);
     if (options.source) html('p', 'chart-source', figure, options.source);
     if (options.note) html('p', 'chart-note', figure, options.note);
+    takeaway(figure, svg, options);
     return { figure, svg, plot, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom, margin };
+  }
+  // The values behind a figure, as rows a person or a reader can take away.
+  function chartRows(options) {
+    if (Array.isArray(options.rows)) return options.rows.map(r => ({ label: r.label, value: r.value ?? r.median ?? '', low: r.low ?? '', high: r.high ?? '', detail: r.detail ?? (r.parts ? Object.entries(r.parts).map(([k, v]) => k + ' ' + v).join('; ') : '') }));
+    if (Array.isArray(options.points)) return options.points.map(p => ({ label: p.label, value: p.y, low: p.low ?? '', high: p.high ?? '', detail: 'x ' + p.x }));
+    if (Array.isArray(options.groups)) return options.groups.flatMap(g => (g.values || []).map(v => ({ label: g.label + (v.label && v.label !== g.label ? ' / ' + v.label : ''), value: v.value, low: '', high: '', detail: '' })));
+    if (Array.isArray(options.series)) return options.series.flatMap(s => (s.points || []).map(p => ({ label: s.label + ' / ' + (p.x ?? ''), value: p.y, low: p.low ?? '', high: p.high ?? '', detail: p.run || '' })));
+    if (Array.isArray(options.lanes)) return options.lanes.flatMap(l => (l.spans || []).map(s => ({ label: l.label, value: s.end - s.start, low: s.start, high: s.end, detail: s.label || s.status || '' })));
+    return [];
+  }
+  function takeaway(figure, svg, options) {
+    const rows = chartRows(options);
+    if (!rows.length) return;
+    // A table sized 1px still lays out at its content width; the wrapper is what stays out of the flow.
+    const table = html('table', 'chart-data', html('div', 'sr-only', figure));
+    const caption = html('caption', null, table, options.title || 'Figure data');
+    const head = html('tr', null, html('thead', null, table));
+    for (const h of ['Label', 'Value', 'Low', 'High', 'Detail']) html('th', null, head, h);
+    const body = html('tbody', null, table);
+    for (const r of rows) { const tr = html('tr', null, body); for (const v of [r.label, r.value, r.low, r.high, r.detail]) html('td', null, tr, v === null || v === undefined ? '' : String(v)); }
+    caption.textContent = options.title || 'Figure data';
+    const bar = html('p', 'chart-take', figure);
+    const name = String(options.title || options.kind || 'figure').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'figure';
+    const link = (label, make, type, ext) => { const a = html('a', null, bar, label); a.href = '#'; a.onclick = e => { e.preventDefault(); const blob = new Blob([make()], { type }); const url = URL.createObjectURL(blob); const d = document.createElement('a'); d.href = url; d.download = name + ext; d.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }; return a; };
+    link('Download SVG', () => { const clone = svg.cloneNode(true); clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); const sheet = [...document.styleSheets].filter(s => (s.href || '').endsWith('/charts.css') || (s.href || '').endsWith('/tokens.css')).map(s => { try { return [...s.cssRules].map(r => r.cssText).join('\n'); } catch { return ''; } }).join('\n'); const style = document.createElementNS(NS, 'style'); style.textContent = sheet; clone.insertBefore(style, clone.firstChild); return new XMLSerializer().serializeToString(clone); }, 'image/svg+xml', '.svg');
+    html('span', 'sep', bar, '·');
+    link('Download CSV', () => ['label,value,low,high,detail', ...rows.map(r => [r.label, r.value, r.low, r.high, r.detail].map(v => '"' + String(v === null || v === undefined ? '' : v).replace(/^[=+@\-]/, "'$&").replaceAll('"', '""') + '"').join(','))].join('\r\n'), 'text/csv;charset=utf-8', '.csv');
   }
   function axisBottom(plot, scale, height, format, label, integers = false) {
     const g = el('g', { class: 'axis axis-x', transform: `translate(0,${height})` }, plot);
@@ -160,8 +188,9 @@ window.Charts = (() => {
   // Vertical columns grouped by category; used by Budget for tokens and cost per model.
   function columns(options) {
     const groups = options.groups || [];
-    const f = frame({ ...options, kind: 'columns', height: options.height || 260, margin: { top: 28, right: 16, bottom: 56, left: 56 } });
     const max = Math.max(1e-9, ...groups.flatMap(g => g.values.map(v => v.value || 0)));
+    const empty = !groups.length || max <= 1e-9;
+    const f = frame({ ...options, kind: 'columns', height: options.height || (empty ? 96 : 260), margin: { top: 28, right: 16, bottom: 56, left: 56 } });
     if (!groups.length || max <= 1e-9) { el('text', { x: f.width / 2, y: f.height / 2, 'text-anchor': 'middle', class: 'empty-mark' }, f.plot, options.empty || 'Nothing recorded yet'); return f.figure; }
     const y = linear([0, max * 1.15], [f.height, 0]);
     axisLeft(f.plot, y, f.width, options.format || compact, options.yLabel || '');
@@ -245,13 +274,17 @@ window.Charts = (() => {
   // 9. Timeline of tool calls by node over the attempt.
   function timeline(options) {
     const lanes = options.lanes || [], rowHeight = 26;
-    const f = frame({ ...options, kind: 'timeline', height: lanes.length * rowHeight + 44, margin: { top: 6, right: 24, bottom: 34, left: options.labelWidth || 150 } });
-    const end = Math.max(1, options.end || Math.max(...lanes.flatMap(l => l.spans.map(s => s.end))));
+    const labelWidth = options.labelWidth || 200, chars = Math.max(10, Math.floor(labelWidth / 7));
+    const f = frame({ ...options, kind: 'timeline', height: lanes.length * rowHeight + 44, margin: { top: 6, right: 24, bottom: 34, left: labelWidth } });
+    const last = Math.max(0.05, ...lanes.flatMap(l => l.spans.map(s => s.end)));
+    const end = Math.max(0.05, Math.min(options.end || last, last * 1.05) || last);
     const x = linear([0, end], [0, f.width]);
-    axisBottom(f.plot, x, lanes.length * rowHeight, v => v.toFixed(1) + 's', 'seconds since the attempt started');
+    axisBottom(f.plot, x, lanes.length * rowHeight, v => (end < 2 ? v.toFixed(2) : v.toFixed(1)) + 's', 'seconds since the attempt started');
     lanes.forEach((lane, i) => {
       const y = i * rowHeight, g = el('g', { class: 'lane' }, f.plot);
-      rowLabel(g, y + rowHeight / 2 + 4, lane.label);
+      const label = String(lane.label || ''), shown = label.length > chars ? label.slice(0, Math.max(3, Math.floor(chars / 2) - 1)) + '…' + label.slice(-Math.floor(chars / 2)) : label;
+      rowLabel(g, y + rowHeight / 2 + 4, shown);
+      if (shown !== label) el('title', {}, g, label);
       for (const span of lane.spans) {
         const s = el('rect', { x: x(span.start), y: y + 6, width: Math.max(2, x(span.end) - x(span.start)), height: rowHeight - 12, class: 'span ' + (span.status || 'observed') }, g);
         el('title', {}, s, (span.label || '') + ' ' + span.start.toFixed(2) + 's – ' + span.end.toFixed(2) + 's');
@@ -313,5 +346,31 @@ window.Charts = (() => {
     return figure;
   }
 
-  return { dotWhisker, scatter, bars, columns, strips, waterfall, trend, timeline, matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
+  // A figure drawn at 720 units scales like a picture on a phone. Each row chart
+  // remembers how it was asked for and is drawn again at the width of its column,
+  // with a shorter label gutter, so the type stays the type.
+  const asked = new WeakMap();
+  let observer = null;
+  const trimLabel = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s; };
+  function refit(figure) {
+    const rec = asked.get(figure); if (!rec || !figure.isConnected) return;
+    const available = Math.round(figure.getBoundingClientRect().width); if (!available) return;
+    const wanted = Math.max(300, Math.min(rec.options.width || 720, available));
+    if (String(wanted) === figure.dataset.fitWidth) return;
+    const labelWidth = Math.min(rec.options.labelWidth || 190, Math.round(wanted * 0.4)), chars = Math.max(8, Math.floor(labelWidth / 7));
+    const options = { ...rec.options, width: wanted, labelWidth };
+    if (Array.isArray(options.rows) && wanted < (rec.options.width || 720)) options.rows = options.rows.map(row => ({ ...row, label: trimLabel(row.label, chars), sub: row.sub ? trimLabel(row.sub, chars) : row.sub }));
+    const next = rec.fn(options, true);
+    next.dataset.fitWidth = String(wanted);
+    asked.set(next, rec); figure.replaceWith(next); observer.observe(next);
+  }
+  const fitted = fn => function (options, again) {
+    const figure = fn(options);
+    if (again || !(figure instanceof Element) || !('ResizeObserver' in window)) return figure;
+    asked.set(figure, { fn, options });
+    if (!observer) observer = new ResizeObserver(entries => { for (const e of entries) refit(e.target); });
+    observer.observe(figure);
+    return figure;
+  };
+  return { dotWhisker: fitted(dotWhisker), scatter: fitted(scatter), bars: fitted(bars), columns: fitted(columns), strips: fitted(strips), waterfall: fitted(waterfall), trend: fitted(trend), timeline: fitted(timeline), matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
 })();

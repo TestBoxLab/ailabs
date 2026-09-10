@@ -55,6 +55,7 @@ def fake_turn(genesis, turn):
 def test_drop_classifies_link_run_id_and_free_text(genesis, monkeypatch):
     genesis.studio.jobs.return_value = JOBS
     monkeypatch.setattr('wb_studio.genesis_watcher.fetch_page', lambda url, timeout=10: ('Attention is all you need', 'Abstract text') if 'arxiv' in url else (None, ''))
+    monkeypatch.setattr('wb_studio.genesis_ingest.fetch_source', lambda url, timeout=20: {'title': 'Attention is all you need', 'text': 'Full text', 'kind': 'paper', 'note': 'Abstract text'} if 'arxiv' in url else {'title': None, 'text': '', 'kind': 'other', 'note': ''})  # feature 022: a drop fetches the whole source, never the network in tests
     source = genesis.drop({'text': 'https://arxiv.org/abs/1706.03762'})
     record = genesis.library.read(source['evidence'][0]['id'])
     assert source['kind'] == 'source' and source['title'] == 'Attention is all you need'
@@ -67,8 +68,8 @@ def test_drop_classifies_link_run_id_and_free_text(genesis, monkeypatch):
     assert run['evidence'] == [{'kind': 'run', 'id': 'run-7'}]
     text = genesis.drop({'text': 'Monarch fails on pagination\nbecause the graph lacks cursors', 'auto': False})
     assert text['kind'] == 'hypothesis' and text['title'] == 'Monarch fails on pagination' and text['body'].endswith('cursors')
-    assert text['auto'] is False and text['evidence'] == []
-    for card, kind in ((source, 'source'), (run, 'run'), (text, 'hypothesis')):
+    assert text['auto'] is False and text['evidence'] == [] and text['work'] is None  # not for Genesis: filed, never queued
+    for card, kind in ((source, 'source'), (run, 'run')):
         assert card['stage'] == 'research' and card['work']['status'] == 'queued' and card['work']['queued_at']
         assert card['question'] == (QUESTIONS[kind] if card is not run else 'Why did task 3 fail?')
     assert source['auto'] is True and run['auto'] is True
@@ -124,7 +125,7 @@ def test_one_wake_works_one_card_and_the_next_wake_takes_the_next(genesis, monke
     second = genesis.drop({'text': 'Second hypothesis'})
     turn = genesis.watcher.wake()
     assert turn['card'] == first['id'] and turn['maximum_usd'] == '0.50' and turn['model'] == 'gemini-3.7-flash'
-    assert 'First hypothesis' in turn['message'] and QUESTIONS['hypothesis'] in turn['message'] and 'Never launch' in turn['message']
+    assert 'First hypothesis' in turn['message'] and QUESTIONS['hypothesis'] in turn['message'] and 'propose_experiment' in turn['message'] and 'Smoke scale is at most 20' in turn['message']
     reservation = genesis.studio.ledger.run_reservation('genesis-' + turn['id'])
     assert reservation.metadata['purpose'] == 'Genesis watcher' and reservation.maximum_usd == Decimal('0.50')
     done = genesis.read('cards', first['id'])
@@ -220,7 +221,7 @@ def test_routes_drop_status_pause_and_stop(tmp_path, monkeypatch):
         assert card['kind'] == 'hypothesis' and card['work']['status'] == 'queued'
         status, _, body = request(port, 'GET', '/api/genesis/watcher')
         assert status == 200
-        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None}
+        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None, 'interval_s': 30}
         assert json.loads(request(port, 'GET', '/api/genesis')[2])['watcher']['queue'] == [card['id']]
         status, _, body = request(port, 'POST', '/api/genesis/watcher', json.dumps({'paused': True}), headers)
         assert status == 200 and json.loads(body)['paused'] is True

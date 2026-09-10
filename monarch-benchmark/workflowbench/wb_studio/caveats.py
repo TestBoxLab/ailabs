@@ -70,7 +70,9 @@ def for_run(job, m, narrative=None, hidden=(), audience="public", reused=None) -
         out.append("Costs are settled from provider receipts at each model's recorded price table; cached and uncached tokens are priced separately.")
     if narrative:
         if narrative.get("status") == "pending":
-            out.append("Analysis pending: " + str(narrative.get("reason") or "the analysis has not run yet."))
+            reason = str(narrative.get("reason") or "the analysis has not run yet.")
+            # Nothing to interpret is a state, not a wait.
+            out.append(("No model analysis: " if "nothing to interpret" in reason.lower() else "Analysis pending: ") + reason)
         elif narrative.get("status") == "failed":
             out.append("The model interpretation did not complete; only the recorded verdicts and counts appear here.")
         elif narrative.get("status") == "completed":
@@ -84,7 +86,7 @@ def for_round(cohort, hidden=()) -> list[str]:
     if len(runs) > 1:
         out.append(f"Figures combine {len(runs)} runs on the same frozen task set; setups that ran more than once are pooled.")
     if not cohort.get("full_benchmark"):
-        out.append("This task set is not the frozen 50-task benchmark; standings here do not count for the leaderboard.")
+        out.append("This task set is not the frozen benchmark of 50 tasks, so these standings do not count for the leaderboard.")
     if hidden:
         out.append(f"{len(hidden)} setup{'s' if len(hidden) != 1 else ''} internal-only, hidden from the public view.")
     if not cohort.get("baseline"):

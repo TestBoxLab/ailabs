@@ -73,5 +73,5 @@ def test_fonts_are_served_locally():
     tokens = (STATIC / "tokens.css").read_text(encoding="utf-8")
     for url in re.findall(r"url\(([^)]+)\)", tokens):
         url = url.strip("\"'")
-        assert url.startswith("/vendor/plex/"), url
+        assert url.startswith(("/vendor/plex/", "/vendor/newsreader/")), url
         assert (STATIC / url.lstrip("/")).is_file(), url

@@ -767,7 +767,26 @@ def handler(studio):
             host = self.headers.get("Host", "").lower()
             origin = self.headers.get("Origin")
             return host in allowed and (not origin or origin in ("http://" + host, "https://" + host)) and (
-                not write or self.headers.get("X-Studio-Token") == studio.token)
+                not write or self.headers.get("X-Studio-Token") == studio.token or self.person() is not None)
+
+        def person(self):
+            """The person named by the X-Person-Key header, or None (feature 022, lane B)."""
+            try:
+                return studio.genesis.access.person_for_key(self.headers.get("X-Person-Key"))
+            except Exception:
+                return None
+
+        def send_text(self, text, content_type="text/plain; charset=utf-8", status=200, filename=None):
+            data = str(text).encode("utf8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if filename:
+                self.send_header("Content-Disposition", 'attachment; filename="' + filename + '"')
+            self.end_headers()
+            self.wfile.write(data)
 
         def authorised(self) -> bool:
             """HTTP Basic Auth, on when STUDIO_AUTH_USER and STUDIO_AUTH_PASSWORD are both set (the hosted Studio)."""
@@ -864,6 +883,9 @@ def handler(studio):
                     return self.send_json(task_sets(studio, ROOT))
                 if url.path == "/api/budget":
                     return self.send_json(studio.budget())
+                if url.path == "/api/budget/ledger":
+                    from wb_studio.usage import ledger_lines
+                    return self.send_json(ledger_lines(studio))
                 if url.path == "/api/runtime":
                     state = studio.runtime.snapshot()
                     if studio.coordinator is not None:
@@ -946,7 +968,8 @@ def handler(studio):
                         report_job = studio.job(identity)
                         report = outcome_report(report_job, studio.events(identity), studio.tasks, studio.directory / identity / "results.sqlite3")
                         analysis = studio.directory / identity / "analysis.json"
-                        report["analysis"] = json.loads(analysis.read_text(encoding="utf-8")) if analysis.exists() else None
+                        report["analysis"] = (json.loads(analysis.read_text(encoding="utf-8")) if analysis.exists()
+                                              else {"status": "pending"} if (studio.directory / identity / "analysis.claimed").exists() else None)
                         return self.send_json(report)
                     cursor = int(self.headers.get("Last-Event-ID") or parse_qs(url.query).get("after", ["0"])[0])
                     studio.job(identity)
@@ -975,6 +998,11 @@ def handler(studio):
                     return self.send_json(build(studio, report_match[2], self.audience(url)))
                 if url.path == '/api/genesis': return self.send_json(studio.genesis.state())
                 if url.path == '/api/genesis/schedule': return self.send_json({'jobs': studio.scheduler.status()})
+                thread_match=re.fullmatch(r'/api/genesis/threads/([a-zA-Z0-9_-]+)',url.path)
+                if thread_match: return self.send_json(studio.genesis.thread(thread_match[1]))
+                if url.path == '/api/genesis/threads': return self.send_json({'threads':studio.genesis.threads()})
+                history_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/history',url.path)
+                if history_match: return self.send_json({'history':studio.genesis.card_history(history_match[1])})
                 genesis_match=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)',url.path)
                 if genesis_match: return self.send_json(studio.genesis.read('turns',genesis_match[1]))
                 if url.path == '/api/genesis/library':
@@ -984,11 +1012,45 @@ def handler(studio):
                 if library_match: return self.send_json(studio.genesis.library.read(library_match[1]))
                 if url.path == '/api/genesis/memory':
                     card=parse_qs(url.query).get('card',[None])[0]
-                    return self.send_json({**studio.genesis.memory.read(card),'history':studio.genesis.memory.history_tail(50),'access':studio.genesis.memory.access_stats()})
+                    from wb_studio import genesis_memory_suite
+                    return self.send_json({**studio.genesis.memory.read(card),'history':studio.genesis.memory.history_tail(50),'access':studio.genesis.memory.access_stats(),'changed':genesis_memory_suite.what_changed(studio.genesis,20),'track':genesis_memory_suite.track(studio.genesis),'eval':genesis_memory_suite.eval_status(studio.genesis)})
                 if url.path == '/api/genesis/record':
                     query=parse_qs(url.query)
                     return self.send_json({'hits':studio.genesis.memory.search(query.get('q',[''])[0],query.get('limit',['10'])[0])})
                 if url.path == '/api/genesis/watcher': return self.send_json(studio.genesis.watcher.status())
+                if url.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.read())
+                if url.path == '/api/genesis/people':
+                    person=self.person()
+                    return self.send_json({'people':studio.genesis.access.people(),'me':person,'anyone':studio.genesis.access.anyone()})
+                person_file=re.fullmatch(r'/api/genesis/people/([a-z0-9._-]+)/file',url.path)
+                if person_file:
+                    from wb_studio import genesis_people
+                    return self.send_json(genesis_people.read(studio.genesis,person_file[1]))
+                if url.path == '/api/genesis/settings':
+                    from wb_studio.usage import ledger_lines
+                    access=studio.genesis.access
+                    return self.send_json({**access.settings(),'envelope':access.envelope(ledger_lines(studio)['lines']),'channels':access.channels()})
+                if url.path == '/api/genesis/channels': return self.send_json(studio.genesis.access.channels())
+                if url.path == '/api/genesis/digest':
+                    from wb_studio import genesis_channels
+                    from datetime import date
+                    week=parse_qs(url.query).get('week',[None])[0] or date.today().strftime('%G-W%V')
+                    if not re.fullmatch(r'\d{4}-W\d{2}',week): raise ValueError('Name the week as YYYY-Www, like 2026-W37.')
+                    return self.send_json(genesis_channels.digest(studio.genesis,week))
+                patch_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/patch',url.path)
+                if patch_match:
+                    from wb_studio import genesis_patch
+                    return self.send_text(genesis_patch.export_patch(studio.genesis,studio.genesis.read('cards',patch_match[1])),'text/x-patch; charset=utf-8',filename='genesis-'+patch_match[1][:12]+'.patch')
+                if url.path == '/api/genesis/config':
+                    from wb_studio.genesis_harness import model_routes
+                    routes=model_routes()
+                    return self.send_json({**studio.genesis.config.read(),'effective':studio.genesis.config.effective(routes),'routes':routes})
+                if url.path == '/api/genesis/skills': return self.send_json({'skills':studio.genesis.skills.listing()})
+                skill_match=re.fullmatch(r'/api/genesis/skills/([a-z0-9-]+)',url.path)
+                if skill_match: return self.send_json(studio.genesis.skills.read(skill_match[1]))
+                if url.path == '/api/genesis/activity':
+                    q=parse_qs(url.query)
+                    return self.send_json({'entries':studio.genesis.autonomy.tail(int(q.get('limit',['100'])[0]),q.get('card',[None])[0])})
                 if url.path == '/api/genesis/code-index':
                     from wb_studio.code_index import code_status
                     return self.send_json(code_status(studio))
@@ -1058,6 +1120,25 @@ def handler(studio):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("Expected an object")
+                if self.path.startswith('/api/genesis/'):
+                    person=self.person();access=studio.genesis.access
+                    admin_only=self.path in ('/api/genesis/config','/api/genesis/autonomy','/api/genesis/settings','/api/genesis/people','/api/genesis/skills') or self.path.endswith('/remove')
+                    ok,why=access.may_write(person,admin_only=admin_only)
+                    if not ok: return self.send_json({'error':why},403)
+                    if person: payload['by']='human:'+person['name']
+                    who=payload.get('by') or 'human:studio'
+                    if self.path == '/api/genesis/people':
+                        out=access.add(payload.get('name'),payload.get('role','member'),by=who);studio.genesis.autonomy.record('person',name=out['name'],role=out['role'],by=who);return self.send_json(out,201)
+                    person_remove=re.fullmatch(r'/api/genesis/people/([a-z0-9._-]+)/remove',self.path)
+                    if person_remove:
+                        out=access.remove(person_remove[1]);studio.genesis.autonomy.record('person-removed',name=person_remove[1],by=who);return self.send_json(out)
+                    person_file=re.fullmatch(r'/api/genesis/people/([a-z0-9._-]+)/file',self.path)
+                    if person_file:
+                        from wb_studio import genesis_people
+                        if person and person['role']!='admin' and person['name']!=person_file[1]: return self.send_json({'error':'A member edits only their own file.'},403)
+                        return self.send_json(genesis_people.write(studio.genesis,person_file[1],payload.get('text',''),by=who))
+                    if self.path == '/api/genesis/settings':
+                        out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out);return self.send_json(out)
                 if self.path == '/api/genesis/chat': return self.send_json(studio.genesis.chat(payload),201)
                 schedule_run=re.fullmatch(r'/api/genesis/schedule/([a-z0-9-]+)/run',self.path)
                 if schedule_run: return self.send_json(studio.scheduler.run(schedule_run[1]))
@@ -1071,6 +1152,20 @@ def handler(studio):
                 if self.path == '/api/genesis/memory': return self.send_json(studio.genesis.memory.edit(payload))
                 if self.path == '/api/genesis/drop': return self.send_json(studio.genesis.drop(payload),201)
                 if self.path == '/api/genesis/watcher': studio.genesis.watcher.pause(payload.get('paused'));return self.send_json(studio.genesis.watcher.status())
+                if self.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.set(payload,by=payload.get('by') or 'human:studio'))
+                if self.path == '/api/genesis/config':
+                    out=studio.genesis.config.set(payload);studio.genesis.autonomy.record('config',by=payload.get('by') or 'human:studio',models=out['models']);return self.send_json(out)
+                if self.path == '/api/genesis/skills':
+                    if payload.get('remove'): out=studio.genesis.skills.remove(payload.get('name'));studio.genesis.autonomy.record('skill-removed',name=out['name'],by='human:studio');return self.send_json(out)
+                    out=studio.genesis.skills.write(payload.get('name'),payload.get('text'));studio.genesis.autonomy.record('skill',name=out['name'],size=out['size'],by='human:studio');return self.send_json(out)
+                genesis_answer=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/answer',self.path)
+                if genesis_answer: return self.send_json(studio.genesis.answer_question(genesis_answer[1],payload))
+                genesis_decline=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/decline',self.path)
+                if genesis_decline: return self.send_json(studio.genesis.decline(genesis_decline[1],payload))
+                genesis_work=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/work',self.path)
+                if genesis_work: return self.send_json(studio.genesis.work_now(genesis_work[1]),201)
+                turn_stop=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/stop',self.path)
+                if turn_stop: return self.send_json(studio.genesis.stop_turn(turn_stop[1]))
                 genesis_stop=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/stop',self.path)
                 if genesis_stop: return self.send_json(studio.genesis.stop_work(genesis_stop[1]))
                 if self.path == '/api/genesis/code-index/refresh': return self.send_json(studio.scheduler.run('code-index'))

@@ -95,7 +95,7 @@ def test_index_has_evidence_tabs_and_runs_table_counts():
     assert names == ["Output", "Checks", "Trace", "Timeline"]
     header = re.search(r'<thead><tr><th scope="col">Run</th>(.*?)</tr></thead>', html).group(1)
     assert "Turns" in header and "Violations" in header
-    assert "Actions taken" in html
+    assert '<th class="num">Actions</th>' in html
 
 
 def test_static_scripts_name_events_by_what_they_show():
@@ -103,4 +103,4 @@ def test_static_scripts_name_events_by_what_they_show():
     app = (STATIC / "app.js").read_text(encoding="utf-8")
     assert "'Event '+id" not in workspace and "Evidence #" not in app
     assert "function eventLabel" in app
-    assert "No runs yet." in workspace and "empty-state" in workspace
+    assert "No runs yet" in workspace and "empty-state" in workspace

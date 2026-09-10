@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import platform
 import tempfile
+import time
 import threading
 
 
@@ -60,9 +61,22 @@ def _atomic_text(path: Path, text: str) -> None:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        _replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def _replace(temporary, path) -> None:
+    """Atomic replacement. On Windows a reader that still holds the target open makes
+    os.replace raise PermissionError for a moment; the write waits it out."""
+    for attempt in range(40):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 39:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def write_json(path: Path, value) -> None:
