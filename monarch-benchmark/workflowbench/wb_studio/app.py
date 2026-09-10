@@ -232,6 +232,8 @@ class Studio:
     def pause(self, identity):
         with self.lock:
             job = self.job(identity)
+            if job.get("config_source"):
+                raise ValueError("Repository plan runs do not support pause; cancel drains active attempts")
             if job["status"] not in ("queued", "running"):
                 raise ValueError("Only queued or running runs can be paused")
             if not job.get("pause_requested"):
@@ -577,6 +579,9 @@ class Studio:
 
     def _execute(self, identity):
         job = self.job(identity)
+        if job.get("config_source"):
+            from wb_studio.benchmark_config import execute
+            return execute(self, identity)
         if job["status"] not in ("queued", "cancelling") or (job.get("pause_requested") and job["status"] == "queued"):
             return
         try:
@@ -871,6 +876,12 @@ def handler(studio):
                 return self.send_json({"error": "Origin refused"}, 403)
             url = urlsplit(self.path)
             try:
+                if url.path == "/api/benchmark-config":
+                    from wb_studio.benchmark_config import catalog
+                    try:
+                        return self.send_json(catalog(studio))
+                    except ValueError as exc:
+                        return self.send_json({"error": str(exc)}, getattr(exc, "status", 400))
                 diagnostics_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/diagnostics", url.path)
                 if diagnostics_match:
                     from wb_studio.failure_analysis import analysis
@@ -1115,11 +1126,20 @@ def handler(studio):
                 return self.send_json({"error": "Origin or session refused"}, 403)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 131072:
+                limit = 16_777_216 if self.path.startswith("/api/benchmark-config/") else 131072
+                if not 0 < length <= limit:
                     raise ValueError("Request too large")
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("Expected an object")
+                if self.path.startswith("/api/benchmark-config/"):
+                    from wb_studio.benchmark_config import dispatch
+                    try:
+                        return self.send_json(dispatch(studio, self.path.rsplit("/", 1)[-1], payload, self.person()))
+                    except PermissionError as exc:
+                        return self.send_json({"error": str(exc)}, 403)
+                    except ValueError as exc:
+                        return self.send_json({"error": str(exc)}, getattr(exc, "status", 400))
                 if self.path.startswith('/api/genesis/'):
                     person=self.person();access=studio.genesis.access
                     admin_only=self.path in ('/api/genesis/config','/api/genesis/autonomy','/api/genesis/settings','/api/genesis/people','/api/genesis/skills') or self.path.endswith('/remove')
