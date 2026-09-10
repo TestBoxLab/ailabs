@@ -70,11 +70,17 @@ def free(port: int) -> None:
     s.close()
 
 
-def monarch_site(site, kb=KB, monarch_repo=None):
-    """The `site` fixture with a runnable Monarch competitor, its price table and its kb file."""
+def monarch_site(site, kb=KB, monarch_repo=None, port=9105):
+    """The `site` fixture with a runnable Monarch competitor, its price table and its kb file.
+
+    Tests rewrite the harness to 127.0.0.1:<port>, so the knowledge base is written
+    naming the same door: `wb monarch verify` refuses a probe whose environment and
+    seeds disagree, which is the defect that check exists to catch.
+    """
     runnable_monarch(site, modes="[create-run]", monarch_repo=monarch_repo)
     write(site / "config/models", PRICE_TABLE)
     if kb is not None:
+        kb = kb.replace("http://host.docker.internal:9105", f"http://127.0.0.1:{port}")
         (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(kb)
     return site
 
@@ -87,7 +93,7 @@ def resolve_monarch(site, env=MONARCH_ENV):
 
 def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None):
     """A Monarch arm whose harness points at the fakes on their real ports."""
-    monarch_site(site, kb=kb, monarch_repo=str(repo))
+    monarch_site(site, kb=kb, monarch_repo=str(repo), port=port)
     text = (site / "config/harnesses/monarch.yaml").read_text()
     text = (edit(text, "base_url", fake.url)
             .replace("shim_port: 9105", f"shim_port: {port}")
