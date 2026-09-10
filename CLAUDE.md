@@ -36,7 +36,7 @@ audience rules are code; config hash per run; API-key billing only.
 
 **Where things stand (2026-09-03, evening):** repo at
 `C:\Users\cgmat\Desktop\TestBox\ailabs` (off OneDrive; moved twice on 3 Sep, see
-`monarch-benchmark/docs/HANDOFF-2026-09-03.md`). `main` pushed to `origin` on 3 Sep;
+`monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` §10). `main` pushed to `origin` on 3 Sep;
 the GitHub repo is public. 199 tests green. Feature 001, declarative benchmark
 configuration, is merged: `wb run --product --plan`, inputs in `workflowbench/config/`,
 approval gate and cost ceiling in code. Two smoke runs (`smoke-frontier-001`, `-002`)
@@ -47,7 +47,7 @@ real Monarch competitor in `wb_arms/monarch.py`, doctor checks, report source
 line. Live gates T053–T057 in `specs/002-monarch-create-run/tasks.md` are
 pending: Monarch running (locally, or on Railway with a public host for the
 front door), `bedrock:InvokeModel` for Carlos's AWS roles, and the Monarch-side
-telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`. Feature 004
+telemetry PR. See `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md`. Feature 004
 (Monarch in run-only mode: `wb monarch recipes`, one known-correct recipe per
 task, the engine measured alone) is specified and planned on 4 Sep —
 `specs/004-monarch-run-only/`, documents only, no code yet. Feature 005 (task
@@ -184,12 +184,15 @@ each stage hands its artifact to the next:
 | `specs/002-monarch-create-run/` | Feature 002: Monarch as a competitor, create + run mode; spec, plan, tasks, `contracts/` (config-files, cli, monarch-telemetry). In progress on branch `002-monarch-create-run`. |
 | `specs/004-monarch-run-only/` | Feature 004: Monarch in run-only mode — one known-correct recipe per task, the engine measured alone; spec, plan, tasks, `contracts/` (cli, config-files). Documents only so far; design of record `docs/superpowers/specs/2026-09-04-monarch-run-only-design.md`. |
 | `specs/005-task-tiers/` | Feature 005: the six scored AutomationBench domains in the corpus, and four task sets drawn by difficulty tier; `contracts/` holds the CLI and config-file contracts. Documents only so far; design of record `docs/superpowers/specs/2026-09-04-task-tiers-design.md`. |
-| `workflowbench/tasks/tier-simple/`, `tier-medium/`, `tier-complex/`, `random-10/` | The four frozen task sets, ten prompts each, drawn by `wb corpus tiers` from a recorded seed (feature 005, not yet drawn). |
+| `workflowbench/tasks/tier-simple/`, `tier-medium/`, `tier-complex/`, `random-10/` | The four frozen task sets, ten prompts each, drawn by `wb corpus tiers` with seed 20260904 on 4 Sep 2026; approval rules re-derived 6 Sep and again 9–10 Sep, so 23 of the 40 hashes moved. Round sheet: `monarch-benchmark/docs/rounds/tier-rounds.md`. |
+| `workflowbench/tasks/achievable-50/` | The 50-task gauntlet set (ApplicationBench `achievable50` slate), frozen 8 Sep 2026 on corpus revision `1.0.6+evalrepair.10`. |
 | `workflowbench/tasks/tiers-manifest.yaml` | How the four sets were chosen: the difficulty measure, the cut points, the seed and every drawn task's score, tier, domain and hash (feature 005). |
 | `specs/006-html-report/` | Feature 006: the round's official report as an HTML page with real tables, and `wb summary` across rounds; `contracts/report.md` holds every table, column and formula. Documents only so far; design of record `docs/superpowers/specs/2026-09-04-html-report-design.md`. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
-| `monarch-benchmark/docs/HANDOFF-2026-09-03.md` | Resume-here note: repo move, feature 001, next steps. |
-| `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Previous handoff: background and standing rules. |
+| `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` | Resume-here note: where things stand, what is blocked, what is next. Replaces the three handoffs of 2, 3 and 8 Sep. |
+| `monarch-benchmark/docs/HOW-WORKFLOWBENCH-WORKS.md` | The guide to the machine: what an attempt is, the two judges, how a round reads. |
+| `monarch-benchmark/docs/BOUNDARY-BENCH-AND-MONARCH.md` | Who describes what data, where the mock is the truth, what each side asks of the other (settled 9 Sep 2026). |
+| `docs/AI-LABS-UNBLOCK-PLAN-2026-09-08.md` (repo root) | The milestone plan M0–M8 to the 50-task gauntlet; decisions D1–D11. |
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
@@ -229,7 +232,7 @@ each stage hands its artifact to the next:
 ## Key references
 
 - **PLAN.md** — `monarch-benchmark/PLAN.md`. The single tracking surface.
-- **Handoff** — `monarch-benchmark/docs/HANDOFF-2026-09-02.md`.
+- **State of the program** — `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md`.
 - **Smoke report** — `workflowbench/out/report-smoke-frontier-001-internal.md`.
 - **Monarch authoring endpoint** — `POST /api/workflows/recipe/runs {goal}`,
   session auth; knowledge base via Feature Discovery's `api_spec` handler.
