@@ -1,6 +1,6 @@
 # Tier-simple: hosted launch and operational continuation
 
-Status at 21:49 UTC: **running**, not a completed benchmark report.
+Status at 21:55 UTC: **running**, not a completed benchmark report.
 Operator and continuation authorization: Carlos, 10 September 2026.
 
 ## Identity and original launch
@@ -78,6 +78,14 @@ Continuation began **21:47:52 UTC (18:47 São Paulo)**. At 21:49 UTC the job was
 running with 94 rows: 90 completed originals and four documented interruptions.
 New Drive API calls returned HTTP 200 through the hosted front door. The original
 90 rows and all four interrupted evidence trees were verified byte-identical.
+
+At **21:54:39 UTC**, the first resumed attempt, `finance.audit_sample_selection`,
+finished `completed` and **passed**, with six world changes and USD 2.159729 in
+additional spend. Its evidence manifest verified without errors. Total recorded
+run spending became USD 17.16424921. The invoice task had already started next.
+The UI refreshed the existing row and total automatically; the row count remained
+94 because the recovered result replaced its temporary interruption record.
+The local CSV and SQLite copies were explicitly refreshed after this success.
 
 ## Verification and access
 
