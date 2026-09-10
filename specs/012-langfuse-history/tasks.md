@@ -12,5 +12,8 @@
   review completed; remaining exporter review was performed locally after
   delegated agents hit their usage limit. Official v4 review caught and fixed
   unsafe exported-span updates and blind retries.
-- [ ] T007 Run detached full tests and CI corpus validation; refresh Graphify,
+- [x] T007 Run detached full tests and CI corpus validation; refresh Graphify,
   update evidence/PR description, commit, push and wait for GitHub CI.
+  Final code: GitHub run 34510275623, 2,096 passed and nine skipped; both
+  corpus checks passed. Windows transport limitation and live delivery/recovery
+  evidence are in docs/rounds/2026-09-10-pr3-ci-and-langfuse.md under monarch-benchmark.

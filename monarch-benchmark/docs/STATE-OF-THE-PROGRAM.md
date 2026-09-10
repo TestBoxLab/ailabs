@@ -407,7 +407,12 @@ read-side confirmation, never a blind retry. CLI commands are documented in
 `workflowbench/config/README.md`. This does not certify provider invoices,
 merge local/hosted ledgers, backfill history automatically or deploy Studio.
 
-The final focused group passed 51 tests; both CI corpus checks passed. A real
-zero-cost telemetry span was delivered and read from Langfuse without calling a
-model. Full local/remote validation and the final merge-readiness outcome are
-tracked in [the session record](rounds/2026-09-10-pr3-ci-and-langfuse.md).
+The final code passed 2,096 tests with nine skips in Ubuntu CI; both corpus
+checks passed. The focused group passed 51 tests. Live zero-cost telemetry and
+read-side delivery recovery were verified without calling a model. The earlier
+Windows run found five cases fixed by the final code plus a Studio transport
+failure (`WinError 10053`) that remains local and also occurred in isolation;
+the corresponding test passes in Ubuntu. No assertion was weakened for it.
+Commits and pushes are complete, and PR #3 has no conflicts with current main.
+Merge and the subsequent hosted Studio deployment remain human operational
+steps. [Final evidence](rounds/2026-09-10-pr3-ci-and-langfuse.md).

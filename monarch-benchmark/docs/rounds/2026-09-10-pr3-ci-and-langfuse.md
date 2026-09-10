@@ -79,6 +79,41 @@ reproduces `41769e05aa5618a9`; the documented successor price table produces
 row was added to the existing pricing transition record. No input was changed
 to make CI pass.
 
-Final full-test and GitHub CI results will be recorded before merge readiness is
-claimed. Local/hosted ledgers remain separate, and historical provider billing
+## Final verification
+
+Code commit `b8f3906cbe5089c6348392cf846ec9fcea860c24` passed
+[GitHub run 34510275623](https://github.com/TestBoxLab/ailabs/actions/runs/34510275623):
+**2,096 passed, nine skipped**, 537.89 seconds. Both corpus checks passed:
+10 pilot tasks and 200 imported simple tasks, with no no-op failures, answer-key
+failures or approval-rule hash drift. The imported corpus has 184 tasks without
+a scripted answer key; validation reports that limitation rather than claiming
+those positive examples were executed. The final focused group passed 51 tests.
+
+The detached Windows run started before the final fixes and finished after
+1,789.13 seconds: 2,092 passed, six failed, two skipped. Five failures are the
+four Genesis cases and stale pilot hash corrected above and covered by the
+final green checks. The sixth,
+`test_http_rejects_foreign_origin_host_and_missing_session_before_mutation`,
+reported `WinError 10053` while reading a local HTTP response; it also failed
+one isolated check. It passes in the final Ubuntu CI. Carlos instructed that
+the known Windows Studio transport issue not be pursued, so no production
+security check or assertion was weakened to hide it.
+
+The final exporter also passed a live zero-cost canary, trace
+`a3381fc03a51e714f2bfb006ab6ed53a`, at `2026-09-10T17:48:19.326993Z`:
+one accounting span, one billing generation with explicit total cost zero and
+zero token buckets, and one summary span. All three were returned by the v2
+Observations API. A simulated lost local acknowledgement was recovered through
+the production read-side reconciliation function: three confirmed, zero
+pending, zero uncertain, no additional POST or model request.
+
+Graphify's code graph was refreshed: 14,070 nodes and 35,095 edges. The vendor
+remains clean at upstream `4a8e106`. Main `290852f` is an ancestor of the branch;
+PR #3 has no merge conflicts. PR #1 remains a separate draft. Commits and pushes
+are complete; merge itself remains Carlos's action. The PR description and
+GitHub checks carry the latest status of the documentation-only follow-up.
+
+Local/hosted ledgers remain separate, and historical provider billing
 verification remains pending; exporting telemetry does not certify invoices.
+The hosted Studio must deploy this version to activate its exporter. No paid
+round or infrastructure deployment was performed during this CI/telemetry task.
