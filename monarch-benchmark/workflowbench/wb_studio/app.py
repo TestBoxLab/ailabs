@@ -62,6 +62,24 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def front_door_target(env, rest: str) -> str:
+    """Where the front door relays an application call.
+
+    The shim runs wherever the attempt runs. When the Studio launches it that is
+    this container, so the loopback default is right. When the CLI launches it the
+    shim is on the operator's machine and reaches the Studio only through a public
+    address, which `STUDIO_FRONT_DOOR_TARGET` names. Without it a hosted Studio
+    answers 502 to every application call of a CLI round while still serving the
+    OpenAPI documents, which reads as "the engine cannot execute" and is really
+    "the door leads nowhere".
+    """
+    target = (env.get("STUDIO_FRONT_DOOR_TARGET") or "").strip()
+    if target:
+        return target.rstrip("/") + rest
+    port = int(env.get("STUDIO_FRONT_DOOR_PORT") or 9105)
+    return f"http://127.0.0.1:{port}{rest}"
+
+
 class Studio:
     def __init__(self, directory=None, tasks=None, gateway_factory=None, adapter_factory=None):
         self.directory = Path(directory or ((data_dir() / "studio") if data_dir() else ROOT / "out" / "studio"))
@@ -790,21 +808,22 @@ def handler(studio):
             return self.path == self.FRONT_DOOR or self.path.startswith(self.FRONT_DOOR + "/")
 
         def front_door(self):
-            """Forward one request to the attempt's front door: the shim on this host.
+            """Forward one request to the attempt's front door: wherever its shim runs.
 
             A hosted Studio is the only address Monarch can reach, so the seeds name
             `https://<studio>/front-door` and this handler relays to the shim the
-            Monarch attempt started (STUDIO_FRONT_DOOR_PORT, default 9105). Like the
-            tunnel it replaces there is no login and no origin check on this path;
-            the shim itself accepts only its episode's world calls.
+            Monarch attempt started — on this host by default (STUDIO_FRONT_DOOR_PORT,
+            9105), or at STUDIO_FRONT_DOOR_TARGET when the attempt runs elsewhere, as
+            a CLI round does. Like the tunnel it replaces there is no login and no
+            origin check on this path; the shim itself accepts only its episode's
+            world calls.
             """
-            port = int(os.environ.get("STUDIO_FRONT_DOOR_PORT") or 9105)
             rest = self.path[len(self.FRONT_DOOR):] or "/"
             length = int(self.headers.get("Content-Length") or 0)
             if length > 8 * 1024 * 1024:
                 return self.send_json({"error": "Request too large"}, 413)
             body = self.rfile.read(length) if length else None
-            request = urllib.request.Request(f"http://127.0.0.1:{port}{rest}", data=body, method=self.command)
+            request = urllib.request.Request(front_door_target(os.environ, rest), data=body, method=self.command)
             for name in ("Content-Type", "Accept", "X-Bench-Episode-Id", "Authorization", "If-Match"):
                 value = self.headers.get(name)
                 if value:

@@ -622,6 +622,11 @@ class FakeMonarch:
     def stop(self) -> None:
         self._stopping.set()
         self.httpd.shutdown()
+        # Join before closing: a stream handler still writing frames from the
+        # previous scenario would otherwise outlive its test and serve them to
+        # the next one, whose fixture is a different FakeMonarch but whose
+        # client may still be reading.
+        self._thread.join(timeout=10)
         self.httpd.server_close()
 
     def __enter__(self):

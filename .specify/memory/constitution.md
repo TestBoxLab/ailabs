@@ -1,9 +1,27 @@
+<!--
+Sync impact: 1.1.0 -> 1.3.0 (2026-09-10).
+Principles I/IV and governance: harness-independent procedure; Carlos or Lucas
+approval (Carlos, September 9). Carlos's final September 10 decision supersedes
+earlier repair permission: AutomationBench world/routes/seeds/requests/initial
+data/assertions stay immutable; only WorkflowBench approval-rule translation
+may be corrected. Bad tasks: recorded exclusion or upstream report.
+Alternative dataset adoption stays suspended, with the question pending Lucas.
+No methodology change. Publication remains explicitly authorized only.
+Reviewed plan/spec/checklist templates: no changes required. Tasks template:
+updated to state the existing mandatory TDD rule above generic optional tests.
+AGENTS.md and CLAUDE.md synchronized; docs/HARNESS-PROCEDURES.md added.
+Claude skill sources preserved; shared current decisions override stale defaults.
+No deferred placeholders.
+-->
+
 # AI Labs Constitution
 
 The durable rules that govern every feature built in this workspace. Spec Kit
 reads this file when generating specs, plans, and tasks; the combined
 Spec Kit + Superpowers workflow (see `CLAUDE.md` → *Working conventions*)
-enforces it at execution time.
+enforces it at execution time. [AGENTS.md](../../AGENTS.md) is the entry point
+for every harness. Current explicit human decisions and the September 7
+direction supersede conflicting historical wording here.
 
 ## Core Principles
 
@@ -16,6 +34,11 @@ cold. Once the design is settled, Spec Kit owns every written artifact
 from this flow. Superpowers then executes (`executing-plans` /
 `subagent-driven-development`: worktree → TDD → code review → finish-branch).
 Planning does not write code; execution does not re-plan.
+When the harness cannot invoke the local Claude skills, it follows the same
+artifacts and gates through [the prose procedure](../../docs/HARNESS-PROCEDURES.md)
+using the checked-in templates and PowerShell helpers. A well-understood small
+change may collapse stages as already specified in `CLAUDE.md`; an existing
+settled brief is not a reason to restart discovery.
 
 ### II. Test-First (NON-NEGOTIABLE)
 TDD is mandatory via `superpowers:test-driven-development`: red → green →
@@ -41,15 +64,26 @@ ledger (`research/budget.sqlite3`). The ledger is the spending gate: every paid
 request is reserved for its maximum before it is sent and settled from the
 provider's receipt; a round is admitted only when the week can cover its maximum
 liability; an attempt stops at its cap; a week's spend is reconciled against the
-providers' own usage exports. Lucas approves paid rounds (decision D5,
-8 September 2026): a launch by Lucas runs at once under an approved record; a
-launch by anyone else, Carlos included, creates an approval request and waits
-for `wb approve`; smoke scale (at most 20 attempts per competitor) needs no
-record. Every paid launch names its operator (`WB_OPERATOR`) and states the
-number of attempts and a cost band before a run. Task prompts, starting data,
-and approval rules are pre-registered: they are not edited after results are
-seen without Lucas's sign-off, and any edit that changes a task hash is called
-out as making old rows non-regradable.
+providers' own usage exports. Either Carlos or Lucas approves paid rounds
+(decision D5, 8 September 2026, approver widened by Carlos on 9 September):
+a launch requested by either uses that person's identity; other launches create
+an approval request and wait for human `wb approve`, then use `--request`.
+An agent never approves its own round. Smoke scale (at most 20 attempts per
+competitor, retries included) needs no approval record. Every paid launch names
+its operator (`WB_OPERATOR`) and states the number of attempts and a cost band
+before a run. Existing explicit authorization survives a harness or skill change.
+Task prompts, starting data and approval rules are pre-registered. Carlos's final
+10 September decision supersedes earlier repair permission: AutomationBench's
+world, routes, seeds, task requests, initial data and assertions are immutable,
+including the ignored Airtable filter and weak invoice assertion. Only
+WorkflowBench's own approval-rule translation may be corrected. Reproduce that
+defect against the unchanged simulator, preserve prior rules, and record
+old/new hashes and evidence in `monarch-benchmark/docs/rounds/`. Old rows are
+non-regradable against replacement hashes. Bad tasks may be excluded with a
+recorded reason or reported upstream; never silently edit them. Do not adopt
+`1.0.6+evalrepair.10` or another replacement dataset without a new explicit
+decision; the question remains pending Lucas. Methodology changes still require
+explicit human approval.
 
 ### V. Plain language, knowledge-graph-grounded
 Every file in the repo is in English; conversation with Carlos is in
@@ -67,10 +101,15 @@ that touches existing code; refresh the graph after code changes.
 - **Laziness within discipline** (ponytail): YAGNI, reuse what is in-repo,
   stdlib before dependencies, shortest working diff — after fully understanding
   the change. Laziness shortens the solution, never the comprehension.
-- **Nothing is pushed** to `TestBoxLab/ailabs` until Carlos decides on repo
-  visibility. Local commits are fine.
-- **Vendored code is not ours.** `workflowbench/vendor/automation-bench` is
-  upstream AutomationBench; patches go through Lucas, not into the vendor tree.
+- **Pushes require Carlos's explicit request.** The repository is public;
+  local commits are fine. No implied permission to publish results, post to
+  Slack or merge experimental changes into Monarch.
+- **The upstream world is immutable.**
+  `monarch-benchmark/workflowbench/vendor/automation-bench` is AutomationBench.
+  Do not patch its code, routes, seeds or assertions locally. Record limitations
+  and the actual source revision; do not relabel it as a repaired version or
+  bypass the revision guard. Exclusions require a reason and provenance;
+  upstream reports do not imply authorization to modify the benchmark locally.
 - **Provenance over convenience.** Results rows keep versioned competitor
   names, model ids, price-table versions, and task hashes. No hand-typed
   numbers in reports.
@@ -92,8 +131,8 @@ that touches existing code; refresh the graph after code changes.
 ## Governance
 
 This constitution supersedes ad-hoc practice. Amendments are made through
-`/speckit-constitution` (which keeps dependent templates in sync) and are
-recorded here with a version bump. When a spec, plan, or task conflicts with
+`/speckit-constitution` or its shared prose equivalent (which keeps dependent
+templates in sync) and are recorded here with a version bump. When a spec, plan, or task conflicts with
 Principle III or IV, the constitution wins and the artifact is revised.
 
-**Version**: 1.1.0 | **Ratified**: 2026-09-02 | **Last Amended**: 2026-09-08 (§IV: the weekly ledger is the spending gate; Lucas approves, decision D5)
+**Version**: 1.3.0 | **Ratified**: 2026-09-02 | **Last Amended**: 2026-09-10 (shared harness procedure and final upstream-immutability decision)

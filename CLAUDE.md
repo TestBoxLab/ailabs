@@ -1,5 +1,11 @@
 # AI Labs — Project Instructions
 
+Read [AGENTS.md](AGENTS.md) first. This entire file is shared repository context
+for Claude Code and Codex; the entry point links here deliberately. Current human
+decisions recorded there supersede older assumptions in this file and skills.
+The [harness-independent procedures](docs/HARNESS-PROCEDURES.md) preserve the
+eleven local Claude skills' method when their commands are unavailable.
+
 ## Project context
 
 TestBox AI Labs is an internal lab run by Carlos Mattos (owner of this repo) and
@@ -36,7 +42,7 @@ audience rules are code; config hash per run; API-key billing only.
 
 **Where things stand (2026-09-03, evening):** repo at
 `C:\Users\cgmat\Desktop\TestBox\ailabs` (off OneDrive; moved twice on 3 Sep, see
-`monarch-benchmark/docs/HANDOFF-2026-09-03.md`). `main` pushed to `origin` on 3 Sep;
+`monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` §10). `main` pushed to `origin` on 3 Sep;
 the GitHub repo is public. 199 tests green. Feature 001, declarative benchmark
 configuration, is merged: `wb run --product --plan`, inputs in `workflowbench/config/`,
 approval gate and cost ceiling in code. Two smoke runs (`smoke-frontier-001`, `-002`)
@@ -47,7 +53,7 @@ real Monarch competitor in `wb_arms/monarch.py`, doctor checks, report source
 line. Live gates T053–T057 in `specs/002-monarch-create-run/tasks.md` are
 pending: Monarch running (locally, or on Railway with a public host for the
 front door), `bedrock:InvokeModel` for Carlos's AWS roles, and the Monarch-side
-telemetry PR. See `monarch-benchmark/docs/HANDOFF-2026-09-03.md`. Feature 004
+telemetry PR. See `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md`. Feature 004
 (Monarch in run-only mode: `wb monarch recipes`, one known-correct recipe per
 task, the engine measured alone) is specified and planned on 4 Sep —
 `specs/004-monarch-run-only/`, documents only, no code yet. Feature 005 (task
@@ -65,8 +71,9 @@ competitors in reports).
 modes (frente B), Monarch phase telemetry (C), Langfuse + Slack output (D),
 corpus leftovers (F), second product (E).
 
-The user's global `~/.claude/CLAUDE.md` is loaded automatically and applies
-here. This file holds project-specific additions only.
+Claude Code loads the user's global `~/.claude/CLAUDE.md` automatically. Codex
+uses its own global instructions; repository method and governance must not
+depend on a private harness-specific global file.
 
 ## Plain names
 
@@ -135,12 +142,15 @@ each stage hands its artifact to the next:
 
 ### Benchmark-specific rules (constitution §III–§V)
 
-- **Lucas approves paid rounds (decision D5, 8 Sep 2026).** A launch by Lucas
-  runs at once; a launch by Carlos, or anyone else, creates an approval request
+- **A human approves paid rounds (decision D5, 8 Sep 2026; approver widened by
+  Carlos, 9 Sep 2026).** Either Carlos or Lucas may approve; a launch by the
+  approver runs at once, any other launch creates an approval request
   (`wb approvals`) and waits for `wb approve <id>`, then runs with
   `wb run ... --request <id>`. Smoke scale (at most 20 attempts per competitor)
   and `wb doctor` need no record. Every paid launch names its operator
   (`WB_OPERATOR`). Before any `wb run`, state the number of attempts and a cost band.
+  An agent never approves its own round: the name on the approval is the person
+  who asked for it.
 - **The weekly ledger is the spending gate.** US$ 300 per calendar week
   (`research/budget.sqlite3`, Monday 00:00 America/Sao_Paulo): every paid
   request is reserved for its maximum before it is sent and settled from the
@@ -149,9 +159,17 @@ each stage hands its artifact to the next:
   `wb budget status` shows what is left, `wb budget reconcile` checks a week
   against the providers' own usage exports. Monarch and Claude Code
   competitors stay refused until milestones M5 and M7.
-- **Pre-registration.** Do not edit a task's prompt, starting data, or approval
-  rule after seeing results without Lucas's sign-off. Hash changes make old
-  rows non-regradable; say so.
+- **Pre-registration and upstream integrity.** Carlos's final 10 September
+  decision supersedes the earlier repair authorization: preserve AutomationBench's
+  world, routes, seeds, task requests, initial data and assertions unchanged.
+  This includes the ignored Airtable filter and weak invoice assertion. Only
+  WorkflowBench's own approval-rule translation may be corrected, with a
+  reproduction against the unchanged simulator. Preserve prior rules and record
+  old/new hashes and evidence in `monarch-benchmark/docs/rounds/`; old rows are
+  non-regradable against replacement hashes. Exclude a bad task with a recorded
+  reason or report it upstream; never silently edit it. Adoption of
+  `1.0.6+evalrepair.10` remains suspended, with the question pending Lucas.
+  Changes of methodology still require explicit human approval.
 - **The methodology does not change through features.** `PLAN.md` §1 is the
   constant; features change its inputs (files, competitors, products), never
   its rules. A spec that reopens a fixed rule needs Carlos's explicit say-so.
@@ -165,10 +183,19 @@ each stage hands its artifact to the next:
   `workflowbench/vendor/automation-bench` is excluded from the graph.
 - **Stack:** Python 3.13 managed by `uv`. Environment:
   `cd monarch-benchmark/workflowbench && uv sync && uv run python -m pytest tests -q`.
+  Always `uv run`, never bare Python. On Windows run the full suite detached
+  with logs and wait for its exit; it takes about 27 minutes. Verify UI changes
+  with browser tooling. `wb` loads `.env` itself: `wb run` is never a free check.
   Keys in `workflowbench/.env` (gitignored). AutomationBench vendored at
   `workflowbench/vendor/automation-bench` (gitignored; re-clone if missing).
 
 ## What lives where
+
+In this table and the references below, `workflowbench/` abbreviates
+`monarch-benchmark/workflowbench/`; `specs/` and `docs/` otherwise start at the
+repository root unless a full prefix is given. Historical feature statuses and
+model examples are context; verify current status in `STATE-OF-THE-PROGRAM.md`
+and actual configuration rather than treating those examples as runtime pins.
 
 | Path | Purpose |
 |---|---|
@@ -181,12 +208,15 @@ each stage hands its artifact to the next:
 | `specs/002-monarch-create-run/` | Feature 002: Monarch as a competitor, create + run mode; spec, plan, tasks, `contracts/` (config-files, cli, monarch-telemetry). In progress on branch `002-monarch-create-run`. |
 | `specs/004-monarch-run-only/` | Feature 004: Monarch in run-only mode — one known-correct recipe per task, the engine measured alone; spec, plan, tasks, `contracts/` (cli, config-files). Documents only so far; design of record `docs/superpowers/specs/2026-09-04-monarch-run-only-design.md`. |
 | `specs/005-task-tiers/` | Feature 005: the six scored AutomationBench domains in the corpus, and four task sets drawn by difficulty tier; `contracts/` holds the CLI and config-file contracts. Documents only so far; design of record `docs/superpowers/specs/2026-09-04-task-tiers-design.md`. |
-| `workflowbench/tasks/tier-simple/`, `tier-medium/`, `tier-complex/`, `random-10/` | The four frozen task sets, ten prompts each, drawn by `wb corpus tiers` from a recorded seed (feature 005, not yet drawn). |
+| `workflowbench/tasks/tier-simple/`, `tier-medium/`, `tier-complex/`, `random-10/` | The four frozen task sets, ten prompts each, drawn by `wb corpus tiers` with seed 20260904 on 4 Sep 2026; approval rules re-derived 6 Sep and again 9–10 Sep, so 23 of the 40 hashes moved. Round sheet: `monarch-benchmark/docs/rounds/tier-rounds.md`. |
+| `workflowbench/tasks/achievable-50/` | The 50-task gauntlet set (ApplicationBench `achievable50` slate), frozen 8 Sep 2026 on corpus revision `1.0.6+evalrepair.10`. |
 | `workflowbench/tasks/tiers-manifest.yaml` | How the four sets were chosen: the difficulty measure, the cut points, the seed and every drawn task's score, tier, domain and hash (feature 005). |
 | `specs/006-html-report/` | Feature 006: the round's official report as an HTML page with real tables, and `wb summary` across rounds; `contracts/report.md` holds every table, column and formula. Documents only so far; design of record `docs/superpowers/specs/2026-09-04-html-report-design.md`. |
 | `monarch-benchmark/PLAN.md` | Methodology, variables, deliverables, tasks, decisions, open questions. |
-| `monarch-benchmark/docs/HANDOFF-2026-09-03.md` | Resume-here note: repo move, feature 001, next steps. |
-| `monarch-benchmark/docs/HANDOFF-2026-09-02.md` | Previous handoff: background and standing rules. |
+| `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` | Resume-here note: where things stand, what is blocked, what is next. Replaces the three handoffs of 2, 3 and 8 Sep. |
+| `monarch-benchmark/docs/HOW-WORKFLOWBENCH-WORKS.md` | The guide to the machine: what an attempt is, the two judges, how a round reads. |
+| `monarch-benchmark/docs/BOUNDARY-BENCH-AND-MONARCH.md` | Who describes what data, where the mock is the truth, what each side asks of the other (settled 9 Sep 2026). |
+| `docs/AI-LABS-UNBLOCK-PLAN-2026-09-08.md` (repo root) | The milestone plan M0–M8 to the 50-task gauntlet; decisions D1–D11. |
 | `monarch-benchmark/docs/ai-labs-context.html` | Onboarding dossier in plain language. |
 | `monarch-benchmark/DESIGN.md`, `BUILD-SPEC.md`, `PROGRAM-SPEC.md` | Lucas's design of record. |
 | `monarch-benchmark/workflowbench/` | The benchmark code (`wb` CLI). |
@@ -232,7 +262,7 @@ each stage hands its artifact to the next:
 ## Key references
 
 - **PLAN.md** — `monarch-benchmark/PLAN.md`. The single tracking surface.
-- **Handoff** — `monarch-benchmark/docs/HANDOFF-2026-09-02.md`.
+- **State of the program** — `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md`.
 - **Smoke report** — `workflowbench/out/report-smoke-frontier-001-internal.md`.
 - **Monarch authoring endpoint** — `POST /api/workflows/recipe/runs {goal}`,
   session auth; knowledge base via Feature Discovery's `api_spec` handler.
@@ -240,12 +270,17 @@ each stage hands its artifact to the next:
 
 ## Open questions in flight
 
-- Repo visibility (private vs scrub) before the first push. (Carlos)
+- Publication and pushes still require Carlos's explicit request; the repo is public.
 - Replace the pilot tasks' manual approval rules with the derived ones. (Lucas)
-- Lucas's AutomationBench patches (`1.0.6+evalrepair.10`) are not upstream; get them from him.
+- Adoption of the alternative AutomationBench dataset `1.0.6+evalrepair.10` is
+  suspended by Carlos's final 10 September decision, with the question pending
+  Lucas. Preserve its historical records; do not resume source acquisition or
+  replacement without a new explicit decision.
 - Service-account or API-key path for Monarch's authoring endpoint, or session login from the bench. (Deyton)
 - Second product under test: real, mapped by Feature Discovery, legally clean. (Lucas + Carlos)
-- Approval-rule gap found by the smoke (`simple.sf_opp_closed_won`: `is_closed`/`is_won`). Needs Lucas's sign-off.
+- Approval-rule gaps require simulator evidence and a recorded refreeze; the
+  authorized corrections are limited to WorkflowBench's own rule translation,
+  keeping AutomationBench's world, routes, seeds and assertions unchanged.
 
 ## graphify
 
@@ -254,4 +289,6 @@ This project has a graphify knowledge graph at graphify-out/.
 Rules:
 - Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+- After modifying code files, refresh the graph through the installed Graphify
+  skill using its `uv`-managed environment; do not invoke bare `python3` or
+  silently claim a refresh if Graphify is unavailable.

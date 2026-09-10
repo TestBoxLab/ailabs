@@ -59,6 +59,19 @@ def receipt_cost(provider: Provider, turn: dict) -> Decimal | None:
     return money(providers.cost_usd(provider, prompt, cached, output, cache_write))
 
 
+def usage_details(turn: dict | None) -> dict | None:
+    """Convert inclusive provider receipts to the disjoint Langfuse buckets."""
+    if not isinstance(turn, dict):
+        return None
+    prompt, cached, output = (turn.get(k) for k in ('prompt_tokens', 'cached_tokens', 'output_tokens'))
+    write = turn.get('cache_write_tokens', 0)
+    if any(type(v) is not int or not 0 <= v <= MAX_RECEIPT_TOKENS for v in (prompt, cached, output, write)):
+        return None
+    cached = min(cached, prompt)
+    write = min(write, prompt - cached)
+    return {'input': prompt - cached - write, 'output': output, 'cache_read': cached, 'cache_write': write}
+
+
 def invocation_token(ep) -> str:
     """The attempt's evidence directory name; a one-off token when no journal is attached."""
     directory = getattr(getattr(ep, "_journal", None), "directory", None)
@@ -92,9 +105,13 @@ def dispatch(ledger, provider: Provider, call: Callable[[], dict], *, request_id
              "rate_card": f"config/models/{provider.key}.yaml", **(metadata or {})}
     ledger.reserve(request_id, maximum, scope_id=scope_id, scope_limit_usd=scope_limit_usd, metadata=facts)
     ledger.claim(request_id)
-    turn = call()
+    try:
+        turn = call()
+    except Exception:
+        ledger.settle(request_id, None, outcome='error')
+        raise
     actual = receipt_cost(provider, turn)
-    ledger.settle(request_id, actual)
+    ledger.settle(request_id, actual, usage=usage_details(turn), outcome='completed')
     billing = {"reservation_id": request_id, "scope_id": scope_id, "maximum_usd": str(maximum),
                "actual_usd": None if actual is None else str(actual),
                "status": "unknown_hold" if actual is None else "estimated_from_usage",

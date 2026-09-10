@@ -108,6 +108,8 @@ def start_turn(genesis,turn):
             self.send_response(status);self.send_header('Content-Type',content);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
         def do_POST(self):
             nonlocal counter,spent,last_reason
+            request_id = None
+            dispatched = settled = False
             if not secrets.compare_digest(self.headers.get('Authorization',''),'Bearer '+token): return self.reply(403,{'error':'Scoped authorization required'})
             try:
                 size=int(self.headers.get('Content-Length','0'))
@@ -128,6 +130,7 @@ def start_turn(genesis,turn):
                     studio.ledger.reserve(request_id,ceiling,scope_id=scope,scope_limit_usd=maximum,metadata={'purpose':'Genesis','provider':provider.key,'model':provider.model_id,'harness':'codex-cross-provider'})
                     with studio.runtime.provider(provider.family or provider.adapter,timeout=180,tokens=upper+max_output):
                         studio.ledger.claim(request_id)
+                        dispatched = True
                         genesis.event(identity,'model_started',request=counter,model=provider.model_id,max_output=max_output,ceiling_usd=str(ceiling))
                         body['_provider_state']=provider_state;body['_max_output']=max_output
                         body['reasoning']={'effort':turn.get('effort','medium' if provider.adapter!='openai' else 'default')}
@@ -136,11 +139,16 @@ def start_turn(genesis,turn):
                     if any(type(v) is not int or v<0 for v in u.values()): raise ValueError('Provider usage could not be verified')
                     genesis.event(identity,'provider_receipt',request=counter,usage=u,finish_reason=result.get('finish_reason'))
                     actual=_money(str(providers.cost_usd(provider,u['prompt_tokens'],u['cached_tokens'],u['output_tokens'],u['cache_write_tokens'])))
-                    studio.ledger.settle(request_id,actual);spent+=actual
+                    from wb_arms.reservations import usage_details
+                    studio.ledger.settle(request_id,actual,usage=usage_details(u),
+                                         outcome='error' if result.get('incomplete') else 'completed');spent+=actual
+                    settled = True
                     genesis.event(identity,'usage',usage=u,cost_usd=str(actual),finish_reason=result.get('finish_reason'))
                     if result.get('incomplete'): raise ValueError('Provider stopped without completing its response')
                     return self.reply(200,response_events(result,body.get('model',provider.model_id)),'text/event-stream')
             except Exception as exc:
+                if dispatched and not settled:
+                    studio.ledger.settle(request_id,None,outcome='error')
                 # Do not expose SDK errors, request bodies, credentials or arbitrary provider text; the lab's own refusals are shown in full.
                 frames=traceback.extract_tb(exc.__traceback__)
                 location=Path(frames[-1].filename).name+':'+str(frames[-1].lineno) if frames else None

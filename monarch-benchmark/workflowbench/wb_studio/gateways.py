@@ -138,17 +138,20 @@ class ProviderGateway:
             self.adapter.on_text = getattr(self,"on_text",None)
             turn = self.adapter.turn(messages, timeout=timeout)
         except InfraError as exc:
+            self.ledger.settle(request_id, None, outcome='error')
             # Provider messages can carry URLs, ids or key fragments: never forwarded.
             raise GatewayError(f"Provider request failed ({exc.kind}); outcome unknown, reservation retained",
                                kind=exc.kind, retryable=False) from None
         except Exception:
+            self.ledger.settle(request_id, None, outcome='error')
             raise GatewayError("Provider request failed; outcome unknown, reservation retained") from None
         prompt, cached, output = turn.get("prompt_tokens"), turn.get("cached_tokens"), turn.get("output_tokens")
         cache_write = turn.get("cache_write_tokens", 0)
         counts = (prompt, cached, output, cache_write)
         known = all(type(v) is int and 0 <= v <= 10_000_000 for v in counts) and (prompt > 0 or output > 0)
         actual = _money(str(providers.cost_usd(self.provider, prompt, cached, output, cache_write))) if known else None
-        self.ledger.settle(request_id, actual)
+        from wb_arms.reservations import usage_details
+        self.ledger.settle(request_id, actual, usage=usage_details(turn), outcome='completed')
         return {**turn, "_billing": {**metadata, "reservation_id": request_id, "maximum_usd": str(maximum),
                                      "actual_usd": None if actual is None else str(actual),
                                      "status": "unknown_hold" if actual is None else "estimated_from_usage",

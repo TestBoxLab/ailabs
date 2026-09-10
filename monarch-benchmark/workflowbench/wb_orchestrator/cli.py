@@ -686,6 +686,30 @@ def cmd_monarch_recipes(args) -> int:
 
 
 
+def cmd_telemetry(args) -> int:
+    from wb_orchestrator import langfuse_export as export
+    paths = {"ledger": args.ledger, "results": args.db}
+    if args.telemetry_cmd == "backfill":
+        if Path(args.ledger).exists():
+            _ledger(args).backfill_telemetry()
+        if Path(args.db).exists():
+            store = _store(args)
+            try:
+                store.backfill_telemetry()
+            finally:
+                store.close()
+    if args.telemetry_cmd == "flush":
+        export.drain()
+        result = {name: export.flush(path) for name, path in paths.items()}
+    elif args.telemetry_cmd == "reconcile":
+        export.drain()
+        result = {name: export.reconcile(path) for name, path in paths.items()}
+    else:
+        result = {name: export.status(path) for name, path in paths.items()}
+    print(json.dumps(result, sort_keys=True))
+    return int(any(row.get("errors") or row.get("pending") is None for row in result.values()))
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()   # keys live in workflowbench/.env (gitignored), never in code
     config.derive_langfuse_keys(os.environ)
@@ -696,6 +720,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="the shared weekly ledger every paid request is reserved in "
                          "(default: research/budget.sqlite3 at the repo root)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("telemetry", help="inspect, retry or backfill Langfuse history; no model calls")
+    p.add_argument("telemetry_cmd", choices=("status", "flush", "backfill", "reconcile"),
+                   help="flush sends up to 100 pending records per database; backfill queues saved history")
+    p.set_defaults(fn=cmd_telemetry)
 
     p = sub.add_parser("budget", help="inspect and reconcile the shared weekly experiment ledger")
     bsub = p.add_subparsers(dest="budget_cmd", required=True)

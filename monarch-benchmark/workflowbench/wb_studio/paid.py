@@ -204,9 +204,11 @@ class PaidGateway:
             if not isinstance(response, dict):
                 raise ValueError('Invalid response')
         except PaidGatewayError as exc:
+            self.ledger.settle(request_id, None, outcome='error')
             raise PaidGatewayError('Generation outcome unknown; reservation retained and retry disabled',
                                    http_status=exc.http_status, provider_status=exc.provider_status, provider_reason=exc.provider_reason) from None
         except Exception:
+            self.ledger.settle(request_id, None, outcome='error')
             raise PaidGatewayError('Generation outcome unknown; reservation retained and retry disabled') from None
         usage = response.get('usageMetadata')
         actual = None
@@ -218,7 +220,11 @@ class PaidGateway:
             thoughts = usage.get('thoughtsTokenCount', total - prompt - candidates if all(_integer(v) for v in (total, prompt, candidates)) else None)
             if all(_integer(v) for v in (prompt, candidates, thoughts, total)) and total == prompt + candidates + thoughts and usage.get('toolUsePromptTokenCount', 0) == 0:
                 actual = _cost(prompt, candidates + thoughts)
-        self.ledger.settle(request_id, actual)
+        cached = usage.get('cachedContentTokenCount', 0) if isinstance(usage, dict) else None
+        details = ({'input': prompt - min(prompt, cached), 'output': candidates + thoughts,
+                    'cache_read': min(prompt, cached), 'cache_write': 0}
+                   if actual is not None and _integer(cached) else None)
+        self.ledger.settle(request_id, actual, usage=details, outcome='completed')
         return {**response, '_billing': {**metadata, 'reservation_id': request_id,
                 'maximum_usd': str(maximum), 'actual_usd': None if actual is None else str(actual),
                 'status': 'unknown_hold' if actual is None else 'estimated_from_usage',

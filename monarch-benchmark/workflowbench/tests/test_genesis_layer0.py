@@ -38,7 +38,7 @@ def test_broker_spends_the_allowance_across_requests_and_stops_with_the_reason(t
     bodies, statuses, timeline = [], [], []
     ledger = Mock()
     ledger.reserve.side_effect = lambda identity, ceiling, **kw: timeline.append(('reserve', Decimal(ceiling)))
-    ledger.settle.side_effect = lambda identity, amount: timeline.append(('settle', Decimal(amount)))
+    ledger.settle.side_effect = lambda identity, amount, **details: timeline.append(('settle', Decimal(amount)))
 
     def complete(provider, body, on_text):
         bodies.append(body)

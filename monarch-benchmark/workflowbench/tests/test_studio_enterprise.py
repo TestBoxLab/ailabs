@@ -43,7 +43,7 @@ def forbidden(*args, **kwargs):
 
 def configured(site, repo, port, monarch_url="http://127.0.0.1:1", fd_url="http://127.0.0.1:2", langfuse_url="http://127.0.0.1:3"):
     """The test config tree with a runnable Monarch harness pointed at the given addresses."""
-    monarch_site(site, monarch_repo=str(repo))
+    monarch_site(site, monarch_repo=str(repo), port=port)
     text = (site / "config/harnesses/monarch.yaml").read_text()
     text = (edit(edit(edit(text, "base_url", monarch_url), "fd_url", fd_url), "langfuse_url", langfuse_url)
             .replace("shim_port: 9105", f"shim_port: {port}")
@@ -127,7 +127,8 @@ def test_verify_records_every_check_and_a_passing_probe_makes_the_version_launch
         app = studio_for(tmp_path, configured(site, repo, port, fake.url, fd.url, lf.url))
         probe = enterprise.verify(app)
         assert probe["ok"] is True, probe
-        assert [c["name"] for c in probe["checks"]] == ["configuration", "backend", "session", "knowledge_base", "langfuse"]
+        assert [c["name"] for c in probe["checks"]] == ["configuration", "backend", "session",
+                                                        "knowledge_base", "front_door", "langfuse"]
         assert probe["backend_host"] == f"127.0.0.1:{fake.port}" and probe["front_door"] == f"http://127.0.0.1:{port}"
         assert probe["price_table"]["name"] == "monarch-team-bedrock" and probe["stock"] is True
         # Verification costs no model money: no authoring run was started.

@@ -12,6 +12,12 @@ from wb_world import episode
 
 
 @pytest.fixture(autouse=True)
+def no_live_telemetry(monkeypatch):
+    """Tests may use local receivers, never the operator's Langfuse project."""
+    monkeypatch.setenv("WB_LANGFUSE_ENABLED", "0")
+
+
+@pytest.fixture(autouse=True)
 def upstream_world(monkeypatch):
     """The fixture task sets record no world, which means the upstream
     AutomationBench 1.0.6. Pin the "installed world" to it, so the guard in
@@ -41,6 +47,9 @@ def pytest_configure(config):
     if os.name == "nt" and not config.option.basetemp:
         root = Path(tempfile.gettempdir()) / "wb" / str(os.getpid())
         shutil.rmtree(root, ignore_errors=True)
+        # pytest's getbasetemp() does mkdir() without parents=True, so the shared
+        # parent has to exist -- another process's sessionfinish may have taken it.
+        root.parent.mkdir(parents=True, exist_ok=True)
         config.option.basetemp = str(root)
         config._wb_basetemp = root
 

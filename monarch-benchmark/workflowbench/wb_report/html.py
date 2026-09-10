@@ -955,6 +955,10 @@ _HEADLINE = [
      "lower is better"),
     ("Median time per attempt", lambda m: m["wall_clock"]["median"], "seconds",
      True, "lower is better"),
+    # Completion alone flatters a competitor that finishes more prompts by
+    # touching more than it was asked to. This card is the other half.
+    ("Changes nobody asked for", lambda m: m["collateral_changes"], "count", True,
+     "lower is better"),
 ]
 
 
@@ -1001,6 +1005,16 @@ def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks
         charts.append(f"<h3>{_esc(label)}</h3>" + _bars(
             [(m["arm"], None if _na(m) else get(m)) for m in metrics], kind,
             {m["arm"]: (cls if is_monarch(m["arm"]) else "") for m in metrics}))
+
+    cards.append(
+        '<div class="mcard note"><div class="lab">What &ldquo;changes nobody '
+        'asked for&rdquo; counts</div><p class="why">Every attempt is checked '
+        'twice: did the requested result appear, and was anything else changed '
+        'along the way. This figure is the second check &mdash; records written, '
+        'or written more times than the request asked for, that nobody asked '
+        'for. A competitor can finish more of the work and still leave more '
+        'behind it, so read it next to the success rate, never instead of '
+        'it.</p></div>')
 
     hero = (f'<header class="hero"><div class="eyebrow">Monarch benchmark</div>'
             f'<h1><span class="crown">{CROWN}</span> '
@@ -1131,7 +1145,8 @@ def _overview_section(report: dict) -> str:
 
 def _success_table(report: dict) -> str:
     headers = ["competitor", "attempts", "passed", "strict pass", "of",
-               "first try", "after retry", "retries", "pass over reps", "infra",
+               "first try", "after retry", "retries", "pass over reps",
+               "attempts with collateral", "collateral changes", "infra",
                "infra rate", "agent errors", "timeouts"]
     # The attempt counts are real for every competitor; only the results are
     # replaced by `n/a` where the answer key had nothing to act on.
@@ -1142,7 +1157,11 @@ def _success_table(report: dict) -> str:
                          _fmt(m["first_try_pass"], "rate"),
                          _fmt(m["pass_after_retry"], "rate"),
                          _fmt(m["retries"]["count"]),
-                         _fmt(m["pass_over_repetitions"], "rate")])
+                         _fmt(m["pass_over_repetitions"], "rate"),
+                         # what it touched that nobody asked for: a competitor
+                         # can pass more prompts by making a bigger mess
+                         _fmt(m["collateral_attempts"]),
+                         _fmt(m["collateral_changes"])])
             + [_fmt(m["infra"]), _fmt(m["infra_rate"], "rate"),
                _fmt(m["agent_errors"]), _fmt(m["timeouts"])]
             for m in report["metrics"]]

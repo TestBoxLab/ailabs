@@ -259,6 +259,8 @@ def test_drawn_sets_pass_when_the_expected_changes_are_applied(set_name):
             # `[*].field` can only be satisfied by changing a record that
             # already exists, so an empty collection gets one to change.
             field = re.match(r".*\[\*\]\.(.+?)\*?$", m["path"])
+            if field and "." in field.group(1):
+                continue          # a nested leaf (rows[*].cells.X): apply_expected seeds it
             if field and isinstance(node, list) and not node:
                 node.append({"id": "seed_0", field.group(1): ""})
         s1 = apply_expected(s0, expected)
@@ -283,33 +285,60 @@ def apply_expected(s0: dict, expected: list[dict]) -> dict:
         if log:
             service, key = log.groups()
             key = key or "createRecord"   # a matcher with no action_key: any key
-            record = {"id": f"a_{i}", "action_key": key, "params": {}}
+            # A `where` matcher names the content the write must carry, so the
+            # oracle-like change writes exactly that and nothing more.
+            params: dict[str, Any] = {}
+            for dotted, value in (m.get("where") or {}).items():
+                target, _, leaf = dotted.rpartition(".")
+                node = params
+                for part in target.split(".")[1:]:   # drop the leading "params"
+                    node = node.setdefault(part, {})
+                node[leaf] = value
+            record = {"id": f"a_{i}", "action_key": key, "params": params}
             actions = s1.setdefault(service, {}).setdefault("actions", {})
             if isinstance(actions, list):          # a service that logs a flat list
                 actions.append(record)
             else:
                 actions.setdefault(key, []).append(record)
             continue
-        # A worksheet: google_sheets.spreadsheets[id=..].worksheets[id=..]*
-        ws = re.match(r"google_sheets\.spreadsheets(?:\[id=([^\]]+)\])?"
-                      r"(?:\.worksheets(?:\[id=([^\]]+)\])?)?\*?$", m["path"])
-        if ws:
-            ssid, wsid = ws.groups()
-            sheets = (s1.setdefault("google_sheets", {})
-                        .setdefault("spreadsheets", []))
-            sheet = next((s for s in sheets
-                          if ssid is None or str(s.get("id")) == ssid),
-                         sheets[0] if sheets else None)
-            if sheet is None:
-                continue
-            worksheets = sheet.setdefault("worksheets", [])
-            sheet_ws = next((w for w in worksheets
-                             if wsid is None or str(w.get("id")) == wsid),
-                            worksheets[0] if worksheets else None)
-            if sheet_ws is None:
-                continue
-            sheet_ws.setdefault("rows", []).append(
-                {"row_id": 9000 + i, "cells": {"x": "y"}})
+        # Sheet rows, in the flat shape WorldState's validator really produces:
+        #   added   google_sheets.rows[*]                 -- a row appended,
+        #           anchored on the spreadsheet by `where`
+        #   changed google_sheets.rows[*].cells.<Column>  -- one cell edited
+        row = re.match(r"google_sheets\.rows\[\*\](?:\.cells\.(.+?))?\*?$",
+                       m["path"])
+        if row:
+            column = row.group(1)
+            rows = (s1.setdefault("google_sheets", {}).setdefault("rows", []))
+            if m.get("op") == "changed":
+                # An edit needs a row to edit; the seed's own is the honest one.
+                target = next((r for r in rows if isinstance(r, dict)), None)
+                key = column if column and column != "*" else (
+                    next(iter(target.get("cells") or {}), "Status")
+                    if target else "Status")
+                if target is None:
+                    # An edit needs a row to edit; a seed with none gets one in
+                    # BOTH snapshots, carrying the cell, so the diff is the one
+                    # `changed` the rule asks for and not an `added` row.
+                    target = {"id": f"seed_{i}", "spreadsheet_id": "ss",
+                              "worksheet_id": "ws", "row_id": 2,
+                              "cells": {key: ""}}
+                    rows.append(target)
+                    s0.setdefault("google_sheets", {}).setdefault(
+                        "rows", []).append(copy.deepcopy(target))
+                cells = target.setdefault("cells", {})
+                cells.setdefault(key, "")
+                s0_row = next((r for r in (s0.get("google_sheets") or {}).get("rows") or []
+                               if isinstance(r, dict) and r.get("id") == target.get("id")), None)
+                if s0_row is not None:
+                    s0_row.setdefault("cells", {}).setdefault(key, cells[key])
+                cells[key] = _flip(cells.get(key))
+            else:
+                # An append carries the fields the rule anchors on, and nothing
+                # else: exactly the row the answer key would write.
+                rows.append({"id": f"new_{i}", "row_id": 9000 + i,
+                             "cells": {"x": "y"},
+                             **{k: v for k, v in (m.get("where") or {}).items()}})
             continue
         # A whole-service wildcard: any change under it will do.
         whole = re.match(r"([^.]+)\.\*$", m["path"])
@@ -349,7 +378,7 @@ def apply_expected(s0: dict, expected: list[dict]) -> dict:
             rec = records[0]
             rec[field] = _flip(rec.get(field))
         else:
-            records.append({"id": f"new_{i}"})
+            records.append({"id": f"new_{i}", **(m.get("where") or {})})
     return s1
 
 

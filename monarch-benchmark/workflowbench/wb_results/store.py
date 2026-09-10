@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from runner.schema import EpisodeRow
+from wb_orchestrator import langfuse_export
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -81,6 +82,8 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        with self._conn:
+            langfuse_export.ensure_schema(self._conn)
         # runs.stop_reason arrived after the first databases were written
         if "stop_reason" not in {r[1] for r in self._conn.execute("PRAGMA table_info(runs)")}:
             with self._conn:
@@ -170,6 +173,22 @@ class Store:
                  tok.prompt if tok else None, tok.cached if tok else None,
                  tok.output if tok else None, row.cost_usd, row.retries,
                  row.model_dump_json()))
+            self._queue_summary(row.model_dump(mode='json'))
+        langfuse_export.kick(self.path)
+
+    def _queue_summary(self, row: dict) -> None:
+        summary = {k: row.get(k) for k in ('episode_id', 'run_id', 'task_id', 'model', 'contract_sha256',
+                                          'started_at', 'finished_at', 'termination', 'passed')}
+        if not {'billing=unknown', 'cost_missing'}.intersection(row.get('flags') or []):
+            summary['cost_usd'] = row.get('cost_usd')
+        langfuse_export.record_summary(self._conn, row['episode_id'], summary)
+
+    def backfill_telemetry(self) -> None:
+        """Queue stored attempt summaries; preserve historical rows and verdicts."""
+        with self._lock, self._conn:
+            for row in self._conn.execute('SELECT row_json FROM episodes').fetchall():
+                self._queue_summary(json.loads(row[0]))
+        langfuse_export.kick(self.path)
 
     def add_artifact(self, episode_id: str, kind: str, uri: str) -> None:
         with self._lock, self._conn:

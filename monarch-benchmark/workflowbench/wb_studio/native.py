@@ -156,7 +156,8 @@ class NativeBroker:
             # and native system prompts are included. No images/remote file fetches.
             maximum = ceiling_cost(self.provider, len(json.dumps(body).encode()) * 2 + 1024, cap)
             self.ledger.reserve(identity, maximum, scope_id=self.scope_id, scope_limit_usd=self.maximum,
-                                metadata={"harness": "native-broker", "model": self.provider.model_id, "max_output_tokens": cap})
+                                metadata={"harness": "native-broker", "model": self.provider.model_id,
+                                          "billing_provider": self.provider.family or self.provider.key, "max_output_tokens": cap})
             self.ledger.claim(identity)
             self.observe({"type": "native_provider_request", "request_id": identity, "path": path, "body": body})
             try:
@@ -168,10 +169,14 @@ class NativeBroker:
                     actual = receipt_cost(self.provider, usage) if usage else None
                 except (ValueError, KeyError, TypeError, StopIteration):
                     usage, actual = None, None
-                self.ledger.settle(identity, actual)
+                from wb_arms.reservations import usage_details
+                self.ledger.settle(identity, actual, usage=usage_details(usage),
+                                   outcome='completed' if status_code == 200 else 'error')
                 self.receipts.append({"id": identity, "usage": usage, "cost": actual})
                 return {"status": status_code, "content_type": content_type, "body": base64.b64encode(raw).decode()}
             except Exception:
+                reservation = next(r for r in self.ledger.reservations(scope_id=self.scope_id) if r.reservation_id == identity)
+                self.ledger.settle(identity, reservation.actual_usd, outcome='error')
                 self.observe({"type": "native_provider_error", "request_id": identity, "billing": "unknown_hold"})
                 self.receipts.append({"id": identity, "usage": None, "cost": None})
                 return _reply(502, {"error": "Provider request failed; billing hold retained"})

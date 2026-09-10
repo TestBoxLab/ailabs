@@ -247,6 +247,9 @@ def verify(studio) -> dict:
             return client.health()
         checks.append(_check("session", health))
         checks.append(_check("knowledge_base", setup.arm().prepare))
+        taught = getattr(setup.kb, "shim_public_url", None)
+        checks.append(_check("front_door",
+                             lambda: _front_door_agrees(record["front_door"], taught)))
         checks.append(_check("langfuse", lambda: _langfuse_health(h, env)))
     record["ok"] = all(c["ok"] for c in checks)
     write_json(probe_path(studio), record)
@@ -255,6 +258,22 @@ def verify(studio) -> dict:
 
 def _fail(message: str):
     raise RuntimeError(message)
+
+
+def _front_door_agrees(configured: str, taught: str | None) -> None:
+    """Refuse when the environment and the knowledge base name different doors.
+
+    Monarch calls the address its seeds were taught; the harness hands the engine
+    the address the environment names. When those differ the attempt authors fine
+    and then executes against a door with nothing behind it -- which is how two
+    rounds on 9 Sep spent US$ 18.75 measuring nothing while every check was green.
+    """
+    if not taught:
+        return
+    if configured.rstrip("/") != taught.rstrip("/"):
+        raise ValueError(
+            f"the environment names {configured} but the knowledge base was taught "
+            f"{taught}; an attempt would execute against a door the seeds do not name")
 
 
 def _check(name: str, call) -> dict:
@@ -524,9 +543,11 @@ class EnterpriseArm:
             self._settle(reservation, ceiling, result)
 
     def _settle(self, reservation: str, ceiling: Decimal, result: ArmResult | None) -> None:
-        known = result is not None and "cost_missing" not in result.flags and isinstance(result.cost_usd, (int, float))
+        known = (result is not None and not self.inner._price_unknown
+                 and "cost_missing" not in result.flags and isinstance(result.cost_usd, (int, float)))
         actual = Decimal(str(result.cost_usd)).quantize(Decimal("0.000001")) if known else None
-        self.studio.ledger.settle(reservation, actual)
+        self.studio.ledger.settle(reservation, actual, trace_ids=list(self.inner._trace_ids),
+                                  outcome='error' if self.inner._infra or result is None else 'completed')
         if result is not None and actual is None and "billing=unknown" not in result.flags:
             result.flags.append("billing=unknown")
         if result is not None:

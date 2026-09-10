@@ -9,7 +9,9 @@ description: "Task list template for feature implementation"
 
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, contracts/
 
-**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
+**Tests**: Constitution II requires failing-test-first implementation and runnable
+evidence for features and bug fixes. Include the relevant tests before code;
+generic OPTIONAL labels in the examples below do not override that rule.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 

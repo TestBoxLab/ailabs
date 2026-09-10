@@ -289,9 +289,16 @@ def _buffered(resp) -> bytes:
     Nothing readable and nothing buffered is the same answer either way: nothing.
     """
     fp, sock = getattr(resp, "fp", None), _socket_of(resp)
-    if fp is None or sock is None or not select.select([sock], [], [], 0.2)[0]:
+    if fp is None or sock is None:
         return b""
     try:
+        # What the buffer already holds, first and without touching the socket:
+        # `urlopen` can pull the first SSE frame in while reading the headers, and
+        # then the socket has nothing pending -- waiting on `select` would time out
+        # and drop that frame. Only an empty buffer is a question for the socket.
+        if not fp.peek(0):
+            if not select.select([sock], [], [], 0.2)[0]:
+                return b""
         return fp.read1(65536)
     except (OSError, ValueError):
         return b""

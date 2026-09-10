@@ -23,10 +23,10 @@ from wb_results.store import Store
 
 @pytest.fixture(autouse=True)
 def hermetic(monkeypatch):
-    """No .env, no operator, the default approvers: every test says who launches."""
+    """No .env/operator; an explicit Lucas-only override tests restricted launches."""
     monkeypatch.setattr(cli, "load_dotenv", lambda *args, **kwargs: None)
     monkeypatch.delenv("WB_OPERATOR", raising=False)
-    monkeypatch.delenv("WB_APPROVERS", raising=False)
+    monkeypatch.setenv("WB_APPROVERS", "lucas")
     monkeypatch.delenv("MONARCH_ATTEMPT_CEILING_USD", raising=False)
 
 
@@ -51,10 +51,13 @@ def requests(tmp_path):
 
 # -- the identity ------------------------------------------------------------------
 
-def test_the_approvers_default_to_lucas_and_can_be_overridden():
-    assert approvals.approvers({}) == ("lucas",)
+def test_the_approvers_default_to_carlos_and_lucas_and_can_be_restricted():
+    for name in ("Carlos", "Carlos Mattos", "Lucas", "Lucas Wakigawa"):
+        assert approvals.is_approver(name, {}), name
+    assert not approvals.is_approver("agent", {})
     assert approvals.approvers({"WB_APPROVERS": "carlos, Alex,"}) == ("carlos", "alex")
-    assert approvals.is_approver("Lucas", {}) and not approvals.is_approver("carlos", {})
+    assert not approvals.is_approver("Carlos", {"WB_APPROVERS": "lucas"})
+    assert not approvals.is_approver("Carlos Mattos", {"WB_APPROVERS": "carlos"})
     assert approvals.operator({"WB_OPERATOR": "  Carlos "}) == "carlos"
     assert approvals.operator({}) is None and approvals.operator({"WB_OPERATOR": " "}) is None
 
@@ -77,19 +80,21 @@ def test_a_scripted_only_plan_needs_no_operator_and_no_ledger(site, tmp_path, ca
 
 # -- decision D5 -----------------------------------------------------------------------
 
-def test_an_approver_launch_runs_at_once_under_an_approved_record(site, tmp_path, mock_server, monkeypatch, capsys):
-    monkeypatch.setenv("WB_OPERATOR", "lucas")
+@pytest.mark.parametrize("name", ["carlos", "Carlos Mattos", "lucas", "Lucas Wakigawa"])
+def test_an_approver_launch_runs_at_once_under_an_approved_record(site, tmp_path, mock_server, monkeypatch, capsys, name):
+    monkeypatch.delenv("WB_APPROVERS")
+    monkeypatch.setenv("WB_OPERATOR", name)
     big_plan(site)
     assert wb(tmp_path, *run_args(site)) == 0
     out = capsys.readouterr().out
     (record,) = requests(tmp_path)
-    assert record["status"] == "approved" and record["requested_by"] == "lucas" and record["decided_by"] == "lucas"
+    assert record["status"] == "approved" and record["requested_by"] == name.lower() and record["decided_by"] == name.lower()
     assert record["plan_name"] == "smoke-frontier" and record["attempts_total"] == 22 and record["ceiling_usd"] == 5.0
     assert record["run_id"] and f"approval {record['id']}" in out
     store = Store(tmp_path / "wb.sqlite3")
     assert len(store.episodes(run=record["run_id"])["rows"]) == 22
     config = json.loads(store.run(record["run_id"])["config_json"])
-    assert config["launched_by"] == "lucas" and config["approval_request"] == record["id"]
+    assert config["launched_by"] == name.lower() and config["approval_request"] == record["id"]
     assert record["config_hash"] == store.run(record["run_id"])["config_hash"]
     assert BudgetLedger(tmp_path / "budget.sqlite3").status().actual_usd > 0
 

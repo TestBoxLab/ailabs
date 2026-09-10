@@ -76,7 +76,13 @@ a one-line notice when the key is set. See "Approvals and the weekly ledger" bel
 
 Every paid launch names its operator: `WB_OPERATOR=<name>` in the environment
 (`wb run`, `wb resume` and provider probes of `wb doctor` refuse without it).
-Approvers are `lucas` (override with `WB_APPROVERS=a,b`). Above smoke scale (20
+Default approvers are Carlos and Lucas: `carlos`, `carlos mattos`, `lucas`,
+`lucas wakigawa`. Names are matched exactly after trimming and lowercasing;
+there is no inferred alias expansion. A nonempty `WB_APPROVERS=a,b` replaces
+the entire default list, so `WB_APPROVERS=lucas` explicitly excludes Carlos.
+Attribute `WB_OPERATOR` to the human who requested the round, never the agent;
+configuration is not permission for an agent to approve its own round.
+Above smoke scale (20
 attempts per competitor, retries included), an approver's `wb run` runs at once
 under an approved record; anyone else's `wb run` writes a pending request,
 prints `<id> awaiting approval` and stops. An approver decides with
@@ -278,6 +284,65 @@ installed package version, naming both: a set imported under
 and the other way round. A set that records no world counts as `1.0.6`, the
 only world the bench had before it recorded one. Draw new sets from the corpus
 imported under the installed world; the old frozen sets stay as records.
+
+## Langfuse execution and spending history
+
+WorkflowBench automatically queues accounting transitions and completed attempt
+summaries in the same SQLite transaction as their local records. CLI controls,
+native brokers, Studio requests, preparation/analysis, Genesis and embeddings
+use the shared ledger path; completed attempts also use the results database.
+Configure `LANGFUSE_URL` (or `LANGFUSE_HOST`), `LANGFUSE_PUBLIC_KEY` and
+`LANGFUSE_SECRET_KEY`. The existing `LANGFUSE_OTLP_AUTH` credential form is also
+supported. Local and hosted processes must point at the same Langfuse project.
+No new dependency is required. `WB_LANGFUSE_ENABLED=0` disables network export
+while retaining pending records; automated tests set it to protect live history.
+
+Delivery runs after committing locally, through OTLP HTTP/JSON. Failed delivery
+keeps a durable pending record and never changes a verdict or retries a model
+call. The next accounting write retries the queue; a bounded shutdown grace
+helps short CLI commands finish delivery. Abrupt exits can still leave a queue.
+These commands use the top-level `--ledger` and `--db` paths and call no models:
+
+```powershell
+uv run wb telemetry status
+uv run wb telemetry flush
+uv run wb telemetry backfill
+uv run wb telemetry reconcile
+```
+
+`status` is read-only. `flush` sends at most 100 eligible pending records from
+each database and prints sent/error/pending/uncertain counts. A definite rejection
+can be retried. A timeout or lost acknowledgement stays uncertain: Langfuse v4
+does not reliably deduplicate repeated ingestion. `reconcile` reads up to ten
+uncertain observations per database and confirms those found remotely, without
+another POST. An absent remote record remains uncertain for operator inspection;
+absence from an eventually consistent API does not prove rejection. This
+telemetry reconciliation is separate from provider-invoice reconciliation.
+`backfill` queues existing ledger records and stored attempt summaries and starts
+automatic delivery when configured. It never changes balances or historical
+verdicts. Backfill cannot recover missing historical token receipts. For a
+different Studio installation, supply its actual database paths before the
+subcommand. Copying a database preserves its source identity; an independently
+created local or hosted database receives a different identity.
+
+In Langfuse, look for `WorkflowBench request`, `WorkflowBench billing` and
+`WorkflowBench summary`.
+Metadata includes source/scope/request identity, model/provider when recorded,
+outcome, reservation ceiling and actual cost when known. Token buckets are
+disjoint. Accounting states are immutable spans; the first known final receipt
+owns one separate immutable billing generation. Later metadata or outcome
+updates cannot bill that receipt again. Unknown billing remains a span with a
+reservation, never an inferred zero-cost generation. Monarch accounting links the original trace IDs and does
+not add another billable generation. Attempt summaries carry cost only as
+metadata, so they cannot double the requests' costs. No prompts, responses,
+answer keys, snapshots or arbitrary error text are exported by this integration.
+
+This is execution history, not invoice certification. A known ledger amount may
+be calculated from a provider token receipt and a rate card. Exporting it does
+not set `historical_billing_verified`, reconcile separate local/hosted ledgers,
+or release unknown-cost holds. See the September 10 historical accounting record.
+Transport and field mapping follow the
+[Langfuse OTLP reference](https://langfuse.com/integrations/native/opentelemetry).
 
 ## `corpus-<label>/MANIFEST.yaml`
 

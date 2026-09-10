@@ -15,6 +15,7 @@ from wb_studio.genesis_provider import response_inputs
 
 
 @pytest.mark.parametrize('model', ['gpt-5.6-sol', 'claude-opus-5', 'gemini-3.7-flash', 'kimi-k3'])
+@pytest.mark.skipif(not harness.codex_binary(), reason='Requires an installed Codex CLI; provider completions remain offline')
 def test_installed_codex_roundtrips_scoped_mcp_tool_through_sse(tmp_path, monkeypatch, model):
     requests, events, processes, actions = [], [], [], []
     usage = dict(prompt_tokens=100, cached_tokens=0, cache_write_tokens=0, output_tokens=20)
@@ -78,7 +79,7 @@ def test_broker_rounds_cost_and_settles_receipt_before_turn_outcome(tmp_path, mo
     usage = {'prompt_tokens': 101, 'cached_tokens': 7, 'cache_write_tokens': 0, 'output_tokens': 19}
     timeline = []
     ledger = Mock()
-    ledger.settle.side_effect = lambda identity, amount: timeline.append(('settle', identity, amount))
+    ledger.settle.side_effect = lambda identity, amount, **details: timeline.append(('settle', identity, amount))
     result = {'text': 'partial' if incomplete else 'done', 'calls': [], 'usage': usage,
               'finish_reason': 'length' if incomplete else 'stop', 'incomplete': incomplete}
     monkeypatch.setattr(harness, 'complete', Mock(return_value=result))
@@ -116,7 +117,9 @@ def test_broker_rounds_cost_and_settles_receipt_before_turn_outcome(tmp_path, mo
     harness.start_turn(genesis, {'id': 'precision', 'maximum_usd': '5', 'model': 'gpt-5.6-sol', 'effort':'high', 'message': 'offline'})
 
     assert harness.complete.call_args.args[1]['reasoning']=={'effort':'high'}
-    ledger.settle.assert_called_once_with('genesis-precision-1', Decimal('0.012346'))
+    ledger.settle.assert_called_once_with('genesis-precision-1', Decimal('0.012346'),
+        usage={'input': 94, 'output': 19, 'cache_read': 7, 'cache_write': 0},
+        outcome='error' if incomplete else 'completed')
     assert type(ledger.settle.call_args.args[1]) is Decimal
     assert responses == [400 if incomplete else 200]
     receipt_position = next(i for i, entry in enumerate(timeline) if entry[:2] == ('event', 'provider_receipt'))

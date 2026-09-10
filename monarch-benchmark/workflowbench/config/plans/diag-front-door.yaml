@@ -1,0 +1,22 @@
+name: diag-front-door
+description: >
+  One Monarch attempt, to tell an execution bug apart from an address bug.
+  On 9 Sep every Monarch attempt reached the front door for discovery
+  (12 to 41 GETs on /openapi/index.json, all 200) and then failed its first
+  execution step with "front door is not running on this host" while the shim
+  was still up. This plan runs one prompt and reads front-door.jsonl: if an
+  application call (/airtable/...) appears there, the address is fine and the
+  fault is in the engine; if only /openapi/ appears, the executor resolves a
+  different address than discovery does. Prompts: 1; attempts: 1; no retry.
+tasks: tasks/diag-one
+mode: create-run
+repetitions: 1
+retry_on_fail: 0
+timeout_s: 1800
+concurrency: 1
+competitors:
+  - {harness: monarch}
+cost_ceiling_usd: 8
+baseline: monarch
+audience: internal
+approved_by: Carlos Mattos     # approved 9 Sep 2026: one attempt, diagnostic

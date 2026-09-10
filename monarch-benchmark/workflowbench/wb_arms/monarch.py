@@ -398,7 +398,8 @@ class MonarchArm:
         known = ("cost_missing" not in res.flags and not self._price_unknown
                  and isinstance(res.cost_usd, (int, float)))
         actual = reservations.money(res.cost_usd) if known else None
-        self.ledger.settle(reservation, actual)
+        self.ledger.settle(reservation, actual, trace_ids=list(self._trace_ids),
+                           outcome='error' if self._infra else 'completed')
         if actual is None and "billing=unknown" not in res.flags:
             res.flags.append("billing=unknown")
         res.turn_log.append({"billing": {

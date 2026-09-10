@@ -45,6 +45,7 @@ field" from "a new record must appear".
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from functools import lru_cache
@@ -238,15 +239,139 @@ def _seeded_record(initial_state: dict[str, Any], service: str, collection: str,
         isinstance(r, dict) and str(r.get("id")) == str(rid) for r in records)
 
 
+@lru_cache(maxsize=None)
+def _logs_actions(service: str) -> bool:
+    """True when the vendor's world model types `<service>.actions` as a dict.
+
+    Asked of the schema, not of one task's seed: a seed that never mentions the
+    service still runs against a world where the log is a dict keyed by
+    action_key, so a list-shaped `<service>.actions[*]` matcher would match
+    nothing the run can produce.
+    """
+    from automationbench.schema.world import WorldState
+    f = WorldState.model_fields.get(service)
+    if f is None:
+        return False
+    args = getattr(f.annotation, "__args__", None)
+    state = args[0] if args else f.annotation
+    col = getattr(state, "model_fields", {}).get("actions")
+    return col is not None and getattr(col.annotation, "__origin__", None) is dict
+
+
 def _action_log(assertion_type: str, initial_state: dict[str, Any]) -> bool:
     """True when this assertion's service records actions as a keyed log."""
     split = _split_type(assertion_type)
     if split is None:
         return False
     service, collection, rest = split
+    # A service that logs actions writes EVERY change into that log -- a Jira
+    # issue created through the API lands at `jira.actions.create_issue[id=..]`
+    # and never at `jira.issues[*]` -- so the log is the right shape for it
+    # whatever collection the assertion's name happens to resolve to.
+    if _logs_actions(service):
+        return True
     if collection != "actions" and not rest.startswith("action_"):
         return False
     return isinstance((initial_state.get(service) or {}).get("actions"), dict)
+
+
+def _seeded_rows(initial_state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The sheet rows as the world really holds them: one flat list.
+
+    The seed nests rows under spreadsheets[].worksheets[].rows[]; WorldState's
+    validator flattens that into google_sheets.rows at load time, stamping each
+    row with its spreadsheet_id and worksheet_id. Reading the raw seed instead
+    is what produced a rule pointed at a subtree no sheets write ever touches.
+    """
+    gs = initial_state.get("google_sheets")
+    if not gs:
+        return []
+    # ponytail: the vendor's own validator does the flattening (and mints the
+    # ids the seed leaves null); reimplementing it here is a second copy to
+    # keep in step.
+    from automationbench.runner import strip_none_values
+    from automationbench.schema.world import WorldState
+    try:
+        world = WorldState(**strip_none_values({"google_sheets": copy.deepcopy(gs)}))
+    except Exception:
+        return []
+    return [r.model_dump(mode="json") for r in (world.google_sheets.rows or [])]
+
+
+def _sheets_columns(a: dict[str, Any]) -> list[str]:
+    """The columns the assertion names, in the order it names them."""
+    for key in ("column", "target_column"):
+        if isinstance(a.get(key), str) and a[key]:
+            return [a[key]]
+    for key in ("cell_contains", "cells"):
+        if isinstance(a.get(key), dict):
+            return [c for c in a[key] if isinstance(c, str)]
+    return []
+
+
+def _same_cell(got: Any, want: Any) -> bool:
+    """Cells are text in the world model; an assertion may say 62 for "62"."""
+    return got is not None and str(got).strip() == str(want).strip()
+
+
+def _sheets_matcher(a: dict[str, Any],
+                    initial_state: dict[str, Any]) -> dict[str, Any]:
+    """The rule for one sheets assertion, shaped by what the write will be.
+
+    An assertion that names a row the world already carries asks for an
+    in-place edit, which diffs as `changed` on that row's `cells.<Column>`.
+    The changed entry's `after` is then the new cell value, a scalar, so
+    `where` has nothing to read and the column in the path carries the
+    discrimination. Everything else asks for a row to appear, which diffs as
+    one `added` whose `after` is the whole row, and `where` anchors it on the
+    spreadsheet and worksheet the assertion names.
+    """
+    rid = a.get("row_id")
+    rows = _seeded_rows(initial_state)
+    ssid = a.get("spreadsheet_id") or a.get("spreadsheet")
+    wsid = a.get("worksheet_id")
+
+    def on_sheet(r: dict[str, Any]) -> bool:
+        return ((ssid is None or str(r.get("spreadsheet_id")) == str(ssid))
+                and (wsid is None or str(r.get("worksheet_id")) == str(wsid)))
+
+    on_sheet_rows = [r for r in rows if on_sheet(r)]
+    columns = _sheets_columns(a)
+    wanted = next((a[k] for k in ("cell_contains", "cells")
+                   if isinstance(a.get(k), dict)), None) or (
+        {columns[0]: a["value"]} if columns and "value" in a else {})
+
+    if rid is not None and any(str(r.get("row_id")) == str(rid)
+                               for r in on_sheet_rows):
+        cell = columns[0] if len(columns) == 1 else "*"
+        return {"service": "google_sheets", "op": "changed",
+                "path": f"google_sheets.rows[*].cells.{cell}"}
+
+    # No row id, but a row the seed already carries answers to the asserted
+    # cells save one: that one cell is the edit the task asks for. Two rows of
+    # a log that share an identifier are a coincidence, so a single hit counts.
+    if wanted and len(wanted) > 1:
+        for column in wanted:
+            others = {k: v for k, v in wanted.items() if k != column}
+            hits = [r for r in on_sheet_rows
+                    if all(_same_cell((r.get("cells") or {}).get(k), v)
+                           for k, v in others.items())
+                    and not _same_cell((r.get("cells") or {}).get(column),
+                                       wanted[column])]
+            if len(hits) == 1:
+                return {"service": "google_sheets", "op": "changed",
+                        "path": f"google_sheets.rows[*].cells.{column}"}
+
+    m: dict[str, Any] = {"service": "google_sheets", "op": "added",
+                         "path": "google_sheets.rows[*]"}
+    where = {}
+    if ssid:
+        where["spreadsheet_id"] = ssid
+    if wsid:
+        where["worksheet_id"] = wsid
+    if where:
+        m["where"] = where
+    return m
 
 
 def _rows_are_nested(assertion_type: str, initial_state: dict[str, Any]) -> bool:
@@ -316,6 +441,35 @@ def _schema_default(service: str, collection: str, field: str) -> Any:
     return spec.get_default(call_default_factory=False)
 
 
+def _content_of(a: dict[str, Any]) -> dict[str, Any]:
+    """The assertion's own content, as `where` keys over a logged action's params.
+
+    Only scalars are pinned: a nested object would make the rule demand an exact
+    shape the prompt never asked for.
+    """
+    where: dict[str, Any] = {}
+    for field, value in (a.get("fields") or {}).items():
+        if isinstance(value, (str, int, float, bool)):
+            where[f"params.fields.{field}"] = value
+    for key in ("tableName", "listId", "channel", "project", "issuetype"):
+        if isinstance(a.get(key), (str, int, float, bool)):
+            where[f"params.{key}"] = a[key]
+    # An `*_action_exists` assertion carries its content nested under `params`,
+    # which is exactly where the logged write stores it too. A `*_contains` key
+    # is a substring test, and `where` compares for equality, so pinning it
+    # would reject the correct answer; those keys are left to the assertion.
+    for key, value in (a.get("params") or {}).items():
+        if isinstance(value, (str, int, float, bool)) and not key.endswith("_contains"):
+            where.setdefault(f"params.{key}", value)
+    # A container alone ("this base", "this workspace") says nothing about which
+    # write was asked for, so it never pins a rule on its own.
+    if not where:
+        return {}
+    if isinstance(a.get("applicationId"), (str, int, float, bool)):
+        where["params.applicationId"] = a["applicationId"]
+    return where
+
+
 def _derived_matcher(a: dict[str, Any],
                      initial_state: dict[str, Any] | None = None,
                      ) -> tuple[dict[str, Any] | None, bool]:
@@ -337,30 +491,37 @@ def _derived_matcher(a: dict[str, Any],
     if collection == "$collection":
         collection = a.get("collection") or _object_collection(a) or "*"
 
-    # Google Sheets rows are not a flat collection: they live at
-    # spreadsheets[id=..].worksheets[id=..].rows[<index>], and the index is
-    # positional because a row carries row_id, not id. The matcher therefore
-    # names the worksheet the assertion names and leaves the row open.
+    # Google Sheets rows are not where the seed puts them. The seed nests them
+    # under spreadsheets[].worksheets[].rows[], but WorldState's validator
+    # flattens that at load time into three sibling collections, so a real
+    # sheets write only ever diffs as
+    #     added   google_sheets.rows[id=<uuid>]                 (an append)
+    #     changed google_sheets.rows[id=<uuid>].cells.<Column>  (an edit)
+    # The row's id is minted during the run, so no frozen rule can name it; the
+    # rule anchors on the spreadsheet (and worksheet) through `where` instead,
+    # which reads the added row's own fields.
     if service == "google_sheets" and collection in ("rows", "worksheets"):
-        ssid = a.get("spreadsheet_id") or a.get("spreadsheet")
-        # The diff addresses a list item by its `id`, falling back to its
-        # position when the record has none. These seeds carry the identifier
-        # under `spreadsheet_id` about as often as under `id`, so the matcher
-        # names the spreadsheet only when the seed really keys it that way.
-        if ssid and _seeded_record(initial_state, "google_sheets",
-                                   "spreadsheets", ssid):
-            path = f"google_sheets.spreadsheets[id={ssid}]*"
-        else:
-            path = "google_sheets.spreadsheets*"
-        return {"service": service, "op": "*", "path": path}, True
+        return _sheets_matcher(a, initial_state), True
 
     # An action log is a dict keyed by action_key, so the matcher names the one
     # key the assertion asks for rather than the whole log.
-    if collection == "actions" or rest.startswith("action_"):
+    #
+    # A service that logs actions writes EVERY change into that log: a Jira
+    # issue created through the API lands at `jira.actions.create_issue[id=..]`
+    # and never at `jira.issues[*]`. So the log is the right branch for such a
+    # service whatever collection the assertion's name resolves to.
+    if collection == "actions" or rest.startswith("action_") or _logs_actions(service):
         key = a.get("action_key")
         base = f"{service}.actions"
-        return {"service": service, "op": "*",
-                "path": f"{base}.{key}*" if key else f"{base}*"}, True
+        # The log key is minted during the run, so the matcher names the write's
+        # own content instead, and `count` pins how many were asked for: doing
+        # the requested thing 201 times is not doing the requested thing.
+        m = {"service": service, "op": "*",
+             "path": f"{base}.{key}*" if key else f"{base}*"}
+        where = _content_of(a)
+        if where:
+            m["where"], m["count"] = where, 1
+        return m, True
 
     # An id key only anchors the matcher to a record when it really names one
     # the world already carries. `slack_dm_sent_to`'s `user_id` is the
@@ -381,7 +542,15 @@ def _derived_matcher(a: dict[str, Any],
     field = _FIELD_ALIAS.get(field, field) if field else None
 
     if collection == "*":
-        return {"service": service, "op": "*", "path": f"{service}.*"}, True
+        # A service that only logs actions has no stable path to the record: the
+        # log key is minted during the run. The matcher names the write's own
+        # content instead, and `count` pins how many were asked for, so doing the
+        # requested thing 201 times is not a pass.
+        m = {"service": service, "op": "*", "path": f"{service}.*"}
+        where = _content_of(a)
+        if where:
+            m["where"], m["count"] = where, 1
+        return m, True
     if rid is not None:
         # A record that already exists: allow that one field, or that record.
         path = f"{service}.{collection}[id={rid}]"
@@ -441,12 +610,25 @@ def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
             present = _field_seeded(initial_state, service, collection, rid, field)
             m = {"service": service, "op": "changed" if present else "*",
                  "path": f"{service}.{collection}[id={rid}].{field}"}
+        elif (field and collection != "*" and "value" in a
+              and a["type"].endswith("_exists_with_field")
+              and not (initial_state.get(service) or {}).get(collection)):
+            # No record can be updated in an empty collection. The real diff
+            # adds the whole record, not a separate change to its field.
+            m = {"service": service, "op": "added", "path": f"{service}.{collection}[*]",
+                 "where": {field: a["value"]}, "count": 1}
         elif field and collection != "*":
             # property asserted on a record found by a non-id key: created or changed
             m = {"service": service, "op": "*", "path": f"{service}.{collection}[*].{field}"}
         else:
             m = {"service": service, "op": "added",
                  "path": f"{service}.{collection}[*]" if collection != "*" else f"{service}.*"}
+            if collection == "*":
+                # See _derived_matcher: an action log has no stable path, so the
+                # matcher pins the write's content and how many were asked for.
+                where = _content_of(a)
+                if where:
+                    m["where"], m["count"] = where, 1
         if m not in expected:
             expected.append(m)
 

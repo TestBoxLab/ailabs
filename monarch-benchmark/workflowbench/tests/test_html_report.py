@@ -948,7 +948,7 @@ class _ReadOnlyStore:
 
     A live round may be writing to `out/wb.sqlite3` while this test reads it, so
     this never opens the file read-write: `Store()` would set `journal_mode=WAL`
-    and run its schema DDL, which is a write. Only the two methods `build_report`
+    and run its schema DDL, which is a write. Only the methods `build_report`
     calls are implemented; anything else is deliberately absent so a future test
     cannot quietly start writing through this class.
 
@@ -971,6 +971,11 @@ class _ReadOnlyStore:
     def run(self, run_id):
         r = self._conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return dict(r) if r else None
+
+    def artifacts(self, episode_id):
+        """The third query a page needs, as the docstring above invites."""
+        return {r["kind"]: r["uri"] for r in self._conn.execute(
+            "SELECT kind, uri FROM artifacts WHERE episode_id=?", (episode_id,))}
 
     def episodes(self, suite=None, arm=None, run=None):
         q, args = "SELECT row_json FROM episodes WHERE 1=1", []
@@ -1371,8 +1376,8 @@ def test_executive_page_shape(phase_store, tmp_path):
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 4          # the four headline cards
-    assert page.count('class="bars"') == 4           # one chart per metric
+    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
+    assert page.count('class="bars"') == 5           # one chart per metric
     assert "Success, first try" in page
     assert "Success after one retry" in page
     assert "Monarch benchmark" in page
@@ -1578,8 +1583,8 @@ def test_executive_page_shape(phase_store, tmp_path):
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
         assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 4          # the four headline cards
-    assert page.count('class="bars"') == 4           # one chart per metric
+    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
+    assert page.count('class="bars"') == 5           # one chart per metric
     assert "Success, first try" in page
     assert "Success after one retry" in page
     assert "Monarch benchmark" in page
@@ -1883,10 +1888,11 @@ def test_technical_page_shows_the_answer_key_as_na(tmp_path):
     # the sentence under the success table, and the reason on every oracle cell
     assert NA_REASON in page
     assert page.count(f'title="{NA_REASON}"') >= 3
-    # the success table's oracle row shows n/a for every result column; the
-    # attempt and infrastructure counts stay real
+    # the success table's oracle row shows n/a for every result column, the two
+    # collateral columns included: a task the answer key cannot act on has no
+    # collateral either. The attempt and infrastructure counts stay real.
     row = re.search(r"<tr><td>oracle</td>.*?</tr>", page, re.S).group(0)
-    assert row.count(f'title="{NA_REASON}">n/a<') == 7
+    assert row.count(f'title="{NA_REASON}">n/a<') == 9
     # the matrix cell for the oracle is n/a, and the charts show no oracle bar
     assert '<td class="num" title="' + NA_REASON + '">n/a</td>' in page
     # the paired comparison against the answer key is skipped, with the reason
@@ -2061,3 +2067,16 @@ def test_front_door_columns_and_failure_detail(phase_store, tmp_path):
     assert "front door" in section and "front door errors" in section
     failures = page[page.index('id="failures"'):]
     assert "last front-door error: GET /bench-airtable/read/root -&gt; 404" in failures
+
+
+def test_the_executive_page_shows_collateral_damage(phase_store):
+    """Two competitors can share a pass rate and differ entirely in how much
+    they touched that nobody asked for; the stakeholder page has to say so."""
+    from wb_report.report import build_report, render_executive
+    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+                                         baseline_arm=None))
+    text = re.sub(r"<[^>]+>", " ", page).lower()
+    # Plain words on purpose: the stakeholder page says what the number counts,
+    # not the word the code uses for it.
+    assert "changes nobody asked for" in text
+    assert "read it next to the success rate" in text

@@ -1,7 +1,7 @@
 """Who may launch a paid round, and the record of it (decision D5, milestone M3).
 
 The launcher is named by `WB_OPERATOR`. Approvers (`WB_APPROVERS`, default
-`lucas`) run at once under an approved record; anyone else's launch above
+Carlos or Lucas, by first or full name) run at once under an approved record; anyone else's launch above
 smoke scale creates a pending request that an approver decides with
 `wb approve <id>` or `wb deny <id>`; `wb run --request <id>` then runs it,
 by any operator, as long as the config hash still matches, once. Smoke scale
@@ -26,7 +26,7 @@ from wb_orchestrator.config import SMOKE_SCALE_ATTEMPTS
 
 OPERATOR_ENV = "WB_OPERATOR"
 APPROVERS_ENV = "WB_APPROVERS"
-DEFAULT_APPROVERS = ("lucas",)
+DEFAULT_APPROVERS = ("carlos", "carlos mattos", "lucas", "lucas wakigawa")
 
 NO_OPERATOR = ("WB_OPERATOR is not set: a paid launch names the person launching it "
                "(set WB_OPERATOR=<name> in the environment)")

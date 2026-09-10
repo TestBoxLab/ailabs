@@ -9,6 +9,19 @@ the targets change. Update it in place.
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
+10 September continuation: shared harness instructions reconciled. Carlos's final
+comparability decision preserves upstream world, routes, seeds and assertions;
+only our approval-rule translation may change. Airtable/invoice limitations and
+upstream issue drafts: docs/rounds/2026-09-10-upstream-limitations.md. Retained
+Salesforce correction: docs/rounds/2026-09-10-invoice-jira-corrections.md.
+Evalrepair adoption is suspended. Langfuse usage reconciliation and deployment
+status are linked in STATE-OF-THE-PROGRAM section 13.
+Deployment is complete with the catalogue preserved. One diagnostic confirmed
+application routing and reproduced the filter trap, then hit missing writer
+pricing. A successor price configuration and approver defaults are verified
+offline; the original result and unknown-cost holds remain intact. Full-suite
+and focused follow-up outcomes are recorded in that same section.
+
 ---
 
 ## 1. Test methodology
