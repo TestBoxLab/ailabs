@@ -76,15 +76,49 @@ def streaming(studio, tasks):
         emit("model_delta", task=second, model="sloppy", node="agent:model-1", text=text, turn=1)
 
 
+def configured_results_handler(studio):
+    """Emit actual result SSE messages after subscription, including repeated pairs."""
+    source = studio.jobs()[0]["results"][0]
+    job = studio.create({"request_id": "fixture-config-results", "title": "Configured result stream fixture",
+                         "models": [source["model"]], "tasks": [source["task"]], "maximum_usd": "3.00"}, start=False)
+    identity = job["id"]
+    first = dict(source, episode_id="fixture-initial", cost_usd=0.25)
+    job.update(status="running", config_source={"commit": "fixture"},
+               results=[first], completed=1, total=3, cost_usd=0.25)
+    job["settings"]["plan_semantics"] = True
+    studio.save(job)
+    subscribed = threading.Event()
+
+    def publish():
+        retries = [dict(first, episode_id="fixture-retry-1", cost_usd=0.5, flags=["retry"]),
+                   dict(first, episode_id="fixture-retry-2", cost_usd=0.75, flags=["retry"])]
+        job.update(results=[first, *retries], completed=3, cost_usd=1.5)
+        studio.save(job)
+        for result in retries:
+            studio.emit(identity, "result", **result)
+
+    class ResultHandler(handler(studio)):
+        def do_GET(self):
+            if self.path == f"/api/jobs/{identity}/events" and not subscribed.is_set():
+                subscribed.set()
+                timer = threading.Timer(1, publish)
+                timer.daemon = True
+                timer.start()
+            super().do_GET()
+
+    return ResultHandler
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--keep", action="store_true", help="keep the temporary workspace")
     parser.add_argument("--live", action="store_true", help="add a run left mid-stream for the live views")
+    parser.add_argument("--configured-results", action="store_true", help="emit configured result events with retries")
     args = parser.parse_args(argv)
     directory = Path(tempfile.mkdtemp(prefix="ailabs-browser-"))
     studio = build(directory / "studio", live=args.live)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(studio))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), configured_results_handler(studio) if args.configured_results else handler(studio))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"READY http://127.0.0.1:{args.port} workspace={directory}", flush=True)
