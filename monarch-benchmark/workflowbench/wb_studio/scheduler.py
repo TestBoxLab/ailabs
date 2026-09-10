@@ -29,10 +29,20 @@ class Scheduler:
         self._stop = threading.Event()
         self._thread = None
 
-    def daily(self, name: str, hour: int, fn) -> None:
-        if not 0 <= int(hour) <= 23:
+    def daily(self, name: str, hour, fn) -> None:
+        """`hour` is 0 to 23, or a callable of the Studio that returns it when the job is checked."""
+        if not callable(hour) and not 0 <= int(hour) <= 23:
             raise ValueError("hour is 0 to 23")
-        self.jobs.append({"name": name, "hour": int(hour), "fn": fn})
+        self.jobs.append({"name": name, "hour": hour if callable(hour) else int(hour), "fn": fn})
+
+    def _hour(self, job) -> int:
+        hour = job["hour"]
+        if callable(hour):
+            try:
+                return int(hour(self.studio))
+            except Exception:
+                return 23  # a setting that cannot be read runs the job late, never never
+        return int(hour)
 
     def discover(self) -> None:
         """Register every module that offers a DAILY job; a missing module is not an error."""
@@ -42,8 +52,11 @@ class Scheduler:
             except ImportError:
                 continue
             offer = getattr(module, "DAILY", None)
-            if offer and not any(j["name"] == offer[0] for j in self.jobs):
-                self.daily(*offer)
+            if not offer:
+                continue
+            for job in (offer if isinstance(offer[0], (tuple, list)) else [offer]):
+                if not any(j["name"] == job[0] for j in self.jobs):
+                    self.daily(*job)
 
     def _read(self) -> dict:
         try:
@@ -55,7 +68,7 @@ class Scheduler:
         now = now or now_sao_paulo()
         stamps = self._read()
         today = now.date().isoformat()
-        return [j for j in self.jobs if now.hour >= j["hour"] and (stamps.get(j["name"]) or {}).get("day") != today]
+        return [j for j in self.jobs if now.hour >= self._hour(j) and (stamps.get(j["name"]) or {}).get("day") != today]
 
     def run(self, name: str, now: datetime | None = None) -> dict:
         """Run one job now, whatever the clock says, and stamp it."""
@@ -83,7 +96,7 @@ class Scheduler:
 
     def status(self) -> list:
         stamps = self._read()
-        return [{"name": j["name"], "hour": j["hour"], **{k: v for k, v in (stamps.get(j["name"]) or {}).items() if k != "trace"}} for j in self.jobs]
+        return [{"name": j["name"], "hour": self._hour(j), **{k: v for k, v in (stamps.get(j["name"]) or {}).items() if k != "trace"}} for j in self.jobs]
 
     def start(self, interval_s: float = 300) -> None:
         """One daemon thread that checks the clock; only the owning web process calls this."""

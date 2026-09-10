@@ -92,6 +92,7 @@ MEMORY_ACTIONS={
     'memory_replace':lambda m,p:m.replace(p.get('old'),p.get('new'),p.get('record')),
     'memory_remove':lambda m,p:m.remove(p.get('old')),
     'note_write':lambda m,p:m.note_write(p.get('card'),p.get('text')),
+    'memory_recent':lambda m,p:m.recent(int(p.get('limit') or 20)),
     'record_search':lambda m,p:m.search(p.get('query'),p.get('limit',10))}
 
 class Genesis:
@@ -138,15 +139,7 @@ class Genesis:
         for card in cards:
             job=None
             if card.get('job'):
-                try:
-                    job=self.studio.job(card['job']);card['run_status']=job['status']
-                    if card['stage']=='running' and card['run_status'] not in ('queued','running','cancelling'):
-                        card['stage']='review'
-                        if card.get('plan') and self.autonomy.read()['cards']=='act':
-                            card['question']="The run finished. Read the grader's results with read_run and write the verdict on this card: supported, not supported or inconclusive, every sentence tagged [rec:...], exploratory notes in a separate block."
-                            card['work']={'status':'queued','queued_at':stamp()};card['auto']=True
-                            self.autonomy.record('debrief',card=card['id'],job=card.get('job'),status=card['run_status'])
-                        with self.lock: write_json(self.path('cards',card['id']),card)
+                try: job=self.studio.job(card['job']);card['run_status']=job['status']
                 except FileNotFoundError: card['run_status']='unavailable'
             card['outcome']=hypothesis_outcome(card,job)
         analyzed=[]
@@ -158,6 +151,45 @@ class Genesis:
         analyzed += [{'run':a['run'],'title':a.get('summary') or a['run'],'status':a['status']} for a in [json.loads(p.read_text(encoding='utf8')) for p in (self.root/'analyses').glob('*.json')]]
         routes=model_routes()
         return {'cards':cards,'turns':self.listing('turns')[-30:],'threads':self.threads(),'models':routes,'analyzed':analyzed,'stages':STATES,'watcher':self.watcher.status(),'autonomy':self.autonomy.read(),'config':{**self.config.read(),'effective':self.config.effective(routes)}}
+    def debrief(self):
+        """A card whose run reached a terminal state moves to Review; a planned one is re-queued with the
+        verdict question when the Cards dial says act. The watcher calls this on every wake (R2), never a GET."""
+        out=[]
+        act=self.autonomy.read()['cards']=='act'
+        for card in self.listing('cards'):
+            if card['stage']!='running' or not card.get('job'): continue
+            try: status=self.studio.job(card['job'])['status']
+            except FileNotFoundError: continue
+            if status in ('queued','running','cancelling'): continue
+            with self.lock:
+                card=self.read('cards',card['id'])
+                if card['stage']!='running': continue
+                card['stage']='review'
+                if card.get('plan') and act:
+                    card['question']="The run finished. Read the grader's results with read_run and measures and write the verdict on this card: supported, not supported or inconclusive, every sentence tagged [rec:...], exploratory notes in a separate block."
+                    card['work']={'status':'queued','queued_at':stamp()};card['auto']=True
+                write_json(self.path('cards',card['id']),card)
+            if card.get('plan') and act: self.autonomy.record('debrief',card=card['id'],job=card.get('job'),status=status)
+            out.append(card['id'])
+        return out
+    def _index(self,rows):
+        """A record enters the search index when it is written, not at 03:00 (R8); indexing never fails a write."""
+        try: self.memory.index_records(rows)
+        except Exception: pass
+    def envelope(self):
+        """What Genesis's weekly envelope holds now, or None when the ledger cannot say."""
+        try:
+            from wb_studio.usage import ledger_lines
+            return self.access.envelope(ledger_lines(self.studio)['lines'])
+        except Exception: return None
+    def envelope_allows(self,amount):
+        """(ok, reason): whether the envelope still covers `amount` (R4)."""
+        from decimal import Decimal
+        state=self.envelope()
+        if state is None: return True,None
+        left=Decimal(state['left_usd'])
+        if left<Decimal(str(amount)): return False,f"Genesis's weekly envelope cannot cover ${Decimal(str(amount)):.2f}: ${left:.2f} left of ${Decimal(state['envelope_usd']):.2f}. Raise it under Settings, Genesis, or wait for the week to reset."
+        return True,None
     def card(self,payload):
         with self.lock:
             identity=payload.get('id') or uuid.uuid4().hex
@@ -173,7 +205,7 @@ class Genesis:
                 write_json(archive/(str(old['revision'])+'.json'),old)
                 record={**old,'stage':payload['stage'],'body':str(payload.get('body',old['body']))[:20000],'revision':old['revision']+1,'updated_at':stamp(),
                         'review':payload.get('review',old.get('review')),'settlement':payload.get('settlement',old.get('settlement')),'hypothesis':payload.get('hypothesis',old.get('hypothesis'))}  # feature 022: a card that ran still takes its review and settlement
-                write_json(path,record);return record
+                write_json(path,record);self._index([{'kind':'card','id':identity,'updated_at':record['updated_at'],'title':record['title'],'body':record['title']+'\n'+record.get('body','')}]);return record
             if old and old['stage']=='running': raise ValueError('A dispatched proposal cannot be edited')
             title=str(payload.get('title','')).strip()
             if not title or len(title)>140: raise ValueError('Give the research card a short title')
@@ -203,6 +235,7 @@ class Genesis:
                 archive=self.root/'card-history'/identity;archive.mkdir(parents=True,exist_ok=True)
                 write_json(archive/(str(old['revision'])+'.json'),old)
             write_json(path,record)
+        self._index([{'kind':'card','id':identity,'updated_at':record['updated_at'],'title':record['title'],'body':record['title']+'\n'+record.get('body','')}])
         if not old: self.autonomy.record('card',card=identity,card_kind=record.get('kind'),stage=record['stage'],title=record['title'][:80],by=payload.get('by'))
         elif old['stage']!=record['stage']: self.autonomy.record('stage',card=identity,before=old['stage'],after=record['stage'],by=payload.get('by'))
         return record
@@ -297,7 +330,7 @@ class Genesis:
     def work_now(self,identity):
         """A person asks for a queued card to be worked at once, under the same allowances the watcher applies."""
         card=self.read('cards',identity)
-        if (card.get('work') or {}).get('status')!='queued': raise ValueError('Only a queued card can be worked now')
+        if (card.get('work') or {}).get('status') not in ('queued','failed','stopped'): raise ValueError('Only a queued, failed or stopped card can be worked now')
         if self.autonomy.read()['paused']: raise ValueError('Genesis is paused; turn it back on first')
         if self.watcher._cards('working'): raise ValueError('Genesis is already working on a card; it takes this one next')
         reason=self.watcher.refusal()
@@ -344,6 +377,24 @@ class Genesis:
     def autonomy_words(self):
         a=self.autonomy.read()
         return ('Autonomy now: cards '+a['cards']+', runs '+a['runs']+(', paused' if a['paused'] else '')+'. Smoke scale is at most '+str(a['smoke_attempts'])+' attempts per competitor; your per-card ceiling is $'+str(a['card_usd'])+' and the daily allowance $'+str(a['daily_usd'])+'.')
+    def launch_if_allowed(self,identity,by='genesis:smoke'):
+        """The gates a smoke launch passes, on a card that already carries a plan: the dials and allowances,
+        the envelope, then every plugin gate (the Reviewer). Called by propose_experiment and again by the
+        Reviewer when it accepts, so an accepted smoke plan launches without a second turn (R3)."""
+        card=self.read('cards',identity)
+        if card.get('job') or card['stage']!='approval' or not card.get('plan'): return {'card':identity,'launched':False,'reason':'This card has no plan waiting.'}
+        ok,reason=self.autonomy.may_launch(card['plan'],self.watcher.today_usd(),self.watcher.card_usd,self.watcher.cap_usd)
+        if ok: ok,reason=self.envelope_allows(card['plan']['maximum_usd'])
+        if ok:
+            from wb_studio.genesis_plugins import gate_launch
+            ok,reason=gate_launch(self,card)
+        if ok:
+            with self.lock: launched=self._dispatch(self.read('cards',identity),by=by)
+            return {'card':identity,'stage':launched['stage'],'job':launched.get('job'),'plan':card['plan'],'launched':True}
+        with self.lock:
+            record=self.read('cards',identity);record['waiting']=reason;write_json(self.path('cards',identity),record)
+        self.autonomy.record('waiting',card=identity,reason=reason)
+        return {'card':identity,'stage':'approval','plan':card['plan'],'launched':False,'reason':reason}
     def propose_experiment(self,payload):
         """The model's plan. The Studio computes every number; a smoke plan within the allowances launches at once, anything else waits for a person."""
         from wb_studio.genesis_autonomy import plan_lines
@@ -357,18 +408,7 @@ class Genesis:
         base={'id':existing['id'],'revision':existing['revision'],'title':existing['title'],'body':existing['body'],'kind':existing.get('kind','hypothesis'),'evidence':existing.get('evidence',[]),'parent':existing.get('parent'),'question':existing.get('question')} if existing else {'title':str(payload.get('title') or 'Experiment')[:140],'body':str(payload.get('body','')),'kind':'hypothesis','evidence':payload.get('evidence',[])}
         record=self.card({**base,'stage':'approval','proposal':proposal,'plan':plan,'auto':False,'by':'genesis'})
         self.autonomy.record('plan',card=record['id'],lines=plan['lines'],maximum_usd=plan['maximum_usd'],attempts=plan['attempts'])
-        ok,reason=self.autonomy.may_launch(plan,self.watcher.today_usd(),self.watcher.card_usd,self.watcher.cap_usd)
-        if ok:
-            from wb_studio.genesis_plugins import gate_launch
-            ok,reason=gate_launch(self,self.read('cards',record['id']))  # feature 022: the Reviewer's acceptance, once that chamber exists
-        if ok:
-            with self.lock:
-                launched=self._dispatch(self.read('cards',record['id']),by='genesis:smoke')
-            return {'card':launched['id'],'stage':launched['stage'],'job':launched.get('job'),'plan':plan,'launched':True}
-        with self.lock:
-            record=self.read('cards',record['id']);record['waiting']=reason;write_json(self.path('cards',record['id']),record)
-        self.autonomy.record('waiting',card=record['id'],reason=reason)
-        return {'card':record['id'],'stage':'approval','plan':plan,'launched':False,'reason':reason}
+        return self.launch_if_allowed(record['id'])
     def ask_question(self,payload):
         """A free question card in Your review; the card it blocks waits until a person answers."""
         question=str(payload.get('question','')).strip()
@@ -429,6 +469,7 @@ class Genesis:
             if kind=='text_delta': turn['answer']+=data.get('text','')
             write_json(self.path('turns',identity),turn)
         if kind in ('completed','failed'):
+            self._index([{'kind':'turn','id':identity,'updated_at':event['at'],'title':turn.get('message','')[:120],'body':turn.get('message','')+'\n'+turn.get('answer','')}])
             self.studio.ledger.record_summary('genesis-'+identity,
                 {'scope_id': 'genesis-'+identity, 'purpose': 'Genesis', 'model': turn.get('model'),
                  'termination': kind, 'finished_at': event['at']})
@@ -456,9 +497,11 @@ class Genesis:
         identity=payload.get('id') or uuid.uuid4().hex
         if self.path('turns',identity).exists(): raise ValueError('This turn id is already taken')
         purpose=str(payload.get('purpose') or 'Genesis conversation')
+        ok,reason=self.envelope_allows(maximum)  # R4: the envelope is a gate, checked once per turn before its reservation
+        if not ok: raise ValueError(reason)
         thread=self.thread_for(payload,text) if purpose=='Genesis conversation' else None
         self.studio.ledger.reserve_run('genesis-'+identity,maximum,metadata={'purpose':purpose,'model':model['id'],'by':'person' if purpose=='Genesis conversation' else 'genesis'})
-        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'thread':thread['id'] if thread else None,'by':payload.get('by') or 'human:studio'}
+        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'thread':thread['id'] if thread else None,'by':payload.get('by') or ('human:studio' if purpose=='Genesis conversation' else 'genesis')}
         write_json(self.path('turns',identity),turn)
         if thread:
             with self.lock:
@@ -549,8 +592,10 @@ class Genesis:
         if action=='save_research': return self.card(payload)
         if action=='library_list': return self.library.listing(**{k:payload.get(k) for k in ('published_from','published_to','discovered_from','discovered_to','topic','status')})
         if action=='library_read': return self.library.read(payload['id'])
-        if action=='library_save': return self.library.add(payload)
-        if action=='library_analyze': return self.library.analyze(payload['id'],payload)
+        if action in ('library_save','library_analyze'):
+            record=self.library.add(payload) if action=='library_save' else self.library.analyze(payload['id'],payload)
+            self._index([{'kind':'library','id':record['id'],'updated_at':record.get('analyzed_at') or record.get('created_at'),'title':record['title'],'body':record['title']+'\n'+(record.get('abstract') or '')+'\n'+(record.get('analysis') or '')}])
+            return record
         if action=='library_use': return self.library.use(payload['id'],payload)
         if action=='library_reclassify': return self.library.reclassify(payload['id'],{**payload,'by':'genesis'})
         if action=='propose_experiment': return self.propose_experiment(payload)

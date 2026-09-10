@@ -418,7 +418,7 @@ check('settings: budget, capacity, providers with key presence, Monarch pin, all
     assert(/Key present|No key/.test(providers), 'each provider says whether a key is present: ' + providers);
     assert(!/sk-|AIza/.test(providers), 'no key value on the page');
     at('genesis configuration'); await p.waitForSelector('#settings-genesis-config .step-table');
-    assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 13, 'one row per step of Genesis\'s work');
+    assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 9, 'one row per step of Genesis\'s work');
     const genesisText = await p.locator('#settings-genesis-config').innerText();
     assert(/envelope/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
     await p.waitForSelector('#config-jobs .schedule-table'); assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');

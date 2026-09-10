@@ -174,11 +174,20 @@ class _OpenAIAdapter:
     def start(self, system: str, brief: str) -> list[dict]:
         return [{"role": "system", "content": system}, {"role": "user", "content": brief}]
 
+    def _cap(self) -> dict:
+        # `max_output`, when a caller sets it, is the output cap the caller reserved for (Genesis).
+        cap = getattr(self, "max_output", None)
+        return {"max_tokens": int(cap)} if cap else {}
+
+    def _tools(self) -> dict:
+        # An empty tool list is left out of the request: some compatible providers refuse `tools: []`.
+        return {"tools": self.tools} if self.tools else {}
+
     def turn(self, messages: list[dict], timeout: float | None = None) -> dict:
         kwargs = {"timeout": timeout} if timeout is not None else {}
         try:
             if getattr(self,'on_text',None):
-                raw=self.client.chat.completions.with_raw_response.create(model=self.provider.model_id,messages=messages,tools=self.tools,stream=True,stream_options={'include_usage':True},**kwargs)
+                raw=self.client.chat.completions.with_raw_response.create(model=self.provider.model_id,messages=messages,stream=True,stream_options={'include_usage':True},**self._tools(),**self._cap(),**kwargs)
                 headers=dict(raw.headers);message={'role':'assistant','content':''};calls={};usage=None;finish=None
                 with raw.parse() as stream:
                     for chunk in stream:
@@ -202,7 +211,7 @@ class _OpenAIAdapter:
                 resp=ChatCompletion.model_validate({'id':'streamed','object':'chat.completion','created':0,'model':self.provider.model_id,'choices':[{'index':0,'message':message,'finish_reason':finish}],'usage':usage})
             else:
                 raw = self.client.chat.completions.with_raw_response.create(
-                    model=self.provider.model_id, messages=messages, tools=self.tools, **kwargs)
+                    model=self.provider.model_id, messages=messages, **self._tools(), **self._cap(), **kwargs)
                 resp = raw.parse()
                 headers = dict(raw.headers)
         except self._openai.RateLimitError as e:
@@ -279,6 +288,11 @@ class _GeminiAdapter:
     def turn(self, contents: list, timeout: float | None = None) -> dict:
         # (Gemini client timeout is fixed at construction; the loop's deadline
         # check still bounds the episode.)
+        cap, budget = getattr(self, "max_output", None), getattr(self, "thinking_budget", None)
+        if cap:
+            self.config.max_output_tokens = int(cap)
+        if budget is not None:
+            self.config.thinking_config = self.types.ThinkingConfig(include_thoughts=True, thinking_budget=int(budget))
         try:
             resp = self.client.models.generate_content(
                 model=self.provider.model_id, contents=contents, config=self.config)
@@ -348,7 +362,7 @@ class _OpenAIResponsesAdapter:
         client = self.client.with_options(timeout=timeout) if timeout is not None else self.client
         try:
             params = dict(model=self.provider.model_id, instructions=self.instructions,
-                input=items, tools=self.tools, reasoning={"effort": self.effort, "summary": "auto"}, max_output_tokens=16000)
+                input=items, tools=self.tools, reasoning={"effort": self.effort, "summary": "auto"}, max_output_tokens=int(getattr(self, "max_output", None) or 16000))
             if getattr(self,"on_text",None):
                 resp = None
                 for event in client.responses.create(**params,stream=True):
@@ -432,7 +446,7 @@ class _AnthropicAdapter:
             # tokens) is under Opus 4.8's 1024-token cache minimum, so the
             # per-block breakpoints on tools/system only pay off once history
             # is appended; this one makes every turn cache the previous turn.
-            params = dict(model=self.provider.model_id, max_tokens=16000,
+            params = dict(model=self.provider.model_id, max_tokens=int(getattr(self, "max_output", None) or 16000),
                 system=self.system, tools=self.tools, messages=messages,
                 cache_control={"type": "ephemeral"}, thinking={"type": "adaptive"},
                 output_config={"effort": self.effort})

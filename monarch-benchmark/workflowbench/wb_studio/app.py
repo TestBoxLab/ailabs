@@ -1027,7 +1027,9 @@ def handler(studio):
                     from wb_studio.report_data import round_report, run_report
                     build = run_report if report_match[1] == 'run' else round_report
                     return self.send_json(build(studio, report_match[2], self.audience(url)))
-                if url.path == '/api/genesis': return self.send_json(studio.genesis.state())
+                if url.path == '/api/genesis':
+                    person=self.person()
+                    return self.send_json({**studio.genesis.state(),'me':('human:'+person['name']) if person else 'human:studio'})
                 if url.path == '/api/genesis/schedule': return self.send_json({'jobs': studio.scheduler.status()})
                 thread_match=re.fullmatch(r'/api/genesis/threads/([a-zA-Z0-9_-]+)',url.path)
                 if thread_match: return self.send_json(studio.genesis.thread(thread_match[1]))
@@ -1188,6 +1190,12 @@ def handler(studio):
                 if self.path == '/api/genesis/cards': return self.send_json(studio.genesis.card(payload),201)
                 genesis_approval=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/approve',self.path)
                 if genesis_approval: return self.send_json(studio.genesis.approve(genesis_approval[1],payload))
+                genesis_review=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/review',self.path)
+                if genesis_review:
+                    from wb_studio import genesis_reviewer
+                    out=genesis_reviewer.request_review(studio.genesis,genesis_review[1],payload.get('subject','plan'))
+                    studio.genesis.autonomy.record('review-asked',card=genesis_review[1],by=payload.get('by') or 'human:studio')
+                    return self.send_json(out,201)
                 if self.path == '/api/genesis/library': return self.send_json(studio.genesis.library.add(payload),201)
                 if self.path == '/api/genesis/library/import': return self.send_json(studio.genesis.library.import_ledger(REPO/'research'/'search-log.jsonl'),201)
                 library_action=re.fullmatch(r'/api/genesis/library/([a-zA-Z0-9_-]+)/(analyze|use|reclassify)',self.path)

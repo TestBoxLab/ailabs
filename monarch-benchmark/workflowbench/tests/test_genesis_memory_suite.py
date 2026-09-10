@@ -105,7 +105,7 @@ def test_the_track_record_counts_the_outcomes_and_scores_the_priors(genesis, mon
     assert suite.write_track(genesis)['size'] == len(text)
     monkeypatch.setattr(harness, 'freshness', lambda now=None: 'FRESHNESS')
     genesis.memory.add('Lab fact', 'turn:t1', now=T0)
-    prompt = harness.build_prompt(genesis, {'id': 'x', 'message': 'hello'})
+    prompt = harness.prompt_text(genesis, {'id': 'x', 'message': 'hello'})
     assert prompt.index('Core memory') < prompt.index('Track record (TRACK.md, computed by the Studio):') < prompt.index('Previous exchange:')
     # no priors at all: the line says so instead of printing a score
     for name in ('h1', 'h2'):

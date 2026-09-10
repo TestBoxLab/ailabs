@@ -144,7 +144,7 @@ def test_record_indexes_turns_cards_and_sources_incrementally(genesis, memory):
     (genesis.root / 'turns' / 'turn-a.json').write_text(json.dumps({'id': 'turn-a', 'status': 'completed', 'message': 'What did the gateway retry?', 'answer': 'Retry caps helped.', 'created_at': '2026-09-08T10:00:00+00:00', 'events': [{'id': 1, 'type': 'completed', 'at': '2026-09-08T10:05:00+00:00'}]}), encoding='utf8')
     (genesis.root / 'analyses').mkdir(exist_ok=True)
     (genesis.root / 'analyses' / 'fp1.json').write_text(json.dumps({'run': 'run-1', 'summary': 'Gateway timeouts dominate', 'findings': [{'kind': 'fact', 'text': 'timeouts at node 3', 'event_ids': [1]}], 'created_at': '2026-09-07T10:00:00+00:00'}), encoding='utf8')
-    assert memory.index_all(genesis.studio) == {'indexed': 4, 'total': 4}
+    assert memory.index_all(genesis.studio) == {'indexed': 3, 'total': 4}  # the card entered the index when it was written
     assert memory.index_all(genesis.studio) == {'indexed': 0, 'total': 4}
     hits = memory.search('retry caps')
     assert {(h['kind'], h['id']) for h in hits} == {('card', 'card-a'), ('turn', 'turn-a')}
@@ -155,16 +155,14 @@ def test_record_indexes_turns_cards_and_sources_incrementally(genesis, memory):
     with pytest.raises(ValueError, match='few words'):
         memory.search('  ')
     genesis.card({**genesis.read('cards', 'card-a'), 'body': 'Updated with a unicorn.'})
-    assert memory.index_all(genesis.studio)['indexed'] == 1
-    assert [h['id'] for h in memory.search('unicorn')] == ['card-a']
+    assert [h['id'] for h in memory.search('unicorn')] == ['card-a']   # indexed as it was written, before any nightly pass
+    assert memory.index_all(genesis.studio)['indexed'] == 0
 
 
 def test_tool_dispatch_returns_plain_sentences_and_hides_pin(genesis):
-    import ast, re
-    from pathlib import Path
-    source = (Path(harness.__file__).with_name('genesis_mcp.py')).read_text(encoding='utf8')  # the adapter reads stdin on import
-    ACTIONS = ast.literal_eval(re.search(r'ACTIONS=(\[.*?\])', source, re.S)[1])
-    for name in ('memory_read', 'memory_add', 'memory_replace', 'memory_remove', 'note_write', 'record_search'):
+    from wb_studio.genesis_schemas import action_names
+    ACTIONS = action_names()
+    for name in ('memory_read', 'memory_add', 'memory_replace', 'memory_remove', 'note_write', 'record_search', 'memory_recent'):
         assert name in ACTIONS
     assert 'memory_pin' not in ACTIONS
     assert genesis.tool('memory_add', {'text': 'A fact', 'record': 'card:c1'})['entry'].startswith('A fact [rec:card:c1]')
@@ -180,16 +178,16 @@ def test_tool_dispatch_returns_plain_sentences_and_hides_pin(genesis):
 
 def test_prompt_carries_the_core_files_and_the_card_notes(genesis, monkeypatch):
     monkeypatch.setattr(harness, 'freshness', lambda now=None: 'FRESHNESS')
-    bare = harness.build_prompt(genesis, {'message': 'hello'})
+    bare = harness.prompt_text(genesis, {'message': 'hello'})
     assert 'Core memory' not in bare and bare.endswith('User request:\nhello')
     genesis.memory.add('Lab fact', 'turn:t1', now=T0)
     genesis.memory.monarch.parent.mkdir(parents=True, exist_ok=True)
     genesis.memory.monarch.write_text('Build: fork-1 at abc123\n', encoding='utf8')
     genesis.memory.note_write('card-9', 'Notes for the card')
-    prompt = harness.build_prompt(genesis, {'message': 'hello', 'card': 'card-9'})
-    order = [prompt.index(s) for s in ('FRESHNESS', 'Core memory', 'LAB.md:\n## Pinned', 'Lab fact [rec:turn:t1] 2026-09-01', 'MONARCH.md:\nBuild: fork-1', 'Notes for card card-9:\nNotes for the card', 'Previous exchange:', 'User request:\nhello')]
+    prompt = harness.prompt_text(genesis, {'message': 'hello', 'card': 'card-9'})
+    order = [prompt.index(s) for s in ('Core memory', 'LAB.md:\n## Pinned', 'Lab fact [rec:turn:t1] 2026-09-01', 'MONARCH.md:\nBuild: fork-1', 'Notes for card card-9:\nNotes for the card', 'FRESHNESS', 'Previous exchange:', 'User request:\nhello')]
     assert order == sorted(order)
-    assert 'Notes for card' not in harness.build_prompt(genesis, {'message': 'hello', 'card': '../bad'})
+    assert 'Notes for card' not in harness.prompt_text(genesis, {'message': 'hello', 'card': '../bad'})
 
 
 def test_tags_found_in_an_answer_are_touched(memory):
@@ -272,10 +270,10 @@ def test_identity_file_starts_from_the_default_and_leads_every_prompt(genesis, m
     memory = genesis.memory
     assert memory.soul.read_text(encoding='utf8').startswith('# Genesis') and memory.read()['budgets']['SOUL.md']['budget'] == 2500
     monkeypatch.setattr(harness, 'freshness', lambda now=None: 'FRESHNESS')
-    prompt = harness.build_prompt(genesis, {'message': 'hello'})
-    assert 'Core memory' not in prompt and prompt.index('FRESHNESS') < prompt.index('Identity (SOUL.md') < prompt.index('## Never')
+    prompt = harness.prompt_text(genesis, {'message': 'hello'})
+    assert 'Core memory' not in prompt and prompt.index('Identity (SOUL.md') < prompt.index('## Never') < prompt.index('# Genesis scientist protocol') < prompt.index('FRESHNESS')
     memory.add('Lab fact', 'turn:t1', now=T0)
-    prompt = harness.build_prompt(genesis, {'message': 'hello'})
+    prompt = harness.prompt_text(genesis, {'message': 'hello'})
     assert prompt.index('Identity (SOUL.md') < prompt.index('Core memory') < prompt.index('Lab fact')
 
 

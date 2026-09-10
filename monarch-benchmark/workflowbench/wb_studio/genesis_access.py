@@ -6,8 +6,8 @@ and the digest day. No passwords and no third-party login: an admin hands a pers
 key, the browser keeps it, and every write carries it. Until the first person exists, the
 Studio token alone opens every write, so a fresh workspace can be set up.
 
-The envelope is displayed and reserved against here; the broker's per-request check is
-owed to the session that owns `genesis_harness.py` (receipt, lane B).
+The envelope is a gate: `Genesis.chat` refuses a turn the envelope cannot cover and
+`Genesis.launch_if_allowed` refuses a plan (deep dive of 10 Sep 2026, R4).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 NAME = re.compile(r'[a-z0-9][a-z0-9._-]{0,60}')
 ROLES = ('member', 'admin')
-ENVELOPE_DEFAULT = '20.00'
+ENVELOPE_DEFAULT = '25.00'  # Lucas, 10 Sep 2026
 WEBHOOK = 'SLACK_WEBHOOK_AILABS'
 PUBLIC_URL = 'STUDIO_PUBLIC_URL'
 

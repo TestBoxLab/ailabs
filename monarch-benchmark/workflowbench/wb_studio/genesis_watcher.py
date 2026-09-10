@@ -6,14 +6,11 @@ watcher takes the oldest one and asks Genesis for one free-work turn, reserved t
 ledger at the per-card ceiling and counted against a daily cap. It never launches an experiment.
 """
 from __future__ import annotations
-import html
 import json
 import os
-import re
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal
-from urllib.request import Request, urlopen
 from wb_results.evidence import write_json
 from wb_studio.library import now_sao_paulo
 
@@ -22,19 +19,6 @@ TERMINAL = ('completed', 'failed', 'cancelled', 'interrupted')
 
 def _on(name):
     return os.environ.get(name, '1').lower() not in ('0', 'false', 'no', 'off')
-
-
-def fetch_page(url, timeout=10):
-    """(title, first 600 characters of visible text) of a page, or (None, '') when it cannot be read."""
-    try:
-        with urlopen(Request(url, headers={'User-Agent': 'AILabs-Genesis/1.0 (research intake)'}), timeout=timeout) as response:
-            raw = response.read(1_000_000).decode(response.headers.get_content_charset() or 'utf8', 'replace')
-    except Exception:
-        return None, ''
-    title = re.search(r'<title[^>]*>(.*?)</title>', raw, re.S | re.I)
-    text = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', raw, flags=re.S | re.I)
-    text = html.unescape(re.sub(r'<[^>]+>', ' ', text))
-    return (html.unescape(' '.join(title[1].split()))[:300] or None) if title else None, ' '.join(text.split())[:600]
 
 
 def scripted_only(job):
@@ -105,12 +89,13 @@ class Watcher:
         self.notify()
 
     def today_usd(self):
-        """What the watcher's turns of today (America/Sao_Paulo) cost: the settled receipts of finished turns, the full ceiling of a running one."""
+        """What every Genesis turn of today (America/Sao_Paulo) cost, cards or not (R5): the settled receipts of
+        finished turns, the full ceiling of a running one."""
         zone = now_sao_paulo().tzinfo
         today = now_sao_paulo().date()
         total = Decimal('0')
         for turn in self.genesis.listing('turns'):
-            if not turn.get('card') or datetime.fromisoformat(turn['created_at']).astimezone(zone).date() != today:
+            if datetime.fromisoformat(turn['created_at']).astimezone(zone).date() != today:
                 continue
             if turn.get('status') == 'running':
                 total += Decimal(str(turn['maximum_usd']))
@@ -138,6 +123,7 @@ class Watcher:
         """Cards for finished runs and full-text library sources nobody dropped; each at most once."""
         cards = self.genesis.listing('cards')
         pointed = {(c.get('kind'), e.get('kind'), e.get('id')) for c in cards for e in c.get('evidence', []) if isinstance(e, dict)}
+        pointed |= {('run', 'run', c['job']) for c in cards if c.get('job')}  # a run Genesis launched from a plan is debriefed on that card, not filed twice (R6)
         # Only what arrives after the watcher first ran: history is not re-worked at the first start.
         state = self._read()
         since = state.get('since')
@@ -166,6 +152,7 @@ class Watcher:
     def wake(self):
         """One pass: create trigger cards, then work the oldest queued card if nothing is working and the gates allow."""
         self._write(last_wake=datetime.now(timezone.utc).isoformat(), last_error=None)
+        self.genesis.debrief()  # R2: a finished planned run re-queues its card here, not on a page load
         self.triggers()
         if self.genesis.autonomy.read()['paused']:
             self._write(reason='Paused by a person: Genesis does nothing until the switch is turned back on')
@@ -185,6 +172,8 @@ class Watcher:
                 card = self.genesis.read('cards', card['id'])
                 card['work']['reason'] = reason
                 write_json(self.genesis.path('cards', card['id']), card)
+            if self._read().get('reason') != reason:  # R5: an attempt that was refused is in the record, once per reason
+                self.genesis.autonomy.record('refused', card=card['id'], reason=reason)
             self._write(reason=reason)
             return None
         self._write(reason=None)
@@ -193,7 +182,9 @@ class Watcher:
     def status(self):
         state = self._read()
         working = self._cards('working')
-        return {'paused': bool(state.get('paused')) or bool(self.genesis.autonomy.read()['paused']), 'queue': [c['id'] for c in __import__('wb_studio.genesis_ranking', fromlist=['order']).order(__import__('wb_studio.genesis_ranking', fromlist=['with_scores']).with_scores(self.genesis, [c for c in self._cards('queued') if c.get('auto')]))],
+        from wb_studio import genesis_ranking
+        queue = genesis_ranking.order(genesis_ranking.with_scores(self.genesis, [c for c in self._cards('queued') if c.get('auto')]))
+        return {'paused': bool(state.get('paused')) or bool(self.genesis.autonomy.read()['paused']), 'queue': [c['id'] for c in queue],
                 'working': working[0]['id'] if working else None, 'today_usd': str(self.today_usd()), 'cap_usd': str(self.cap_usd),
                 'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'),
                 'interval_s': getattr(self, 'interval_s', 30)}

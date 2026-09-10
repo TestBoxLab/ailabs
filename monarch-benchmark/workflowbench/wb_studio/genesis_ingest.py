@@ -29,7 +29,6 @@ LABELS = {'claim': 'Claim', 'method': 'Method', 'dataset': 'Dataset', 'result_nu
 LIMIT = 200_000          # characters of text kept per source
 MAX_BYTES = 4_000_000    # raw bytes read per request; enough HTML for LIMIT characters of text
 MIN_TEXT = 200           # below this an arXiv rendering is a placeholder, not a paper
-MESSAGE_LIMIT = 15_800   # `Genesis.chat` refuses a message over 16,000 characters
 NOT_FOUND = 'This quote is not in the fetched text, so it is not carried.'
 ARXIV = re.compile(r'arxiv\.org/(?:abs|pdf|html)/([\w.\-]+?)(?:v\d+)?(?:\.pdf)?/?$', re.I)
 GITHUB = re.compile(r'github\.com/([\w.\-]+)/([\w.\-]+?)(?:\.git)?/?$', re.I)
@@ -145,13 +144,7 @@ def _message(record, text) -> str:
             'Title: ' + str(record.get('title') or '') + '\n'
             'URL: ' + str(record.get('url') or '') + '\n'
             'Read this source and fill the extraction columns.\n\n' + SCHEMA + '\n\nSource text:\n')
-    room = MESSAGE_LIMIT - len(head)
-    body = text[:room]
-    if len(body) < len(text):
-        # ponytail: `Genesis.chat` caps a message at 16,000 characters, so a long source is read
-        # from its opening; raise that cap for internal purposes and this line goes away.
-        body = body[:room - 120] + '\n\n[Cut: ' + f'{room - 120:,} of {len(text):,}' + ' characters of the source are shown.]'
-    return head + body
+    return head + text[:LIMIT]  # an extraction turn takes the whole source (R7); `Genesis.chat` allows 220,000 characters for it
 
 
 def ingest(genesis, library_id, card=None) -> dict:

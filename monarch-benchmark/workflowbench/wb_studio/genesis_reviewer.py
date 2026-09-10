@@ -179,6 +179,14 @@ def ON_TURN(genesis, turn):
     genesis.autonomy.record('review', card=card['id'], turn=turn['id'], status=review['status'],
                             verdict=review.get('verdict'), reason=review.get('reason'),
                             round=review.get('round'), note=problem)
+    if review.get('status') == 'done' and review.get('verdict') == 'accept' and review.get('subject') == 'plan' and not problem:
+        # R3: an accepted smoke plan launches now, under the same gates, instead of waiting for a second turn.
+        launch = getattr(genesis, 'launch_if_allowed', None)
+        if callable(launch):
+            try:
+                launch(card['id'])
+            except Exception as exc:
+                genesis.autonomy.record('plugin-error', card=card['id'], module=__name__, error=type(exc).__name__ + ': ' + str(exc)[:200])
 
 
 TOOLS = {'request_review': lambda genesis, payload: request_review(genesis, payload.get('card'), payload.get('subject', 'plan')),

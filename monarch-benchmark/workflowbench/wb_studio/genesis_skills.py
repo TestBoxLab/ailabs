@@ -84,16 +84,17 @@ class Skills:
         return {'name': path.stem, 'removed': True}
 
     def prompt_block(self, kind: str | None) -> str:
-        """The skills that apply to this turn, or nothing."""
+        """The skills that apply to this turn, by name and first line; the body comes through skill_read (M6)."""
         parts = []
         for path in sorted(self.root.glob('*.md')):
             text = path.read_text(encoding='utf8').strip()
             applies = self.applies(text)
             if 'always' in applies or (kind and kind in applies):
-                parts.append('Skill ' + path.stem + ':\n' + text)
+                lines = [l.strip() for l in text.splitlines()[1:] if l.strip() and not l.strip().startswith('#')]
+                parts.append('- ' + path.stem + ': ' + (lines[0][:160] if lines else '(no description)'))
         if not parts:
             return ''
-        return '\n\nSkills (procedures you wrote; edit with skill_write when a step proved wrong):\n\n' + '\n\n'.join(parts)
+        return '\n\nSkills that apply (procedures you wrote; read one with skill_read before following it, edit with skill_write when a step proved wrong):\n' + '\n'.join(parts)
 
     # ---- candidates waiting for the Reviewer (feature 022) --------------------------
     def pending_path(self, slug: str) -> Path:

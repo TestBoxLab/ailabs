@@ -346,6 +346,7 @@ def test_state_moves_only_terminal_job_cards_to_durable_review(genesis, monkeypa
     card = proposal_card(genesis)
     approved = genesis.approve(card['id'], approval_payload(card))
     genesis.studio.job.return_value = {'id': approved['job'], 'status': status}
+    genesis.debrief()  # the watcher moves the card; a read never does
     result = genesis.state()['cards'][0]
     assert result['stage'] == stage
     assert result['run_status'] == status

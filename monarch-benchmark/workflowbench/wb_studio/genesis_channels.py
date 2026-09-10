@@ -94,7 +94,7 @@ def post_waiting(genesis) -> list:
             if card.get('default'):
                 text += '\nIts suggested default: ' + str(card['default'])
             about = 'question'
-        elif card.get('stage') == 'approval' and card.get('plan'):
+        elif card.get('stage') == 'approval' and card.get('plan') and (card.get('review') or {}).get('status') != 'pending':
             text = 'A plan is waiting for a person: ' + str(card.get('title'))
             if card.get('waiting'):
                 text += '\n' + str(card['waiting'])
@@ -200,7 +200,26 @@ def weekly(studio) -> dict:
     return summary
 
 
-DAILY = ('genesis-sweep', 6, weekly)
+def brief_hour(studio) -> int:
+    """The hour a person set under Settings, Genesis (R10: the setting now has an effect)."""
+    return int(studio.genesis.access.settings()['brief_hour'])
+
+
+def post_latest_brief(studio) -> dict:
+    """The newest brief card, posted once. Without a webhook nothing is sent and the reason is the summary."""
+    genesis = studio.genesis
+    briefs = [c for c in genesis.listing('cards') if c.get('kind') == 'brief']
+    if not briefs:
+        return {'posted': False, 'reason': 'No brief has been written yet.'}
+    card = briefs[-1]
+    if card['id'] in _posted(genesis, 'brief'):
+        return {'posted': False, 'reason': 'Already posted.', 'card': card['id']}
+    if not os.environ.get(WEBHOOK):
+        return {'posted': False, 'reason': NO_WEBHOOK, 'card': card['id']}
+    return {**post_brief(genesis, card), 'card': card['id']}
+
+
+DAILY = (('genesis-sweep', 6, weekly), ('genesis-brief', brief_hour, post_latest_brief))
 
 PROTOCOL = ('Once a week the Studio spends one sweep turn per library topic that holds a source: search for new '
             'work, file it with library_save, say on an Analyzed card when a new source contradicts it, and drop '

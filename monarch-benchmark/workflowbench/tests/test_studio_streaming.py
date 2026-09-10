@@ -96,37 +96,3 @@ def test_missing_receipt_or_incomplete_stream_is_refused(adapter, finish, with_u
         adapter.turn(messages)
     assert messages == before
     adapter.on_text.assert_called_once_with('Partial')
-
-
-def test_genesis_gemini_preserves_tool_signature_without_streaming_thoughts(monkeypatch):
-    from google import genai
-    from google.genai import types
-    from wb_studio.genesis_provider import complete
-    provider = providers.get('gemini-3.7-flash')
-    signed_part = types.Part(function_call=types.FunctionCall(id='call_signed', name='catalog', args={}),
-                             thought_signature=b'offline-signature')
-    usage = types.GenerateContentResponseUsageMetadata(prompt_token_count=50, cached_content_token_count=5,
-                                                       candidates_token_count=7, thoughts_token_count=3)
-    first = types.GenerateContentResponse(candidates=[types.Candidate(
-        content=types.Content(role='model', parts=[types.Part(text='Private', thought=True), signed_part]),
-        finish_reason='STOP')], usage_metadata=usage)
-    second = types.GenerateContentResponse(candidates=[types.Candidate(
-        content=types.Content(role='model', parts=[types.Part(text='Done')]), finish_reason='STOP')], usage_metadata=usage)
-    stream = Mock(side_effect=[iter([first]), iter([second])])
-    monkeypatch.setattr(genai, 'Client', Mock(return_value=SimpleNamespace(models=SimpleNamespace(generate_content_stream=stream))))
-    state = {}
-    body = {'instructions': 'system', 'input': [{'role': 'user', 'content': 'request'}], '_provider_state': state}
-    public = Mock()
-    result = complete(provider, body, public)
-    public.assert_not_called()
-    assert result['calls'] == [{'id': 'call_signed', 'name': 'catalog', 'arguments': '{}'}]
-    assert state['call_signed']['thought_signature'] == b'offline-signature'
-    assert result['usage'] == {'prompt_tokens': 50, 'cached_tokens': 5, 'cache_write_tokens': 0, 'output_tokens': 10}
-    body['input'] += [{'type': 'function_call', 'call_id': 'call_signed', 'name': 'catalog', 'arguments': '{}'},
-                      {'type': 'function_call_output', 'call_id': 'call_signed', 'output': 'found'}]
-    complete(provider, body, public)
-    public.assert_called_once_with('Done')
-    sent = stream.call_args.kwargs['contents']
-    assert sent[1].parts[0].thought_signature == b'offline-signature'
-    assert sent[1].parts[0].function_call.name == 'catalog'
-    assert sent[2].parts[0].function_response.name == 'catalog'

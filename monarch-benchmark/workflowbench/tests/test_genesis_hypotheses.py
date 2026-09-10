@@ -118,30 +118,12 @@ def test_freshness_names_the_sao_paulo_clock_and_the_recency_rule():
     assert now_sao_paulo().utcoffset() == timedelta(hours=-3)
 
 
-def test_every_turn_records_a_prompt_with_the_date_and_the_recency_rule(tmp_path, monkeypatch):
-    sent = []
-
-    class Process:
-        def __init__(self, command, **kwargs):
-            self.returncode = 0
-        def communicate(self, input=None, timeout=None):
-            sent.append(input)
-            return '', ''
-        def poll(self):
-            return self.returncode
-
-    monkeypatch.setattr(harness.subprocess, 'Popen', Process)
-    events = []
-    genesis = SimpleNamespace(root=tmp_path, active={}, studio=SimpleNamespace(ledger=Mock(), runtime=SimpleNamespace(provider=lambda *a, **kw: nullcontext())),
-                              event=lambda identity, kind, **data: events.append({'kind': kind, **data}), read=Mock(side_effect=FileNotFoundError))
+def test_every_turn_records_a_prompt_with_the_date_and_the_recency_rule(tmp_path):
+    genesis = SimpleNamespace(root=tmp_path, read=Mock(side_effect=FileNotFoundError))
     before = now_sao_paulo()
-    harness.start_turn(genesis, {'id': 'fresh', 'maximum_usd': '1', 'model': 'gpt-5.6-sol', 'message': 'What changed in agent evaluation this quarter?'})
-    recorded = (tmp_path / 'sessions' / 'fresh' / 'prompt.txt').read_text(encoding='utf8')
-    assert recorded == sent[0]
-    assert recorded.startswith('# Genesis scientist protocol')
-    assert before.strftime('%Y-%m-%d') in recorded or now_sao_paulo().strftime('%Y-%m-%d') in recorded
-    assert 'America/Sao_Paulo' in recorded
-    assert 'Prefer sources from the last six months; keep foundational and contradicting work.' in recorded
-    assert recorded.rstrip().endswith('What changed in agent evaluation this quarter?')
-    assert events[-1]['kind'] == 'completed'
-    genesis.studio.ledger.finish_run.assert_called_once_with('genesis-fresh')
+    system, brief = harness.build_prompt(genesis, {'id': 'fresh', 'message': 'What changed in agent evaluation this quarter?'})
+    assert system.startswith('# Genesis scientist protocol')
+    assert before.strftime('%Y-%m-%d') in brief or now_sao_paulo().strftime('%Y-%m-%d') in brief
+    assert 'America/Sao_Paulo' in brief
+    assert 'Prefer sources from the last six months; keep foundational and contradicting work.' in brief
+    assert brief.rstrip().endswith('What changed in agent evaluation this quarter?')

@@ -14,8 +14,9 @@ from wb_studio.genesis_config import cheapest
 from wb_studio.genesis_harness import model_routes
 from wb_studio.library import now_sao_paulo
 
-MESSAGE = ('Nightly consolidation for {day}. Use record_search to read the records added since yesterday '
-           '(turns, cards, analyses, sources). Then answer with one JSON object and nothing else: '
+MESSAGE = ('Nightly consolidation for {day}. Use memory_recent to list the records added since yesterday '
+           '(turns, cards, analyses, sources) and record_search or read_run to read the ones that matter. '
+           'Then answer with one JSON object and nothing else: '
            '{{"ops": [{{"op": "add", "replace" or "remove", "section": "Known" or "Recent", "text": "the new entry", '
            '"old": "a piece of the entry to change", "new": "its replacement", "record": "kind:id"}}], '
            '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order through '
@@ -108,15 +109,7 @@ def nightly(studio):
         return genesis.card(payload)['id']
     step('brief', brief)
 
-    def slack():
-        """The brief posted after it is written; with no webhook, one line and nothing sent."""
-        from wb_studio import genesis_channels
-        if not os.environ.get(genesis_channels.WEBHOOK):
-            return {'posted': False, 'reason': genesis_channels.NO_WEBHOOK}
-        return genesis_channels.post_brief(genesis, genesis.read('cards', summary['brief']))
-    if summary.get('brief'):
-        step('slack', slack)
-    return summary
+    return summary  # the brief is posted by the genesis-brief job at the brief hour (genesis_channels)
 
 
 DAILY = ('genesis-sleep', 3, nightly)

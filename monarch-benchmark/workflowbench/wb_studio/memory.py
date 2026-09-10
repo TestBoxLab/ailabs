@@ -167,7 +167,10 @@ class Memory:
             raise ValueError('The entry was refused. ' + reason)
         if ENTRY.match(text):
             return text
-        return text + ' ' + _record(record) + ' ' + _day(now)
+        tag = _record(record)
+        while text.endswith(tag):  # the model often writes the tag itself; it is not written twice
+            text = text[:-len(tag)].rstrip()
+        return text + ' ' + tag + ' ' + _day(now)
 
     def _find(self, sections, needle):
         needle = str(needle or '').strip()
@@ -273,8 +276,9 @@ class Memory:
             out['budgets']['notes']['size'] = len(out['notes'])
         return out
 
-    def prompt_block(self, card=None):
-        """The core files as they enter a prompt; empty when nothing has been written yet."""
+    def prompt_block(self, card=None, soul=True):
+        """The core files as they enter a prompt; empty when nothing has been written yet. `soul=False`
+        leaves SOUL.md out, for a caller that puts it first itself (the harness)."""
         parts = []
         lab, monarch = self._text(self.lab), self._text(self.monarch)
         if lab.strip():
@@ -287,11 +291,15 @@ class Memory:
             notes = ''
         if notes.strip():
             parts.append('Notes for card ' + card + ':\n' + notes.strip())
-        soul = self._text(self.soul).strip()
-        head = '\n\nIdentity (SOUL.md, written by the lab; you do not edit it):\n\n' + soul if soul else ''
+        head = self.soul_block() if soul else ''
         if not parts:
             return head
         return head + '\n\nCore memory (cite entries by their [rec:...] tags; edit with memory_add, memory_replace, memory_remove):\n\n' + '\n\n'.join(parts)
+
+    def soul_block(self):
+        """SOUL.md as the first block of a prompt, or nothing when it is empty."""
+        text = self._text(self.soul).strip()
+        return '\n\nIdentity (SOUL.md, written by the lab; you do not edit it):\n\n' + text if text else ''
 
     # ---- access, probation and decay ----------------------------------------------
     def _access(self):

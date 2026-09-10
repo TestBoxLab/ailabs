@@ -131,4 +131,4 @@ def test_the_sweep_spends_one_turn_per_topic_and_none_when_the_ledger_cannot_cov
     studio.ledger.status.return_value = SimpleNamespace(available_usd='0.10')
     assert channels.weekly(studio)['reason'] == 'The weekly ledger cannot cover $0.50 for one topic.'
     assert len(calls) == 3
-    assert channels.DAILY[0] == 'genesis-sweep' and channels.DAILY[1] == 6
+    assert channels.DAILY[0][0] == 'genesis-sweep' and channels.DAILY[0][1] == 6
