@@ -547,8 +547,12 @@ kinds of the week enter every prompt. Form: the Genesis page opens on the board 
 session when something waits; the Memory tab shows the night's proposal with a way to the
 card; a memory card reads "Adopt the changes". Live: one nightly run on the local Studio
 proposed four entries in ten requests for US$ 0.20, LAB.md untouched until adopted. Tests:
-`tests/test_genesis_tiers.py` (14). Not built: SSE streaming (F1), answering from Slack
-(F4), the phone-width check (F5), the settlement history on the card sheet.
+`tests/test_genesis_tiers.py` (14). Then: the turn route answers `?after=<event id>`
+with only the events the conversation has not seen (the cheap form of F1; SSE was not
+needed), `research_state` and `list_runs` give the model lines instead of every event
+and result row, the settlement history shows on the card, the browser suite checks the
+conversation at phone width. Not built: answering from Slack (F4). Full suite 2151
+passed; browser suite green. Commits on the local branch `genesis-loop`, never pushed.
 
 ## 9. Decisions for Lucas
 
