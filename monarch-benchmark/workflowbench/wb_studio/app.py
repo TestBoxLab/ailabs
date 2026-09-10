@@ -845,6 +845,9 @@ def handler(studio):
                     return self.send_json(task_sets(studio, ROOT))
                 if url.path == "/api/budget":
                     return self.send_json(studio.budget())
+                if url.path == "/api/budget/ledger":
+                    from wb_studio.usage import ledger_lines
+                    return self.send_json(ledger_lines(studio))
                 if url.path == "/api/runtime":
                     state = studio.runtime.snapshot()
                     if studio.coordinator is not None:
@@ -970,6 +973,17 @@ def handler(studio):
                     query=parse_qs(url.query)
                     return self.send_json({'hits':studio.genesis.memory.search(query.get('q',[''])[0],query.get('limit',['10'])[0])})
                 if url.path == '/api/genesis/watcher': return self.send_json(studio.genesis.watcher.status())
+                if url.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.read())
+                if url.path == '/api/genesis/config':
+                    from wb_studio.genesis_harness import model_routes
+                    routes=model_routes()
+                    return self.send_json({**studio.genesis.config.read(),'effective':studio.genesis.config.effective(routes),'routes':routes})
+                if url.path == '/api/genesis/skills': return self.send_json({'skills':studio.genesis.skills.listing()})
+                skill_match=re.fullmatch(r'/api/genesis/skills/([a-z0-9-]+)',url.path)
+                if skill_match: return self.send_json(studio.genesis.skills.read(skill_match[1]))
+                if url.path == '/api/genesis/activity':
+                    q=parse_qs(url.query)
+                    return self.send_json({'entries':studio.genesis.autonomy.tail(int(q.get('limit',['100'])[0]),q.get('card',[None])[0])})
                 if url.path == '/api/genesis/code-index':
                     from wb_studio.code_index import code_status
                     return self.send_json(code_status(studio))
@@ -1052,6 +1066,38 @@ def handler(studio):
                 if self.path == '/api/genesis/memory': return self.send_json(studio.genesis.memory.edit(payload))
                 if self.path == '/api/genesis/drop': return self.send_json(studio.genesis.drop(payload),201)
                 if self.path == '/api/genesis/watcher': studio.genesis.watcher.pause(payload.get('paused'));return self.send_json(studio.genesis.watcher.status())
+                if self.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.set(payload,by='human:studio'))
+                if self.path == '/api/genesis/config':
+                    out=studio.genesis.config.set(payload);studio.genesis.autonomy.record('config',by='human:studio',models=out['models']);return self.send_json(out)
+                if self.path == '/api/genesis/skills':
+                    if payload.get('remove'): out=studio.genesis.skills.remove(payload.get('name'));studio.genesis.autonomy.record('skill-removed',name=out['name'],by='human:studio');return self.send_json(out)
+                    out=studio.genesis.skills.write(payload.get('name'),payload.get('text'));studio.genesis.autonomy.record('skill',name=out['name'],size=out['size'],by='human:studio');return self.send_json(out)
+                genesis_answer=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/answer',self.path)
+                if genesis_answer: return self.send_json(studio.genesis.answer_question(genesis_answer[1],payload))
+                genesis_decline=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/decline',self.path)
+                if genesis_decline: return self.send_json(studio.genesis.decline(genesis_decline[1],payload))
+                genesis_work=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/work',self.path)
+                if genesis_work: return self.send_json(studio.genesis.work_now(genesis_work[1]),201)
+                turn_stop=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/stop',self.path)
+                if turn_stop: return self.send_json(studio.genesis.stop_turn(turn_stop[1]))
+                genesis_decline=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/decline',self.path)
+                if genesis_decline: return self.send_json(studio.genesis.decline(genesis_decline[1],payload))
+                genesis_work=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/work',self.path)
+                if genesis_work: return self.send_json(studio.genesis.work_now(genesis_work[1]),201)
+                turn_stop=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/stop',self.path)
+                if turn_stop: return self.send_json(studio.genesis.stop_turn(turn_stop[1]))
+                genesis_decline=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/decline',self.path)
+                if genesis_decline: return self.send_json(studio.genesis.decline(genesis_decline[1],payload))
+                genesis_work=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/work',self.path)
+                if genesis_work: return self.send_json(studio.genesis.work_now(genesis_work[1]),201)
+                turn_stop=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/stop',self.path)
+                if turn_stop: return self.send_json(studio.genesis.stop_turn(turn_stop[1]))
+                genesis_decline=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/decline',self.path)
+                if genesis_decline: return self.send_json(studio.genesis.decline(genesis_decline[1],payload))
+                genesis_work=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/work',self.path)
+                if genesis_work: return self.send_json(studio.genesis.work_now(genesis_work[1]),201)
+                turn_stop=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/stop',self.path)
+                if turn_stop: return self.send_json(studio.genesis.stop_turn(turn_stop[1]))
                 genesis_stop=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/stop',self.path)
                 if genesis_stop: return self.send_json(studio.genesis.stop_work(genesis_stop[1]))
                 if self.path == '/api/genesis/code-index/refresh': return self.send_json(studio.scheduler.run('code-index'))

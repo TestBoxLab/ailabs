@@ -37,8 +37,11 @@ const TEMPLATES = {
 
 function mk(id, type, x, y, config = {}, label) { return {id, type, label: label || STEP_TYPES[type].name, x, y, config}; }
 function E(...pairs) { return pairs.map(([from, to]) => ({from, to})); }
+const providerHasKey = p => (typeof state !== 'undefined' && state?.models || []).some(m => m.provider === p && m.available);
 function runnerFor(provider) {
-  const control = controls.find(c => c.provider === provider) || controls.find(c => c.provider === 'gemini');
+  // A template starts on a provider that can run here; the asked-for one when it has a key, else the first that does.
+  const keyed = controls.filter(c => providerHasKey(c.provider));
+  const control = keyed.find(c => c.provider === provider) || keyed[0] || controls.find(c => c.provider === provider) || controls.find(c => c.provider === 'gemini');
   return control ? {provider: control.provider, model: control.model, effort: 'default'} : {provider: 'gemini', model: 'gemini-3.7-flash', effort: 'default'};
 }
 function newId() { return crypto.randomUUID().replaceAll('-', '').slice(0, 10); }
@@ -669,7 +672,8 @@ function runnerFields(n) {
   if (models && !models.some(m => m.includes(' selected')) && r.model) models.unshift(option(r.model, r.model + ' (no rate card)', true));
   const efforts = r.provider === 'bedrock' ? ['default'] : control ? ['default', ...control.efforts] : ALL_EFFORTS;
   const cap = nodeCapability(n.id);
-  return '<div class="field"><label for="node-provider">Provider</label><select id="node-provider">' + providers.map(p => option(p, PROVIDER_LABELS[p], p === r.provider)).join('') + '</select></div>'
+  const apiProviders = ['anthropic', 'openai', 'gemini', 'fireworks', 'moonshot', 'zai'];
+  return '<div class="field"><label for="node-provider">Provider</label><select id="node-provider">' + providers.map(p => { const keyless = apiProviders.includes(p) && !providerHasKey(p); return '<option value="' + esc(p) + '"' + (p === r.provider ? ' selected' : '') + (keyless && p !== r.provider ? ' disabled' : '') + '>' + esc(PROVIDER_LABELS[p]) + (keyless ? ' — no key (Settings)' : '') + '</option>'; }).join('') + '</select></div>'
     + '<div class="field"><label for="node-model">Model</label>' + (models ? '<select id="node-model"' + invalidAttr(n, 'rate-carded', 'model') + '>' + models.join('') + (r.provider === 'fireworks' ? option('__custom__', 'Other Fireworks model…', false) : '') + '</select>' : '<input id="node-model" value="' + esc(r.model || '') + '" placeholder="Model alias for the native harness" autocomplete="off">')
     + (r.provider === 'fireworks' ? '<div class="field-tools"><input id="node-model-custom" list="fireworks-model-list" class="' + (models.some(m => m.includes(' selected')) ? 'hidden' : '') + '" value="' + esc(r.model || '') + '" placeholder="accounts/fireworks/models/…" autocomplete="off"><button class="text-button" id="node-load-models" type="button">Load Fireworks catalog</button><small id="node-model-status"></small></div>' : '') + '</div>'
     + '<div class="field"><label for="node-effort">Reasoning effort</label><select id="node-effort">' + efforts.map(e => option(e, e === 'default' ? 'Default' + (control?.default_effort ? ' (' + control.default_effort + ')' : '') : e, e === r.effort)).join('') + '</select>' + (control && !control.efforts.length ? '<small class="node-help">This API has no reasoning-effort control.</small>' : '') + '</div>'
@@ -908,8 +912,8 @@ document.addEventListener('keydown', e => {
 });
 $('#blueprint-publish').onclick = async () => {
   const button = $('#blueprint-publish');
-  if(!blueprint.name.trim()&&!await ensureStudioName('architectures'))return;
   if (problems.length) { const first = problems.find(p => p.node) || problems[0]; hint('Fix ' + problems.length + (problems.length === 1 ? ' problem' : ' problems') + ' before publishing'); if (first.node) focusProblem(first); return; }
+  if(!blueprint.name.trim()&&!await ensureStudioName('architectures'))return;
   const release = busy(button, 'Publishing…');
   const target=blueprint;
   try {

@@ -84,6 +84,10 @@ class Watcher:
         self._wake.set()
 
     def start(self, interval_s=30):
+        self.interval_s = interval_s
+        self.interval_s = interval_s
+        self.interval_s = interval_s
+        self.interval_s = interval_s
         """One daemon thread; only the owning web process calls this. It never raises out."""
         if self._thread:
             return
@@ -160,6 +164,9 @@ class Watcher:
         """One pass: create trigger cards, then work the oldest queued card if nothing is working and the gates allow."""
         self._write(last_wake=datetime.now(timezone.utc).isoformat(), last_error=None)
         self.triggers()
+        if self.genesis.autonomy.read()['paused']:
+            self._write(reason='Paused by a person: Genesis does nothing until the switch is turned back on')
+            return None
         if self._read().get('paused') or self._cards('working'):
             return None
         queue = [c for c in self._cards('queued') if c.get('auto')]
@@ -181,6 +188,7 @@ class Watcher:
     def status(self):
         state = self._read()
         working = self._cards('working')
-        return {'paused': bool(state.get('paused')), 'queue': [c['id'] for c in self._cards('queued') if c.get('auto')],
+        return {'paused': bool(state.get('paused')) or bool(self.genesis.autonomy.read()['paused']), 'queue': [c['id'] for c in self._cards('queued') if c.get('auto')],
                 'working': working[0]['id'] if working else None, 'today_usd': str(self.today_usd()), 'cap_usd': str(self.cap_usd),
-                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error')}
+                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'),
+                'interval_s': getattr(self, 'interval_s', 30)}

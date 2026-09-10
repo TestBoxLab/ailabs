@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from wb_studio import caveats, measures
 from wb_studio.reports import CATEGORIES
 
-GRADES = ("Improvement", "Regression", "Tradeoff", "Tie", "Not comparable")
+GRADES = ("Improvement", "Regression", "Tradeoff", "Tie", "Undecided", "Not comparable")
 FINISHED = ("completed", "failed", "cancelled", "interrupted")
 
 
@@ -48,6 +48,11 @@ def grade(setup, baseline) -> dict:
     cost_better = cost_a is not None and cost_b is not None and cost_a > 0 and cost_b > cost_a * 1.25
     better, worse = p["wins"] > p["losses"], p["losses"] > p["wins"]
     tally = f"better than Bare on {p['wins']} {'task' if p['wins'] == 1 else 'tasks'}, worse on {p['losses']}, the same on {p['ties']}"
+    p_value = p.get("p_value")
+    if (better or worse) and p_value is not None and p_value >= 0.05:
+        # The word carries the same certainty as the sentence: a direction the sign test cannot support is not a grade.
+        cost_note = ", and each attempt cost more than 1.25 times what Bare's did" if cost_worse else (", and each attempt cost less than 0.8 times what Bare's did" if cost_better else "")
+        return {"grade": "Undecided", "reason": f"{tally}; too few tasks differ to tell them apart (sign test p = {p_value:.2f}){cost_note}"}
     if better and cost_worse:
         return {"grade": "Tradeoff", "reason": f"{tally}, but each attempt cost more than 1.25 times what Bare's did"}
     if worse and cost_better:
@@ -131,22 +136,47 @@ def chance_sentence(p_value: float) -> str:
     return f"A gap this size would come up by chance about {round(p_value * 100)} times in 100."
 
 
+def rate_phrase(p) -> str:
+    """Count, rate and interval in one clause: "6 of 10 tasks (60%, 95% CI 31 to 83)"."""
+    return f"{count_phrase(p['passed'], p['attempts'])} tasks ({pct(p['rate'])}%, 95% CI {pct(p['low'])} to {pct(p['high'])})"
+
+
+def certainty(pr, baseline_name) -> str:
+    """One sentence from a closed set, chosen from the paired test by code, never by a model.
+
+    probably: the sign test is below 0.05 and the direction is clear.
+    may: the direction is clear but the test is between 0.05 and 0.5.
+    cannot tell: the test is 0.5 or above, or too few tasks differ.
+    """
+    p_value = pr.get("p_value")
+    wins, losses = pr["wins"], pr["losses"]
+    if not (wins or losses) or p_value is None or p_value >= 0.5 or (wins + losses) < 3:
+        return "This run cannot tell them apart."
+    more = "more" if wins > losses else "fewer"
+    word = "probably" if p_value < 0.05 else "may"
+    verb = "passes" if word == "probably" else "pass"
+    return f"It {word} {verb} {more} tasks than {baseline_name} on this set."
+
+
+def harm_sentence(subject) -> str:
+    v = subject.get("violations") or {}
+    if v.get("attempts_with_changes"):
+        return f"It changed something outside the task in {v['attempts_with_changes']} of {v['attempts']} attempts."
+    if v.get("attempts"):
+        return "It changed nothing outside the task."
+    return ""
+
+
 def verdict_text(subject, baseline, g, task_count, reused=None) -> str:
-    """At most 120 words, numbers from measures only."""
+    """Three sentences: the outcome with its interval, what changed that should not have, the cost. Numbers from measures only."""
     p = subject["pass"]
     if p["attempts"]:
-        parts = [f"{subject['name']} passed {count_phrase(p['passed'], p['attempts'])} tasks ({pct(p['rate'])}%).",
-                 f"If the same tasks ran again, its pass rate would most likely fall between {pct(p['low'])}% and {pct(p['high'])}%."]
+        parts = [f"{subject['name']} passed {rate_phrase(p)}" + (f"; {baseline['name']} passed {rate_phrase(baseline['pass'])}." if baseline and baseline["pass"]["attempts"] else ".")]
     else:
         parts = [f"{subject['name']} has no evaluated attempts."]
-    if baseline and baseline["pass"]["attempts"]:
-        b = baseline["pass"]
-        parts.append(f"{baseline['name']} passed {count_phrase(b['passed'], b['attempts'])} ({pct(b['rate'])}%).")
-    if subject.get("paired") and subject["paired"]["comparable"]:
-        pr = subject["paired"]
-        parts.append(f"On the same {pr['tasks']} tasks it did better than {baseline['name']} on {pr['wins']}, worse on {pr['losses']} and the same on {pr['ties']}.")
-        if pr["p_value"] is not None and (pr["wins"] or pr["losses"]):
-            parts.append(chance_sentence(pr["p_value"]))
+    harm = harm_sentence(subject)
+    if harm:
+        parts.append(harm)
     if subject["cost"]["per_attempt"] is not None:
         cost = f"Each attempt cost {fmt_money(subject['cost']['per_attempt'])}"
         if baseline and baseline["cost"]["per_attempt"] is not None:
@@ -154,7 +184,6 @@ def verdict_text(subject, baseline, g, task_count, reused=None) -> str:
         parts.append(cost + ".")
     if reused and baseline:
         parts.append(f"The Bare figures were recorded earlier, in the run \"{reused['title']}\" on {str(reused['finished_at'])[:10]}, with the same model, thinking setting and tasks.")
-    parts.append(f"Grade: {g['grade']} ({g['reason']}).")
     return " ".join(parts)
 
 
@@ -164,21 +193,22 @@ def code_findings(m, shown, baseline_id, fa) -> list:
     setups = [m["setups"][s] for s in shown if s in m["setups"]]
     baseline = m["setups"].get(baseline_id) if baseline_id else None
     ranked = sorted([s for s in setups if s["pass"]["attempts"]], key=lambda s: (-(s["pass"]["rate"] or 0), s["name"]))
+    # Harms first (rule 14): what changed that should not have, or that nothing did.
+    violators = [(s, s["violations"]) for s in setups if s["violations"]["attempts_with_changes"]]
+    for s, v in sorted(violators, key=lambda x: -x[1]["attempts_with_changes"])[:1]:
+        out.append({"kind": "violations", "text": f"{s['name']} changed something outside the task in {v['attempts_with_changes']} of {v['attempts']} attempts.",
+                    "number": v["per_attempt"], "evidence": {"kind": "bucket", "ref": "unintended_changes", "setup": s["id"]}})
     if ranked:
         top = ranked[0]
         lead = f"{top['name']} had the highest pass rate: " if len(ranked) > 1 else f"{top['name']} passed "
-        out.append({"kind": "count", "text": f"{lead}{count_phrase(top['pass']['passed'], top['pass']['attempts'])} ({pct(top['pass']['rate'])}%).",
+        out.append({"kind": "count", "text": f"{lead}{rate_phrase(top['pass'])}.",
                     "number": top["pass"]["rate"], "evidence": {"kind": "table", "ref": "hero", "setup": top["id"]}})
     for s in setups:
         pr = s.get("paired")
         if pr and pr["comparable"] and (pr["wins"] or pr["losses"]):
             tasks = [t["task"] for t in pr["per_task"] if t["delta"] != 0]
-            out.append({"kind": "paired", "text": f"On the same {pr['tasks']} tasks, {s['name']} did better than {baseline['name']} on {pr['wins']} and worse on {pr['losses']} ({pct(pr['delta']):+d} points of pass rate).",
+            out.append({"kind": "paired", "text": f"On the same {pr['tasks']} tasks, {s['name']} did better than {baseline['name']} on {pr['wins']} and worse on {pr['losses']} ({pct(pr['delta']):+d} points of pass rate). {certainty(pr, baseline['name'])}",
                         "number": pr["delta"], "evidence": {"kind": "matrix", "ref": "matrix", "tasks": tasks[:5]}})
-    violators = [(s, s["violations"]) for s in setups if s["violations"]["attempts_with_changes"]]
-    for s, v in sorted(violators, key=lambda x: -x[1]["attempts_with_changes"])[:1]:
-        out.append({"kind": "violations", "text": f"{s['name']} changed something outside the permitted scope in {v['attempts_with_changes']} of {v['attempts']} attempts.",
-                    "number": v["per_attempt"], "evidence": {"kind": "bucket", "ref": "unintended_changes", "setup": s["id"]}})
     claims = [(s, s["false_completion"]) for s in setups if s["false_completion"]["count"]]
     for s, fc in sorted(claims, key=lambda x: -x[1]["count"])[:1]:
         out.append({"kind": "false_completion", "text": f"{s['name']} said the work was done when it was not, in {fc['count']} of {fc['failed']} failed attempts.",
@@ -330,7 +360,8 @@ def run_report(studio, identity, audience="public") -> dict:
         "grade": g, "subject": subject["id"] if subject else None, "baseline": baseline_id,
         "baseline_source": {"run": reused["run"], "title": reused["title"], "finished_at": reused["finished_at"]} if reused else None,
         "verdict": verdict_text(subject, baseline, g, len(settings.get("tasks") or []), reused) if subject else "This run has no evaluated attempts.",
-        "findings": code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts}),
+        "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
+                     if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
         "model_findings": model_findings(narrative, aliases_back),
         "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "summary", "next_experiment", "limitations", "model", "effort", "basis")},
         "hero": hero_rows(m, shown), "paired": paired_table(job, m, shown, baseline_id),
@@ -366,6 +397,8 @@ def cohorts(studio) -> dict:
     for cohort in groups.values():
         cohort["runs"].sort(key=lambda r: r["created_at"] or "", reverse=True)
         cohort["latest"] = cohort["runs"][0]["created_at"] if cohort["runs"] else None
+        cohort["first"] = cohort["runs"][-1]["created_at"] if cohort["runs"] else None
+        cohort["first"] = cohort["runs"][-1]["created_at"] if cohort["runs"] else None
     return groups
 
 
@@ -396,15 +429,18 @@ def round_report(studio, cohort_id, audience="public") -> dict:
     shown, hidden = visible_setups(job, audience)
     baseline_id = m["baseline"] if m["baseline"] in shown else None
     baseline = m["setups"].get(baseline_id) if baseline_id else None
-    standings = sorted([m["setups"][s] for s in shown if s in m["setups"] and m["setups"][s]["pass"]["attempts"]],
-                       key=lambda s: (-(s["pass"]["rate"] or 0), s["cost"]["per_attempt"] if s["cost"]["per_attempt"] is not None else float("inf"), s["name"]))
+    standings = [m["setups"][s] for s in shown if s in m["setups"] and m["setups"][s]["pass"]["attempts"]]
+    # Rank the way LMArena and SEAL do: one plus the number of setups whose whole interval sits above this one;
+    # the far end of the spread counts every setup this one cannot be told apart from.
+    def low(s): return s["pass"]["low"] if s["pass"]["low"] is not None else (s["pass"]["rate"] or 0)
+    def high(s): return s["pass"]["high"] if s["pass"]["high"] is not None else (s["pass"]["rate"] or 0)
+    ranks = {s["id"]: 1 + sum(1 for o in standings if o is not s and low(o) > high(s)) for s in standings}
+    spread = {s["id"]: sum(1 for o in standings if high(o) >= low(s)) for s in standings}
+    standings.sort(key=lambda s: (ranks[s["id"]], -(s["pass"]["rate"] or 0), s["cost"]["per_attempt"] if s["cost"]["per_attempt"] is not None else float("inf"), s["name"]))
     rows = []
-    previous, rank = None, 0
-    for index, s in enumerate(standings):
-        if s["pass"]["rate"] != previous:
-            rank = index + 1
-        previous = s["pass"]["rate"]
-        rows.append({"rank": rank, "id": s["id"], "name": s["name"], "is_baseline": s["is_baseline"], "pass": s["pass"], "pass_k": s["pass_k"], "cost": s["cost"],
+    for s in standings:
+        rank = ranks[s["id"]]
+        rows.append({"rank": rank, "rank_high": max(rank, spread[s["id"]]), "id": s["id"], "name": s["name"], "is_baseline": s["is_baseline"], "pass": s["pass"], "pass_k": s["pass_k"], "cost": s["cost"],
                      "paired": s["paired"], "grade": grade(s, baseline) if not s["is_baseline"] else None, "runs": sorted({r["id"] for r in cohort["runs"]}),
                      "interval": uncertainty(groups.get(s["id"], []))})
     trend = []
@@ -415,7 +451,8 @@ def round_report(studio, cohort_id, audience="public") -> dict:
             if sid in shown and "monarch" in (s["name"] or "").lower() and s["pass"]["attempts"]:
                 trend.append({"series": s["name"], "x": (entry["created_at"] or "")[:10], "run": entry["id"], "y": s["pass"]["rate"], "low": s["pass"]["low"], "high": s["pass"]["high"]})
     return {"version": 1, "cohort": cohort_id, "audience": audience, "task_set": cohort["task_set"], "task_count": cohort["task_count"], "track": cohort["track"],
-            "full_benchmark": cohort["full_benchmark"], "runs": cohort["runs"], "baseline": baseline_id, "standings": rows, "hero": hero_rows(m, shown),
+            "full_benchmark": cohort["full_benchmark"], "runs": cohort["runs"], "latest": cohort.get("latest"), "first": cohort.get("first"),
+            "baseline": baseline_id, "standings": rows, "hero": hero_rows(m, shown),
             "pairings": pairings({sid: groups[sid] for sid in shown if sid in groups}),
             "excluded": [{"id": r["id"], "title": r.get("title"), "reason": exclusion_reason(studio.job(r["id"]))} for r in cohort["runs"] if not r["full_benchmark"]],
             "paired": paired_table(job, m, shown, baseline_id), "matrix": matrix_cells(job, shown, studio.tasks), "tasks": task_rows(job, studio.tasks),

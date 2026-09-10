@@ -24,6 +24,10 @@ function loadPlaywright() {
   throw new Error('Playwright not found. Set PLAYWRIGHT_MODULE to its node_modules path.');
 }
 
+async function portIsFree() {
+  try { await fetch(BASE + '/api/state', { signal: AbortSignal.timeout(1500) }); return false; } catch { return true; }
+}
+
 function startServer() {
   const uv = process.platform === 'win32' ? 'uv.exe' : 'uv';
   const child = spawn(uv, ['run', 'python', 'tests/browser/server.py', '--port', String(PORT)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -49,6 +53,7 @@ async function page(browser, theme, url) {
   const errors = [];
   p.on('pageerror', e => errors.push(e.message));
   p.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  p.on('response', r => { if (r.status() >= 400 && r.url().includes('/api/')) errors.push('HTTP ' + r.status() + ' ' + r.url().replace(BASE, '')); });
   await p.goto(BASE + url);
   await p.waitForSelector('#connection[data-status=connected]');
   return { p, context, errors };
@@ -99,10 +104,12 @@ check('run row opens the run; expander shows configuration; no ghost height afte
     at('results tab'); await p.locator('[data-view=results]').click();
     await p.waitForSelector('.results-table [data-index]');
     await p.locator('.results-table [data-index]').first().click();
-    await p.waitForSelector('.workspace.has-inspector');
+    await p.waitForSelector('#attempt-dialog[open]');
+    assert(await p.evaluate(() => /^#run\/[^/]+\/[^/]+\/[^/]+$/.test(location.hash)), 'the route carries the open attempt: ' + await p.evaluate(() => location.hash));
     await snapshot(p, 'run-inspector-light');
     at('close inspector'); await p.locator('#close-inspector').click();
-    await p.waitForFunction(() => !document.querySelector('.workspace').classList.contains('has-inspector'));
+    await p.waitForFunction(() => !document.querySelector('#attempt-dialog').open);
+    assert(await p.evaluate(() => /^#run\/[^/]+$/.test(location.hash)), 'closing the attempt returns the route to the run');
     const ghost = await p.evaluate(() => document.documentElement.scrollHeight - Math.max(innerHeight, document.querySelector('main').getBoundingClientRect().bottom + scrollY));
     assert(ghost < 48, 'ghost height below main: ' + ghost);
     await noOverflowNoErrors(p, errors, 'run');
@@ -123,8 +130,12 @@ check('new run is a route: Escape cancels and returns to runs, draft survives', 
     assert(await p.evaluate(() => document.querySelector('#launch-panel').classList.contains('hidden')), 'wizard hidden after Cancel');
     await p.locator('#new-comparison').click();
     await p.waitForSelector('#launch-panel:not(.hidden)');
-    at('escape'); await p.locator('#launch-title').press('Escape');
-    await p.waitForSelector('#runs-panel:not(.hidden)');
+    at('escape stays'); await p.locator('#task-search').press('Escape');
+    assert(await p.evaluate(() => !document.querySelector('#launch-panel').classList.contains('hidden')), 'Escape in a field does not throw the page away');
+    assert((await p.locator('#launch-panel [data-launch-panel]:not(.hidden)').count()) === 3, 'the run is one page with three sections');
+    assert((await p.locator('#launch-button').isVisible()), 'Start run is always in reach');
+    assert(/#\d+$/.test(await p.locator('#run-title').inputValue()) || (await p.locator('#run-title').inputValue()) === '', 'the run name is numbered: ' + await p.locator('#run-title').inputValue());
+    await p.locator('#close-dialog').click(); await p.waitForSelector('#runs-panel:not(.hidden)');
     await noOverflowNoErrors(p, errors, 'launch');
   } finally { await context.close(); }
 });
@@ -180,7 +191,7 @@ check('reports are the front door: index, run report, round report, back', async
     await p.waitForSelector('#report-article .verdict');
     assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
     const order = await p.evaluate(() => [...document.querySelectorAll('#report-article h2')].map(h => h.textContent));
-    assert(order.join('|') === 'Verdict|Findings|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured|Terms', 'section order: ' + order.join('|'));
+    assert(order.join('|') === 'Verdict|Findings|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured', 'section order: ' + order.join('|'));
     assert(await p.evaluate(() => document.querySelectorAll('#report-article figure.chart svg').length >= 2), 'figures drawn');
     assert(await p.evaluate(() => document.querySelector('#report-article .grade').textContent.trim().length > 0), 'grade shown');
     assert(await p.evaluate(() => !document.querySelector('[style]')), 'no inline styles');
@@ -197,7 +208,39 @@ check('reports are the front door: index, run report, round report, back', async
   } finally { await context.close(); }
 });
 
-check('vocabulary: no approach, runner or purpose in visible text', async browser => {
+check('report: a contents list, sections with an address, the page titled by the report, and no overflow on a phone', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#reports');
+  try {
+    await p.waitForSelector('.reports-table [data-open-report]');
+    await p.locator('.reports-table [data-open-report]').first().click();
+    await p.waitForSelector('#report-article .report-contents a');
+    assert(!(await p.title()).endsWith('Report'), 'the page is titled by the report: ' + await p.title());
+    at('section link'); await p.locator('.report-contents a[href$="/cost"]').click();
+    await p.waitForFunction(() => location.hash.endsWith('/cost'));
+    assert(await p.evaluate(() => !document.querySelector('#report-panel').classList.contains('hidden')), 'a section address stays on the report');
+    const back = await p.locator('#report-article .section-link').first().getAttribute('href');
+    assert(/^#report\/[^/]+\/verdict$/.test(back), 'section headings carry their address: ' + back);
+    at('round'); await p.goto(BASE + '/#reports'); await p.waitForSelector('.reports-table [data-open-round]');
+    await p.locator('[data-open-round]').first().click(); await p.waitForSelector('#report-article .standings');
+    assert(!(await p.locator('#report-article').innerText()).includes('Not counted in the standings'), 'a pilot round does not list its own runs as excluded');
+    assert((await p.locator('#report-article .standings thead th').first().innerText()) === 'Rank', 'standings carry a rank column');
+    at('audience in the address'); await p.locator('#report-article [data-audience=internal]').click(); await p.waitForFunction(() => location.hash.includes('audience=internal'));
+    assert((await p.locator('#report-article .internal-mark').count()) === 1, 'the internal view is banded');
+    assert((await p.locator('#report-article figure.chart .chart-take a').count()) >= 2, 'a figure can be taken away as SVG or CSV');
+    assert((await p.locator('#report-article .report-terms-fold').count()) === 1 && !(await p.locator('#report-article .report-terms-fold').getAttribute('open')), 'terms fold away');
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+    const q = await phone.newPage(); await q.goto(BASE + '/#reports'); await q.waitForSelector('.reports-table [data-open-report]');
+    await q.locator('.reports-table [data-open-report]').first().click(); await q.waitForSelector('#report-article figure.chart svg'); await q.waitForTimeout(400);
+    const overflow = await q.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+    assert(overflow <= 1, 'run report overflows on a phone by ' + overflow + 'px');
+    const fit = await q.evaluate(() => [...document.querySelectorAll('#report-article figure.chart')].map(f => f.dataset.fitWidth || 'none'));
+    assert(fit.some(v => v !== 'none' && Number(v) < 720), 'charts are drawn again at the column width: ' + fit.join(','));
+    await phone.close();
+    await noOverflowNoErrors(p, errors, 'report');
+  } finally { await context.close(); }
+});
+
+check('vocabulary: no approach, runner or purpose in visible text\', runner or purpose in visible text', async browser => {
   const { p, context } = await page(browser, 'light', '/#runs');
   try {
     const leaks = [];
@@ -223,13 +266,16 @@ check('live view: finished workstream blocks collapse to a verdict line, expand 
       collapsed: b.classList.contains('collapsed'), bodyHidden: getComputedStyle(b.querySelector('.block-body')).display === 'none',
       verdict: b.querySelector('.stream-state').textContent, header: b.querySelector('header').textContent, progress: b.querySelector('.stream-progress').textContent })));
     assert(blocks.length > 0, 'blocks rendered');
-    assert(blocks.every(b => b.collapsed && b.bodyHidden), 'finished blocks collapsed: ' + JSON.stringify(blocks));
-    assert(blocks.every(b => ['Requirements met', 'Needs investigation'].includes(b.verdict)), 'verdict line: ' + blocks.map(b => b.verdict).join(', '));
+    assert(blocks.every(b => b.verdict === 'Failed' ? !b.collapsed && !b.bodyHidden : b.collapsed && b.bodyHidden), 'failed blocks stay open, passed blocks fold to a line: ' + JSON.stringify(blocks));
+    assert(blocks.every(b => ['Passed', 'Failed'].includes(b.verdict)), 'verdict line: ' + blocks.map(b => b.verdict).join(', '));
     assert(blocks.every(b => /^\d+ \/ \d+$/.test(b.progress)), 'progress as n / m: ' + blocks.map(b => b.progress).join(', '));
-    at('expand'); await p.locator('.workstream .stream-toggle').first().click();
+    at('fold and unfold'); await p.locator('.workstream .stream-toggle').first().click();
+    await p.waitForFunction(() => document.querySelector('.workstream').classList.contains('collapsed'));
+    assert(await p.evaluate(() => document.querySelector('.workstream .stream-toggle').getAttribute('aria-expanded') === 'false'), 'toggle reports folded');
+    await p.locator('.workstream .stream-toggle').first().click();
     await p.waitForFunction(() => !document.querySelector('.workstream').classList.contains('collapsed'));
     assert(await p.evaluate(() => getComputedStyle(document.querySelector('.workstream .block-body')).display !== 'none'), 'expanded body visible');
-    assert(await p.evaluate(() => document.querySelector('.workstream .stream-toggle').getAttribute('aria-expanded') === 'true'), 'toggle reports expanded');
+    assert((await p.locator('.workstream .stream-step').first().innerText()).startsWith('Failed:'), 'a failed block names the failed check');
     at('reduced motion'); await p.emulateMedia({ reducedMotion: 'reduce' });
     await p.waitForTimeout(200);
     assert(await p.evaluate(() => document.getAnimations().length === 0), 'no running animations under reduced motion');
@@ -244,13 +290,15 @@ check('run page: a failing check and its event in two clicks from the Runs table
     at('runs table'); await p.waitForSelector('#history-rows [data-open-run]');
     await p.waitForFunction(() => [...document.querySelectorAll('#history-rows td.num')].every(td => td.textContent !== '…'));
     const header = await p.locator('.history-table thead').innerText();
-    assert(/turns/i.test(header) && /violations/i.test(header), 'runs table has Turns and Violations: ' + header);
+    assert(/violations/i.test(header), 'runs table has Violations: ' + header);
+    assert(await p.evaluate(() => document.querySelector('#runs-panel .history-table').classList.contains('no-turns') && getComputedStyle(document.querySelector('#runs-panel .history-table thead th:nth-child(6)')).display === 'none'), 'the Turns column is hidden when no run recorded turns');
     const cells = await p.evaluate(() => [...document.querySelectorAll('#history-rows .history-row')].map(r => [...r.querySelectorAll('td.num')].map(td => td.textContent)));
-    assert(cells.every(c => c[0] === 'unknown'), 'scripted checks record no model turns: ' + JSON.stringify(cells));
+    assert(cells.every(c => c[0] === '—'), 'scripted checks record no model turns: ' + JSON.stringify(cells));
     assert(cells.some(c => /^[1-9]\d* \/ \d+$/.test(c[1])), 'the sloppy check counts as violations: ' + JSON.stringify(cells));
     at('click 1: open the run'); await p.locator('#history-rows .history-row').filter({ hasText: 'Answer key against sloppy' }).locator('td').nth(2).click();
-    await p.waitForSelector('#report-view .outcome-card');
-    at('click 2: open the failing attempt'); await p.locator('.outcome-card').filter({ hasText: 'Needs investigation' }).first().click();
+    await p.waitForSelector('#report-view .matrix-cell button');
+    assert((await p.locator('#report-view .outcome-matrix tfoot').innerText()).includes('3 / 3'), 'matrix footer counts passes per setup');
+    at('click 2: open the failing attempt'); await p.locator('.matrix-cell.fail button').first().click();
     await p.waitForSelector('#output .check-row.failed');
     const tabs = await p.evaluate(() => [...document.querySelectorAll('.inspector-tabs [role=tab]')].map(b => b.textContent + ':' + b.getAttribute('aria-selected')));
     assert(tabs.join('|') === 'Output:false|Checks:true|Trace:false|Timeline:false', 'tabs: ' + tabs.join('|'));
@@ -265,9 +313,17 @@ check('run page: a failing check and its event in two clicks from the Runs table
     assert(labels.some(l => l.startsWith('Tool call: ')) && labels.some(l => l.startsWith('Check failed: ')), 'events labelled by what they show: ' + labels.join(' | '));
     assert(new Set(labels).size === labels.length, 'no identical labels: ' + labels.join(' | '));
     await p.locator('#output .trace-event').last().click();
-    await p.waitForSelector('#evidence-dialog[open]');
-    assert((await p.locator('#evidence-title').innerText()).startsWith('Check failed'), 'dialog titled by the event');
-    await p.locator('#evidence-close').click();
+    await p.waitForSelector('#trace-detail h3');
+    assert((await p.locator('#trace-detail h3').innerText()).startsWith('Check failed'), 'the event opens beside the list, titled by the event');
+    assert(await p.evaluate(() => /\/e\d+$/.test(location.hash)), 'the address names the event: ' + await p.evaluate(() => location.hash));
+    assert(await p.evaluate(() => !document.querySelector('#attempt-dialog').matches(':modal') && document.querySelector('#report-view .matrix-cell.current') !== null), 'the sheet is not modal and the current cell is marked');
+    at('back closes the sheet'); await p.goBack(); await p.waitForFunction(() => !document.querySelector('#attempt-dialog').open);
+    assert(await p.evaluate(() => !document.querySelector('.workspace').classList.contains('hidden')), 'Back closes the sheet and keeps the run');
+    await p.locator('.matrix-cell.fail button').first().click(); await p.waitForSelector('#attempt-dialog[open]');
+    at('next attempt by keyboard'); const before = await p.locator('#attempt-position').innerText(); await p.locator('#inspector-title').focus(); await p.keyboard.press('ArrowDown');
+    await p.waitForFunction(b => document.querySelector('#attempt-position').textContent !== b, before);
+    assert((await p.locator('#attempt-position').innerText()) !== before, 'j moves to the next attempt');
+    await p.keyboard.press('k');
     at('timeline tab'); await p.locator('#inspector-tab-timeline').click();
     await p.waitForSelector('#output figure.chart.timeline svg rect.span');
     at('keyboard'); await p.locator('#inspector-tab-timeline').focus(); await p.keyboard.press('ArrowLeft');
@@ -306,13 +362,58 @@ check('studio: New architecture opens the template menu and a choice opens the e
   const { p, context, errors } = await page(browser, 'light', '/#studio');
   try {
     await p.waitForSelector('#studio-library-rows');
-    await p.locator('#studio-create').click();
+    at('empty state teaches and offers the one action'); assert((await p.locator('#studio-library-rows').innerText()).includes('An architecture is'), 'empty state says what an architecture is');
+    await p.locator('[data-studio-empty-create]').click();
     await p.waitForSelector('.context-menu:not(.hidden) [role=menuitem]');
     await p.locator('.context-menu [role=menuitem]').first().click();
     await p.waitForFunction(() => document.querySelector('#setup-panel').dataset.screen === 'editor', null, { timeout: 10000 });
     assert(await p.evaluate(() => document.querySelector('#studio-item-title').textContent.trim() === 'Untitled architecture'), 'editor shows the new draft');
     assert(await p.evaluate(() => document.querySelectorAll('#lanes .node, #arch-panel .node, .graph-node').length > 0 || !!document.querySelector('#arch-panel canvas, #arch-panel svg')), 'canvas rendered');
     await noOverflowNoErrors(p, errors, 'studio new architecture');
+  } finally { await context.close(); }
+});
+
+check('runs: days as group rows, text filters, a Report link at the edge, the pager only when needed', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#runs');
+  try {
+    await p.waitForSelector('#history-rows [data-open-run]');
+    assert((await p.locator('#history-rows .history-day').count()) >= 1, 'a day row groups the runs');
+    assert((await p.locator('#history-pager').isHidden()), 'no pager for one page');
+    assert((await p.locator('#history-rows .run-setups').first().innerText()).includes('task'), 'the row names its setups and task count');
+    at('filter'); await p.locator('[data-history-status=failed]').click();
+    assert((await p.locator('#history-rows').innerText()).includes('No runs match'), 'the failed filter empties the fixture list');
+    await p.locator('[data-history-clear]').click();
+    await p.waitForSelector('#history-rows [data-open-run]');
+    at('report link'); await p.locator('#history-rows [data-open-report]').first().click();
+    await p.waitForSelector('#report-panel:not(.hidden)');
+    assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
+    await noOverflowNoErrors(p, errors, 'runs list');
+  } finally { await context.close(); }
+});
+
+check('budget: the ledger comes first and an empty week is one line, not three', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#budget');
+  try {
+    await p.waitForSelector('#budget-content .budget-section');
+    const text = await p.locator('#budget-content').innerText();
+    assert(text.indexOf('Ledger') < text.indexOf('Usage by model'), 'ledger before usage');
+    assert((await p.locator('#budget-content .ledger-table, #budget-content .budget-section .empty-line').count()) >= 1, 'a ledger table or one plain line');
+    assert((await p.locator('#budget-content .empty-line').count()) <= 2, 'at most one empty line per section');
+    assert((await p.locator('[data-usage-period][aria-pressed=true]').innerText()) === 'This week', 'the usage period matches the ledger week');
+    await noOverflowNoErrors(p, errors, 'budget');
+  } finally { await context.close(); }
+});
+
+check('settings: budget, capacity, providers with key presence, Monarch pin, all in a label column', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#runtime');
+  try {
+    await p.waitForSelector('#settings-providers');
+    const heads = await p.evaluate(() => [...document.querySelectorAll('#runtime-panel h2')].map(h => h.textContent));
+    assert(heads.join('|').startsWith('Budget|Capacity|Providers|Genesis|Monarch Enterprise'), 'sections in order: ' + heads.join('|'));
+    const providers = await p.locator('#settings-providers').innerText();
+    assert(/Key present|No key/.test(providers), 'each provider says whether a key is present: ' + providers);
+    assert(!/sk-|AIza/.test(providers), 'no key value on the page');
+    await noOverflowNoErrors(p, errors, 'settings');
   } finally { await context.close(); }
 });
 
@@ -327,9 +428,14 @@ check('genesis: a dropped sentence becomes a queued card, the board has six colu
     assert(card.title.startsWith('Monarch fails more often') && card.draggable, 'the dropped sentence is a draggable card: ' + JSON.stringify(card));
     assert(/Queued|Waiting/.test(card.chip), 'the card shows its work state: ' + card.chip);
     assert((await p.locator('.research-column').count()) === 6 && (await p.locator('[data-add-stage]').count()) === 4, 'six columns, four with an add action');
-    await p.waitForFunction(() => /idle|waiting|paused|working/i.test(document.querySelector('#genesis-watcher').innerText), null, { timeout: 15000 });
+    await p.waitForFunction(() => /idle|waiting|paused|working|next card/i.test(document.querySelector('#genesis-watcher').innerText), null, { timeout: 15000 });
     at('open card'); await p.locator('.research-column[data-stage=research] .research-card').first().click();
-    await p.waitForSelector('#research-detail:not(.hidden) .research-question');
+    await p.waitForSelector('#card-dialog[open] .research-question');
+    assert((await p.locator('#card-dialog .card-nav .meta').innerText()).includes(' of '), 'the card sheet counts its place among the cards');
+    assert((await p.locator('#card-dialog #research-work-now').count()) === 1, 'a queued card offers Work now');
+    await p.keyboard.press('Escape'); await p.waitForFunction(() => !document.querySelector('#card-dialog').open);
+    assert((await p.locator('.research-column.empty').count()) >= 1, 'empty columns fold to their name');
+    assert(await p.evaluate(() => document.querySelector('.research-board').scrollWidth <= document.querySelector('.research-board').clientWidth + 1), 'the board fits the page');
     at('memory tab'); await p.locator('#genesis-tab-memory').click();
     await p.waitForSelector('#memory-core .memory-block');
     assert((await p.locator('#memory-core .memory-block').count()) === 3, 'SOUL.md, LAB.md and MONARCH.md blocks');
@@ -351,6 +457,7 @@ check('genesis: a dropped sentence becomes a queued card, the board has six colu
 
 (async () => {
   const { chromium } = loadPlaywright();
+  if (!(await portIsFree())) throw new Error('Port ' + PORT + ' already answers: a stale fixture server is running. Kill Python listeners on 8766-8799 (they answer with old code), or set BROWSER_PORT.');
   const server = await startServer();
   const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chrome' });
   let failed = 0;

@@ -10,7 +10,7 @@ function renderObservatory(){
  const started=pairs.filter(p=>p.events.some(e=>['model_started','step_started','attempt_started'].includes(e.type)));
  const active=started.filter(p=>!p.events.some(e=>e.type==='attempt_finished')),complete=started.filter(p=>!active.includes(p));
  const live=['queued','running','cancelling'].includes(job.status),selected=[...active,...complete];
- root.querySelector('h3').textContent=runStatus(job)==='paused'?'Paused':live?'Live':'Output';
+ root.querySelector('h3').textContent=runStatus(job)==='paused'?'Paused':live?'Live':'';
  root.querySelector('.observatory-count').textContent=complete.length+' / '+pairs.length+' finished'+(live?' · '+active.length+' active':'');
  const streams=root.querySelector('.workstreams'),keys=new Set(selected.map(p=>JSON.stringify([p.task,p.model])));
  for(const child of Array.from(streams.children))if(!keys.has(child.dataset.stream))child.remove();
@@ -20,26 +20,25 @@ function renderObservatory(){
   let card=Array.from(streams.children).find(c=>c.dataset.stream===key);
   if(!card){
    card=document.createElement('article');card.className='block workstream';card.dataset.stream=key;
-   card.innerHTML='<header><span class="stream-model"></span><span class="sep">·</span><span class="stream-task"></span><span class="stream-progress"></span><button class="stream-toggle" type="button" aria-expanded="true" hidden>Collapse</button></header><div class="block-body"><div class="stream-path"><div class="knowledge-cell"></div><div class="flow-channel"></div><div class="agent-cell"></div></div><div class="stream-output" tabindex="0" aria-label="Attempt output"><span class="stream-text"></span><span class="stream-cursor" aria-hidden="true" hidden></span></div><footer><span class="stream-knowledge"></span><button class="text-button" type="button">Inspect task</button></footer></div><p class="stream-state" role="status"></p>';
+   card.innerHTML='<header><span class="stream-model"></span><span class="sep">·</span><span class="stream-task"></span><span class="stream-progress"></span><button class="stream-toggle" type="button" aria-expanded="true" hidden>Collapse</button></header><div class="block-body"><p class="stream-knowledge meta" hidden></p><div class="stream-output" tabindex="0" aria-label="Attempt output"><span class="stream-text"></span><span class="stream-cursor" aria-hidden="true" hidden></span></div><footer><span class="stream-step meta"></span><button class="text-button" type="button">Inspect task</button></footer></div><p class="stream-state" role="status"></p>';
    streams.append(card);
    card.querySelector('.stream-toggle').onclick=()=>{card.dataset.expanded=card.classList.contains('collapsed')?'1':'0';renderObservatory();};
-   card.querySelector('footer button').onclick=()=>{taskId=p.task;$('#task-select').value=taskId;$('.technical-trace').open=true;renderGraph();$('.technical-trace').scrollIntoView({behavior:'smooth',block:'start'});};
+   card.querySelector('footer button').onclick=()=>{const r=job.results.find(x=>x.task===p.task&&x.model===p.model);taskId=p.task;$('#task-select').value=taskId;if(r){selected={node:'result',model:p.model,task:p.task,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};setOutputMode('trace');revealSelection();}else{$('.technical-trace').open=true;renderGraph();$('.technical-trace').scrollIntoView({behavior:'smooth',block:'start'});}};
   }
   const signal=es.findLast(e=>e.type==='knowledge_delivered'),modelEvent=es.findLast(e=>e.type==='model_started');
   const deltas=modelEvent?es.filter(e=>e.type==='model_delta'&&e.node===modelEvent.node).map(e=>e.text).join(''):'';
   const finished=es.findLast(e=>e.type==='model_finished'),output=deltas||finished?.output||done?.output||'';
-  const step=es.findLast(e=>e.type==='step_started'),status=done?(done.passed?'Requirements met':'Needs investigation'):!live?'Stopped before completion':last?.type==='node_started'?'Working in the application':output?'Writing the result':'Working on the request';
-  const collapsed=!!done&&card.dataset.expanded!=='1';
+  const step=es.findLast(e=>e.type==='step_started'),status=done?(done.passed?'Passed':'Failed'):!live?'Stopped before completion':last?.type==='node_started'?'Working in the application':output?'Writing the result':'Working on the request';
+  const collapsed=!!done&&(card.dataset.expanded==='0'||(!!done.passed&&card.dataset.expanded!=='1'));
   card.classList.toggle('live',!done&&live);card.classList.toggle('collapsed',collapsed);card.classList.toggle('passed',!!done&&!!done.passed);card.classList.toggle('failed',!!done&&!done.passed);
   const toggle=card.querySelector('.stream-toggle');toggle.hidden=!done;toggle.textContent=collapsed?'Expand':'Collapse';toggle.setAttribute('aria-expanded',String(!collapsed));
   const set=(selector,text)=>{const el=card.querySelector(selector);if(el.textContent!==text)el.textContent=text;};
   set('.stream-model',modelName(p.model));set('.stream-task',shortTaskLabel(p.task));set('.stream-progress',(tasks.indexOf(p.task)+1)+' / '+tasks.length);
-  set('.knowledge-cell',signal?signal.label:'Task brief');set('.agent-cell',step?.label||'Agent');set('.stream-state',status);set('.stream-knowledge',signal?signal.products+' products attached':'');
+  const failedChecks=done&&!done.passed?(done.checks||[]).map((c,i)=>c.passed===false?checkName(c.type,p.task,p.model,i):null).filter(Boolean):[];set('.stream-step',failedChecks.length?'Failed: '+failedChecks.join(', '):step?.label?'Step '+step.label:'');set('.stream-state',status);const knowledge=card.querySelector('.stream-knowledge');set('.stream-knowledge',signal?signal.label+' · '+signal.products+' products attached':'');knowledge.hidden=!signal;
   const outputBox=card.querySelector('.stream-output'),follow=outputBox.scrollHeight-outputBox.scrollTop-outputBox.clientHeight<40;
   set('.stream-text',output||(done?'':'Waiting for output…'));card.querySelector('.stream-cursor').hidden=!!done||!live;
   if(follow)outputBox.scrollTop=outputBox.scrollHeight;
-  const channel=card.querySelector('.flow-channel');channel.classList.toggle('attached',!!signal);
-  if(signal&&!observedDeliveries.has(signal.id)){observedDeliveries.add(signal.id);channel.setAttribute('aria-label','Knowledge attached');if(live){channel.classList.remove('delivering');void channel.offsetWidth;channel.classList.add('delivering');channel.addEventListener('animationend',()=>channel.classList.remove('delivering'),{once:true});}}
+  if(signal&&!observedDeliveries.has(signal.id)){observedDeliveries.add(signal.id);if(live){knowledge.classList.remove('delivering');void knowledge.offsetWidth;knowledge.classList.add('delivering');knowledge.addEventListener('animationend',()=>knowledge.classList.remove('delivering'),{once:true});}}
  }
 }
 const originalSwitchView=switchView;switchView=function(name){originalSwitchView(name);if(name==='live')renderObservatory();};

@@ -94,7 +94,7 @@ function renderPgFields(keepFocus) {
     const state = pgFieldState(f);
     return '<div class="fields-row pg-row" data-row="' + i + '"><input data-pg-field="path" data-index="' + i + '" value="' + esc(f.path) + '" placeholder="product.summary" maxlength="120" aria-label="Field path" autocomplete="off"' + (f.path ? '' : ' aria-invalid="true"') + '><select data-pg-field="type" data-index="' + i + '" aria-label="Field type">' + PG_TYPES.map(t => option(t, t, t === f.type)).join('') + '</select><input data-pg-field="description" data-index="' + i + '" value="' + esc(f.description || '') + '" placeholder="What the agent should find and write here" maxlength="600" aria-label="Field description" autocomplete="off"><span class="bp-chip ' + state[0] + '" title="' + esc(state[1]) + '">' + state[0] + '</span><button class="icon-button" data-pg-remove="' + i + '" type="button" aria-label="Remove field ' + esc(f.path || i + 1) + '" title="Remove field">×</button></div>';
   }).join('') || '<p class="node-help">No fields yet. Add one below.</p>';
-  $$('[data-pg-field]').forEach(el => { const handler = () => { const i = Number(el.dataset.index); pg.fields[i][el.dataset.pgField] = el.value; pgMarkDirty(); if (el.dataset.pgField === 'path') el.setAttribute('aria-invalid', String(!el.value)); const chip = el.closest('.pg-row')?.querySelector('.bp-chip'); if (chip) { const state = pgFieldState(pg.fields[i]); chip.className = 'bp-chip ' + state[0]; chip.textContent = state[0]; chip.title = state[1]; } }; if (el.tagName === 'SELECT') el.onchange = handler; else el.oninput = handler; });
+  $$('[data-pg-field]').forEach(el => { const handler = () => { const i = Number(el.dataset.index); pg.fields[i][el.dataset.pgField] = el.value; pgMarkDirty(); if (el.dataset.pgField === 'path') { const ok = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(el.value.trim()); el.setAttribute('aria-invalid', String(!ok)); el.title = ok ? '' : 'A path looks like product.summary'; } const chip = el.closest('.pg-row')?.querySelector('.bp-chip'); if (chip) { const state = pgFieldState(pg.fields[i]); chip.className = 'bp-chip ' + state[0]; chip.textContent = state[0]; chip.title = state[1]; } }; if (el.tagName === 'SELECT') el.onchange = handler; else el.oninput = handler; });
   $$('[data-pg-remove]').forEach(b => b.onclick = () => { const removed = pg.fields.splice(Number(b.dataset.pgRemove), 1)[0]; pgMarkDirty(); renderPgFields(); $('#pg-add-field').focus(); hint('Removed field ' + (removed?.path || '')); });
   if (key) { const again = $$('[data-pg-field]').find(el => el.dataset.pgField + ':' + el.dataset.index === key); if (again) { again.focus({preventScroll: true}); if (pos !== undefined && again.setSelectionRange) try { again.setSelectionRange(pos, pos); } catch {} } }
 }
@@ -329,8 +329,10 @@ async function loadPgGraphProducts() {
     }
   } catch (e) {
     pgGraphProducts = [];
-    list.innerHTML = '<div class="empty-state"><p>' + esc(e.message) + '</p><button class="button" type="button" id="pg-graph-retry">Try again</button></div>';
-    $('#pg-graph-retry').onclick = () => { pgGraphLoads.clear(); renderPgGraph(); };
+    const unset = /not set|MONARCH_FD_URL/i.test(e.message);
+    list.innerHTML = '<div class="empty-state"><p>' + (unset ? 'The live graph is not configured: MONARCH_FD_URL is not set on the server. Add it to workflowbench/.env and restart the Studio; Settings lists what is present.' : esc(e.message)) + '</p>' + (unset ? '<button class="text-button" type="button" id="pg-graph-settings">Open Settings</button>' : '<button class="button" type="button" id="pg-graph-retry">Try again</button>') + '</div>';
+    if ($('#pg-graph-retry')) $('#pg-graph-retry').onclick = () => { pgGraphLoads.clear(); renderPgGraph(); };
+    if ($('#pg-graph-settings')) $('#pg-graph-settings').onclick = () => $('#nav-runtime').click();
     return;
   }
   if (!pgGraph.product || !pgGraphProducts.some(p => p.slug === pgGraph.product)) pgGraph.product = pgGraphProducts[0]?.slug || null;

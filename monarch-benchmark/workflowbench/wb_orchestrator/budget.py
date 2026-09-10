@@ -300,6 +300,12 @@ class BudgetLedger:
             rows = connection.execute(query + ' ORDER BY created_at, reservation_id', args).fetchall()
         return [Reservation(**dict(row)) for row in rows]
 
+    def run_reservations(self) -> list[RunReservation]:
+        """Every run envelope, oldest first; a read-only view for the ledger page."""
+        with self._transaction() as connection:
+            rows = connection.execute('SELECT * FROM budget_run_reservations ORDER BY created_at, scope_id').fetchall()
+        return [RunReservation(**dict(row)) for row in rows]
+
     def scope_committed(self, scope_id: str) -> Decimal:
         """What a scope has committed: settled actuals plus the maximum of every open hold."""
         _identity(scope_id, 'scope_id')

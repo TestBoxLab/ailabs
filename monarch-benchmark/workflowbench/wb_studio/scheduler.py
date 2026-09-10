@@ -18,7 +18,8 @@ from pathlib import Path
 from wb_results.evidence import write_json
 from wb_studio.library import now_sao_paulo
 
-MODULES = ("wb_studio.code_index", "wb_studio.genesis_sleep")
+MODULES = ("wb_studio.code_index", "wb_studio.genesis_sleep",
+           "wb_studio.genesis_ranking", "wb_studio.genesis_memory_suite", "wb_studio.genesis_channels")  # feature 022 lanes; missing ones are skipped
 
 
 class Scheduler:
