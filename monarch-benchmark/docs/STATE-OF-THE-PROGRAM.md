@@ -242,3 +242,90 @@ In `workflowbench/deferred.md`, kept here so they are visible:
   Sheets has no list-spreadsheets route and Drive is not seeded. Keep it or
   redraw it; Lucas decides.
 - 27 approval rules still use a whole-service wildcard.
+
+## 12. Session of 9–10 September 2026: what changed and what is open
+
+The whole of that session went into one finding: **the approval rules were
+broken, and four paid rounds had measured that rather than any competitor.**
+
+### The six defects, all in rules the bench derives itself
+
+| Defect | Effect | Frozen tasks |
+|---|---|---|
+| An added subtree collapsed to `"<object>"` | collateral writes invisible | 12 of 40 |
+| The rule named `google_sheets.spreadsheets[id=…]*`, a subtree the loader empties | **nobody could pass** | 12 |
+| `<service>.actions[*]`, a list glob against a dict-keyed log | **nobody could pass** | 1 |
+| `zoom.actions.*` on a service whose schema has no `actions` field | **nobody could pass** | 1 |
+| A `where` clause compared `1200000` with `"1200000"` | rejected the write it had asked for | 5 |
+| `id: None` collided, so an added record read as five edits | failed correct answers | — |
+
+Two more accepted a wrong answer: a whole-service wildcard took any number of
+unrequested writes, and an assertion pinning no value let a junk-only attempt
+score.
+
+Every one was found by running the frozen tasks against the simulator, never by
+reading them. Two sweeps were discarded first for being heuristics — one
+reported 1,168 false positives. **A heuristic over task files is not evidence;
+a reproduction against the world is.**
+
+### Also fixed
+
+- **A production bug in the Monarch client.** `_buffered` asked the socket before
+  the response buffer, so a first SSE frame that arrived with the headers was
+  discarded. In a live round that can drop a real `awaiting_input` and make an
+  attempt miss a question the builder asked. Worth a second pair of eyes.
+- **`wb monarch verify` could not fail on the thing that mattered.** It never
+  probed the front door, so it reported green while the environment named the
+  tunnel and the knowledge base named the hosted Studio — the exact split that
+  spent US$ 18.75 on two rounds measuring nothing. It now compares them.
+- **The Studio's front-door relay** targeted a hardcoded loopback, so a CLI round
+  could never reach its own shim through a hosted Studio.
+  `STUDIO_FRONT_DOOR_TARGET` now names where the shim listens.
+- **The seed deploy guards** compared a bare host against one carrying a path, so
+  a front door served at `/front-door` was rejected by construction.
+
+### Collateral damage is now measured
+
+A verdict alone hides the difference between a competitor that takes the safe
+path and one that finishes more prompts by making a bigger mess. Every attempt
+carries a count; the technical page has two columns and the stakeholder page a
+card in plain words. On the Easy round of 5 September it already separates the
+field: Opus has the lowest pass rate of the models and the highest collateral
+(8 attempts of 16), Monarch 1 of 20.
+
+### Monarch executes again
+
+After the migration, one attempt: `completed`, two `GET /airtable/base_crm/Contacts`
+at 200 — the call that had failed all day — and a 13-second execution phase where
+it had been 149 seconds of failure. It still did not pass the task: it read and
+wrote nothing, which is now a question about the product, not the wiring.
+
+### Open, in the order they matter
+
+1. **Why Monarch read and did not write** on `simple.airtable_find_update`. The
+   known trap is that the Airtable mock does not evaluate `filterByFormula`, so a
+   "does a VIP already exist?" lookup returns the existing non-VIP record and the
+   builder concludes there is nothing to create. If that is it, the fix is an
+   AutomationBench patch and belongs with Lucas. **Worth settling before paying
+   for a round that would measure the same trap four times.**
+2. **PR #3** is open against `main` and carries all of the above.
+3. **Re-vendor AutomationBench.** The tree here is plain `1.0.6`; `achievable-50`
+   declares `1.0.6+evalrepair.10` and the patched source is not on this machine,
+   so a run over that set stops at the world-revision guard. The four tier sets
+   are unaffected.
+4. **`simple.invoice_airtable_slack` has a weak assertion** — it pins the table
+   but not the vendor or the amount, so a wrong invoice satisfies the positive
+   half. Editing it is a pre-registration change and needs Lucas.
+5. **Two Jira tasks stay collateral-blind**: their assertions carry no content for
+   a `where` clause to pin. A limit of the vendor's data, not of the derivation.
+6. **The schema synthesizer** is finished on the Monarch side and not yet
+   deployed. `rounds/2026-09-10-fdapi-deploy-runbook.md` has the procedure; the
+   check that matters is that the 47 `bench-*` products come back **unchanged**,
+   because the synthesizer is not supposed to touch them.
+
+### One caution for whoever runs the next round
+
+The bench now refuses more than it used to, and each refusal is load-bearing:
+knowledge-base drift, front-door disagreement, an operator name, a world
+revision. When one fires, read it before working around it — every one of them
+was added because something silently measured nothing.
