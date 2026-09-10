@@ -10,18 +10,27 @@
 """
 from __future__ import annotations
 
+import datetime
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from grader.grade import grade
 from grader.noop import validate_task
 from runner.arms import OracleArm, _sf_updates_from_assertions
 from wb_orchestrator.orchestrator import contract_hash
-from wb_world.episode import Episode, load_task_file
+from wb_world import episode as world
+from wb_world.episode import (UPSTREAM_WORLD_VERSION, WORLD_PACKAGE, Episode, load_task_file,
+                              seeded_services, world_block, world_of)
 
 
 BASELINE_DOMAIN = "simple"
+MANIFEST_NAME = "MANIFEST.yaml"
+VENDORED_RECORD = "VENDORED-FROM.txt"      # written by scripts/vendor_automation_bench.py
+_REVISION_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def known_domains() -> list[str]:
@@ -46,11 +55,19 @@ def resolve_domains(domains: list[str]) -> list[str]:
 
 
 def import_ab(domains: list[str], out_dir: str | Path,
-              product_services: list[str] | None = None) -> dict[str, Any]:
+              product_services: list[str] | None = None,
+              revision: str | None = None) -> dict[str, Any]:
     """Convert AB rows into task files, one folder per domain when asked.
 
     `out_dir` may contain `{domain}`, which is replaced per domain. Several
     domains without it is refused rather than mixing them in one folder.
+
+    `revision` labels the world the tasks are imported under: every task then
+    carries `info.world` (package, installed version, label), hashed, and the
+    folder that holds the domain folders gets a MANIFEST.yaml. Without it the
+    import is what it always was, which is only right on the upstream world;
+    on any other it is refused, so a repaired world never lands in `corpus/`
+    looking like the old one.
     """
     from automationbench.domains import get_domain_dataset
     domains = resolve_domains(domains)
@@ -58,6 +75,15 @@ def import_ab(domains: list[str], out_dir: str | Path,
     if len(domains) > 1 and "{domain}" not in template:
         raise ValueError(f"several domains ({domains}) need '{{domain}}' in --dest, "
                          f"or they would be mixed in one folder: {template}")
+    if revision is not None and not _REVISION_LABEL.fullmatch(revision):
+        raise ValueError(f"revision label {revision!r} must be letters, digits, '.', '_' "
+                         f"or '-' (it names a folder and a suite)")
+    installed = world.installed_world_version()
+    if revision is None and installed != UPSTREAM_WORLD_VERSION:
+        raise ValueError(f"the installed world is {WORLD_PACKAGE} {installed}, not the upstream "
+                         f"{UPSTREAM_WORLD_VERSION}; an import from it must say which revision "
+                         f"it is: pass --revision LABEL --out DIR, so it never lands in "
+                         f"corpus/ as if it were the {UPSTREAM_WORLD_VERSION} world")
 
     by_domain: dict[str, dict[str, int]] = {}
     seeded: set[str] = set()
@@ -84,11 +110,15 @@ def import_ab(domains: list[str], out_dir: str | Path,
                     "allowed_changes": info.get("allowed_changes", []),
                 },
             }
+            if revision is not None:
+                task["info"]["world"] = world_block(revision, installed)
             task["contract_sha256"] = contract_hash(task)
             # What the domain seeds, counted before the skip below: the service
             # check must answer for the whole domain, not only for the tasks this
             # call happened to write, or a re-import would report nothing missing.
-            seeded |= {k for k in task["info"]["initial_state"] if k != "meta"}
+            # Seeded means the task's data says something about the service; the
+            # repaired world's spelled-out empty defaults do not count.
+            seeded |= set(seeded_services(task["info"]["initial_state"]))
             path = out / f"{task_name}.json"
             if path.exists() and json.loads(path.read_text()).get("contract_sha256") == task["contract_sha256"]:
                 skipped.append(task_name)
@@ -98,8 +128,16 @@ def import_ab(domains: list[str], out_dir: str | Path,
         by_domain[domain] = {"written": len(written) - n_written,
                              "unchanged": len(skipped) - n_skipped}
     missing = sorted(seeded - set(product_services)) if product_services is not None else []
+    manifest = None
+    if revision is not None and "{domain}" in template:
+        # the folder that holds the domain folders describes the whole import
+        root = Path(template.replace("{domain}", "x")).parent
+        write_manifest(root, imported_at=_now())
+        manifest = root / MANIFEST_NAME
     return {"written": len(written), "unchanged": len(skipped),
             "by_domain": by_domain, "missing_services": missing,
+            "revision": revision, "world_version": installed,
+            "manifest": str(manifest) if manifest else None,
             "tasks": written[:20] + (["..."] if len(written) > 20 else [])}
 
 
@@ -175,4 +213,125 @@ def format_validation(v: dict[str, Any], verbose: bool = False) -> str:
             for k in ("noop_detail", "oracle_detail"):
                 if k in r:
                     lines.append(f"      {k}: {json.dumps(r[k], default=str)[:200]}")
+    return "\n".join(lines)
+
+
+# --- the corpus manifest (one per world revision) -------------------------------
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def vendored_record() -> dict[str, str]:
+    """What VENDORED-FROM.txt next to the installed package says, as a mapping;
+    empty when the copy has no record (a plain clone of upstream, say)."""
+    import automationbench
+    path = Path(automationbench.__file__).resolve().parents[1] / VENDORED_RECORD
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition(":")
+        if sep and " " not in key:
+            out[key.strip()] = value.strip()
+    return out
+
+
+def _world_of_corpus(folders: list[Path]) -> dict[str, Any]:
+    """The one world every task under `folders` records; refuses a mix by name."""
+    seen: dict[tuple, list[str]] = {}
+    for folder in folders:
+        for p in sorted(folder.glob("*.json")):
+            task = load_task_file(p)
+            w = world_of(task)
+            key = (w["package"], str(w["version"]), w.get("revision")) if w else None
+            seen.setdefault(key, []).append(task.get("task", p.stem))
+    if len(seen) > 1:
+        detail = "; ".join(f"{k or 'no world recorded'}: {', '.join(v[:3])}"
+                           f"{', ...' if len(v) > 3 else ''}" for k, v in seen.items())
+        raise ValueError(f"the folders mix worlds ({detail}); a corpus is one world")
+    key = next(iter(seen), None)
+    if key is None:
+        return {"package": WORLD_PACKAGE, "version": UPSTREAM_WORLD_VERSION, "revision": None}
+    return {"package": key[0], "version": key[1], "revision": key[2]}
+
+
+def write_manifest(root: str | Path, imported_at: str | None = None) -> dict[str, Any]:
+    """Write ROOT/MANIFEST.yaml from the imported-* folders under ROOT as they are.
+
+    Usable means what `wb corpus tiers` means: a non-empty approval rule and a
+    hash that matches the content. `imported_at` is kept from the previous
+    manifest unless given.
+    """
+    from wb_orchestrator import tiers
+    root = Path(root)
+    folders = sorted(p for p in root.glob("imported-*") if p.is_dir())
+    if not folders:
+        raise FileNotFoundError(f"no imported-* folder under {root}")
+    path = root / MANIFEST_NAME
+    previous = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    world_seen = _world_of_corpus(folders)
+    pool = tiers.load_corpus(folders)
+
+    record = vendored_record()
+    vendored: dict[str, Any]
+    if record.get("expected_version") == world_seen["version"]:
+        vendored = {"vendored_from": record.get("source"),
+                    "source_tree_id": (record.get("source_tree_id") or "").split(" ")[0] or None,
+                    "tree_sha256": record.get("tree_sha256"),
+                    "pyproject_sha256": record.get("pyproject_sha256"),
+                    "vendored_at": record.get("vendored_at")}
+    else:
+        vendored = {"vendored_from": f"no {VENDORED_RECORD} for {world_seen['version']} next to "
+                                     f"the installed package"}
+
+    rows = []
+    for f in pool.folders:
+        declared = any(load_task_file(p)["info"].get("expected_changes")
+                       for p in sorted(f.path.glob("*.json")))
+        rows.append({"dir": f.path.relative_to(root).as_posix(), "domain": f.domain,
+                     "tasks": f.tasks, "declared": declared, "usable": f.usable})
+    domain_of = {e.task_id: e.domain for e in pool.entries}
+    for f in pool.folders:
+        for p in f.path.glob("*.json"):
+            domain_of.setdefault(load_task_file(p).get("task", p.stem), f.domain)
+    without_rule = [{"task": t, "domain": domain_of.get(t), "reason": tiers.excluded_reason(*r)}
+                    for t, r in sorted(pool.excluded.items()) if r[0] == tiers.NO_RULE]
+    mismatch = [{"task": t, "domain": domain_of.get(t), "reason": tiers.excluded_reason(*r)}
+                for t, r in sorted(pool.excluded.items()) if r[0] == tiers.DRIFT]
+
+    manifest: dict[str, Any] = {
+        "revision": world_seen["revision"],
+        "world": {"package": world_seen["package"], "version": world_seen["version"], **vendored},
+        "imported_at": imported_at or previous.get("imported_at") or _now(),
+        "manifest_written_at": _now(),
+        "usable_means": ("a non-empty approval rule (info.expected_changes) and a "
+                         "contract_sha256 that matches the content; the two checks "
+                         "wb corpus tiers applies"),
+        "folders": rows,
+        "tasks_total": pool.total,
+        "usable_total": len(pool.entries),
+        "without_rule": without_rule,
+    }
+    if mismatch:
+        manifest["hash_mismatch"] = mismatch
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True,
+                                   default_flow_style=False), encoding="utf-8", newline="\n")
+    return manifest
+
+
+def format_manifest(root: str | Path, m: dict[str, Any]) -> str:
+    root = Path(root)
+    w = m["world"]
+    lines = [f"{root.as_posix()}: revision {m['revision'] or '(none recorded)'}, "
+             f"world {w['package']} {w['version']}"]
+    width = max(len(f["domain"]) for f in m["folders"]) + 1
+    for f in m["folders"]:
+        lines.append(f"  {f['domain']:<{width}} {f['tasks']:>4} tasks, {f['usable']:>4} usable, "
+                     f"{'declared' if f['declared'] else 'not declared'}")
+    lines.append(f"total: {m['tasks_total']} tasks, {m['usable_total']} usable, "
+                 f"{len(m['without_rule'])} without a rule"
+                 + (f", {len(m['hash_mismatch'])} whose hash does not match"
+                    if m.get("hash_mismatch") else ""))
+    lines.append(f"[ok] write {(root / MANIFEST_NAME).as_posix()}")
     return "\n".join(lines)

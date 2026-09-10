@@ -109,7 +109,7 @@ def test_mock_e2e_full_matrix(tmp_path, mock_server):
 
     ep0 = res["rows"][0]
     arts = store.artifacts(ep0["episode_id"])
-    assert set(arts) == {"snapshot0", "snapshot1", "turns"}
+    assert set(arts) == {"snapshot0", "snapshot1", "turns", "events", "grading", "result", "manifest"}
     assert json.loads(Path(arts["snapshot0"]).read_text())
 
 

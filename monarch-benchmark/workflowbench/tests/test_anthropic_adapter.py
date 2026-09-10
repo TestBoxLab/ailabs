@@ -57,6 +57,7 @@ def test_turn_normalizes_usage_and_echoes_thinking(adapter):
     sent = adapter.calls[0]
     assert sent["thinking"] == {"type": "adaptive"} and sent["output_config"] == {"effort": "xhigh"}
     assert sent["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sent["cache_control"] == {"type": "ephemeral"}
     # thinking block echoed verbatim in the appended assistant turn
     assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"][0]["type"] == "thinking"
 

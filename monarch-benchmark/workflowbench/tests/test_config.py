@@ -238,7 +238,7 @@ def test_unknown_key_rejected(tmp_path, kind):
     ("model", "provider"), ("model", "key_env"), ("model", "usd_per_million"),
     ("harness_api", "accepts"), ("harness_cli", "command"), ("harness_scripted", "script"),
     ("harness_monarch", "credential_env"),
-    ("plan", "tasks"), ("plan", "competitors"), ("plan", "approved_by"), ("plan", "baseline"),
+    ("plan", "tasks"), ("plan", "competitors"), ("plan", "cost_ceiling_usd"), ("plan", "baseline"),
 ])
 def test_missing_required_key(tmp_path, kind, key):
     load, text = EXAMPLES[kind]
@@ -854,6 +854,39 @@ def test_tier_plans():
     pilot = config.load_plan(site / "config/plans/pilot-monarch-create-run.yaml")
     assert [(c.model, c.harness) for c in pilot.competitors] == next(iter(shapes.values()))
     assert pilot.mode == "create-run" and pilot.baseline == "claude-opus-5/api"
+
+
+def test_achievable_50_plans():
+    """Unblock plan M2: the two gauntlet plans differ only in name, description and track.
+
+    Loaded, not resolved: the monarch-stock and monarch-lab harness files arrive
+    with milestone M5, so `config.resolve` refuses both plans until then.
+    """
+    site = Path(__file__).resolve().parents[1]
+    plans = {n: config.load_plan(site / "config/plans" / f"achievable-50-{n}.yaml")
+             for n in ("request", "workflow")}
+    assert plans["request"].track == "agentic-request"
+    assert plans["workflow"].track == "create-run"
+
+    for name, pl in plans.items():
+        assert pl.name == f"achievable-50-{name}"
+        assert pl.tasks == "tasks/achievable-50" and pl.mode == "create-run"
+        assert pl.repetitions == 1 and pl.retry_on_fail == 1
+        assert pl.timeout_s == 1800 and pl.concurrency == 4
+        assert pl.cost_ceiling_usd == 220
+        assert pl.baseline == "claude-opus-5/api" and pl.audience == "internal"
+        assert pl.approved_by is None                      # Lucas approves (D5)
+        assert [(c.model, c.harness) for c in pl.competitors] == [
+            (None, "oracle"), ("claude-opus-5", "api"),
+            (None, "monarch-stock"), (None, "monarch-lab")]
+        # the size in the agreed words, never a bare per-competitor total
+        assert ("prompts: 50; attempts per prompt: 1 plus 1 retry on failure; "
+                "attempts per competitor: 50 to 100; competitors: 4; attempts in "
+                "the round: 200 to 400") in " ".join(pl.description.lower().split())
+
+    def rest(pl):
+        return {k: v for k, v in vars(pl).items() if k not in ("name", "description", "track")}
+    assert rest(plans["request"]) == rest(plans["workflow"])
 
 
 def test_monarch_kb_keys_are_hyphenated_product_slugs(tmp_path):

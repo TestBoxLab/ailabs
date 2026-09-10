@@ -160,7 +160,7 @@ def test_banner_matches_contract(site):
         "prompts: 2; attempts per prompt and competitor: 2; "
         "attempts per competitor: 4 = 2 x 2",
         "competitors: 1; attempts in the round: 4",
-        "ceiling   US$ 5.00   approved_by: —"]
+        "ceiling   US$ 5.00   attempt cap US$ 3.00"]
 
 
 # -- T037: cli harness env reaches the subprocess ------------------------------
@@ -180,18 +180,17 @@ def test_build_arm_for_renders_cli_env_from_model(site, monkeypatch):
     assert arm.env == {"ANTHROPIC_MODEL": "claude-opus-4-8", "WB_KEY_ENV": "ANTHROPIC_API_KEY",
                        "WB_PROVIDER": "anthropic"}
 
-    captured = {}
-
-    def fake_run(cmd, **kw):
-        captured.update(kw)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    from unittest.mock import Mock
+    from wb_arms.api_loop import InfraError
+    process = Mock(side_effect=AssertionError("unverified native launch"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_claude_code.shutil, "which", lambda _: "claude")
-    monkeypatch.setattr(cli_claude_code.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", process)
     arm.workdir_root = site / "cc-work"
-    arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
-    assert captured["env"]["ANTHROPIC_MODEL"] == "claude-opus-4-8"
-    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-test"
+    with pytest.raises(InfraError, match="verified isolated runtime") as error:
+        arm.run(Episode(load_suite(site / "tasks")[0], "ep-1"))
+    assert error.value.retryable is False
+    process.assert_not_called()
+    assert not arm.workdir_root.exists()
 
 
 @pytest.mark.parametrize("value", ['{"a":1}', "{modle}"])
@@ -674,3 +673,52 @@ def test_banner_states_the_arithmetic(site):
     for line in out.splitlines():
         if "attempts per competitor" in line:
             assert "=" in line and " x " in line
+
+
+
+# -- unblock plan M2: the evaluation track is a plan field and part of the hash ---
+
+MOCK_COMPETITORS = """competitors:
+  - {harness: oracle}
+  - {model: mock, harness: api}
+"""
+
+
+def _mock_plan(site, extra: str = "") -> str:
+    write(site / "config/models", MODEL_MOCK)
+    plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
+    plan = edit(plan, "baseline", "oracle") + MOCK_COMPETITORS + extra
+    write(site / "config/plans", plan)
+    return plan
+
+
+def _resolve_smoke(site):
+    return config.resolve(site / "config/products/simulated-apps.yaml",
+                          site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+
+
+def test_plan_track_defaults_to_create_run_and_keeps_the_hash(site, monkeypatch):
+    monkeypatch.setenv("WB_MOCK_KEY", "set")
+    _mock_plan(site)
+    rc = _resolve_smoke(site)
+    assert rc.plan.track == "create-run"
+    h0 = rc.hash
+    _mock_plan(site, "track: create-run" + chr(10))
+    assert _resolve_smoke(site).hash == h0, "writing the default track must not move the hash"
+
+
+def test_plan_track_agentic_request_is_a_different_measurement(site, monkeypatch):
+    monkeypatch.setenv("WB_MOCK_KEY", "set")
+    _mock_plan(site)
+    h0 = _resolve_smoke(site).hash
+    _mock_plan(site, "track: agentic-request" + chr(10))
+    rc = _resolve_smoke(site)
+    assert rc.plan.track == "agentic-request"
+    assert rc.hash != h0
+
+
+def test_plan_track_rejects_unknown_values(site, monkeypatch):
+    monkeypatch.setenv("WB_MOCK_KEY", "set")
+    _mock_plan(site, "track: browsing" + chr(10))
+    with pytest.raises(ConfigError, match="track"):
+        _resolve_smoke(site)

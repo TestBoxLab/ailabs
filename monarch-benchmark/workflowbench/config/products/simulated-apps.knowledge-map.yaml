@@ -1,0 +1,415 @@
+# Which bench action each entry of the PG-Waki knowledge catalog describes.
+#
+# The catalog (research/architectures/pg-waki/v1/provenance.md) names its
+# entries after AutomationBench's Zapier tools: `zapier:<app>_<tool>`. The
+# bench's seeds name their actions after the simulated apps' REST routes:
+# `bench-<app>:<verb>:<object>` (wb_world/seeds.py). The two were never the same
+# thing -- a Zapier tool is a fixture replay over the app's state, a seed is one
+# HTTP route -- so no rule derives one from the other. This table is the rule:
+# a row says "the tool on the left performs, over the simulated app, the
+# operation the route on the right performs". Read from the data on 8 September
+# 2026 (every catalog entry beside every bench action, product by product) and
+# checked against the routes' handlers where the row was not obvious.
+#
+# How rows were chosen:
+#   * same product, same resource, same kind of effect (create, read, list,
+#     update, delete, send);
+#   * several tools may point at one route when they are aliases of each other
+#     (gmail_find_email / gmail_list_emails) or special cases of one route
+#     (three Gmail label tools are all messages/{id}/modify);
+#   * a tool with no route that performs its operation has no row and is
+#     reported as catalog-only, never guessed (see `notes` for the reasons);
+#   * a route no tool describes is reported as bench-only.
+#
+# `wb monarch knowledge` reads this file next to the product file and refuses
+# a row whose right-hand side the generator does not produce. Edit rows here,
+# never in the generated seeds.
+
+product: simulated-apps
+catalog_id_scheme: "AutomationBench Zapier tool id, `zapier:<app>_<tool>`"
+bench_id_scheme: "public-api-seeds@1 action id, `bench-<app>:<verb>:<object>`"
+
+rows:
+  # airtable
+  zapier:airtable_add_comment: bench-airtable:create:comments
+  zapier:airtable_create_record: bench-airtable:create:root
+  zapier:airtable_findManyRecords: bench-airtable:read:root
+  zapier:airtable_updateRecord: bench-airtable:update:root
+  # asana
+  zapier:asana_add_tag_to_task: bench-asana:create:addtag
+  zapier:asana_add_task_to_section: bench-asana:create:addtask
+  zapier:asana_create_task: bench-asana:create:tasks
+  zapier:asana_find_section: bench-asana:list:sections
+  # bamboohr
+  zapier:bamboohr_employeeCreate: bench-bamboohr:create:employees
+  zapier:bamboohr_update_employee: bench-bamboohr:create:v1-employees
+  # basecamp3
+  zapier:basecamp3_todo: bench-basecamp3:create:todos
+  # buffer
+  zapier:buffer_add_to_queue: bench-buffer:create:create-json
+  zapier:buffer_list_channels: bench-buffer:list:profiles-json
+  # calendly
+  zapier:calendly_cancel_event: bench-calendly:create:cancellation
+  zapier:calendly_create_event_type: bench-calendly:create:one-off-event-types
+  zapier:calendly_find_event: bench-calendly:read:scheduled-events
+  zapier:calendly_list_event_types: bench-calendly:list:event-types
+  zapier:calendly_list_invitees: bench-calendly:list:invitees
+  zapier:calendly_list_scheduled_events: bench-calendly:list:scheduled-events
+  zapier:calendly_mark_no_show: bench-calendly:create:invitee-no-shows
+  # canva
+  zapier:canva_create_design: bench-canva:create:designs
+  zapier:canva_create_design_export_job: bench-canva:create:exports
+  zapier:canva_find_design: bench-canva:list:designs
+  # chatgpt
+  zapier:chatgpt_chat_completion_memory: bench-chatgpt:create:completions
+  zapier:chatgpt_send_prompt: bench-chatgpt:create:v1-completions
+  # confluence
+  zapier:confluence_pageCreate: bench-confluence:create:pages
+  # docusign
+  zapier:docusign_add_envelope_cc: bench-docusign:create:recipients
+  zapier:docusign_add_envelope_signer: bench-docusign:create:recipients
+  zapier:docusign_create_envelope_from_template: bench-docusign:create:envelopes
+  zapier:docusign_create_workspace: bench-docusign:create:workspaces
+  zapier:docusign_find_envelope_info: bench-docusign:read:envelopes
+  zapier:docusign_find_envelope_recipients: bench-docusign:list:recipients
+  zapier:docusign_find_template: bench-docusign:read:templates
+  zapier:docusign_list_envelopes: bench-docusign:list:envelopes
+  zapier:docusign_list_templates: bench-docusign:list:templates
+  zapier:docusign_void_envelope: bench-docusign:update:envelopes
+  # facebook_pages
+  zapier:facebook_pages_create_photo: bench-facebook-pages:create:photos
+  zapier:facebook_pages_create_post: bench-facebook-pages:create:feed
+  # freshdesk
+  zapier:freshdesk_add_note_to_ticket: bench-freshdesk:create:notes
+  zapier:freshdesk_create_contact: bench-freshdesk:create:contacts
+  zapier:freshdesk_create_ticket: bench-freshdesk:create:tickets
+  zapier:freshdesk_find_contact: bench-freshdesk:list:search-contacts
+  zapier:freshdesk_find_ticket: bench-freshdesk:list:tickets
+  zapier:freshdesk_get_contacts: bench-freshdesk:list:contacts
+  zapier:freshdesk_get_tickets: bench-freshdesk:list:v2-tickets
+  zapier:freshdesk_update_ticket: bench-freshdesk:update:tickets
+  # gmail
+  zapier:gmail_add_label_to_email: bench-gmail:create:modify
+  zapier:gmail_create_draft: bench-gmail:create:drafts
+  zapier:gmail_create_draft_reply: bench-gmail:create:drafts
+  zapier:gmail_create_label: bench-gmail:create:labels
+  zapier:gmail_find_email: bench-gmail:list:messages
+  zapier:gmail_get_email_by_id: bench-gmail:read:messages
+  zapier:gmail_list_emails: bench-gmail:list:messages
+  zapier:gmail_mark_as_read: bench-gmail:create:modify
+  zapier:gmail_remove_label_from_email: bench-gmail:create:modify
+  zapier:gmail_send_email: bench-gmail:create:messages-send
+  # google_ads
+  zapier:google_ads_find_campaign_by_id: bench-google-ads:read:campaigns
+  zapier:google_ads_find_campaign_by_name: bench-google-ads:create:googleads-search
+  zapier:google_ads_find_customer_list: bench-google-ads:create:googleads-search
+  zapier:google_ads_get_all_campaigns: bench-google-ads:create:googleads-search
+  zapier:google_ads_send_offline_conversion: bench-google-ads:create:customers
+  zapier:google_ads_set_campaign_status: bench-google-ads:create:campaigns-mutate
+  # google_calendar
+  zapier:google_calendar_create_detailed_event: bench-google-calendar:create:events
+  zapier:google_calendar_find_calendars: bench-google-calendar:list:calendarlist
+  zapier:google_calendar_find_event: bench-google-calendar:list:events
+  zapier:google_calendar_update_event: bench-google-calendar:update:events
+  # google_drive
+  zapier:google_drive_find_multiple_files: bench-google-drive:list:files
+  zapier:google_drive_folder: bench-google-drive:create:files
+  zapier:google_drive_move_file: bench-google-drive:update:files
+  # google_sheets
+  zapier:google_sheets_add_row: bench-google-sheets:create:values
+  zapier:google_sheets_append_row: bench-google-sheets:create:values
+  zapier:google_sheets_delete_row: bench-google-sheets:create:spreadsheets-values
+  zapier:google_sheets_find_many_rows: bench-google-sheets:read:values
+  zapier:google_sheets_find_worksheet: bench-google-sheets:read:spreadsheets
+  zapier:google_sheets_get_many_rows: bench-google-sheets:read:values
+  zapier:google_sheets_get_spreadsheet_by_id: bench-google-sheets:read:spreadsheets
+  zapier:google_sheets_lookup_row: bench-google-sheets:read:values
+  zapier:google_sheets_update_row: bench-google-sheets:update:values
+  # gorgias
+  zapier:gorgias_create_ticket: bench-gorgias:create:tickets
+  zapier:gorgias_create_ticket_message: bench-gorgias:create:messages
+  zapier:gorgias_get_tickets: bench-gorgias:list:tickets
+  zapier:gorgias_update_ticket: bench-gorgias:update:tickets
+  # helpcrunch
+  zapier:helpcrunch_add_customer_event: bench-helpcrunch:create:events
+  zapier:helpcrunch_find_customer: bench-helpcrunch:create:search
+  zapier:helpcrunch_list_customers: bench-helpcrunch:list:customers
+  zapier:helpcrunch_tag_customer: bench-helpcrunch:update:tags
+  zapier:helpcrunch_untag_customer: bench-helpcrunch:delete:tags
+  # helpscout
+  zapier:helpscout_add_note: bench-helpscout:create:note
+  zapier:helpscout_find_customer: bench-helpscout:list:customers
+  zapier:helpscout_get_conversations: bench-helpscout:list:conversations
+  zapier:helpscout_get_customers: bench-helpscout:list:customers
+  zapier:helpscout_get_mailboxes: bench-helpscout:list:mailboxes
+  zapier:helpscout_get_users: bench-helpscout:list:users
+  zapier:helpscout_send_reply: bench-helpscout:create:reply
+  zapier:helpscout_update_conversation: bench-helpscout:update:conversations
+  # hiver
+  zapier:hiver_get_conversations: bench-hiver:list:conversations
+  zapier:hiver_get_users: bench-hiver:list:users
+  # hubspot
+  zapier:hubspot_create_company: bench-hubspot:create:companies
+  zapier:hubspot_create_contact: bench-hubspot:create:contacts
+  zapier:hubspot_create_deal: bench-hubspot:create:deals
+  zapier:hubspot_create_engagement: bench-hubspot:create:engagements
+  zapier:hubspot_create_ticket: bench-hubspot:create:tickets
+  zapier:hubspot_find_contact: bench-hubspot:create:search
+  zapier:hubspot_get_all_companies: bench-hubspot:list:companies
+  zapier:hubspot_get_all_contacts: bench-hubspot:list:contacts
+  zapier:hubspot_get_all_deals: bench-hubspot:list:deals
+  zapier:hubspot_update_contact: bench-hubspot:update:contacts
+  # instagram
+  zapier:instagram_publish_photo: bench-instagram:create:media
+  # intercom
+  zapier:intercom_add_note: bench-intercom:create:notes
+  zapier:intercom_add_tag_to_contact: bench-intercom:create:tags
+  zapier:intercom_add_tag_to_conversation: bench-intercom:create:conversations-tags
+  zapier:intercom_create_ticket: bench-intercom:create:tickets
+  zapier:intercom_find_company: bench-intercom:create:search
+  zapier:intercom_find_contact: bench-intercom:create:contacts-search
+  zapier:intercom_find_conversation: bench-intercom:create:conversations-search
+  zapier:intercom_find_or_create_company: bench-intercom:create:companies
+  zapier:intercom_find_or_create_lead: bench-intercom:create:contacts-findorcreatelead
+  zapier:intercom_get_conversations: bench-intercom:list:conversations
+  zapier:intercom_list_companies: bench-intercom:list:companies
+  zapier:intercom_list_contacts: bench-intercom:list:contacts
+  zapier:intercom_reply_to_conversation: bench-intercom:create:reply
+  zapier:intercom_tag_company: bench-intercom:create:tags-post
+  zapier:intercom_update_contact: bench-intercom:update:contacts
+  # jira
+  zapier:jira_add_comment: bench-jira:create:comment
+  zapier:jira_create_issue: bench-jira:create:issue
+  zapier:jira_project: bench-jira:list:search
+  # linkedin
+  zapier:linkedin_create_company_update: bench-linkedin:create:companyupdates
+  zapier:linkedin_create_share: bench-linkedin:create:ugcposts
+  zapier:linkedin_find_post: bench-linkedin:list:ugcposts
+  zapier:linkedin_find_profile: bench-linkedin:list:people
+  zapier:linkedin_get_connections: bench-linkedin:list:connections
+  zapier:linkedin_get_job: bench-linkedin:read:jobs
+  zapier:linkedin_get_profile: bench-linkedin:read:people
+  zapier:linkedin_list_companies: bench-linkedin:list:organizations
+  zapier:linkedin_send_invite: bench-linkedin:create:invitations
+  zapier:linkedin_send_message: bench-linkedin:create:messages
+  # mailchimp
+  zapier:mailchimp_add_subscriber: bench-mailchimp:create:members
+  zapier:mailchimp_add_tag_to_subscriber: bench-mailchimp:create:tags
+  zapier:mailchimp_archive_subscriber: bench-mailchimp:delete:members
+  zapier:mailchimp_find_subscriber: bench-mailchimp:read:members
+  zapier:mailchimp_list_subscribers: bench-mailchimp:list:members
+  zapier:mailchimp_remove_tag_from_subscriber: bench-mailchimp:create:tags
+  # monday
+  zapier:monday_change_date_column_value: bench-monday:create:columns-update
+  zapier:monday_change_number_column_value: bench-monday:create:columns-update
+  zapier:monday_change_status_column_value: bench-monday:create:columns-update
+  zapier:monday_create_item: bench-monday:create:items-create
+  zapier:monday_find_item: bench-monday:create:items-find
+  # notion
+  zapier:notion_create_page: bench-notion:create:pages
+  # pipefy
+  zapier:pipefy_find_database_records: bench-pipefy:list:records-find
+  zapier:pipefy_move_card: bench-pipefy:create:move
+  zapier:pipefy_update_card_field: bench-pipefy:create:fields-update
+  # quickbooks
+  zapier:quickbooks_create_bill_payment: bench-quickbooks:create:billpayment
+  zapier:quickbooks_create_customer: bench-quickbooks:create:customer
+  zapier:quickbooks_create_invoice: bench-quickbooks:create:invoice
+  zapier:quickbooks_create_sales_receipt: bench-quickbooks:create:salesreceipt
+  zapier:quickbooks_find_customer: bench-quickbooks:list:query
+  zapier:quickbooks_find_estimate: bench-quickbooks:list:query
+  zapier:quickbooks_find_payment: bench-quickbooks:list:query
+  zapier:quickbooks_find_vendor: bench-quickbooks:list:query
+  zapier:quickbooks_query: bench-quickbooks:list:query
+  # reamaze
+  zapier:reamaze_add_message: bench-reamaze:create:messages
+  zapier:reamaze_create_contact: bench-reamaze:create:contacts
+  zapier:reamaze_create_conversation: bench-reamaze:create:conversations
+  zapier:reamaze_get_contacts: bench-reamaze:list:contacts
+  zapier:reamaze_get_conversations: bench-reamaze:list:conversations
+  zapier:reamaze_update_conversation: bench-reamaze:update:conversations
+  # recruitee
+  zapier:recruitee_add_tags: bench-recruitee:update:candidates
+  zapier:recruitee_candidateCreate: bench-recruitee:create:candidates
+  zapier:recruitee_create_offer: bench-recruitee:create:placements
+  # salesforce
+  zapier:salesforce_account_update: bench-salesforce:update:account
+  zapier:salesforce_case_create: bench-salesforce:create:case
+  zapier:salesforce_contact_add_to_campaign: bench-salesforce:create:campaignmember
+  zapier:salesforce_contact_create: bench-salesforce:create:contact
+  zapier:salesforce_contact_update: bench-salesforce:update:contact
+  zapier:salesforce_find_records: bench-salesforce:list:query
+  zapier:salesforce_lead_create: bench-salesforce:create:lead
+  zapier:salesforce_lead_update: bench-salesforce:update:lead
+  zapier:salesforce_note_create: bench-salesforce:create:note
+  zapier:salesforce_opportunity_create: bench-salesforce:create:opportunity
+  zapier:salesforce_opportunity_update: bench-salesforce:update:opportunity
+  zapier:salesforce_query: bench-salesforce:list:query
+  zapier:salesforce_task_create: bench-salesforce:create:task
+  # slack
+  zapier:slack_create_channel: bench-slack:create:conversations-create
+  zapier:slack_find_message: bench-slack:list:search-messages
+  zapier:slack_find_message_in_channel: bench-slack:list:search-messages
+  zapier:slack_find_user_by_email: bench-slack:list:users-lookupbyemail
+  zapier:slack_find_user_by_name: bench-slack:list:users-list
+  zapier:slack_get_channel_messages: bench-slack:list:conversations-history
+  zapier:slack_get_conversation: bench-slack:list:conversations-info
+  zapier:slack_invite_to_channel: bench-slack:create:conversations-invite
+  zapier:slack_list_channel_messages: bench-slack:list:conversations-history
+  zapier:slack_list_channels: bench-slack:list:conversations-list
+  zapier:slack_send_channel_message: bench-slack:create:chat-postmessage
+  zapier:slack_send_direct_message: bench-slack:create:chat-postmessage
+  zapier:slack_set_channel_topic: bench-slack:create:conversations-settopic
+  # trello
+  zapier:trello_card: bench-trello:create:cards
+  zapier:trello_card_comment: bench-trello:create:comments
+  zapier:trello_card_label: bench-trello:create:idlabels
+  zapier:trello_card_update: bench-trello:update:cards
+  zapier:trello_find_card: bench-trello:list:cards
+  # twilio
+  zapier:twilio_make_call: bench-twilio:create:calls-json
+  zapier:twilio_send_sms: bench-twilio:create:messages-json
+  # twitter
+  zapier:twitter_find_tweet: bench-twitter:list:recent
+  zapier:twitter_find_user: bench-twitter:read:username
+  zapier:twitter_follow_user: bench-twitter:create:following
+  zapier:twitter_like_tweet: bench-twitter:create:likes
+  zapier:twitter_post_tweet: bench-twitter:create:tweets
+  # wave
+  zapier:wave_create_invoice: bench-wave:create:public
+  zapier:wave_find_customer: bench-wave:create:public
+  zapier:wave_find_product: bench-wave:create:public
+  zapier:wave_list_invoices: bench-wave:create:public
+  zapier:wave_send_invoice: bench-wave:create:public
+  zapier:wave_update_product: bench-wave:create:public
+  # xero
+  zapier:xero_allocate_credit_note: bench-xero:update:allocations
+  zapier:xero_create_bank_transaction: bench-xero:update:banktransactions
+  zapier:xero_create_bill: bench-xero:update:invoices
+  zapier:xero_create_contact: bench-xero:update:2-0-contacts
+  zapier:xero_create_payment: bench-xero:update:payments
+  zapier:xero_create_sales_invoice: bench-xero:update:invoices
+  zapier:xero_email_invoice: bench-xero:create:email
+  zapier:xero_find_bank_transaction: bench-xero:list:banktransactions
+  zapier:xero_find_contact: bench-xero:list:contacts
+  zapier:xero_find_credit_note: bench-xero:list:creditnotes
+  zapier:xero_find_invoice: bench-xero:list:invoices
+  zapier:xero_find_purchase_order: bench-xero:list:purchaseorders
+  zapier:xero_find_quote: bench-xero:list:quotes
+  zapier:xero_update_purchase_order: bench-xero:create:purchaseorders
+  # zendesk
+  zapier:zendesk_add_comment_to_ticket: bench-zendesk:update:tickets
+  zapier:zendesk_add_tags_to_ticket: bench-zendesk:update:tags
+  zapier:zendesk_create_ticket: bench-zendesk:create:tickets
+  zapier:zendesk_delete_user: bench-zendesk:delete:users
+  zapier:zendesk_find_group: bench-zendesk:list:groups
+  zapier:zendesk_find_organization: bench-zendesk:list:search
+  zapier:zendesk_find_user: bench-zendesk:list:users-search
+  zapier:zendesk_get_organizations: bench-zendesk:list:organizations
+  zapier:zendesk_get_tickets: bench-zendesk:list:tickets
+  zapier:zendesk_get_users: bench-zendesk:list:users
+  zapier:zendesk_remove_tags_from_ticket: bench-zendesk:delete:tags
+  zapier:zendesk_update_organization: bench-zendesk:update:organizations
+  zapier:zendesk_update_ticket: bench-zendesk:update:tickets
+  # zoho_desk
+  zapier:zoho_desk_add_comment: bench-zoho-desk:create:comments
+  zapier:zoho_desk_create_account: bench-zoho-desk:create:accounts
+  zapier:zoho_desk_create_contact: bench-zoho-desk:create:contacts
+  zapier:zoho_desk_create_ticket: bench-zoho-desk:create:tickets
+  zapier:zoho_desk_find_account: bench-zoho-desk:list:accounts
+  zapier:zoho_desk_find_contact: bench-zoho-desk:list:contacts
+  zapier:zoho_desk_find_ticket: bench-zoho-desk:list:tickets
+  zapier:zoho_desk_get_contacts: bench-zoho-desk:list:contacts
+  zapier:zoho_desk_get_tickets: bench-zoho-desk:list:tickets
+  zapier:zoho_desk_update_ticket: bench-zoho-desk:update:tickets
+  # zoom
+  zapier:zoom_create_meeting: bench-zoom:create:meetings
+  zapier:zoom_create_meeting_registrant: bench-zoom:create:registrants
+  zapier:zoom_find_meeting: bench-zoom:list:meetings
+  zapier:zoom_find_meeting_participants: bench-zoom:list:registrants
+  zapier:zoom_list_meetings: bench-zoom:list:meetings
+  zapier:zoom_list_recordings: bench-zoom:list:users-recordings
+  zapier:zoom_update_meeting: bench-zoom:update:meetings
+
+# Why a row is what it is, when that is not obvious from the two ids; and why
+# a catalog entry has no row. Notes on mapped rows are copied into the
+# mapping report next to the pair.
+notes:
+  zapier:airtable_findManyRecords: "the table read; the route's filterByFormula does the matching the tool does with searchByField/searchByValue"
+  zapier:asana_find_section: "the route lists a project's sections; the caller picks the one whose name matches"
+  zapier:asana_list_projects: "no row; the bench has no route that lists projects"
+  zapier:bamboohr_update_employee: "BambooHR updates an employee with POST /employees/{id}; the seed's verb says create because of the method"
+  zapier:buffer_get_posts: "no row; the bench has no route that lists posts"
+  zapier:buffer_list_channels: "Buffer's profiles are its channels"
+  zapier:calendly_book_meeting: "no row; the bench has no route that books an invitee onto an event type"
+  zapier:calendly_create_event_type: "the only event-type creation route makes a one-off event type"
+  zapier:calendly_find_user: "no row; the tool searches by name or email, the route reads one user by id"
+  zapier:calendly_get_user_availability: "no row; the bench has no availability route"
+  zapier:calendly_list_invitees: "the route lists the invitees of one scheduled event (uuid); the tool lists across events"
+  zapier:chatgpt_analyze_text_sentiment: "no row; a prompt template over chat completions, not a route of its own"
+  zapier:chatgpt_chat_completion_memory: "chat completions with a system message; the conversation memory is the tool's own"
+  zapier:chatgpt_send_prompt: "the legacy completions endpoint (prompt, stop, frequency_penalty, presence_penalty)"
+  zapier:docusign_add_envelope_cc: "the recipients route takes carbonCopies as well as signers"
+  zapier:docusign_add_user_to_workspace: "no row; the bench has no workspace-users route"
+  zapier:docusign_create_envelope_from_template: "compositeTemplates on the envelope create"
+  zapier:docusign_find_template: "by id; by name use bench-docusign:list:templates (search_text)"
+  zapier:docusign_send_envelope: "no row; sending is PUT envelope with status=sent and the seed exposes no status parameter"
+  zapier:docusign_void_envelope: "PUT envelope with voidedReason"
+  zapier:gmail_create_draft_reply: "a draft whose message carries the threadId"
+  zapier:gmail_mark_as_read: "messages/{id}/modify with removeLabelIds=[UNREAD]"
+  zapier:google_ads_add_email_to_customer_list: "no row; adding a member is an offline user-data job in three steps, not one route"
+  zapier:google_ads_find_campaign_by_name: "a GAQL query over campaign through googleAds:search"
+  zapier:google_ads_find_customer_list: "a GAQL query over user_list through googleAds:search"
+  zapier:google_ads_get_all_campaigns: "a GAQL query over campaign through googleAds:search"
+  zapier:google_ads_send_offline_conversion: "customers/{id}:uploadClickConversions"
+  zapier:google_drive_folder: "a folder is a file whose mimeType is application/vnd.google-apps.folder"
+  zapier:google_drive_move_file: "PATCH the file with addParents and removeParents"
+  zapier:google_sheets_delete_row: "the values/{range}:clear route; Sheets clears rows, it does not remove them"
+  zapier:google_sheets_find_many_rows: "read the range, then match the rows; the route does no filtering"
+  zapier:google_sheets_find_worksheet: "the spreadsheet read lists its sheets by title"
+  zapier:google_sheets_lookup_row: "read the range, then match the lookup column; the route does no filtering"
+  zapier:helpcrunch_tag_customer: "the route takes the customer's tag list"
+  zapier:hiver_get_conversations: "the route lists one inbox's conversations (inbox_id); list inboxes first"
+  zapier:hiver_get_users: "the route lists one inbox's users (inbox_id); list inboxes first"
+  zapier:hubspot_find_contact: "contacts/search by email or name; by id use bench-hubspot:read:contacts"
+  zapier:instagram_publish_photo: "the media container (caption, image) comes first; media_publish publishes it"
+  zapier:intercom_add_note: "contact notes; a note on a conversation is a reply with message_type note"
+  zapier:intercom_create_contact: "no row; the bench has no plain contact create, only contacts:findOrCreateLead"
+  zapier:intercom_create_conversation: "no row; the bench has no conversation create route"
+  zapier:intercom_find_or_create_company: "Intercom's POST /companies creates or updates by company_id or name"
+  zapier:linkedin_find_jobs: "no row; the bench reads one job by id and has no job search"
+  zapier:linkedin_list_companies: "by name and role; one by id is bench-linkedin:read:organizations"
+  zapier:mailchimp_add_subscriber: "POST members adds; an existing member is bench-mailchimp:update:members"
+  zapier:mailchimp_archive_subscriber: "Mailchimp's DELETE member archives the member"
+  zapier:mailchimp_remove_tag_from_subscriber: "the tags route with the tag status inactive"
+  zapier:quickbooks_find_customer: "a query 'select * from Customer where ...' through the GET query route"
+  zapier:quickbooks_find_estimate: "a query over Estimate through the GET query route"
+  zapier:quickbooks_find_payment: "a query over Payment through the GET query route"
+  zapier:quickbooks_find_vendor: "a query over Vendor through the GET query route"
+  zapier:quickbooks_update_vendor: "no row; the POST /vendor route updates when the body carries Id, and the seed exposes no Id parameter"
+  zapier:quickbooks_void_invoice: "no row; voiding needs operation=void with the invoice Id, and the seed exposes no Id parameter"
+  zapier:recruitee_add_tags: "PATCH the candidate with its tags"
+  zapier:recruitee_create_offer: "a placement: candidate, offer (job) and start date"
+  zapier:salesforce_find_records: "a SOQL query with a WHERE on the field"
+  zapier:slack_find_user_by_name: "users.list, then match the name; the bench has no name lookup"
+  zapier:slack_send_direct_message: "chat.postMessage where channel is the user id (or the IM opened with conversations.open)"
+  zapier:trello_board_list: "no row; the tool finds or creates a list, and the bench has no list create route"
+  zapier:trello_find_card: "the board's cards, then match the name"
+  zapier:twitter_find_user: "by username; the bench has no lookup by user id"
+  zapier:wave_create_invoice: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:wave_find_customer: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:wave_find_product: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:wave_list_invoices: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:wave_send_invoice: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:wave_update_product: "Wave's API is GraphQL; every operation is a query or mutation on this one route"
+  zapier:xero_create_bank_transaction: "in Xero PUT creates; the seed's verb says update because of the method"
+  zapier:xero_create_bill: "a bill is an ACCPAY invoice; in Xero PUT creates"
+  zapier:xero_create_contact: "in Xero PUT creates; the seed's verb says update because of the method"
+  zapier:xero_create_payment: "in Xero PUT creates; the seed's verb says update because of the method"
+  zapier:xero_create_sales_invoice: "an ACCREC invoice; in Xero PUT creates"
+  zapier:xero_update_purchase_order: "in Xero POST /PurchaseOrders/{id} updates; the seed's verb says create because of the method"
+  zapier:zendesk_add_comment_to_ticket: "PATCH the ticket with a comment"
+  zapier:zendesk_add_tags_to_ticket: "Zendesk's PUT tickets/{id}/tags adds the given tags"
+  zapier:zendesk_find_group: "the groups list, then match the name; one by id is bench-zendesk:read:groups"
+  zapier:zoho_desk_find_or_create_contact: "no row; the bench has no upsert route for contacts"
+  zapier:zoom_find_meeting: "by topic through the user's meetings list; one by id is bench-zoom:read:meetings"

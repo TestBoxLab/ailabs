@@ -109,7 +109,9 @@ def test_yes_proceeds(site, repo):
     assert [r for r in monarch.requests if r["path"] == "/api/workflows/recipe/runs"]
 
 
-def test_an_approved_plan_proceeds_without_a_yes(site, repo):
+def test_approved_by_in_the_plan_does_not_replace_the_yes(site, repo):
+    """Since decision D5 (8 Sep 2026) `approved_by` in a plan file approves
+    nothing: only an explicit --yes lets this paid command proceed."""
     port = free_port()
     plan = (site / "config/plans/smoke-frontier.yaml").read_text()
     write(site / "config/plans", edit(plan, "approved_by", "carlos"))
@@ -121,8 +123,8 @@ def test_an_approved_plan_proceeds_without_a_yes(site, repo):
         code, out = run_recipes(site, attempts=1,
                                 plan_path=site / "config/plans/smoke-frontier.yaml")
 
-    assert code in (0, 1)
-    assert [r for r in monarch.requests if r["path"] == "/api/workflows/recipe/runs"]
+    assert code == 5 and "rerun with --yes" in out
+    assert not [r for r in monarch.requests if r["path"] == "/api/workflows/recipe/runs"]
 
 
 def test_a_missing_knowledge_base_file_points_at_wb_monarch_setup(site, repo):
@@ -311,7 +313,7 @@ def test_rows_an_earlier_run_earned_survive_a_rerun(site, repo):
 
 # -- T034: the subcommand ------------------------------------------------------
 
-def test_main_returns_the_steps_exit_code(site, repo, monkeypatch):
+def test_main_blocks_authoring_until_foundation_ready(site, repo, monkeypatch):
     for k, v in MONARCH_ENV.items():
         monkeypatch.setenv(k, v)
     port = free_port()
@@ -322,7 +324,8 @@ def test_main_returns_the_steps_exit_code(site, repo, monkeypatch):
                      "--product", str(site / "config/products/simulated-apps.yaml"),
                      "--harness", str(site / "config/harnesses/monarch.yaml"),
                      "--tasks", str(site / "tasks")])
-    assert code == 5        # the gate, because no --yes and no approved plan
+    assert code == 2        # foundation gate precedes paid recipe creation
+    assert not monarch.requests
 
 
 def test_plan_and_tasks_together_are_refused(site, capsys):

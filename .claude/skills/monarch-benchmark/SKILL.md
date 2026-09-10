@@ -15,11 +15,19 @@ names, task ids and command lines exactly as they are — do not translate them.
 
 ## Rules you may not break
 
-- No round beyond smoke scale (10 tasks, 2 repetitions = 20 attempts per
-  competitor) without Carlos approving that specific round AND `approved_by`
-  filled in the plan file. `wb run` enforces this; do not work around it.
-- Always state attempts and a cost band before running. Never run without the
-  explicit "sim".
+- Lucas approves paid rounds (decision D5, 8 Sep 2026). Above smoke scale (20
+  attempts per competitor, retries included) `wb run` by anyone but an approver
+  writes an approval request and waits; after `wb approve <id>` it runs with
+  `wb run ... --request <id>`. `approved_by` in a plan file approves nothing.
+  Every paid launch needs `WB_OPERATOR=<name>` in the environment. Do not work
+  around any of this.
+- The weekly ledger (US$ 300, `research/budget.sqlite3`) is the spending gate:
+  `wb run` refuses a round the week cannot cover and names the shortfall;
+  `wb budget status` shows what is left. Always state attempts and a cost band
+  before running. Never run without the explicit "sim".
+- Monarch competitors, `wb monarch recipes` and `wb doctor --monarch-probe` are
+  refused until milestone M5 verifies an instance; Claude Code until M7. Say
+  so; do not look for another path.
 - Pre-registration: never edit a task's prompt, starting data or approval rule.
   Never edit prices. If the user asks for an edit after seeing results, say it
   needs Lucas's sign-off and that it makes old rows non-regradable.
@@ -72,8 +80,8 @@ names, ask the user to pick. Never invent a plan.
 
 If the user describes a round no plan file matches, draft a new file under
 `config/plans/` — copy the shape of `config/plans/railway-round-001.yaml`, with
-`approved_by: null`, `audience: internal` and a `cost_ceiling_usd` — and show it
-before continuing. Field tables: `config/README.md`,
+`audience: internal`, a `cost_ceiling_usd` and, when the default US$ 3.00 is not
+right, an `attempt_cap_usd` — and show it before continuing. Field tables: `config/README.md`,
 `specs/001-declarative-benchmark-config/contracts/config-files.md`,
 `specs/002-monarch-create-run/contracts/config-files.md`.
 
@@ -118,8 +126,9 @@ has no rows, say **"sem dados anteriores"** for it — never guess.
 ```
 Rodada: <plan> · produto sob teste: <product> (<kind>, <N> apps) · modo: <mode>
 Prompts: <n_tasks> · tentativas por prompt e competidor: <k> · por competidor: <n> (= prompts × tentativas) · total: <total>
-Teto de custo: US$ <ceiling> · approved_by: <valor ou "não definido">
-Escala: <smoke (<=20 por competidor) | acima de smoke — exige approved_by>
+Teto de custo: US$ <ceiling> · teto por tentativa: US$ <attempt_cap_usd>
+Escala: <smoke (<=20 por competidor) | acima de smoke — exige aprovação do Lucas (wb approve)>
+Operador: <WB_OPERATOR> · semana no ledger: US$ <available> disponíveis de US$ 300 (wb budget status)
 Hash da configuração: <hash>
 
 | competidor | harness | provedor | US$/milhão (in / cached / out) |
@@ -197,7 +206,10 @@ makes resume refuse with a drift error, and the round has to start over.
 | Symptom | Cause and fix |
 |---|---|
 | `config error in ...: key_env: ... not set` | The API key is missing from `.env`. Show the line; do not run. |
-| `config error in ...: approved_by: ...` | Above smoke scale without approval. Ask Carlos; only he fills `approved_by`. |
+| `paid launch refused: WB_OPERATOR is not set` | Set `WB_OPERATOR=<name>` in the environment (who is launching), then retry. |
+| `<id> awaiting approval` | Above smoke scale, launched by a non-approver. Lucas runs `wb approve <id>`; then `wb run ... --request <id>`. |
+| `the week cannot cover this round ... short by US$ X` | The weekly ledger has no room. `wb budget status`; wait for Monday or reduce the plan. Never edit the ledger. |
+| `paid launch refused: ... milestone M5` / `M7` | Monarch or Claude Code is not verified yet. Say so; drop that competitor or wait for the milestone. |
 | Knowledge-base drift error | The seeds Monarch imported no longer match. `uv run wb monarch setup --product <product>` again, then say the config hash moved. |
 | Monarch unreachable / 502 | Railway is locked or asleep: `railway-ops.sh status`, then `unlock`. |
 | Monarch reaches nothing / front door times out | The `FRONT_DOOR_URL` tunnel is down. Restart ngrok; if its host changed, rerun `wb monarch setup`. |
