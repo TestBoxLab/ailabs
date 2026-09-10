@@ -389,3 +389,25 @@ affected refreeze/real-world/scored-derivation tests then passed. The later
 approval and price configuration changes separately passed 34 and 129 tests.
 The full suite was not rerun after those focused corrections. Graphify's code
 graph was refreshed; vendor and upstream task fields were checked unchanged.
+
+## 14. PR #3 CI and complete WorkflowBench telemetry (10 September)
+
+Carlos authorized correcting, committing and pushing the CI fixes and requested
+WorkflowBench execution/spending history in Langfuse. Main through `290852f`
+was integrated without conflicts. The CI runs offline tests and corpus
+validation, never infrastructure deployment. The 13 original failures were
+reproduced and fixed; the next run found one stale pilot price hash, now traced
+to the documented successor table and corrected without changing task data.
+
+Ledger transitions and attempt summaries now queue metadata-only telemetry,
+covering API/native/Studio/Genesis/embedding calls. Unknown usage keeps the hold;
+Monarch costs link the original generations. V4 immutable billing observations
+and durable send claims prevent cost duplication: ambiguous delivery requires
+read-side confirmation, never a blind retry. CLI commands are documented in
+`workflowbench/config/README.md`. This does not certify provider invoices,
+merge local/hosted ledgers, backfill history automatically or deploy Studio.
+
+The final focused group passed 51 tests; both CI corpus checks passed. A real
+zero-cost telemetry span was delivered and read from Langfuse without calling a
+model. Full local/remote validation and the final merge-readiness outcome are
+tracked in [the session record](rounds/2026-09-10-pr3-ci-and-langfuse.md).

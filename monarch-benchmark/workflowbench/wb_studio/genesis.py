@@ -431,6 +431,9 @@ class Genesis:
             if kind=='text_delta': turn['answer']+=data.get('text','')
             write_json(self.path('turns',identity),turn)
         if kind in ('completed','failed'):
+            self.studio.ledger.record_summary('genesis-'+identity,
+                {'scope_id': 'genesis-'+identity, 'purpose': 'Genesis', 'model': turn.get('model'),
+                 'termination': kind, 'finished_at': event['at']})
             cost=sum((float(e.get('cost_usd') or 0) for e in turn['events'] if e.get('type')=='usage'),0.0)
             self.autonomy.record('turn-'+kind,card=turn.get('card'),turn=identity,cost_usd=round(cost,4),message=(data.get('message') or '')[:200] if kind=='failed' else None)
         if kind in ('completed','failed') and turn.get('card'): self.finish_card(turn)

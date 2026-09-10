@@ -377,7 +377,9 @@ def test_monarch_needs_its_addresses_and_langfuse_keys(site):
 # because the discovery service slugifies and was creating two products per app.
 # A deliberate input change: rows from before this date are not regradable against
 # runs after it. Pre-registration (PLAN.md rule 5) -- needs Lucas's sign-off.
-CREATE_RUN_HASH = "41769e05aa5618a9"   # 10 Sep: knowledge base re-synced against the deployed
+CREATE_RUN_HASH = "1912201bfea8a62a"   # 10 Sep: successor direct-Anthropic price table adds Opus 4.6.
+                                       # Archived harness/prices reproduce 41769e05aa5618a9.
+                                       # The previous knowledge base was re-synced against the deployed
                                        # instance and re-pointed at the hosted front door. The
                                        # frozen hashes had drifted from what discovery reported
                                        # and were refusing every Monarch attempt. Approved by

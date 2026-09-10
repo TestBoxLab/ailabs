@@ -12,6 +12,12 @@ from wb_world import episode
 
 
 @pytest.fixture(autouse=True)
+def no_live_telemetry(monkeypatch):
+    """Tests may use local receivers, never the operator's Langfuse project."""
+    monkeypatch.setenv("WB_LANGFUSE_ENABLED", "0")
+
+
+@pytest.fixture(autouse=True)
 def upstream_world(monkeypatch):
     """The fixture task sets record no world, which means the upstream
     AutomationBench 1.0.6. Pin the "installed world" to it, so the guard in

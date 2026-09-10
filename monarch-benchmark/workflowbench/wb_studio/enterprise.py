@@ -543,9 +543,11 @@ class EnterpriseArm:
             self._settle(reservation, ceiling, result)
 
     def _settle(self, reservation: str, ceiling: Decimal, result: ArmResult | None) -> None:
-        known = result is not None and "cost_missing" not in result.flags and isinstance(result.cost_usd, (int, float))
+        known = (result is not None and not self.inner._price_unknown
+                 and "cost_missing" not in result.flags and isinstance(result.cost_usd, (int, float)))
         actual = Decimal(str(result.cost_usd)).quantize(Decimal("0.000001")) if known else None
-        self.studio.ledger.settle(reservation, actual)
+        self.studio.ledger.settle(reservation, actual, trace_ids=list(self.inner._trace_ids),
+                                  outcome='error' if self.inner._infra or result is None else 'completed')
         if result is not None and actual is None and "billing=unknown" not in result.flags:
             result.flags.append("billing=unknown")
         if result is not None:

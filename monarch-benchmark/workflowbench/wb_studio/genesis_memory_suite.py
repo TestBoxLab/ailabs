@@ -458,10 +458,13 @@ def embed(genesis, texts) -> list | None:
     try:
         result = _client(provider).embeddings.create(model=provider.model_id, input=texts)
     except Exception:
-        ledger.settle(request_id, None)  # an uncertain charge stays held at its ceiling
+        ledger.settle(request_id, None, outcome='error')  # an uncertain charge stays held at its ceiling
         raise
-    used = int(getattr(getattr(result, 'usage', None), 'prompt_tokens', 0) or tokens)
-    ledger.settle(request_id, _money(Decimal(used) * price / 1_000_000))
+    used = getattr(getattr(result, 'usage', None), 'prompt_tokens', None)
+    known = type(used) is int and used >= 0
+    ledger.settle(request_id, _money(Decimal(used) * price / 1_000_000) if known else None,
+                  usage={'input': used, 'output': 0, 'cache_read': 0, 'cache_write': 0} if known else None,
+                  outcome='completed')
     return [list(item.embedding) for item in result.data]
 
 

@@ -87,6 +87,13 @@ configurations change; this completed run cannot be resumed under them:
 | tier-medium | `b788cef293980d55` | `c676b5549e395691` |
 | tier-complex | `09e701c0682d3e56` | `13a825830187b4ba` |
 | random-10 | `cd5ef08b9765ab67` | `786a1c35289520f2` |
+| pilot-monarch-create-run | `41769e05aa5618a9` | `1912201bfea8a62a` |
+
+The pilot row was added during PR #3 CI review: its pinned test still expected
+the old price configuration. Resolving the same tasks with the archived harness
+and original table reproduces `41769e05aa5618a9`; the successor alone produces
+`1912201bfea8a62a`. Updating the test expectation preserves the historical hash
+and changes no benchmark data.
 
 An offline test first reproduced the exact `PriceLookupError` using the configured
 harness and observed model name, then passed with the successor table. The full

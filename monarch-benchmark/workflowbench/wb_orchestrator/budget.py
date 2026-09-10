@@ -34,6 +34,8 @@ import sqlite3
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from wb_orchestrator import langfuse_export
+
 MICROUSD = 1_000_000
 MAX_SQLITE_INTEGER = 2**63 - 1
 AUTHORIZED_WEEKLY_MICROUSD = 300 * MICROUSD
@@ -202,6 +204,7 @@ class BudgetLedger:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._transaction() as connection:
+            langfuse_export.ensure_schema(connection)
             connection.execute('CREATE TABLE IF NOT EXISTS budget_policy (id INTEGER PRIMARY KEY CHECK(id=1), weekly_limit INTEGER NOT NULL, timezone TEXT NOT NULL, schema_version INTEGER NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS budget_scopes (scope_id TEXT PRIMARY KEY, maximum INTEGER CHECK(maximum >= 0))')
             connection.execute('''CREATE TABLE IF NOT EXISTS budget_reservations (
@@ -238,17 +241,21 @@ class BudgetLedger:
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
+        changed = False
         try:
             connection.execute('PRAGMA foreign_keys=ON')
             connection.execute('PRAGMA synchronous=FULL')
             connection.execute('BEGIN IMMEDIATE')
             yield connection
             connection.commit()
+            changed = bool(connection.total_changes)
         except BaseException:
             connection.rollback()
             raise
         finally:
             connection.close()
+            if changed:
+                langfuse_export.kick(self.path)
 
     def _time(self, now: datetime | None) -> tuple[str, str]:
         instant = now if now is not None else datetime.now(timezone.utc)
@@ -462,6 +469,7 @@ class BudgetLedger:
             connection.execute('INSERT INTO budget_reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', tuple(result.__dict__.values()))
             if envelope is not None:
                 connection.execute('INSERT INTO budget_run_requests VALUES (?, ?)', (reservation_id, envelope['scope_id']))
+            langfuse_export.record(connection, result.__dict__)
             return result
 
     def claim(self, reservation_id: str, *, now: datetime | None = None) -> Reservation:
@@ -496,9 +504,12 @@ class BudgetLedger:
                 raise BudgetExceeded('shared weekly budget exhausted')
             connection.execute('UPDATE budget_reservations SET dispatched_at=? WHERE reservation_id=?', (timestamp, reservation_id))
             row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            langfuse_export.record(connection, dict(row), outcome='dispatched')
             return Reservation(**dict(row))
 
-    def settle(self, reservation_id: str, actual_usd: str | Decimal | int | None, *, now: datetime | None = None) -> Reservation:
+    def settle(self, reservation_id: str, actual_usd: str | Decimal | int | None, *, now: datetime | None = None,
+               usage: dict | None = None, outcome: str | None = None,
+               trace_ids: list[str] | None = None) -> Reservation:
         """Record verified final total, or keep the maximum held for unknown billing.
 
         This call records even an overrun; it never pretends to undo paid usage.
@@ -517,10 +528,23 @@ class BudgetLedger:
             if row['actual_microusd'] is not None:
                 if row['actual_microusd'] != actual:
                     raise ReservationConflict('verified settlement is immutable')
+                langfuse_export.record(connection, dict(row), usage=usage, outcome=outcome, trace_ids=trace_ids)
                 return Reservation(**dict(row))
             if actual is not None:
                 if datetime.fromisoformat(timestamp) < datetime.fromisoformat(row['dispatched_at'] or row['created_at']):
                     raise ValueError('settlement cannot be before dispatch or reservation')
                 connection.execute('UPDATE budget_reservations SET actual_microusd=?, settled_at=? WHERE reservation_id=?', (actual, timestamp, reservation_id))
                 row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            langfuse_export.record(connection, dict(row), usage=usage, outcome=outcome, trace_ids=trace_ids)
             return Reservation(**dict(row))
+
+    def record_summary(self, identity: str, summary: dict) -> None:
+        """Keep activity evidence separate from billable provider generations."""
+        with self._transaction() as connection:
+            langfuse_export.record_summary(connection, identity, summary)
+
+    def backfill_telemetry(self) -> None:
+        """Queue existing accounting records without changing balances or receipts."""
+        with self._transaction() as connection:
+            for row in connection.execute('SELECT * FROM budget_reservations').fetchall():
+                langfuse_export.record(connection, dict(row))
