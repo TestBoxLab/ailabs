@@ -113,6 +113,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
     h = competitor.harness
     if h.kind == "api":
         arm = ApiLoopArm(competitor.model.name, ledger=ledger, operator=operator,
+                         provider=providers.from_model(competitor.model),
                          attempt_cap_usd=run_config.plan.attempt_cap_usd if run_config else None)
         arm.provider_key = competitor.model.name
     elif h.kind == "scripted":
@@ -135,7 +136,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         if run_config is None:
             raise ValueError("a Monarch competitor needs the run config to build its arm")
         config_dir = Path(run_config.config_dir)
-        repo = config_mod.from_workflowbench(h.monarch_repo, config_dir)
+        repo = config_mod.from_workflowbench(h.monarch_repo, config_dir, run_config.runtime_root)
         try:
             name = monarch_version(repo, os.environ.get("MONARCH_BUILD"))
         except ValueError as e:
@@ -231,13 +232,26 @@ class Orchestrator:
         arms = self._arms()
         self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
         self.store.create_run(run_id, self._hash(), self.suite, self._config())
+        if self.run_config and self.run_config.config_source:
+            evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
         self._execute(run_id, skip=set(), arms=arms)
         return run_id
+
+    def cancel(self) -> None:
+        """Stop scheduling and drain in-flight attempts, preserving their evidence and spend."""
+        self._stop_reason = "cancelled"
+        self._abort.set()
 
     def resume(self, run_id: str) -> str:
         run = self.store.run(run_id)
         if run is None:
             raise KeyError(f"unknown run {run_id!r}")
+        recorded_config = json.loads(run["config_json"])
+        source = recorded_config.get("config_source")
+        if source and (self.run_config is None or source != self.run_config.config_source):
+            raise ConfigDrift("configuration source drift: resume requires the original repository revision and bytes")
+        if source and recorded_config["cost_ceiling_usd"] != self.run_config.plan.cost_ceiling_usd:
+            raise ConfigDrift("configuration ceiling drift: a higher ceiling requires a new committed plan and run")
         if run["config_hash"] != self._hash():
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
@@ -400,11 +414,15 @@ class Orchestrator:
                 "as infra:weekly_budget and run again on resume. When the week has room (Monday 00:00 "
                 f"America/Sao_Paulo, or an earlier hold settles), run: wb resume {run_id}")
         if self._abort.is_set():
+            if self._stop_reason == "cancelled":
+                self.store.set_stop_reason(run_id, "cancelled")
             raise RunKilled(f"run {run_id} killed after {self._recorded} episodes")
         self.store.finish_run(run_id)
         self.store.export_jsonl(run_id, self._run_dir(run_id) / "episodes.jsonl")
 
     def _run_arm_group(self, run_id: str, arm, work: list[tuple[dict, int]]) -> None:
+        if self._abort.is_set():
+            return
         if hasattr(arm, "prepare"):   # ponytail: hasattr check; only Monarch has one
             # A refused competitor stops the whole run before any attempt: the
             # thread body's exception is invisible to the joiner otherwise.

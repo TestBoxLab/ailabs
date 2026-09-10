@@ -77,7 +77,7 @@ def _monarch_line(rc) -> str | None:
     if h is None:
         return None
     try:
-        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir), os.environ.get("MONARCH_BUILD"))
+        name = monarch_version(config.from_workflowbench(h.monarch_repo, rc.config_dir, rc.runtime_root), os.environ.get("MONARCH_BUILD"))
     except ValueError:
         name = "version unreadable"
     table = rc.price_tables.get(h.price_table)
@@ -125,7 +125,9 @@ def _banner(rc) -> str:
         _size_line(rc),
         f"competitors: {len(rc.competitors)}; attempts in the round: {rc.attempts_total}",
         f"ceiling   US$ {plan.cost_ceiling_usd:.2f}   attempt cap US$ {plan.attempt_cap_usd:.2f}",
-        *monarch])
+        *monarch,
+        *([f"configuration {rc.config_source['repository']}@{rc.config_source['commit']}"]
+          if rc.config_source else [])])
 
 
 def _approved_by_notice(rc, plan_path) -> None:
@@ -201,6 +203,36 @@ def _paid_gate(rc, args):
         return 2
 
 
+def _selected_config(args):
+    if getattr(args, "local_config", False):
+        if getattr(args, "revision", None):
+            raise ConfigError("configuration", "revision", "--revision cannot be used with --local-config")
+        return config.resolve(_pick_or_flag(args.product, "product"), _pick_or_flag(args.plan, "plan"))
+    if os.environ.get("WB_CONFIG_REPOSITORY") or getattr(args, "revision", None):
+        return config.resolve_selection(args.product, args.plan, revision=getattr(args, "revision", None))
+    return config.resolve(_pick_or_flag(args.product, "product"), _pick_or_flag(args.plan, "plan"))
+
+
+def cmd_preview(args) -> int:
+    """Resolve and report readiness without creating a run, approval or reservation."""
+    try:
+        rc = _selected_config(args)
+    except (ConfigError, ValueError, OSError) as e:
+        print(e, file=sys.stderr)
+        return 2
+    reasons = approvals.launch_readiness(rc, os.environ)
+    print(json.dumps({"product": rc.product.name, "plan": rc.plan.name,
+                      "repository": rc.config_source.get("repository"),
+                      "commit": rc.config_source.get("commit"), "config_hash": rc.hash,
+                      "tasks": len(rc.tasks), "competitors": [c.name for c in rc.competitors],
+                      "attempts_total": rc.attempts_total, "retry_on_fail": rc.plan.retry_on_fail,
+                      "cost_ceiling_usd": rc.plan.cost_ceiling_usd,
+                      "attempt_cap_usd": rc.plan.attempt_cap_usd,
+                      "ready": not reasons, "readiness": reasons,
+                      "note": "Launch still checks approvals and the weekly ledger; preview spends nothing."}, indent=2))
+    return 0
+
+
 def cmd_run(args) -> int:
     # Two error formats per contracts/cli.md: `wb run: ...` for picker and
     # name errors, `config error in <file>: <field>: <why>` for file errors.
@@ -208,22 +240,17 @@ def cmd_run(args) -> int:
     # approval record -> orchestrator; no arm is built, and nothing is spent,
     # before the config is fully validated and the launch admitted.
     try:
-        product_path = _pick_or_flag(args.product, "product")
-        plan_path = _pick_or_flag(args.plan, "plan")
-    except ConfigError as e:
-        print(f"wb run: {e.why}", file=sys.stderr)
-        return 2
-    try:
-        rc = config.resolve(product_path, plan_path)
-    except ConfigError as e:
-        print(e, file=sys.stderr)
+        rc = _selected_config(args)
+    except (ConfigError, ValueError, OSError) as e:
+        print(f"wb run: {e.why}" if isinstance(e, ConfigError) and e.field.startswith("--") else e,
+              file=sys.stderr)
         return 2
     ledger = launch = None
     if approvals.is_paid(rc):
         ledger = _paid_gate(rc, args)
         if isinstance(ledger, int):
             return ledger
-    _approved_by_notice(rc, plan_path)
+    _approved_by_notice(rc, rc.plan_path)
     print(_banner(rc))
     store = _store(args)
     if ledger is not None:
@@ -267,7 +294,7 @@ def cmd_resume(args) -> int:
     cfg = json.loads(run["config_json"])
     try:
         if "plan_path" in cfg:
-            rc = config.resolve(cfg["product_path"], cfg["plan_path"])
+            rc = config.resume_config(cfg)
             ledger = None
             if approvals.is_paid(rc):
                 ledger = _paid_gate(rc, args)
@@ -284,7 +311,7 @@ def cmd_resume(args) -> int:
                                 out_dir=args.out, timeout_s=cfg["timeout_s"],
                                 provider_concurrency=args.concurrency or 4)
         orch.resume(args.run_id)
-    except (ConfigError, ConfigDrift, RoundAdmissionError) as e:
+    except (ConfigError, ConfigDrift, RoundAdmissionError, ValueError, OSError) as e:
         print(e, file=sys.stderr)
         return 2
     except RunKilled as e:
@@ -749,9 +776,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
     p.add_argument("--plan", default=None, help="name in config/plans or a path; asked if omitted")
     p.add_argument("--run-id", default=None)
+    p.add_argument("--revision", default=None, help="immutable configuration repository commit; default: resolve main once")
+    p.add_argument("--local-config", action="store_true", help="explicitly use local configuration instead of the associated repository")
     p.add_argument("--request", default=None,
                    help="run an approved approval request (wb approvals); the config hash must still match")
     p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("preview", help="preview a product/plan and immutable revision without launching")
+    p.add_argument("--product", required=True)
+    p.add_argument("--plan", required=True)
+    p.add_argument("--revision", default=None)
+    p.add_argument("--local-config", action="store_true")
+    p.set_defaults(fn=cmd_preview)
 
     p = sub.add_parser("approve", help="approve a pending launch request (approvers only)")
     p.add_argument("request_id")

@@ -49,14 +49,19 @@ def load_models(folder: str | Path) -> dict[str, Provider]:
         if is_price_table(path):  # price tables live in models/ but are not competitors
             continue
         m = load_model(path)
-        out[m.name] = Provider(
-            key=m.name, model_id=m.model, key_env=m.key_env,
-            adapter=m.adapter or _DEFAULT_ADAPTER.get(m.provider, "openai"),
-            price_in=m.usd_per_million.input, price_cached=m.usd_per_million.cached,
-            price_out=m.usd_per_million.output, price_cache_write=m.usd_per_million.cache_write,
-            base_url=m.base_url, cache_min_prompt_tokens=m.cache_min_prompt_tokens,
-            header_fallbacks=tuple(m.header_fallbacks), effort=m.effort, family=m.provider)
+        out[m.name] = from_model(m)
     return out
+
+
+def from_model(m) -> Provider:
+    """Freeze the resolved model and rate card for one run, without touching the registry."""
+    return Provider(
+        key=m.name, model_id=m.model, key_env=m.key_env,
+        adapter=m.adapter or _DEFAULT_ADAPTER.get(m.provider, "openai"),
+        price_in=m.usd_per_million.input, price_cached=m.usd_per_million.cached,
+        price_out=m.usd_per_million.output, price_cache_write=m.usd_per_million.cache_write,
+        base_url=m.base_url, cache_min_prompt_tokens=m.cache_min_prompt_tokens,
+        header_fallbacks=tuple(m.header_fallbacks), effort=m.effort, family=m.provider)
 
 
 REGISTRY.update(load_models(DEFAULT_MODELS_DIR))

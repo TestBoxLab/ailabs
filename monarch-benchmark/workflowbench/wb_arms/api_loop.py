@@ -491,8 +491,9 @@ class ApiLoopArm:
     """
 
     def __init__(self, provider_key: str, request_timeout: float = 120.0, ledger=None,
-                 attempt_cap_usd: float | None = None, operator: str | None = None):
-        self.provider = providers.get(provider_key)
+                 attempt_cap_usd: float | None = None, operator: str | None = None,
+                 provider: Provider | None = None):
+        self.provider = provider if provider is not None else providers.get(provider_key)
         self.name = f"bare/api/{provider_key}"
         self._tools_openai = build_tools_openai()
         self._tools_gemini = build_tools_gemini()
