@@ -69,9 +69,26 @@ set has not been run for this feature. Real local-browser save created commit
 `cecb7e4f8291e02a43082fe8d67e9420b07347f4`, changing only config/README.md
 (+7 lines), with exactly one save request and no run request.
 
-Hosted deployment verification is pending. The Railway token is present and was
+Hosted code deployment is verified; repository access remains blocked. The Railway token is present and was
 copied into the original checkout's existing gitignored WorkflowBench `.env`.
 It authenticates against GitHub (HTTP 200 for the user endpoint), but access to
 the private configuration repository currently returns HTTP 404. Carlos was asked
 to check repository selection and organization approval; no broader credential
 was substituted into the hosted service.
+
+Graphify AST refresh completed: 17,197 nodes, 43,036 edges, 412 communities.
+Deployment source: clean commit `9bd2f2c`. Railway deployment
+`723fa1c7-a747-44c8-be34-4d4a39842aa9` reached SUCCESS; image digest
+`sha256:189a54f061cfa8edd1e877ae5162889622f4bd17b15c6964675e235346fbad49`.
+The authenticated hosted browser renders Settings > Benchmark configuration and
+reports the repository HTTP 404 accurately. Existing job listing was checked
+before deployment: 11 jobs and no active job. No benchmark run was launched.
+
+The local browser verified a saved-plan preview using Carlos as operator; missing
+provider credentials correctly blocked launch. Desktop and mobile screenshots
+were inspected. The local test server was stopped after verification.
+
+The AI Labs implementation is committed locally on `ailabs/config-repository`;
+it has not been pushed to AI Labs GitHub. Configuration repository commits are
+published to main as explicitly authorized. Hosted browse/save/preview completion
+still requires the restricted token to access the private repository.

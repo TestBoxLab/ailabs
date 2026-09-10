@@ -29,8 +29,11 @@
 - [x] T016 Run targeted regression groups, inspect editor and conflict flow in a browser, and perform independent code review.
 - [x] T017 Publish reviewed config artifacts to TestBoxLab/ailabls-benchmark-config main and verify revision/file hashes.
 - [ ] T018 Verify hosted credential availability, prepare deployment, and complete free hosted browse/save/preview verification when authorized and runnable.
-- [ ] T019 Refresh Graphify and record tests, migration hashes, deployment status and any outstanding limitation in the feature quickstart/evidence.
+- [x] T019 Refresh Graphify and record tests, migration hashes, deployment status and any outstanding limitation in the feature quickstart/evidence.
 
 No paid benchmark round is part of this implementation verification. Check a task
 only after evidence exists; configuration-main publication is authorized, not a
 blanket authorization to push AI Labs code or modify Monarch.
+
+T018: code deployment succeeded; hosted API/browser confirms repository access
+HTTP 404. Waiting for Carlos to correct token repository access/organization approval.

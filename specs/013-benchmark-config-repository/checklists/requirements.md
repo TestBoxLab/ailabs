@@ -7,4 +7,4 @@
 - [x] Existing format, upstream data, historical results and spending rules are preserved.
 - [x] CLI and Studio must share resolution and reject unsupported runtime mappings.
 - [x] Browser verification and failing-test-first evidence are required.
-- [ ] Independent review and implementation evidence are complete.
+- [x] Independent review and implementation evidence are recorded; hosted repository access remains an explicit external dependency.
