@@ -416,3 +416,18 @@ def test_an_edit_that_omits_kind_and_evidence_keeps_them(genesis):
     saved = genesis.card({'id': card['id'], 'revision': card['revision'], 'title': card['title'], 'body': 'worked', 'stage': 'review'})
     assert saved['kind'] == 'run' and saved['evidence'] == [{'kind': 'run', 'id': 'run-1'}]
 
+
+def test_the_answer_is_the_last_model_response_not_the_narration(genesis):
+    """Text the model writes between tool calls stays in the events; the answer is what follows the last tool call."""
+    turn = {'id': 'narrated', 'status': 'running', 'answer': '', 'events': [], 'card': None}
+    genesis.path('turns', turn['id']).write_text(json.dumps(turn), encoding='utf8')
+    genesis.event('narrated', 'model_started', request=1)
+    genesis.event('narrated', 'text_delta', text='I am checking the run. ')
+    genesis.event('narrated', 'tool_started', action='measures')
+    genesis.event('narrated', 'model_started', request=2)
+    genesis.event('narrated', 'text_delta', text='The run passed 0 of 1 ')
+    genesis.event('narrated', 'text_delta', text='and cost $0.07.')
+    saved = genesis.read('turns', 'narrated')
+    assert saved['answer'] == 'The run passed 0 of 1 and cost $0.07.'
+    assert [e['text'] for e in saved['events'] if e['type'] == 'text_delta'][0] == 'I am checking the run. '
+

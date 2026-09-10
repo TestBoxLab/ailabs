@@ -426,6 +426,8 @@ class Genesis:
             event={'id':len(turn['events'])+1,'type':kind,'at':stamp(),**data}
             turn['events'].append(event)
             if kind in ('completed','failed'): turn['status']=kind
+            # The answer is what the model writes in its last response; text written between tool calls stays in the events.
+            if kind=='model_started': turn['answer']=''
             if kind=='text_delta': turn['answer']+=data.get('text','')
             write_json(self.path('turns',identity),turn)
         if kind in ('completed','failed'):
