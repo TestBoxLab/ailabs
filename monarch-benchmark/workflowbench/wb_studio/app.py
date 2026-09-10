@@ -1037,7 +1037,12 @@ def handler(studio):
                 history_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/history',url.path)
                 if history_match: return self.send_json({'history':studio.genesis.card_history(history_match[1])})
                 genesis_match=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)',url.path)
-                if genesis_match: return self.send_json(studio.genesis.read('turns',genesis_match[1]))
+                if genesis_match:
+                    turn=studio.genesis.read('turns',genesis_match[1])
+                    after=parse_qs(url.query).get('after',[None])[0]
+                    if after is not None:  # the live view asks only for what it has not seen
+                        seen=int(after);turn={**turn,'events':[e for e in turn['events'] if e['id']>seen],'partial':True}
+                    return self.send_json(turn)
                 if url.path == '/api/genesis/library':
                     filters={k:v[0] for k,v in parse_qs(url.query).items() if k in ('published_from','published_to','discovered_from','discovered_to','topic','status')}
                     return self.send_json({'items':studio.genesis.library.listing(**filters),'topics':list(__import__('wb_studio.library',fromlist=['TOPICS']).TOPICS)})

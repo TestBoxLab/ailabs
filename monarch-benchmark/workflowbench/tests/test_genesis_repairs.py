@@ -127,3 +127,20 @@ def test_extraction_reads_the_whole_source():
 
 def test_the_state_says_who_is_asking(genesis):
     assert 'me' not in genesis.state()  # the route adds it from the person's key; the state itself does not know
+
+
+def test_the_turn_route_answers_incrementally(tmp_path, monkeypatch):
+    from tests.test_studio_app import request, server_for
+    from wb_results.evidence import write_json
+    from wb_studio.app import ROOT, Studio
+    from wb_world.episode import load_suite
+    monkeypatch.setattr('wb_studio.genesis_harness.model_routes', lambda: [])
+    studio = Studio(tmp_path / 'studio', tasks=load_suite(ROOT / 'tasks')[:1], gateway_factory=lambda *a, **k: pytest.fail('paid dispatch'))
+    turn = {'id': 'inc1', 'status': 'running', 'model': 'glm-5.3', 'message': 'm', 'answer': 'so far', 'created_at': stamp(), 'maximum_usd': '2',
+            'events': [{'id': 1, 'type': 'harness_started', 'at': stamp()}, {'id': 2, 'type': 'model_started', 'at': stamp()}, {'id': 3, 'type': 'text_delta', 'at': stamp(), 'text': 'so far'}]}
+    write_json(studio.genesis.path('turns', 'inc1'), turn)
+    with server_for(studio) as port:
+        whole = json.loads(request(port, 'GET', '/api/genesis/turns/inc1')[2])
+        assert [e['id'] for e in whole['events']] == [1, 2, 3] and 'partial' not in whole
+        part = json.loads(request(port, 'GET', '/api/genesis/turns/inc1?after=2')[2])
+        assert [e['id'] for e in part['events']] == [3] and part['partial'] is True and part['answer'] == 'so far' and part['status'] == 'running'
