@@ -29,6 +29,7 @@ def run_loop(gateway, *, system: str, brief: str, execute_tool, emit, scope_id: 
     prefix = f"{step}:" if step else ""
     tag = {"step": step} if step else {}
     messages = gateway.start(system, brief)
+    emit("model_prompt", node=f"{prefix}prompt", label="Prompt", arguments={"system": system, "brief": brief}, **tag)
     turn = 0
     try:
         for turn in range(max_turns):
@@ -56,7 +57,8 @@ def run_loop(gateway, *, system: str, brief: str, execute_tool, emit, scope_id: 
             emit("billing", billing=billing, budget=budget(), **tag)
             record({"type": "agent_response", "turn": turn, "step": step, "response": {k: v for k, v in reply.items() if k != "raw"}})
             text, calls = reply.get("text") or "", reply.get("tool_calls") or []
-            emit("model_finished", node=f"{prefix}model-{turn}", output=text, status="completed", **tag)
+            emit("model_finished", node=f"{prefix}model-{turn}", output=text, status="completed",
+                 reasoning=reply.get("reasoning") or [], stop_reason=reply.get("stop_reason") or reply.get("finish_reason"), **tag)
             if not calls:
                 result.final_text = text
                 if not text or reply.get("finish_reason") not in (None, "STOP", "stop", "end_turn"):

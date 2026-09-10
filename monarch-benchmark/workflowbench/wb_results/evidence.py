@@ -6,7 +6,8 @@ leave a running attempt and a partial last JSONL record: only complete records
 and snapshot.observed.json are evidence, never proof of a final world. The files
 are not a cross-file transaction, and this does not promise storage hardware or
 power-loss durability. Native/provider messages exist only if a harness records
-them through Episode.record_agent_event; private reasoning remains unavailable.
+them through Episode.record_agent_event; reasoning is recorded only as the provider's
+own summary, when it returns one (coverage.private_reasoning = "summaries").
 """
 from __future__ import annotations
 
@@ -186,7 +187,7 @@ def write_attempt(root: Path, index: int, ep, result, termination: str, error: s
 
 
 def write_manifest(root: Path, *, episode_id: str, contract_sha256: str,
-                   agent_messages: str) -> dict:
+                   agent_messages: str, private_reasoning: str = "unavailable") -> dict:
     paths = [root / name for name in (
         "snapshot0.json", "snapshot1.json", "events.jsonl", "turns.jsonl",
         "grading.json", "result.json")]
@@ -213,7 +214,7 @@ def write_manifest(root: Path, *, episode_id: str, contract_sha256: str,
         "schema": "workflowbench-evidence@1", "episode_id": episode_id,
         "contract_sha256": contract_sha256, "attempt_count": len(attempts),
         "coverage": {"tool_events": "recorded", "agent_messages": agent_messages,
-                     "private_reasoning": "unavailable",
+                     "private_reasoning": private_reasoning,
                      "live_journals": ("recorded" if len(journaled_attempts) == len(attempts) and attempts
                                        else "partial" if journaled_attempts else "unavailable")},
         "journaled_attempts": journaled_attempts, "provenance": provenance(),

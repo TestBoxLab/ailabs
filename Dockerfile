@@ -13,6 +13,10 @@ ENV PYTHONUNBUFFERED=1 \
     STUDIO_DATA_DIR=/data \
     STUDIO_HOST=0.0.0.0
 
+# Genesis runs its turns through the Codex CLI (wb_studio/genesis_harness.py); without it every
+# model route reads as unavailable on the configuration page and no turn can start.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && apt-get install -y --no-install-recommends nodejs     && npm install -g @openai/codex     && codex --version     && apt-get purge -y gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY research /app/research
 COPY monarch-benchmark/workflowbench /app/monarch-benchmark/workflowbench

@@ -49,7 +49,7 @@ function markCurrent(){
 }
 function revealSelection() {
   const dialog=$('#attempt-dialog');
-  if(!dialog.open){selectionOpener=document.activeElement;if(selected?.result?.passed===false)setOutputMode('checks');else if(selected?.category==='result')setOutputMode('output');}
+  if(!dialog.open){selectionOpener=document.activeElement;if(selected?.category==='result')setOutputMode('story');else if(outputMode==='story')setOutputMode('output');}
   selectedEvent=null;
   renderOutput(); bindEvidence();
   if(!dialog.open)dialog.show();
@@ -66,7 +66,7 @@ function selectTraceEvent(id,writeHash=true){
   const node=nodeList(event.model).find(n=>n.node===event.node);
   const input=event.arguments!==undefined?event.arguments:node?.arguments;
   const output=event.output!==undefined?event.output:node?.output;
-  detail.innerHTML='<h3>'+esc(action?.title||eventLabel(event))+'</h3><p class="meta">Event '+event.id+' · '+esc(new Date(event.at).toLocaleTimeString())+'</p>'+(action?.detail?'<p class="evidence-description">'+esc(action.detail)+'</p>':'')+(input!==undefined?'<h4>Input</h4>'+pretty(input):'')+(output!==undefined?'<h4>Output</h4>'+pretty(output):'')+'<details class="finding-section"><summary>Raw record</summary><pre>'+esc(JSON.stringify(event,null,2))+'</pre></details>';
+  detail.innerHTML='<h3>'+esc(action?.title||eventLabel(event))+'</h3><p class="meta">Event '+event.id+' · '+esc(new Date(event.at).toLocaleTimeString())+(event.stop_reason?' · stopped: '+esc(event.stop_reason):'')+'</p>'+(action?.detail?'<p class="evidence-description">'+esc(action.detail)+'</p>':'')+(input!==undefined?'<h4>Input</h4>'+pretty(input):'')+(event.reasoning?.length?'<h4>Reasoning</h4><p class="meta">The summary the provider gives of its thinking, not the full trace.</p>'+event.reasoning.map(r=>textDocument(String(r))).join(''):'')+(output!==undefined?'<h4>Output</h4>'+pretty(output):'')+'<details class="finding-section"><summary>Raw record</summary><pre>'+esc(JSON.stringify(event,null,2))+'</pre></details>';
   detail.scrollTop=0;
   if(writeHash)attemptHash();
 }
@@ -231,12 +231,21 @@ function renderOutput(){
   const result=selected.result||job?.results.find(r=>r.task===task&&r.model===model)||null;
   const account=selected.report||report?.attempts.find(a=>a.task===task&&a.model===model)||null;
   box.setAttribute('aria-labelledby','inspector-tab-'+outputMode);
-  if(outputMode==='checks')box.innerHTML=checksView(result,account);
+  if(outputMode==='story')box.innerHTML=isResult?storyView(result,account):outputView(result,account);
+  else if(outputMode==='checks')box.innerHTML=checksView(result,account);
   else if(outputMode==='trace'){box.innerHTML=traceView(task,model);architectureFigure(box,task,model);if(selectedEvent!==null)selectTraceEvent(selectedEvent,false);}
   else if(outputMode==='timeline')box.replaceChildren(timelineView(task,model));
   else box.innerHTML=outputView(result,account);
 }
 function rawRecord(){const raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes}:{})};return '<details class="finding-section"><summary>Raw record</summary><pre>'+esc(JSON.stringify(raw,null,2))+'</pre></details>';}
+function factList(items){return items?.length?'<ul class="story-facts">'+items.map(f=>'<li>'+esc(f.text)+' '+[...new Set(f.event_ids||[])].slice(0,4).map(evidenceButton).join(' ')+'</li>').join('')+'</ul>':'<p class="meta">Nothing to report.</p>';}
+function storyView(result,account){
+  const s=account?.story;
+  if(!s)return '<p>'+(result?'The story is written once the attempt has a recorded outcome.':'No verdict recorded yet.')+'</p>';
+  const turning=s.turning_point?'<h4>Where it turned</h4><p>'+esc(s.turning_point.text)+' '+evidenceButton(s.turning_point.event_id)+'</p>':'';
+  const timeline=s.timeline.length?'<ol class="story-timeline">'+s.timeline.map(t=>'<li><p><strong>Turn '+t.turn+'</strong>'+(t.stop_reason&&!['STOP','stop','end_turn','tool_calls','tool_use','completed'].includes(t.stop_reason)?' <span class="meta">stopped: '+esc(t.stop_reason)+'</span>':'')+'</p>'+(t.reasoning?'<p class="story-reasoning">'+esc(t.reasoning)+'</p>':'')+(t.actions.length?'<ul>'+t.actions.map(a=>'<li'+(a.status==='error'?' class="fail"':'')+'>'+esc(a.title)+(a.detail?' <span class="meta">'+esc(a.detail)+'</span>':'')+(a.error?' <span class="fail">failed: '+esc(a.error)+'</span>':'')+' '+evidenceButton(a.event_id)+'</li>').join('')+'</ul>':t.said?'<p>'+esc(t.said)+' '+evidenceButton(t.event_ids[0])+'</p>':'')+'</li>').join('')+'</ol>':'<p class="meta">No model turns were recorded for this attempt.</p>';
+  return '<p class="verdict">'+esc(s.verdict)+'</p>'+(result?.passed?'':'<p class="meta">Failure mode: '+esc(s.mode_label)+'</p>')+turning+'<h4>What went right</h4>'+factList(s.went_right)+'<h4>What went wrong</h4>'+factList(s.went_wrong)+'<h4>What happened</h4>'+timeline+'<p class="report-caveat">'+esc(s.limits)+'</p>';
+}
 function outputView(result,account){
   if(selected.category!=='result')return (selected.output!==null&&selected.output!==undefined?pretty(selected.output):'<p>No output received yet.</p>')+(selected.arguments?'<h4>Input</h4>'+pretty(selected.arguments):'')+rawRecord();
   return (result?.error?'<p class="fail">'+esc(result.error)+'</p>':'')+(result&&result.output!==null&&result.output!==undefined?pretty(result.output):'<p>No output received yet.</p>')+(account?reportDetails(account):'')+rawRecord();
@@ -282,6 +291,7 @@ function eventLabel(e){
     case 'node_finished':return (e.status==='error'?'Tool error: ':e.category==='builder'?'Builder result: ':'Tool result: ')+callWords(start);
     case 'model_started':return 'Model turn'+(e.turn!==undefined?' '+(Number(e.turn)+1):'');
     case 'model_finished':return e.status==='error'?'Model error':'Model reply';
+    case 'model_prompt':return 'Prompt to the model'+(e.step?' · '+e.step:'');
     case 'step_started':return 'Step started: '+(e.label||e.step);
     case 'step_finished':return (e.status==='error'?'Step failed: ':'Step finished: ')+(e.label||e.step);
     case 'workflow_step':return 'Workflow node: '+(e.label||e.node)+(e.status?' · '+e.status:'');
