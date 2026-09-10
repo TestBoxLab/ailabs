@@ -378,7 +378,7 @@ def apply_expected(s0: dict, expected: list[dict]) -> dict:
             rec = records[0]
             rec[field] = _flip(rec.get(field))
         else:
-            records.append({"id": f"new_{i}"})
+            records.append({"id": f"new_{i}", **(m.get("where") or {})})
     return s1
 
 

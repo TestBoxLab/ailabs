@@ -610,6 +610,13 @@ def derive(task: dict[str, Any], side_effects: SideEffects) -> dict[str, Any]:
             present = _field_seeded(initial_state, service, collection, rid, field)
             m = {"service": service, "op": "changed" if present else "*",
                  "path": f"{service}.{collection}[id={rid}].{field}"}
+        elif (field and collection != "*" and "value" in a
+              and a["type"].endswith("_exists_with_field")
+              and not (initial_state.get(service) or {}).get(collection)):
+            # No record can be updated in an empty collection. The real diff
+            # adds the whole record, not a separate change to its field.
+            m = {"service": service, "op": "added", "path": f"{service}.{collection}[*]",
+                 "where": {field: a["value"]}, "count": 1}
         elif field and collection != "*":
             # property asserted on a record found by a non-id key: created or changed
             m = {"service": service, "op": "*", "path": f"{service}.{collection}[*].{field}"}

@@ -14,9 +14,20 @@ from wb_arms.langfuse_cost import (
     read_generations,
     summarize,
 )
-from wb_orchestrator.config import load_price_table
+from wb_orchestrator.config import load_harness, load_price_table
 
 TABLE = Path(__file__).resolve().parents[1] / "config" / "models" / "monarch-team-bedrock.yaml"
+
+
+def test_configured_monarch_prices_deployed_writer_model():
+    """Model observed in run-20260910-155059, not a guessed model alias."""
+    from wb_arms.langfuse_cost import _family, cost_for
+
+    harness = load_harness(TABLE.parent.parent / "harnesses" / "monarch.yaml")
+    current = load_price_table(TABLE.parent / f"{harness.price_table}.yaml")
+    family = _family("claude-opus-4-6", current)
+    prices = next(e.usd_per_million for e in current.models if e.family == family)
+    assert cost_for(prices, 1000000, 1000000, 1000000, 1000000) == 36.75
 
 
 @pytest.fixture(scope="module")

@@ -1,5 +1,11 @@
 # AI Labs — Project Instructions
 
+Read [AGENTS.md](AGENTS.md) first. This entire file is shared repository context
+for Claude Code and Codex; the entry point links here deliberately. Current human
+decisions recorded there supersede older assumptions in this file and skills.
+The [harness-independent procedures](docs/HARNESS-PROCEDURES.md) preserve the
+eleven local Claude skills' method when their commands are unavailable.
+
 ## Project context
 
 TestBox AI Labs is an internal lab run by Carlos Mattos (owner of this repo) and
@@ -65,8 +71,9 @@ competitors in reports).
 modes (frente B), Monarch phase telemetry (C), Langfuse + Slack output (D),
 corpus leftovers (F), second product (E).
 
-The user's global `~/.claude/CLAUDE.md` is loaded automatically and applies
-here. This file holds project-specific additions only.
+Claude Code loads the user's global `~/.claude/CLAUDE.md` automatically. Codex
+uses its own global instructions; repository method and governance must not
+depend on a private harness-specific global file.
 
 ## Plain names
 
@@ -152,9 +159,17 @@ each stage hands its artifact to the next:
   `wb budget status` shows what is left, `wb budget reconcile` checks a week
   against the providers' own usage exports. Monarch and Claude Code
   competitors stay refused until milestones M5 and M7.
-- **Pre-registration.** Do not edit a task's prompt, starting data, or approval
-  rule after seeing results without Lucas's sign-off. Hash changes make old
-  rows non-regradable; say so.
+- **Pre-registration and upstream integrity.** Carlos's final 10 September
+  decision supersedes the earlier repair authorization: preserve AutomationBench's
+  world, routes, seeds, task requests, initial data and assertions unchanged.
+  This includes the ignored Airtable filter and weak invoice assertion. Only
+  WorkflowBench's own approval-rule translation may be corrected, with a
+  reproduction against the unchanged simulator. Preserve prior rules and record
+  old/new hashes and evidence in `monarch-benchmark/docs/rounds/`; old rows are
+  non-regradable against replacement hashes. Exclude a bad task with a recorded
+  reason or report it upstream; never silently edit it. Adoption of
+  `1.0.6+evalrepair.10` remains suspended, with the question pending Lucas.
+  Changes of methodology still require explicit human approval.
 - **The methodology does not change through features.** `PLAN.md` §1 is the
   constant; features change its inputs (files, competitors, products), never
   its rules. A spec that reopens a fixed rule needs Carlos's explicit say-so.
@@ -168,10 +183,19 @@ each stage hands its artifact to the next:
   `workflowbench/vendor/automation-bench` is excluded from the graph.
 - **Stack:** Python 3.13 managed by `uv`. Environment:
   `cd monarch-benchmark/workflowbench && uv sync && uv run python -m pytest tests -q`.
+  Always `uv run`, never bare Python. On Windows run the full suite detached
+  with logs and wait for its exit; it takes about 27 minutes. Verify UI changes
+  with browser tooling. `wb` loads `.env` itself: `wb run` is never a free check.
   Keys in `workflowbench/.env` (gitignored). AutomationBench vendored at
   `workflowbench/vendor/automation-bench` (gitignored; re-clone if missing).
 
 ## What lives where
+
+In this table and the references below, `workflowbench/` abbreviates
+`monarch-benchmark/workflowbench/`; `specs/` and `docs/` otherwise start at the
+repository root unless a full prefix is given. Historical feature statuses and
+model examples are context; verify current status in `STATE-OF-THE-PROGRAM.md`
+and actual configuration rather than treating those examples as runtime pins.
 
 | Path | Purpose |
 |---|---|
@@ -240,12 +264,17 @@ each stage hands its artifact to the next:
 
 ## Open questions in flight
 
-- Repo visibility (private vs scrub) before the first push. (Carlos)
+- Publication and pushes still require Carlos's explicit request; the repo is public.
 - Replace the pilot tasks' manual approval rules with the derived ones. (Lucas)
-- Lucas's AutomationBench patches (`1.0.6+evalrepair.10`) are not upstream; get them from him.
+- Adoption of the alternative AutomationBench dataset `1.0.6+evalrepair.10` is
+  suspended by Carlos's final 10 September decision, with the question pending
+  Lucas. Preserve its historical records; do not resume source acquisition or
+  replacement without a new explicit decision.
 - Service-account or API-key path for Monarch's authoring endpoint, or session login from the bench. (Deyton)
 - Second product under test: real, mapped by Feature Discovery, legally clean. (Lucas + Carlos)
-- Approval-rule gap found by the smoke (`simple.sf_opp_closed_won`: `is_closed`/`is_won`). Needs Lucas's sign-off.
+- Approval-rule gaps require simulator evidence and a recorded refreeze; the
+  authorized corrections are limited to WorkflowBench's own rule translation,
+  keeping AutomationBench's world, routes, seeds and assertions unchanged.
 
 ## graphify
 
@@ -254,4 +283,6 @@ This project has a graphify knowledge graph at graphify-out/.
 Rules:
 - Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+- After modifying code files, refresh the graph through the installed Graphify
+  skill using its `uv`-managed environment; do not invoke bare `python3` or
+  silently claim a refresh if Graphify is unavailable.

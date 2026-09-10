@@ -9,6 +9,11 @@ machine, `PLAN.md` for the tracking surface, and
 summarises. Where the two disagree, the unblock plan is the authority on
 milestones and the refreeze record on task hashes.
 
+**Continuation, 10 September:** the current corrections and remaining gates are
+in section 13. Sections 1–12 retain the inherited historical account; their
+Lucas-only approval and pending assertion-repair statements are superseded by
+Carlos's ruling and the shared instructions in `../../AGENTS.md`.
+
 ## 1. The one-paragraph version
 
 The bench works offline and its machinery is done: declarative configuration,
@@ -329,3 +334,58 @@ The bench now refuses more than it used to, and each refusal is load-bearing:
 knowledge-base drift, front-door disagreement, an operator name, a world
 revision. When one fires, read it before working around it — every one of them
 was added because something silently measured nothing.
+
+## 13. Codex continuation, 10 September 2026
+
+Carlos's final comparability rule preserves AutomationBench's world, routes, seeds
+and assertions, including known limitations. WorkflowBench may fix its approval-rule
+translation. Bad tasks may be excluded with a record or reported upstream, never
+silently altered. Evalrepair adoption is suspended pending Lucas's clarification.
+
+AGENTS.md requires the entire CLAUDE.md, constitution and HARNESS-PROCEDURES.md.
+Codex and Claude share the method, file map, glossary and round gates; all eleven
+Claude skill files remain intact. The runtime approver defaults and local
+WB_APPROVERS now recognize Carlos or Lucas by first or full name; an explicit
+restricted override still works. The failing Carlos reproduction and 34 passing
+approval/CLI tests verify the governance alignment without creating real approvals.
+
+The Airtable filter trap and weak invoice assertion are reproduced but intentionally
+preserved. Runnable characterizations and upstream issue drafts (not submitted) are
+in [the limitations record](rounds/2026-09-10-upstream-limitations.md). No task was
+removed or redrawn. Temporary simulator/assertion edits were fully reverted before
+any paid attempt. The vendor is clean at upstream 1.0.6; dependency pin and installed
+package agree. Four tier plans resolve; achievable-50 retains its revision block.
+
+Extra Jira writes were already caught by frozen counts. The wrong-summary
+collateral-count limit is documented. The retained Salesforce approval-rule fix
+accepts the correct whole-record addition. Only its task hash changes; requests,
+initial data and vendor assertions are identical.
+[Evidence and hashes](rounds/2026-09-10-invoice-jira-corrections.md).
+
+Deployment evidence is in [the merged-branch record](rounds/2026-09-10-merged-monarch-deploy.md).
+The deployment passed all six verification checks; the catalogue remains 47
+products, 686 actions, 47 in sync. Carlos identified Langfuse as the usage source;
+[historical usage accounting](rounds/2026-09-10-historical-cost-accounting.md)
+reserved US$ 34.064 for the observed gap without certifying provider invoices.
+
+The one requested diagnostic ran as `run-20260910-155059`. Monarch's stored final
+poll is `success`, and the front-door log contains four Airtable GETs, all 200.
+The VIP lookup again returned the Active record; the create step was skipped and
+the world did not change. WorkflowBench recorded `infra:harness_crash` because
+the merged product used `claude-opus-4-6`, absent from its frozen price table.
+The US$ 25 reservation remains held with unknown billing; the row's zero dollar
+value is not zero cost. No repeat was launched and no refusal was overridden.
+[Diagnostic evidence](rounds/2026-09-10-post-deploy-diagnostic.md).
+Langfuse subsequently yielded 22 generations, US$ 0.89375475 observed cost.
+A versioned successor price table now covers the deployed writer and records
+direct Anthropic routing, with original configuration preserved and all five
+relevant plan hash moves documented. Its 129 offline pricing/config tests pass.
+The diagnostic result remains the original refusal; no second paid attempt ran.
+
+Final validation: detached full suite completed with 1,916 passed, 2 skipped and
+one real corpus/task rule-hash mismatch. The source corpus now carries the same
+permitted Salesforce rule as its drawn copy; old versions are archived. All 31
+affected refreeze/real-world/scored-derivation tests then passed. The later
+approval and price configuration changes separately passed 34 and 129 tests.
+The full suite was not rerun after those focused corrections. Graphify's code
+graph was refreshed; vendor and upstream task fields were checked unchanged.

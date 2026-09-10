@@ -76,7 +76,13 @@ a one-line notice when the key is set. See "Approvals and the weekly ledger" bel
 
 Every paid launch names its operator: `WB_OPERATOR=<name>` in the environment
 (`wb run`, `wb resume` and provider probes of `wb doctor` refuse without it).
-Approvers are `lucas` (override with `WB_APPROVERS=a,b`). Above smoke scale (20
+Default approvers are Carlos and Lucas: `carlos`, `carlos mattos`, `lucas`,
+`lucas wakigawa`. Names are matched exactly after trimming and lowercasing;
+there is no inferred alias expansion. A nonempty `WB_APPROVERS=a,b` replaces
+the entire default list, so `WB_APPROVERS=lucas` explicitly excludes Carlos.
+Attribute `WB_OPERATOR` to the human who requested the round, never the agent;
+configuration is not permission for an agent to approve its own round.
+Above smoke scale (20
 attempts per competitor, retries included), an approver's `wb run` runs at once
 under an approved record; anyone else's `wb run` writes a pending request,
 prints `<id> awaiting approval` and stops. An approver decides with

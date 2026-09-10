@@ -125,4 +125,18 @@ are not fetched for the Activity lane.
   not on this machine: `scripts/vendor_automation_bench.py --source <tree>
   --expect-version 1.0.6+evalrepair.10 --tree-id <id> --replace`, then `uv lock`
   and `uv sync`. The four tier sets and `check-collateral` declare no world
-  revision, so they run unaffected. Seen 10 Sep 2026.
+  revision, so they ran unaffected before the local filter repair. Seen 10 Sep 2026.
+  **Superseded later on 10 September:** Carlos preserves AutomationBench's
+  upstream world, routes, seeds and assertions; only WorkflowBench's approval-rule
+  translation may be corrected. Evalrepair adoption is suspended pending
+  clarification, not a pending source request. Vendor restored to unchanged upstream
+  1.0.6; all four tier plans resolve. See the repo-root relative record
+  monarch-benchmark/docs/rounds/2026-09-10-upstream-limitations.md.
+
+- The merged-branch diagnostic `run-20260910-155059` reached Airtable and finished
+  its Monarch workflow, but WorkflowBench refused cost closure for the unpriced
+  writer model Opus 4.6. The successor price table covers it, with 129 offline
+  checks and recorded config hash moves; no paid repeat. Its US$ 25 hold remains
+  pending billing, alongside the US$ 34.064 historical usage hold. Langfuse shows
+  US$ 0.89375475 for the diagnostic. Preserve the refusal and frozen original
+  config. See docs/rounds/2026-09-10-post-deploy-diagnostic.md under monarch-benchmark.

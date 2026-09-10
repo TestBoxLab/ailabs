@@ -7,7 +7,7 @@ name = "workflowbench"
 version = "0.1.0"
 description = "WorkflowBench T0: synthetic-mode world server, graph ingester, grader, pilot runner"
 requires-python = ">=3.13"
-dependencies = ["pydantic>=2.0", "mcp>=1.0", "automation-bench==1.0.6+evalrepair.10", "openai>=1.50", "google-genai>=1.0", "pyyaml>=6.0"]
+dependencies = ["pydantic>=2.0", "mcp>=1.0", "automation-bench==1.0.6", "openai>=1.50", "google-genai>=1.0", "pyyaml>=6.0"]
 
 [project.scripts]
 wb = "wb_orchestrator.cli:main"
@@ -20,12 +20,12 @@ dev = [
 ]
 
 # AutomationBench is vendored under vendor/automation-bench (gitignored) by
-# scripts/vendor_automation_bench.py, which refuses any version other than the
-# one pinned above. Since 8 Sep 2026 that is the repaired 1.0.6+evalrepair.10
-# (ApplicationBench vendor subtree, Git tree 7ac9559); the world it came from
-# is recorded in vendor/automation-bench/VENDORED-FROM.txt and the swap in
-# specs/007-lab-foundation/dependency-adoption.md. The previous world, upstream
-# 1.0.6 at 4a8e106, is what the frozen sets under tasks/ and corpus/ record.
+# scripts/vendor_automation_bench.py, which verifies the requested source version.
+# Carlos's 10 September comparability decision keeps upstream 1.0.6 at 4a8e106:
+# world, routes, seeds and assertions stay unchanged. Only WorkflowBench's
+# approval-rule translation may be repaired. evalrepair.10 adoption is suspended;
+# achievable-50 remains blocked by its world declaration. The four historical
+# task sets and corpus retain their upstream 1.0.6 identity.
 [tool.uv.sources]
 automation-bench = { path = "vendor/automation-bench", editable = true }
 
