@@ -407,3 +407,12 @@ def test_chat_rejects_unsupported_thinking_before_spending(genesis,monkeypatch):
         genesis.chat({'model':'gemini-3.7-flash','message':'Inspect','effort':'xhigh'})
     genesis.studio.ledger.reserve_run.assert_not_called()
     assert genesis.listing('turns')==[]
+
+
+def test_an_edit_that_omits_kind_and_evidence_keeps_them(genesis):
+    """The watcher's dedup key is the card's kind and evidence; the model's save_research omits both."""
+    card = genesis.intake('run', 'Smoke run', 'run-1', [{'kind': 'run', 'id': 'run-1'}])
+    assert card['kind'] == 'run' and card['evidence'] == [{'kind': 'run', 'id': 'run-1'}]
+    saved = genesis.card({'id': card['id'], 'revision': card['revision'], 'title': card['title'], 'body': 'worked', 'stage': 'review'})
+    assert saved['kind'] == 'run' and saved['evidence'] == [{'kind': 'run', 'id': 'run-1'}]
+

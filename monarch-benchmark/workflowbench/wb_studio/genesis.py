@@ -186,13 +186,13 @@ class Genesis:
                 forbidden={'request_id','approved','approval','benchmark'}&set(proposal)
                 if forbidden: raise ValueError('Proposal cannot set approval or server-owned identities')
                 if proposal.get('goal') is not None: check_goal(proposal['goal'])
+            kept=old or {}
             record={'id':identity,'title':title,'body':str(payload.get('body',''))[:20000],
-                    'stage':stage,'kind':payload.get('kind','hypothesis'),'revision':(old or {}).get('revision',0)+1,
-                    'created_at':(old or {}).get('created_at',stamp()),'updated_at':stamp(),
-                    'evidence':payload.get('evidence',[]),'parent':payload.get('parent'),'proposal':proposal,
+                    'stage':stage,'kind':payload.get('kind',kept.get('kind','hypothesis')),'revision':kept.get('revision',0)+1,
+                    'created_at':kept.get('created_at',stamp()),'updated_at':stamp(),
+                    'evidence':payload.get('evidence',kept.get('evidence',[])),'parent':payload.get('parent',kept.get('parent')),'proposal':proposal,
                     'proposal_digest':digest(proposal) if proposal else None,'approval':None}
             # Intake and watcher fields; an edit that omits them (the model's save_research) keeps the old values.
-            kept=old or {}
             record.update(question=payload.get('question',kept.get('question')),auto=bool(payload.get('auto',kept.get('auto',False))),work=payload.get('work',kept.get('work')),position=payload.get('position',kept.get('position')),
                           plan=payload.get('plan',kept.get('plan')),default=payload.get('default',kept.get('default')),blocks=payload.get('blocks',kept.get('blocks')),answer=payload.get('answer',kept.get('answer')),waiting=payload.get('waiting',kept.get('waiting')),brief=payload.get('brief',kept.get('brief')),
                           hypothesis=payload.get('hypothesis',kept.get('hypothesis')),settlement=payload.get('settlement',kept.get('settlement')),review=payload.get('review',kept.get('review')),

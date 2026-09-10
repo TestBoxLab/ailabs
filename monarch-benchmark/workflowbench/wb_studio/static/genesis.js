@@ -269,7 +269,7 @@ function renderBrief(){const slot=$('#genesis-brief');if(!slot)return;const brie
  const list=(items,render)=>items&&items.length?'<ul class="brief-list">'+items.map(render).join('')+'</ul>':'<p class="meta">None</p>';
  if(!d){slot.innerHTML='<article class="block genesis-brief"><header><span>'+esc(brief.title)+'</span></header><div class="block-body"><p>'+esc(brief.body)+'</p></div></article>';return;}
  const a=d.allowance||{};
- slot.innerHTML='<article class="block genesis-brief"><header><span>'+esc(brief.title)+'</span><span class="meta">'+esc('Genesis spent $'+(a.today_usd||'0.00')+' of $'+(a.cap_usd||'')+' today'+(a.week_usd?' · $'+a.week_usd+' left this week':''))+'</span></header><div class="block-body"><dl class="facts brief-grid">'
+ slot.innerHTML='<article class="block genesis-brief"><header><span>'+esc(brief.title)+'</span></header><div class="block-body"><dl class="facts brief-grid">'
  +'<dt>What ran</dt><dd>'+list(d.ran,j=>'<li><button type="button" class="text-button" data-open-job="'+esc(j.id)+'">'+esc(j.title)+'</button> <span class="meta">'+esc(j.status||'')+'</span></li>')+'</dd>'
  +'<dt>What moved</dt><dd>'+list(d.moved,c=>'<li><button type="button" class="text-button" data-card="'+esc(c.id)+'">'+esc(c.title)+'</button> <span class="meta">'+esc(stageWord(c.stage))+'</span></li>')+'</dd>'
  +'<dt>Questions waiting</dt><dd>'+list(d.questions,q=>'<li><button type="button" class="text-button" data-card="'+esc(q.id)+'">'+esc(q.title)+'</button>'+(q.default?' <span class="meta">suggested: '+esc(q.default)+'</span>':'')+'</li>')+'</dd>'
