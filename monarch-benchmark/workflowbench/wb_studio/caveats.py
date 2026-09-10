@@ -70,7 +70,9 @@ def for_run(job, m, narrative=None, hidden=(), audience="public", reused=None) -
         out.append("Costs are settled from provider receipts at each model's recorded price table; cached and uncached tokens are priced separately.")
     if narrative:
         if narrative.get("status") == "pending":
-            out.append("Analysis pending: " + str(narrative.get("reason") or "the analysis has not run yet."))
+            reason = str(narrative.get("reason") or "the analysis has not run yet.")
+            # Nothing to interpret is a state, not a wait.
+            out.append(("No model analysis: " if "nothing to interpret" in reason.lower() else "Analysis pending: ") + reason)
         elif narrative.get("status") == "failed":
             out.append("The model interpretation did not complete; only the recorded verdicts and counts appear here.")
         elif narrative.get("status") == "completed":

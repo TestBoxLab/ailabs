@@ -112,6 +112,32 @@ turns everything off.
 - **Empty states teach**: one sentence that says what the thing is and what
   freezes it, and the one action that creates it.
 
+## After the audit (10 Sep): surfaces and addresses
+
+- **A detail peeks to the side of its table.** The attempt sheet sits fixed at
+  the right edge, at most half the width, with no scrim; the page gives it
+  that width above 1100 px so the matrix stays the map, and the current cell
+  is marked in the signal colour. Full screen on a phone. The card sheet on
+  the Genesis board follows the same pattern. A centred modal is for a
+  confirmation, never for reading.
+- **One home per kind of evidence.** An event opens in the attempt sheet on
+  Trace, selected, with its input and output beside the list. There is no
+  second dialog.
+- **Everything has an address.** `#run/<id>/<task>/<setup>/e<event>`,
+  `#report/<id>/<section>?audience=internal`, `#round/<id>/<section>`. The
+  first open of a sheet is a history entry so Back closes it; stepping
+  replaces it. The page title is the thing's title.
+- **A form that fits one page is one page.** New run is three sections on one
+  page with a sticky footer that keeps the sum; the numbers above scroll,
+  they do not gate. Choices a person cannot take are shown disabled with the
+  reason beside them.
+- **A grade carries the certainty of its sentence.** Improvement and
+  Regression need the sign test; otherwise the word is Undecided with the
+  tally and the p value. Standings rank by interval overlap and show a spread.
+- **Figures leave the page whole.** Every row chart is drawn again at the
+  width of its column, offers Download SVG and Download CSV, and carries a
+  hidden data table for assistive technology.
+
 ## Still to do
 
 - Newsreader is vendored under `static/vendor/newsreader/` (SIL OFL 1.1, two

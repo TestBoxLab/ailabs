@@ -73,7 +73,7 @@ for (const theme of ['light', 'dark']) {
   for (const [name, hash, ready] of [
     ['runs', '#runs', '#history-rows [data-open-run]'],
     ['studio', '#studio', '#studio-library-rows'],
-    ['genesis', '#genesis', '#genesis-panel:not(.hidden)'],
+    ['genesis', '#genesis', '#genesis-panel:not(.hidden) #genesis-form'],
     ['budget', '#budget', '#budget-content'],
     ['leaderboard', '#leaderboard', '#reports-panel:not(.hidden)'],
     ['settings', '#runtime', '#runtime-panel:not(.hidden)'],
@@ -335,12 +335,11 @@ check('run page: a failing check and its event in two clicks from the Runs table
   } finally { await context.close(); }
 });
 
-check('product graph: the Graph view offers the live Monarch graph first and shows products with their stored actions, or the reason it cannot', async browser => {
+check('studio: the Live Monarch Graph tab offers the live graph first and shows products with their stored actions, or the reason it cannot', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#studio');
   try {
     at('open graphs'); await p.waitForSelector('#studio-library-rows');
-    await p.locator('.studio-tabs [data-mode=graphs]').click();
-    await p.locator('#studio-live-graph').click();
+    await p.locator('.studio-tabs [data-mode=live]').click();
     await p.waitForSelector('#pg-graph-source');
     assert(await p.evaluate(() => document.querySelector('.pg-workspace').dataset.pgView === 'graph'), 'graph view open');
     const options = await p.evaluate(() => [...document.querySelectorAll('#pg-graph-source option')].map(o => o.textContent));
@@ -413,14 +412,25 @@ check('settings: budget, capacity, providers with key presence, Monarch pin, all
     const providers = await p.locator('#settings-providers').innerText();
     assert(/Key present|No key/.test(providers), 'each provider says whether a key is present: ' + providers);
     assert(!/sk-|AIza/.test(providers), 'no key value on the page');
+    at('genesis configuration'); await p.waitForSelector('#settings-genesis-config .step-table');
+    assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 13, 'one row per step of Genesis\'s work');
+    const genesisText = await p.locator('#settings-genesis-config').innerText();
+    assert(/envelope/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
+    await p.waitForSelector('#config-jobs .schedule-table'); assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');
+    at('digest'); await p.goto(BASE + '/#genesis/digest'); await p.waitForSelector('#genesis-digest .report-section');
+    assert(/^Genesis, week \d{1,2} of \d{4}$/.test(await p.locator('#genesis-digest h1').innerText()), 'the digest reads as a report');
     await noOverflowNoErrors(p, errors, 'settings');
   } finally { await context.close(); }
 });
 
-check('genesis: a dropped sentence becomes a queued card, the board has six columns with an add action, the Memory tab shows the core files and the daily jobs', async browser => {
+check('genesis: chat first with the rail and the tracking pane; a dropped sentence becomes a queued card; the board has six columns; the Memory view shows the core files and the daily jobs', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#genesis');
   try {
-    await p.waitForSelector('#genesis-panel:not(.hidden)');
+    await p.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    at('chat first'); assert((await p.locator('#genesis-new').count()) === 1 && (await p.locator('.tracking-tabs [role=tab]').count()) === 3, 'the rail offers a new conversation and the tracking pane has three tabs');
+    assert((await p.locator('#genesis-messages').innerText()).includes('Ask Genesis'), 'an empty conversation says what to do');
+    at('board route'); await p.locator('#genesis-tab-board').click(); await p.waitForSelector('#genesis-board-view:not(.hidden)');
+    assert(await p.evaluate(() => location.hash === '#genesis/board'), 'the board has its own address: ' + await p.evaluate(() => location.hash));
     await p.locator('#genesis-drop textarea').fill('Monarch fails more often on tasks that touch two applications.');
     await p.locator('#drop-submit').click();
     await p.waitForSelector('.research-column[data-stage=research] .research-card');
@@ -430,11 +440,11 @@ check('genesis: a dropped sentence becomes a queued card, the board has six colu
     assert((await p.locator('.research-column').count()) === 6 && (await p.locator('[data-add-stage]').count()) === 4, 'six columns, four with an add action');
     await p.waitForFunction(() => /idle|waiting|paused|working|next card/i.test(document.querySelector('#genesis-watcher').innerText), null, { timeout: 15000 });
     at('open card'); await p.locator('.research-column[data-stage=research] .research-card').first().click();
-    await p.waitForSelector('#card-dialog[open] .research-question');
-    assert((await p.locator('#card-dialog .card-nav .meta').innerText()).includes(' of '), 'the card sheet counts its place among the cards');
-    assert((await p.locator('#card-dialog #research-work-now').count()) === 1, 'a queued card offers Work now');
-    await p.keyboard.press('Escape'); await p.waitForFunction(() => !document.querySelector('#card-dialog').open);
-    assert((await p.locator('.research-column.empty').count()) >= 1, 'empty columns fold to their name');
+    await p.waitForSelector('#research-detail:not(.hidden) .research-question');
+    assert((await p.locator('#research-detail #research-work-now').count()) === 1, 'a queued card offers Work now');
+    assert((await p.locator('#research-detail .stage-track li.now').innerText()) === 'Research', 'the stage track uses the one vocabulary');
+    await p.locator('#research-close').click(); await p.waitForSelector('#tracking-list:not(.hidden)');
+    assert((await p.locator('.research-column.folded').count()) >= 1, 'empty columns fold to their name');
     assert(await p.evaluate(() => document.querySelector('.research-board').scrollWidth <= document.querySelector('.research-board').clientWidth + 1), 'the board fits the page');
     at('memory tab'); await p.locator('#genesis-tab-memory').click();
     await p.waitForSelector('#memory-core .memory-block');
@@ -444,12 +454,12 @@ check('genesis: a dropped sentence becomes a queued card, the board has six colu
     assert(!(await p.locator('#soul-save').isDisabled()), 'Save turns on after an edit');
     await p.locator('#soul-reset').click();
     assert(await p.locator('#soul-save').isDisabled(), 'Discard restores the saved text');
-    at('schedule'); await p.waitForSelector('#memory-schedule .schedule-table');
-    assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');
+    assert((await p.locator('#memory-changes').innerText()).includes('Track record'), 'the Memory view shows last night and the track record');
     at('library topics'); await p.locator('#genesis-tab-library').click();
     await p.waitForSelector('#library-filters [name=topic] option', { state: 'attached' });
     const topics = await p.evaluate(() => [...document.querySelectorAll('#library-filters [name=topic] option')].map(o => o.textContent));
     assert(topics.includes('Agentic memory') && topics[topics.length - 1] === 'Other', 'fixed topic list with Other last');
+    await p.locator('#genesis-tab-board').click(); await p.waitForSelector('#genesis-board-view:not(.hidden)');
     await snapshot(p, 'genesis-board-light');
     await noOverflowNoErrors(p, errors, 'genesis board');
   } finally { await context.close(); }

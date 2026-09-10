@@ -10,7 +10,8 @@ from wb_studio.genesis import Genesis
 
 
 @pytest.fixture
-def genesis(tmp_path):
+def genesis(tmp_path, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # feature 022's Reviewer gate has its own tests
     studio = SimpleNamespace(
         directory=tmp_path,
         create=Mock(return_value={'id': 'run-accepted'}),

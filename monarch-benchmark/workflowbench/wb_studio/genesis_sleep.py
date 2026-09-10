@@ -1,22 +1,29 @@
-"""Genesis sleeps at 03:00: probation and decay on LAB.md, the record re-indexed, a daily
-brief card written from counts (no model), and, when a model route exists and the weekly
-ledger can cover the ceiling, one consolidation turn that merges the day's records into
-LAB.md. Nothing here raises into the scheduler.
+"""Genesis sleeps at 03:00: probation and decay on LAB.md, a self-check of three Known
+entries against their records, the record re-indexed, TRACK.md recomputed, a daily brief
+card written from counts (no model), and, when a model route exists and the weekly ledger
+can cover the ceiling, one consolidation turn. That turn answers with memory operations,
+not prose; `genesis_memory_suite.ON_TURN` validates and applies them. Nothing here raises
+into the scheduler.
 """
 from __future__ import annotations
 import os
 from datetime import timedelta, timezone
 from decimal import Decimal
+from wb_studio import genesis_memory_suite as suite
 from wb_studio.genesis_config import cheapest
 from wb_studio.genesis_harness import model_routes
 from wb_studio.library import now_sao_paulo
 
 MESSAGE = ('Nightly consolidation for {day}. Use record_search to read the records added since yesterday '
-           '(turns, cards, analyses, sources). Merge what matters into LAB.md with memory_replace and memory_add, '
-           'within its budget and with each entry tagged [rec:kind:id]; merge before adding when the file is near '
-           'its budget. Flag contradictions between a new source or run and an Analyzed card in one short list. '
-           'Move any library source filed under Other to a better topic with library_reclassify when its text makes the topic clear. '
-           'Do not propose experiments.')
+           '(turns, cards, analyses, sources). Then answer with one JSON object and nothing else: '
+           '{{"ops": [{{"op": "add", "replace" or "remove", "section": "Known" or "Recent", "text": "the new entry", '
+           '"old": "a piece of the entry to change", "new": "its replacement", "record": "kind:id"}}], '
+           '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order through '
+           'memory_add, memory_replace and memory_remove and stops at the first one LAB.md refuses, so merge '
+           'before you add when the file is near its budget, name the record of every entry you write, and put '
+           'the most important operation first. List a contradiction when a new source or run disagrees with an '
+           'Analyzed card. Move any library source filed under Other to a better topic with library_reclassify '
+           'when its text makes the topic clear. Do not propose experiments and do not answer in prose.')
 
 
 def _titles(items, limit=5):
@@ -37,7 +44,10 @@ def nightly(studio):
             summary[name] = None
     step('promoted', lambda: memory.promote(now))
     step('decayed', lambda: memory.decay(now))
+    step('self_check', lambda: suite.check_known(genesis, now=now))
     step('indexed', lambda: memory.index_all(studio))
+    step('vectors', lambda: suite.index_vectors(genesis))  # off when no embedding route is configured
+    step('track', lambda: suite.write_track(genesis))  # TRACK.md before the turn, so the turn reads today's numbers
 
     def gather():
         fresh = lambda rows, field='created_at': [r for r in rows if str(r.get(field) or '') >= since]
@@ -76,7 +86,9 @@ def nightly(studio):
                 'moved': [{'id': c['id'], 'title': c['title'], 'stage': c['stage']} for c in moved][:12],
                 'questions': [{'id': c['id'], 'title': c['title'], 'default': c.get('default')} for c in questions][:12],
                 'waiting': [{'id': c['id'], 'title': c['title'], 'reason': c.get('waiting')} for c in waiting][:12],
-                'allowance': {'today_usd': watcher.get('today_usd'), 'cap_usd': watcher.get('cap_usd'), 'week_usd': week}}
+                'allowance': {'today_usd': watcher.get('today_usd'), 'cap_usd': watcher.get('cap_usd'), 'week_usd': week},
+                'memory': {'self_check': summary.get('self_check'), 'track': summary.get('track'),
+                           'changed': suite.what_changed(genesis, 12)}}
     step('structured', structured)
     counts = records['counts']
     first = f"Since yesterday: {counts.get('turns', 0)} turns, {counts.get('cards', 0)} cards and {counts.get('sources', 0)} sources"
@@ -95,6 +107,15 @@ def nightly(studio):
             payload['revision'] = genesis.read('cards', identity)['revision']
         return genesis.card(payload)['id']
     step('brief', brief)
+
+    def slack():
+        """The brief posted after it is written; with no webhook, one line and nothing sent."""
+        from wb_studio import genesis_channels
+        if not os.environ.get(genesis_channels.WEBHOOK):
+            return {'posted': False, 'reason': genesis_channels.NO_WEBHOOK}
+        return genesis_channels.post_brief(genesis, genesis.read('cards', summary['brief']))
+    if summary.get('brief'):
+        step('slack', slack)
     return summary
 
 

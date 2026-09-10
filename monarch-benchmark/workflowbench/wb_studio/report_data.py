@@ -40,7 +40,7 @@ def visible_setups(job, audience) -> tuple[list, list]:
 def grade(setup, baseline) -> dict:
     """One word for the whole comparison, with its reason."""
     if not baseline or not setup or not setup.get("paired") or not setup["paired"]["comparable"]:
-        reason = "no Bare baseline to compare against" if not baseline else (setup or {}).get("paired", {}).get("reason") or "no paired attempts"
+        reason = "no Bare baseline to compare against" if not baseline else ((setup or {}).get("paired") or {}).get("reason") or "no paired attempts"
         return {"grade": "Not comparable", "reason": reason}
     p = setup["paired"]
     cost_a, cost_b = setup["cost"]["per_attempt"], baseline["cost"]["per_attempt"]
@@ -349,7 +349,12 @@ def run_report(studio, identity, audience="public") -> dict:
         baseline_id = m["baseline"]
         baseline = m["setups"].get(baseline_id)
         subject = m["setups"][subject["id"]]
-    g = grade(subject, baseline) if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
+    if subject and baseline and subject["id"] == baseline["id"]:
+        # Only the Bare baseline ran: nothing to compare it with, least of all itself.
+        baseline = None
+        g = {"grade": "Not comparable", "reason": "only the Bare baseline ran"}
+    else:
+        g = grade(subject, baseline) if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
     narrative = narrative_status(studio.directory / identity)
     aliases_back = {alias: m["setups"].get(real, {}).get("name", real) for real, alias in (narrative.get("aliases") or {}).items()}
     settings = job.get("settings") or {}

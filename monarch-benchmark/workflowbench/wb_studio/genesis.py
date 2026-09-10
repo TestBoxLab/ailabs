@@ -112,6 +112,8 @@ class Genesis:
         self.watcher=Watcher(studio,self)
         from wb_studio.genesis_config import Config
         self.config=Config(self.root)  # feature 022: the model each step of Genesis's work uses
+        from wb_studio.genesis_access import Access
+        self.access=Access(self.root)  # feature 022, lane B: people, keys, the envelope
     def recover_interrupted(self):
         """Called only by the single owning web process, never worker constructors."""
         for turn in self.listing('turns'):
@@ -124,7 +126,7 @@ class Genesis:
                 write_json(self.path('cards',card['id']),card)
 
     def path(self, kind, identity):
-        if kind not in ('cards','turns') or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',str(identity)): raise ValueError('Unknown Genesis record')
+        if kind not in ('cards','turns','threads') or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',str(identity)): raise ValueError('Unknown Genesis record')
         folder=self.root/kind;folder.mkdir(exist_ok=True)
         return folder/(identity+'.json')
     def read(self, kind, identity): return json.loads(self.path(kind,identity).read_text(encoding='utf8'))
@@ -132,6 +134,8 @@ class Genesis:
     def state(self):
         from wb_studio.genesis_harness import model_routes
         cards=self.listing('cards')
+        from wb_studio import genesis_ranking
+        cards=genesis_ranking.with_scores(self,cards)  # feature 022: each card carries its elo and games
         for card in cards:
             job=None
             if card.get('job'):
@@ -154,7 +158,7 @@ class Genesis:
                 analyzed.append({'run':job['id'],'title':job['title'],'status':data.get('status','completed')})
         analyzed += [{'run':a['run'],'title':a.get('summary') or a['run'],'status':a['status']} for a in [json.loads(p.read_text(encoding='utf8')) for p in (self.root/'analyses').glob('*.json')]]
         routes=model_routes()
-        return {'cards':cards,'turns':self.listing('turns')[-30:],'models':routes,'analyzed':analyzed,'stages':STATES,'watcher':self.watcher.status(),'autonomy':self.autonomy.read(),'config':{**self.config.read(),'effective':self.config.effective(routes)}}
+        return {'cards':cards,'turns':self.listing('turns')[-30:],'threads':self.threads(),'models':routes,'analyzed':analyzed,'stages':STATES,'watcher':self.watcher.status(),'autonomy':self.autonomy.read(),'config':{**self.config.read(),'effective':self.config.effective(routes)}}
     def card(self,payload):
         with self.lock:
             identity=payload.get('id') or uuid.uuid4().hex
@@ -168,7 +172,8 @@ class Genesis:
                     raise ValueError('A dispatched proposal cannot be edited')
                 archive=self.root/'card-history'/identity;archive.mkdir(parents=True,exist_ok=True)
                 write_json(archive/(str(old['revision'])+'.json'),old)
-                record={**old,'stage':payload['stage'],'body':str(payload.get('body',old['body']))[:20000],'revision':old['revision']+1,'updated_at':stamp()}
+                record={**old,'stage':payload['stage'],'body':str(payload.get('body',old['body']))[:20000],'revision':old['revision']+1,'updated_at':stamp(),
+                        'review':payload.get('review',old.get('review')),'settlement':payload.get('settlement',old.get('settlement')),'hypothesis':payload.get('hypothesis',old.get('hypothesis'))}  # feature 022: a card that ran still takes its review and settlement
                 write_json(path,record);return record
             if old and old['stage']=='running': raise ValueError('A dispatched proposal cannot be edited')
             title=str(payload.get('title','')).strip()
@@ -190,7 +195,8 @@ class Genesis:
             kept=old or {}
             record.update(question=payload.get('question',kept.get('question')),auto=bool(payload.get('auto',kept.get('auto',False))),work=payload.get('work',kept.get('work')),position=payload.get('position',kept.get('position')),
                           plan=payload.get('plan',kept.get('plan')),default=payload.get('default',kept.get('default')),blocks=payload.get('blocks',kept.get('blocks')),answer=payload.get('answer',kept.get('answer')),waiting=payload.get('waiting',kept.get('waiting')),brief=payload.get('brief',kept.get('brief')),
-                          hypothesis=payload.get('hypothesis',kept.get('hypothesis')),settlement=payload.get('settlement',kept.get('settlement')),review=payload.get('review',kept.get('review')))  # feature 022 records, kept whole
+                          hypothesis=payload.get('hypothesis',kept.get('hypothesis')),settlement=payload.get('settlement',kept.get('settlement')),review=payload.get('review',kept.get('review')),
+                          patch=payload.get('patch',kept.get('patch')),audience=payload.get('audience',kept.get('audience')))  # feature 022 records, kept whole
             # A queued card is a card the watcher will take: queued and not auto cannot both be true.
             if (record.get('work') or {}).get('status')=='queued' and record.get('kind') not in ('question','brief'): record['auto']=True
             body=record['body'];record['analysis']=payload.get('analysis') or (body.split(ANALYSIS_HEADING,1)[1].strip() if ANALYSIS_HEADING in body else kept.get('analysis'))
@@ -215,9 +221,11 @@ class Genesis:
         text=str(payload.get('text','')).strip()
         if not text or len(text)>20000: raise ValueError('Drop a link, a run id or a hypothesis up to 20,000 characters')
         if re.fullmatch(r'https?://\S+',text):
-            title,abstract=fetch_page(text)
+            from wb_studio.genesis_ingest import fetch_source
+            fetched=fetch_source(text)  # feature 022: the whole text, not 600 characters
+            title,abstract=fetched['title'],fetched['note']
             kind=_source_type(text);kind='blog' if kind=='other' else kind
-            source=self.library.add({'title':title or text,'url':text,'source_type':kind,'abstract':abstract})
+            source=self.library.add({'title':title or text,'url':text,'source_type':kind,'abstract':abstract,'original':fetched['text'] or None})
             return self.intake('source',source['title'],text,[{'kind':'library','id':source['id']}],payload)
         if re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',text):
             try: job=self.studio.job(text)
@@ -273,102 +281,6 @@ class Genesis:
         process=self.active.get(work.get('turn'))
         if process is not None and process.poll() is None: process.kill()
         return card
-    def decline(self,identity,payload):
-        """A person declines a plan or a card waiting in Needs you; the card closes with the reason on it."""
-        reason=str(payload.get('reason') or '').strip()[:600]
-        by=payload.get('by') or 'human:studio'
-        with self.lock:
-            card=self.read('cards',identity)
-            if card.get('job'): raise ValueError('This experiment already ran; write the verdict instead')
-            work=card.get('work') or {}
-            if work.get('status') in ('queued','working','waiting'): work.update(status='stopped',finished_at=stamp());card['work']=work
-            card.update(stage='complete',waiting=None,decision={'outcome':'declined','by':by,'at':stamp(),'reason':reason},revision=card['revision']+1,updated_at=stamp())
-            write_json(self.path('cards',identity),card)
-        process=self.active.get((card.get('work') or {}).get('turn'))
-        if process is not None and process.poll() is None: process.kill()
-        self.autonomy.record('declined',card=identity,reason=reason[:200],by=by)
-        return card
-    def work_now(self,identity):
-        """A person asks for a queued card to be worked at once, under the same allowances the watcher applies."""
-        card=self.read('cards',identity)
-        if (card.get('work') or {}).get('status')!='queued': raise ValueError('Only a queued card can be worked now')
-        if self.autonomy.read()['paused']: raise ValueError('Genesis is paused; turn it back on first')
-        if self.watcher._cards('working'): raise ValueError('Genesis is already working on a card; it takes this one next')
-        reason=self.watcher.refusal()
-        if reason: raise ValueError(reason)
-        return self.work(card)
-    def stop_turn(self,identity):
-        """A person stops a running turn; the turn is recorded as failed with the reason."""
-        turn=self.read('turns',identity)
-        if turn.get('status')!='running': return turn
-        process=self.active.get(identity)
-        if process is not None and process.poll() is None: process.kill()
-        self.event(identity,'failed',message='Stopped by a person')
-        return self.read('turns',identity)
-    def decline(self,identity,payload):
-        """A person declines a plan or a card waiting in Needs you; the card closes with the reason on it."""
-        reason=str(payload.get('reason') or '').strip()[:600]
-        by=payload.get('by') or 'human:studio'
-        with self.lock:
-            card=self.read('cards',identity)
-            if card.get('job'): raise ValueError('This experiment already ran; write the verdict instead')
-            work=card.get('work') or {}
-            if work.get('status') in ('queued','working','waiting'): work.update(status='stopped',finished_at=stamp());card['work']=work
-            card.update(stage='complete',waiting=None,decision={'outcome':'declined','by':by,'at':stamp(),'reason':reason},revision=card['revision']+1,updated_at=stamp())
-            write_json(self.path('cards',identity),card)
-        process=self.active.get((card.get('work') or {}).get('turn'))
-        if process is not None and process.poll() is None: process.kill()
-        self.autonomy.record('declined',card=identity,reason=reason[:200],by=by)
-        return card
-    def work_now(self,identity):
-        """A person asks for a queued card to be worked at once, under the same allowances the watcher applies."""
-        card=self.read('cards',identity)
-        if (card.get('work') or {}).get('status')!='queued': raise ValueError('Only a queued card can be worked now')
-        if self.autonomy.read()['paused']: raise ValueError('Genesis is paused; turn it back on first')
-        if self.watcher._cards('working'): raise ValueError('Genesis is already working on a card; it takes this one next')
-        reason=self.watcher.refusal()
-        if reason: raise ValueError(reason)
-        return self.work(card)
-    def stop_turn(self,identity):
-        """A person stops a running turn; the turn is recorded as failed with the reason."""
-        turn=self.read('turns',identity)
-        if turn.get('status')!='running': return turn
-        process=self.active.get(identity)
-        if process is not None and process.poll() is None: process.kill()
-        self.event(identity,'failed',message='Stopped by a person')
-        return self.read('turns',identity)
-    def decline(self,identity,payload):
-        """A person declines a plan or a card waiting in Needs you; the card closes with the reason on it."""
-        reason=str(payload.get('reason') or '').strip()[:600]
-        by=payload.get('by') or 'human:studio'
-        with self.lock:
-            card=self.read('cards',identity)
-            if card.get('job'): raise ValueError('This experiment already ran; write the verdict instead')
-            work=card.get('work') or {}
-            if work.get('status') in ('queued','working','waiting'): work.update(status='stopped',finished_at=stamp());card['work']=work
-            card.update(stage='complete',waiting=None,decision={'outcome':'declined','by':by,'at':stamp(),'reason':reason},revision=card['revision']+1,updated_at=stamp())
-            write_json(self.path('cards',identity),card)
-        process=self.active.get((card.get('work') or {}).get('turn'))
-        if process is not None and process.poll() is None: process.kill()
-        self.autonomy.record('declined',card=identity,reason=reason[:200],by=by)
-        return card
-    def work_now(self,identity):
-        """A person asks for a queued card to be worked at once, under the same allowances the watcher applies."""
-        card=self.read('cards',identity)
-        if (card.get('work') or {}).get('status')!='queued': raise ValueError('Only a queued card can be worked now')
-        if self.autonomy.read()['paused']: raise ValueError('Genesis is paused; turn it back on first')
-        if self.watcher._cards('working'): raise ValueError('Genesis is already working on a card; it takes this one next')
-        reason=self.watcher.refusal()
-        if reason: raise ValueError(reason)
-        return self.work(card)
-    def stop_turn(self,identity):
-        """A person stops a running turn; the turn is recorded as failed with the reason."""
-        turn=self.read('turns',identity)
-        if turn.get('status')!='running': return turn
-        process=self.active.get(identity)
-        if process is not None and process.poll() is None: process.kill()
-        self.event(identity,'failed',message='Stopped by a person')
-        return self.read('turns',identity)
     def decline(self,identity,payload):
         """A person declines a plan or a card waiting in Needs you; the card closes with the reason on it."""
         reason=str(payload.get('reason') or '').strip()[:600]
@@ -527,7 +439,8 @@ class Genesis:
     def chat(self,payload):
         from wb_studio.genesis_harness import start_turn, model_routes
         text=str(payload.get('message','')).strip()
-        if not text or len(text)>16000: raise ValueError('Write a message up to 16,000 characters')
+        limit=220000 if str(payload.get('purpose') or '').startswith('Genesis extraction') else 16000  # a whole source fits an extraction turn
+        if not text or len(text)>limit: raise ValueError('Write a message up to '+format(limit,',')+' characters')
         routes=model_routes()
         model=next((r for r in routes if r['id']==payload.get('model')),None) if payload.get('model') else self.config.route_for('chat',routes=routes)
         if not model or not model['available']: raise ValueError('Choose an available Genesis model route')
@@ -540,12 +453,53 @@ class Genesis:
         identity=payload.get('id') or uuid.uuid4().hex
         if self.path('turns',identity).exists(): raise ValueError('This turn id is already taken')
         purpose=str(payload.get('purpose') or 'Genesis conversation')
+        thread=self.thread_for(payload,text) if purpose=='Genesis conversation' else None
         self.studio.ledger.reserve_run('genesis-'+identity,maximum,metadata={'purpose':purpose,'model':model['id'],'by':'person' if purpose=='Genesis conversation' else 'genesis'})
-        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose}
+        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'thread':thread['id'] if thread else None,'by':payload.get('by') or 'human:studio'}
         write_json(self.path('turns',identity),turn)
+        if thread:
+            with self.lock:
+                thread=self.read('threads',thread['id']);thread['turns'].append(identity);thread['updated_at']=stamp();write_json(self.path('threads',thread['id']),thread)
         self.autonomy.record('turn',card=payload.get('card'),turn=identity,model=model['id'],purpose=purpose,maximum_usd=str(maximum))
         threading.Thread(target=start_turn,args=(self,turn),daemon=True).start()
         return turn
+    # ---- threads: a conversation belongs to a person and keeps its turns in order (feature 022, lane B) ----
+    def thread_for(self,payload,text):
+        """The thread named in the payload, or a new one titled by the first message."""
+        (self.root/'threads').mkdir(exist_ok=True)
+        wanted=payload.get('thread')
+        if wanted:
+            path=self.path('threads',wanted)
+            if path.exists(): return self.read('threads',wanted)
+        identity=wanted if wanted and re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',str(wanted)) else uuid.uuid4().hex
+        thread={'id':identity,'owner':payload.get('by') or 'human:studio','title':(text.splitlines()[0] if text else 'Conversation')[:80],'created_at':stamp(),'updated_at':stamp(),'turns':[],'card':payload.get('card')}
+        write_json(self.path('threads',identity),thread)
+        return thread
+    def threads(self,owner=None):
+        """A person's conversations, newest first, with the count of turns."""
+        out=[]
+        for t in self.listing('threads'):
+            if owner and t.get('owner')!=owner: continue
+            out.append({**t,'turn_count':len(t.get('turns',[]))})
+        return sorted(out,key=lambda t:t.get('updated_at',''),reverse=True)
+    def thread(self,identity):
+        """One thread with its turns in order."""
+        t=self.read('threads',identity)
+        turns=[]
+        for tid in t.get('turns',[]):
+            try: turns.append(self.read('turns',tid))
+            except (FileNotFoundError,ValueError): continue
+        return {**t,'turns':turns}
+    def card_history(self,identity):
+        """Every earlier revision of a card, oldest first: revision, stage, title, when."""
+        folder=self.root/'card-history'/identity
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',str(identity)) or not folder.exists(): return []
+        rows=[]
+        for path in sorted(folder.glob('*.json'),key=lambda p:int(p.stem) if p.stem.isdigit() else 0):
+            try: old=json.loads(path.read_text(encoding='utf8'))
+            except ValueError: continue
+            rows.append({'revision':old.get('revision'),'stage':old.get('stage'),'title':old.get('title'),'updated_at':old.get('updated_at'),'work':(old.get('work') or {}).get('status')})
+        return rows
     def tool(self,action,payload):
         # Model-facing capabilities intentionally exclude approval and paid launch.
         from wb_studio import blueprints, code_index, product_graphs
@@ -605,6 +559,10 @@ class Genesis:
             out=self.skills.remove(payload.get('name'));self.autonomy.record('skill-removed',name=out['name'],by='genesis');return out
         if action=='ask_question': return self.ask_question(payload)
         if action=='activity': return self.autonomy.tail(int(payload.get('limit',50)),payload.get('card'))
+        if action=='record_search':
+            from wb_studio import genesis_memory_suite
+            try: return genesis_memory_suite.record_search(self,payload)  # feature 022: words and meaning, each hit saying why
+            except (ValueError,FileNotFoundError) as exc: return {'error':str(exc)}
         if action in MEMORY_ACTIONS:
             try: return MEMORY_ACTIONS[action](self.memory,payload)
             except (MemoryFull,ValueError,FileNotFoundError) as exc: return {'error':str(exc)}

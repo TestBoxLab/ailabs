@@ -55,6 +55,7 @@ def fake_turn(genesis, turn):
 def test_drop_classifies_link_run_id_and_free_text(genesis, monkeypatch):
     genesis.studio.jobs.return_value = JOBS
     monkeypatch.setattr('wb_studio.genesis_watcher.fetch_page', lambda url, timeout=10: ('Attention is all you need', 'Abstract text') if 'arxiv' in url else (None, ''))
+    monkeypatch.setattr('wb_studio.genesis_ingest.fetch_source', lambda url, timeout=20: {'title': 'Attention is all you need', 'text': 'Full text', 'kind': 'paper', 'note': 'Abstract text'} if 'arxiv' in url else {'title': None, 'text': '', 'kind': 'other', 'note': ''})  # feature 022: a drop fetches the whole source, never the network in tests
     source = genesis.drop({'text': 'https://arxiv.org/abs/1706.03762'})
     record = genesis.library.read(source['evidence'][0]['id'])
     assert source['kind'] == 'source' and source['title'] == 'Attention is all you need'

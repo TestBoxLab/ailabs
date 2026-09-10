@@ -6,7 +6,7 @@ const fmtPct = v => v === null || v === undefined ? '—' : Math.round(v * 100) 
 // Three significant figures below a dollar, cents above: $0.0284, $0.107, $1.26.
 const fmtMoney = v => v === null || v === undefined ? 'unknown' : v === 0 ? '$0.00' : v >= 1 ? '$' + v.toFixed(2) : '$' + Number(v.toPrecision(3)).toString();
 const fmtDate = s => s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-const trackWords = t => t === 'create-and-run' ? 'Workflow building' : 'Agentic requests';
+const trackWords = t => t === 'create-and-run' ? 'Workflow configuration' : 'Agentic requests';
 const gradeClass = g => ({ Improvement: 'improvement', Regression: 'regression', Tradeoff: 'tradeoff', Tie: 'tie', Undecided: 'undecided' }[g] || 'none');
 const meta = parts => '<p class="meta">' + parts.filter(Boolean).map(esc).join('<span class="sep">·</span>') + '</p>';
 const gradeBadge = g => '<span class="grade ' + gradeClass(g.grade) + '">' + esc(g.grade) + '</span>';
@@ -59,12 +59,12 @@ function renderReportsIndex(data) {
   const row = round => {
     const best = round.best ? '<strong>' + esc(round.best.name) + '</strong> passed ' + round.best.passed + ' of ' + round.best.attempts + ' (' + fmtPct(round.best.rate) + ')' : 'No evaluated attempts';
     const comparable = round.grade && round.grade.grade !== 'Not comparable';
-    return '<tr class="round-card"><td class="round-lead">' + (comparable ? gradeBadge(round.grade) : '') + '<span>' + best + '</span>' + (comparable ? '<span class="meta">' + esc(round.grade.reason) + '</span>' : '') + '</td>' +
+    return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status]) + '</li>').join('') + '</ul></td>' +
+      '<td class="round-lead">' + (comparable ? gradeBadge(round.grade) : '') + '<span>' + best + '</span>' + (comparable ? '<span class="meta">' + esc(round.grade.reason) + '</span>' : '') + '</td>' +
       '<td>' + round.task_count + ' ' + (round.task_count === 1 ? 'task' : 'tasks') + '<br><span class="meta">' + esc(trackWords(round.track)) + ' · ' + round.setups + (round.setups === 1 ? ' setup' : ' setups') + '</span></td>' +
-      '<td><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status]) + '</li>').join('') + '</ul></td>' +
-      '<td class="num"><a href="#round/' + encodeURIComponent(round.id) + audienceQuery() + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
+      '<td class="action"><a href="#round/' + encodeURIComponent(round.id) + audienceQuery() + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
   };
-  const table = rows => '<table class="table reports-table"><thead><tr><th>Result</th><th>Task set</th><th>Runs</th><th class="num">Report</th></tr></thead><tbody>' + rows.map(row).join('') + '</tbody></table>';
+  const table = rows => '<table class="table reports-table"><thead><tr><th>Runs</th><th>Result</th><th>Task set</th><th class="num">Report</th></tr></thead><tbody>' + rows.map(row).join('') + '</tbody></table>';
   const benchmark = data.rounds.filter(r => r.full_benchmark), other = data.rounds.filter(r => !r.full_benchmark);
   box.innerHTML = '<div class="reports-toolbar">' + audienceToggle() + '</div>' +
     (benchmark.length ? '<h2 class="reports-group">Benchmark rounds</h2>' + table(benchmark) : '') +

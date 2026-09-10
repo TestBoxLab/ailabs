@@ -50,7 +50,8 @@ def test_skills_are_bounded_scanned_and_enter_the_prompt_by_kind(genesis, monkey
     assert kinds[0] == 'skill-removed' and kinds.count('skill') == 1
 
 
-def test_finished_run_requeues_a_planned_card_for_its_verdict(genesis):
+def test_finished_run_requeues_a_planned_card_for_its_verdict(genesis, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # feature 022's Reviewer chamber is not what this test is about
     out = genesis.tool('propose_experiment', {'title': 'Two tasks', 'tasks': ['t1', 't2'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'})
     assert out['launched'] is True
     genesis.studio.job.return_value = {'id': 'run-1', 'status': 'completed', 'results': []}
@@ -97,7 +98,8 @@ def test_skill_routes(tmp_path, monkeypatch):
         assert status == 200 and json.loads(body)['removed'] is True
 
 
-def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason(genesis):
+def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason(genesis, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # feature 022's Reviewer chamber is not what this test is about
     genesis.autonomy.set({'runs': 'propose'})
     out = genesis.tool('propose_experiment', {'title': 'Big', 'tasks': ['t1'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'})
     card = genesis.read('cards', out['card'])
@@ -118,68 +120,3 @@ def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
     monkeypatch.setattr(genesis, 'work', lambda card: {'id': 'turn-x', 'card': card['id']})
     assert genesis.work_now(dropped['id'])['id'] == 'turn-x'
 
-
-def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason(genesis):
-    genesis.autonomy.set({'runs': 'propose'})
-    out = genesis.tool('propose_experiment', {'title': 'Big', 'tasks': ['t1'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'})
-    card = genesis.read('cards', out['card'])
-    assert card['stage'] == 'approval' and not card.get('job')
-    closed = genesis.decline(card['id'], {'reason': 'Not this week', 'by': 'human:lucas'})
-    assert closed['stage'] == 'complete' and closed['decision']['outcome'] == 'declined' and closed['decision']['reason'] == 'Not this week'
-    assert [e['kind'] for e in genesis.autonomy.tail(1)] == ['declined']
-    with pytest.raises(ValueError):
-        genesis.work_now(card['id'])
-
-
-def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
-    dropped = genesis.drop({'text': 'A sentence to work.'})
-    genesis.autonomy.set({'paused': True})
-    with pytest.raises(ValueError, match='paused'):
-        genesis.work_now(dropped['id'])
-    genesis.autonomy.set({'paused': False})
-    monkeypatch.setattr(genesis, 'work', lambda card: {'id': 'turn-x', 'card': card['id']})
-    assert genesis.work_now(dropped['id'])['id'] == 'turn-x'
-
-
-def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason(genesis):
-    genesis.autonomy.set({'runs': 'propose'})
-    out = genesis.tool('propose_experiment', {'title': 'Big', 'tasks': ['t1'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'})
-    card = genesis.read('cards', out['card'])
-    assert card['stage'] == 'approval' and not card.get('job')
-    closed = genesis.decline(card['id'], {'reason': 'Not this week', 'by': 'human:lucas'})
-    assert closed['stage'] == 'complete' and closed['decision']['outcome'] == 'declined' and closed['decision']['reason'] == 'Not this week'
-    assert [e['kind'] for e in genesis.autonomy.tail(1)] == ['declined']
-    with pytest.raises(ValueError):
-        genesis.work_now(card['id'])
-
-
-def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
-    dropped = genesis.drop({'text': 'A sentence to work.'})
-    genesis.autonomy.set({'paused': True})
-    with pytest.raises(ValueError, match='paused'):
-        genesis.work_now(dropped['id'])
-    genesis.autonomy.set({'paused': False})
-    monkeypatch.setattr(genesis, 'work', lambda card: {'id': 'turn-x', 'card': card['id']})
-    assert genesis.work_now(dropped['id'])['id'] == 'turn-x'
-
-
-def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason(genesis):
-    genesis.autonomy.set({'runs': 'propose'})
-    out = genesis.tool('propose_experiment', {'title': 'Big', 'tasks': ['t1'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'})
-    card = genesis.read('cards', out['card'])
-    assert card['stage'] == 'approval' and not card.get('job')
-    closed = genesis.decline(card['id'], {'reason': 'Not this week', 'by': 'human:lucas'})
-    assert closed['stage'] == 'complete' and closed['decision']['outcome'] == 'declined' and closed['decision']['reason'] == 'Not this week'
-    assert [e['kind'] for e in genesis.autonomy.tail(1)] == ['declined']
-    with pytest.raises(ValueError):
-        genesis.work_now(card['id'])
-
-
-def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
-    dropped = genesis.drop({'text': 'A sentence to work.'})
-    genesis.autonomy.set({'paused': True})
-    with pytest.raises(ValueError, match='paused'):
-        genesis.work_now(dropped['id'])
-    genesis.autonomy.set({'paused': False})
-    monkeypatch.setattr(genesis, 'work', lambda card: {'id': 'turn-x', 'card': card['id']})
-    assert genesis.work_now(dropped['id'])['id'] == 'turn-x'

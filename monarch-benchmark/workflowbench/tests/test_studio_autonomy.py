@@ -61,7 +61,8 @@ def test_plan_lines_are_computed_by_the_studio(genesis):
         plan_lines(genesis.studio, {**SMOKE, 'maximum_usd': '0'})
 
 
-def test_smoke_plan_launches_itself_and_is_recorded(genesis):
+def test_smoke_plan_launches_itself_and_is_recorded(genesis, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # the Reviewer chamber (feature 022) has its own tests
     out = genesis.tool('propose_experiment', {**SMOKE, 'body': 'A hypothesis.'})
     assert out['launched'] is True and out['job'] == 'run-accepted' and out['stage'] == 'running'
     card = genesis.read('cards', out['card'])
@@ -72,7 +73,8 @@ def test_smoke_plan_launches_itself_and_is_recorded(genesis):
     assert kinds[:3] == ['launch', 'plan', 'card'] or set(kinds) >= {'launch', 'plan', 'card'}
 
 
-def test_plan_above_smoke_or_under_propose_waits_for_a_person(genesis):
+def test_plan_above_smoke_or_under_propose_waits_for_a_person(genesis, monkeypatch):
+    monkeypatch.setattr('wb_studio.genesis_plugins.gate_launch', lambda g, c: (True, None))  # the Reviewer chamber (feature 022) has its own tests
     big = {**SMOKE, 'tasks': [f't{i}' for i in range(21)]}
     out = genesis.tool('propose_experiment', big)
     assert out['launched'] is False and 'above smoke scale' in out['reason']

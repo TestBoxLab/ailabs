@@ -225,3 +225,24 @@ def test_manifest_provenance_hashes_current_sources_and_records_dependency_versi
     assert after["source_sha256"]["grader/grade.py"] == hashlib.sha256(b"uncommitted repair").hexdigest()
     assert before["source_sha256"]["grader/grade.py"] != after["source_sha256"]["grader/grade.py"]
     assert set(after["source_sha256"]) == set(sources)
+
+
+def test_write_json_waits_out_a_windows_reader(tmp_path, monkeypatch):
+    """A reader holding the target open makes os.replace fail once on Windows; the write retries."""
+    import os
+    from wb_results import evidence
+    calls = {"n": 0}
+    real = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError(5, "Access denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(evidence.os, "name", "nt")
+    monkeypatch.setattr(evidence.os, "replace", flaky)
+    evidence.write_json(tmp_path / "job.json", {"ok": True})
+    assert json.loads((tmp_path / "job.json").read_text(encoding="utf-8")) == {"ok": True}
+    assert calls["n"] == 2
+
