@@ -135,12 +135,15 @@ each stage hands its artifact to the next:
 
 ### Benchmark-specific rules (constitution §III–§V)
 
-- **Lucas approves paid rounds (decision D5, 8 Sep 2026).** A launch by Lucas
-  runs at once; a launch by Carlos, or anyone else, creates an approval request
+- **A human approves paid rounds (decision D5, 8 Sep 2026; approver widened by
+  Carlos, 9 Sep 2026).** Either Carlos or Lucas may approve; a launch by the
+  approver runs at once, any other launch creates an approval request
   (`wb approvals`) and waits for `wb approve <id>`, then runs with
   `wb run ... --request <id>`. Smoke scale (at most 20 attempts per competitor)
   and `wb doctor` need no record. Every paid launch names its operator
   (`WB_OPERATOR`). Before any `wb run`, state the number of attempts and a cost band.
+  An agent never approves its own round: the name on the approval is the person
+  who asked for it.
 - **The weekly ledger is the spending gate.** US$ 300 per calendar week
   (`research/budget.sqlite3`, Monday 00:00 America/Sao_Paulo): every paid
   request is reserved for its maximum before it is sent and settled from the
