@@ -117,3 +117,19 @@ are not fetched for the Activity lane.
 - The lab set of 8 Sep was generated with the front door pinned to
   `http://host.docker.internal:9105` because `FRONT_DOOR_URL` is empty offline;
   regenerate with the lab instance's real front door before importing (T5.3).
+- The vendored AutomationBench on this machine is plain `1.0.6`, while
+  `tasks/achievable-50-manifest.yaml` declares `1.0.6+evalrepair.10`. The tests
+  pass because `conftest.upstream_world` pins the installed world to the
+  constant, but a real `wb run` over `achievable-50` would stop at the
+  world-revision guard. Re-vendoring needs Lucas's patched source tree, which is
+  not on this machine: `scripts/vendor_automation_bench.py --source <tree>
+  --expect-version 1.0.6+evalrepair.10 --tree-id <id> --replace`, then `uv lock`
+  and `uv sync`. The four tier sets and `check-collateral` declare no world
+  revision, so they run unaffected. Seen 10 Sep 2026.
+- `test_studio_runtime_controls.py::test_single_host_owner_excludes_other_process_and_releases_lock`
+  fails on this machine: it spawns a subprocess with a 10 s timeout, and
+  importing `wb_studio.runtime` alone takes 9.4 s here (measured), so the
+  contender is killed before it can report the lock it correctly failed to take.
+  The lock itself is fine; the margin is not. Raising the subprocess timeout, or
+  importing less at module scope, would fix it. Lucas's test (bd2f2fa). Seen
+  10 Sep 2026.

@@ -948,7 +948,7 @@ class _ReadOnlyStore:
 
     A live round may be writing to `out/wb.sqlite3` while this test reads it, so
     this never opens the file read-write: `Store()` would set `journal_mode=WAL`
-    and run its schema DDL, which is a write. Only the two methods `build_report`
+    and run its schema DDL, which is a write. Only the methods `build_report`
     calls are implemented; anything else is deliberately absent so a future test
     cannot quietly start writing through this class.
 
@@ -971,6 +971,11 @@ class _ReadOnlyStore:
     def run(self, run_id):
         r = self._conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return dict(r) if r else None
+
+    def artifacts(self, episode_id):
+        """The third query a page needs, as the docstring above invites."""
+        return {r["kind"]: r["uri"] for r in self._conn.execute(
+            "SELECT kind, uri FROM artifacts WHERE episode_id=?", (episode_id,))}
 
     def episodes(self, suite=None, arm=None, run=None):
         q, args = "SELECT row_json FROM episodes WHERE 1=1", []
