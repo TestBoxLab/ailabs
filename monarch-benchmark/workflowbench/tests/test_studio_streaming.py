@@ -58,7 +58,8 @@ def test_public_deltas_and_fragmented_tools_preserve_private_continuation(adapte
     result = adapter.turn(messages, timeout=17)
     assert [call.args[0] for call in adapter.on_text.call_args_list] == ['Reading ', 'catalog.']
     assert result == {'tool_calls': [{'id': 'call_7', 'name': 'catalog', 'args': {'query': 'active'}}],
-                      'text': 'Reading catalog.', 'prompt_tokens': 100, 'output_tokens': 20,
+                      'text': 'Reading catalog.', 'reasoning': ['private continuation'], 'stop_reason': 'tool_calls',
+                      'prompt_tokens': 100, 'output_tokens': 20,
                       'cached_tokens': 31, 'cache_source': 'prompt_tokens_details.cached_tokens'}
     assert messages[-1]['reasoning_content'] == 'private continuation'
     assert messages[-1]['tool_calls'][0]['function'] == {'name': 'catalog', 'arguments': '{"query":"active"}'}

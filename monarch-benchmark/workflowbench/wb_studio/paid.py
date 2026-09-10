@@ -167,7 +167,7 @@ class PaidGateway:
             'contents': contents,
             'systemInstruction': {'parts': [{'text': system}]},
             'generationConfig': {'candidateCount': 1, 'maxOutputTokens': self.max_output_tokens,
-                                 'responseModalities': ['TEXT'], 'thinkingConfig': {'thinkingLevel': self.thinking_level}},
+                                 'responseModalities': ['TEXT'], 'thinkingConfig': {'thinkingLevel': self.thinking_level, 'includeThoughts': True}},
         }
         if tools:
             payload['tools'] = tools

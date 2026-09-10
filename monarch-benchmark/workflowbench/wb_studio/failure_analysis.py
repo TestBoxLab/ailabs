@@ -1,6 +1,7 @@
 """Read-only, deterministic outcome diagnostics; never a causal model review."""
 from collections import Counter, defaultdict
 
+from wb_studio.narrative import run_story
 from wb_studio.reports import outcome_report
 
 
@@ -62,9 +63,16 @@ def _attempt(result, trace, report, index):
         verdict = "Passed" if check["passed"] is True else "Failed" if check["passed"] is False else "Not evaluated"
         facts.append({"text": verdict + ": " + check["title"], "event_ids": finish_ids,
                       "check_names": [check["name"]], "check_index": check["check_index"], "source": "result.checks"})
-    for change in report["change_summaries"]:
+    writes = [a for a in report["actions"] if a.get("method") not in (None, "GET")]
+    for change, raw in zip(report["change_summaries"], report["unexpected_changes"]):
         facts.append({"text": change, "event_ids": finish_ids,
                       "check_names": ["allowed_changes_only"], "source": "result.unexpected_changes"})
+        suspects = [w for w in writes if str(raw.get("service", "")).split("_")[0].lower() in str(w.get("url", "")).lower()] or writes
+        if suspects:
+            facts.append({"text": "Writes that could have made this change: " + "; ".join(
+                              f'{w["method"]} {w["url"]}' for w in suspects) + ".",
+                          "event_ids": [w["event_id"] for w in suspects], "check_names": ["allowed_changes_only"],
+                          "source": "trace.api_fetch"})
     errors = [e for e in trace if e["type"] == "attempt_error" or
               (e["type"] in ("node_finished", "model_finished", "step_finished") and e.get("status") == "error")]
     first = errors[0] if errors else next((e for e in trace if e["type"] == "attempt_finished" and not result["passed"]), None)
@@ -97,7 +105,7 @@ def _attempt(result, trace, report, index):
     return {"id": "attempt-" + str(index + 1), "task": result["task"], "model": result["model"],
             "passed": result["passed"], "infrastructure": report["infrastructure"], "bucket": bucket,
             "headline": headline, "narrative": narrative, "termination": result["termination"],
-            "checks": checks, "observed_facts": facts, "earliest_supported_evidence": earliest,
+            "checks": checks, "observed_facts": facts, "earliest_supported_evidence": earliest, "story": report.get("story"),
             "event_ids": [e["id"] for e in trace], "causal_hypotheses": [], "limitations": LIMITATION}
 
 
@@ -148,4 +156,4 @@ def analysis(studio, identity):
                              "percent_all": "All recorded attempts, including successes and infrastructure interruptions",
                              "unrecorded_attempts": "Planned attempts without saved results; excluded from outcome percentages"},
             "classification_policy": "One bucket per failed attempt: explicit budget/timeout, infrastructure, scope violation, unmet requirement, then unclassified. These are outcome categories, not causal attributions.",
-            "buckets": buckets, "attempts": attempts, "limitations": LIMITATION}
+            "buckets": buckets, "attempts": attempts, "limitations": LIMITATION, "story": run_story(attempts)}

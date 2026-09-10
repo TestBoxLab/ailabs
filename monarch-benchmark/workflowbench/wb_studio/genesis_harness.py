@@ -69,7 +69,12 @@ def codex_binary():
 
 
 def model_routes():
-    return [{'id':p.key,'name':p.model_id,'provider':p.family or p.adapter,'harness':'Codex','available':bool(codex_binary() and providers.api_key(p)), 'verification':'Live provider route not yet verified', 'efforts':list(EFFORTS[p.adapter]) or ['default']} for p in providers.REGISTRY.values()]
+    # `available` is what a turn needs: the key and the Codex CLI. `keyed` and `harness_ready`
+    # are the two facts apart, so the configuration page can say which one is missing.
+    ready = bool(codex_binary())
+    return [{'id':p.key,'name':p.model_id,'provider':p.family or p.adapter,'harness':'Codex','available':bool(ready and providers.api_key(p)),
+             'keyed':bool(providers.api_key(p)),'harness_ready':ready,
+             'verification':'Live provider route not yet verified', 'efforts':list(EFFORTS[p.adapter]) or ['default']} for p in providers.REGISTRY.values()]
 
 
 def build_prompt(genesis,turn):

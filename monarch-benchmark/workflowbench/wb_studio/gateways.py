@@ -193,7 +193,9 @@ class GeminiGateway:
         prompt = usage.get("promptTokenCount", 0)
         candidates = usage.get("candidatesTokenCount", 0)
         thoughts = usage.get("thoughtsTokenCount", max(0, usage.get("totalTokenCount", 0) - prompt - candidates))
-        return {"text": text or None, "tool_calls": calls, "prompt_tokens": prompt, "output_tokens": candidates + thoughts,
+        reasoning = [p["text"] for p in parts if p.get("thought") and isinstance(p.get("text"), str)]
+        return {"text": text or None, "tool_calls": calls, "reasoning": reasoning, "stop_reason": candidate.get("finishReason"),
+                "prompt_tokens": prompt, "output_tokens": candidates + thoughts,
                 "cached_tokens": usage.get("cachedContentTokenCount", 0) or 0, "cache_write_tokens": 0,
                 "finish_reason": candidate.get("finishReason"), "raw": reply, "_billing": reply.get("_billing", {})}
 
