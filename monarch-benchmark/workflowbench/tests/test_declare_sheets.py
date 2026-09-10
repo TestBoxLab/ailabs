@@ -229,10 +229,17 @@ def test_the_correct_answer_now_passes_the_sheets_rule(name):
         sheets, [m for m in d["expected"] if m["service"] == "google_sheets"],
         [m for m in d["allowed"] if m["service"] == "google_sheets"])
     assert inv["passed"], inv
-    # and the rule that shipped could not: it named a subtree nothing touches
-    old = [m for m in task["info"]["expected_changes"]
-           if m["service"] == "google_sheets"]
-    assert not check_invariant(sheets, old, [])["passed"], old
+    # and the shape that shipped before could not: it named the spreadsheet
+    # subtree, which the loader empties when it flattens rows into their own
+    # collection. Written out rather than read from the task, because the task
+    # files have since been re-derived and no longer carry it.
+    spreadsheet_id = next(iter(
+        m["where"]["spreadsheet_id"] for m in d["expected"]
+        if m["service"] == "google_sheets" and (m.get("where") or {}).get("spreadsheet_id")), None)
+    if spreadsheet_id:
+        broken = [{"service": "google_sheets", "op": "*",
+                   "path": f"google_sheets.spreadsheets[id={spreadsheet_id}]*"}]
+        assert not check_invariant(sheets, broken, [])["passed"], broken
 
 
 def _m(matcher: dict, change: dict) -> bool:
