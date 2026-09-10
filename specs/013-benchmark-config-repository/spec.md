@@ -15,7 +15,7 @@ No Git submodule or deployment on each configuration save is required.
 
 ## User scenarios and acceptance
 
-### US1 — Read and edit the shared configuration (P1)
+### US1 â€” Read and edit the shared configuration (P1)
 
 Carlos opens Studio Settings, browses plans, models, harnesses, products and
 supporting configuration files, edits YAML and reviews the diff before saving.
@@ -27,7 +27,7 @@ supporting configuration files, edits YAML and reviews the diff before saving.
 4. Invalid configuration produces file/field errors and no branch update.
 5. A remote edit is visible on refresh without redeploying Studio.
 
-### US2 — Run a plan from an immutable revision (P1)
+### US2 â€” Run a plan from an immutable revision (P1)
 
 Carlos selects a product and plan in Studio or the CLI. Both use the same
 configuration resolution, validation and execution semantics for that plan.
@@ -41,7 +41,7 @@ configuration resolution, validation and execution semantics for that plan.
 5. Missing runtime capabilities, credentials, task versions or approval records
    remain refusals. Merely saving or synchronizing never launches paid work.
 
-### US3 — Migrate and recover without changing the benchmark (P2)
+### US3 â€” Migrate and recover without changing the benchmark (P2)
 
 1. All current config artifacts migrate with identical bytes and a manifest.
 2. Tasks, corpus, AutomationBench, secrets, results and ledger are not migrated.
@@ -136,3 +136,18 @@ outside `config/` are outside this migration.
 - `scripts/studio-entrypoint.sh`: one-time persistent-volume seed, not config sync.
 - `specs/001-declarative-benchmark-config/`: existing configuration contracts.
 - Constitution and Carlos's final upstream-data preservation ruling remain binding.
+
+## Operational extension: offline immutable source
+
+Carlos requested the complete tier-simple plan and prioritized hosted UI results
+with a local evidence copy while repository-token approval is pending. The
+existing worker path cannot preserve that plan's scripted reference competitor,
+retries and execution settings. Use the existing configured-plan executor on the
+host with an explicitly selected, read-only manifest copied from the authorized
+local configuration checkout. `WB_CONFIG_SNAPSHOT` points to that manifest;
+existing repository/commit/file hashes and cache validation remain authoritative.
+Missing, changed or invalid source refuses to load; there is no network fallback.
+Saving is disabled in this mode. Removing the explicit setting restores ordinary
+repository mode. Approval, billing, budget, task and Monarch checks are unchanged.
+The run must be launched through the browser and retained in the hosted UI, with
+SQLite, trajectories and spreadsheet-readable metrics copied locally afterward.
