@@ -15,6 +15,7 @@ from wb_studio.genesis_provider import response_inputs
 
 
 @pytest.mark.parametrize('model', ['gpt-5.6-sol', 'claude-opus-5', 'gemini-3.7-flash', 'kimi-k3'])
+@pytest.mark.skipif(not harness.codex_binary(), reason='Requires an installed Codex CLI; provider completions remain offline')
 def test_installed_codex_roundtrips_scoped_mcp_tool_through_sse(tmp_path, monkeypatch, model):
     requests, events, processes, actions = [], [], [], []
     usage = dict(prompt_tokens=100, cached_tokens=0, cache_write_tokens=0, output_tokens=20)

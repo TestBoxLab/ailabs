@@ -12,7 +12,6 @@ pilot plan runs offline beside the answer key.
 from __future__ import annotations
 
 import json
-import socket
 import subprocess
 import threading
 import time
@@ -124,9 +123,7 @@ def test_completed_attempt(site, repo):
     assert result.phases["authoring"].wall_clock_s > 0
     assert result.phases["execution"].wall_clock_s > 0
     # The front door let go of its fixed port.
-    s = socket.socket()
-    s.bind(("0.0.0.0", port))
-    s.close()
+    free(port)
 
 
 # -- T027/T028: one Monarch at a time, and a port that is already taken -------
@@ -355,9 +352,7 @@ def test_termination_table(site, repo, kwargs, expected):
     # Only a `done` frame that actually names a workflow leaves one to delete.
     authored = any(r["path"] == "/api/workflows/recipe/runs" for r in fake.requests)         and any(f.get("status") == "done" and f.get("workflowId") for f in sc.frames)
     assert fake.deleted_workflows == (["wf-1"] if authored else [])
-    s = socket.socket()
-    s.bind(("0.0.0.0", port))
-    s.close()
+    free(port)
 
 
 # -- T035/T036: the deadline, in either phase ---------------------------------

@@ -112,6 +112,7 @@ def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason
 
 
 def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
+    monkeypatch.setattr(harness, 'model_routes', lambda: [{'id': 'gemini-3.7-flash', 'available': True}])
     dropped = genesis.drop({'text': 'A sentence to work.'})
     genesis.autonomy.set({'paused': True})
     with pytest.raises(ValueError, match='paused'):
@@ -119,4 +120,3 @@ def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
     genesis.autonomy.set({'paused': False})
     monkeypatch.setattr(genesis, 'work', lambda card: {'id': 'turn-x', 'card': card['id']})
     assert genesis.work_now(dropped['id'])['id'] == 'turn-x'
-
