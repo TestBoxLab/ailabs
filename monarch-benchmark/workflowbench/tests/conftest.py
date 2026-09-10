@@ -41,6 +41,9 @@ def pytest_configure(config):
     if os.name == "nt" and not config.option.basetemp:
         root = Path(tempfile.gettempdir()) / "wb" / str(os.getpid())
         shutil.rmtree(root, ignore_errors=True)
+        # pytest's getbasetemp() does mkdir() without parents=True, so the shared
+        # parent has to exist -- another process's sessionfinish may have taken it.
+        root.parent.mkdir(parents=True, exist_ok=True)
         config.option.basetemp = str(root)
         config._wb_basetemp = root
 

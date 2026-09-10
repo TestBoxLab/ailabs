@@ -70,7 +70,7 @@ def free(port: int) -> None:
     s.close()
 
 
-def monarch_site(site, kb=KB, monarch_repo=None, port=9105):
+def monarch_site(site, kb=KB, monarch_repo=None, port=None):
     """The `site` fixture with a runnable Monarch competitor, its price table and its kb file.
 
     Tests rewrite the harness to 127.0.0.1:<port>, so the knowledge base is written
@@ -80,7 +80,8 @@ def monarch_site(site, kb=KB, monarch_repo=None, port=9105):
     runnable_monarch(site, modes="[create-run]", monarch_repo=monarch_repo)
     write(site / "config/models", PRICE_TABLE)
     if kb is not None:
-        kb = kb.replace("http://host.docker.internal:9105", f"http://127.0.0.1:{port}")
+        if port is not None:
+            kb = kb.replace("http://host.docker.internal:9105", f"http://127.0.0.1:{port}")
         (site / "config/products/simulated-apps.monarch-kb.yaml").write_text(kb)
     return site
 
