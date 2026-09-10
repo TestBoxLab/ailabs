@@ -16,6 +16,20 @@ Current direction: [AI Labs direction](docs/AI-LABS-DIRECTION.md). Implementatio
 - Current scientific decisions live in docs/AI-LABS-DIRECTION.md; implementation plans and versioned evidence link to the Trello research pipeline. Historical plans retain their original context.
 - Experiments have a USD 300 weekly budget. Paid launches require verified shared reservations and billing; the atomic ledger and bounded Studio Gemini dispatch are implemented; valid credentials and provider invoice reconciliation remain outstanding. See [implementation status](specs/007-lab-foundation/implementation.md). CI and local setup use offline checks.
 
+## Versioned benchmark configuration
+
+Concrete models, harnesses, plans and products live in
+[TestBoxLab/ailabls-benchmark-config](https://github.com/TestBoxLab/ailabls-benchmark-config).
+AI Labs retains their schemas, validation and execution code.
+
+In the [hosted Studio](https://ailabs-studio-production.up.railway.app/#settings),
+open **Settings > Benchmark configuration**. Edit files, validate and review the
+change, then save directly to main. Saving never starts a run. Use the separate
+saved-plan preview and launch controls to run one immutable configuration revision.
+
+[Setup, CLI commands and verification status](specs/013-benchmark-config-repository/quickstart.md)
+cover repository credentials, historical configurations and current access limits.
+
 ## Local run workspace
 
 Start from this repository:
