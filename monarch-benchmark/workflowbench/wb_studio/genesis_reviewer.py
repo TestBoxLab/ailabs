@@ -189,6 +189,29 @@ def ON_TURN(genesis, turn):
                 genesis.autonomy.record('plugin-error', card=card['id'], module=__name__, error=type(exc).__name__ + ': ' + str(exc)[:200])
 
 
+def PROMPT(genesis, turn) -> str:
+    """What the Reviewer flagged most in the last seven days, so Genesis fixes it before asking (S4)."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    counts = {}
+    try:
+        cards = genesis.listing('cards')
+    except Exception:
+        return ''
+    for card in cards:
+        review = card.get('review') or {}
+        if review.get('status') != 'done' or str(review.get('at') or '') < since:
+            continue
+        for issue in review.get('issues') or []:
+            kind = issue.get('kind') if isinstance(issue, dict) else None
+            if kind:
+                counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return ''
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return '\n\nThis week the Reviewer flagged most often: ' + ', '.join(k + ' (' + str(n) + ')' for k, n in top) + '. Fix these before you ask for a review.'
+
+
 TOOLS = {'request_review': lambda genesis, payload: request_review(genesis, payload.get('card'), payload.get('subject', 'plan')),
          'read_review': lambda genesis, payload: read_review(genesis, payload.get('card'))}
 

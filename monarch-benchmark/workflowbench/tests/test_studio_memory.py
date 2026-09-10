@@ -162,9 +162,9 @@ def test_record_indexes_turns_cards_and_sources_incrementally(genesis, memory):
 def test_tool_dispatch_returns_plain_sentences_and_hides_pin(genesis):
     from wb_studio.genesis_schemas import action_names
     ACTIONS = action_names()
-    for name in ('memory_read', 'memory_add', 'memory_replace', 'memory_remove', 'note_write', 'record_search', 'memory_recent'):
+    for name in ('memory_read', 'memory_add', 'note_write', 'record_search', 'memory_recent'):
         assert name in ACTIONS
-    assert 'memory_pin' not in ACTIONS
+    assert 'memory_pin' not in ACTIONS and 'memory_replace' not in ACTIONS and 'memory_remove' not in ACTIONS  # the night rewrites, a person adopts (A2)
     assert genesis.tool('memory_add', {'text': 'A fact', 'record': 'card:c1'})['entry'].startswith('A fact [rec:card:c1]')
     assert genesis.tool('memory_add', {'text': 'no record'}) == {'error': 'Every memory entry names its record, like turn:abc123 or card:xyz; kinds are turn, analysis, card, library, run, code, human.'}
     assert 'set by people' in genesis.tool('memory_add', {'text': 'x', 'record': 'card:c1', 'section': 'Pinned'})['error']

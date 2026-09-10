@@ -17,6 +17,7 @@ so 1.25 means "a quarter more expensive".
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 MEASURES = ('pass_rate', 'pass_k', 'cost_per_pass', 'violations', 'false_completion', 'turns')
 DIRECTIONS = ('a_higher', 'a_lower')
@@ -607,8 +608,14 @@ def _settle_tool(genesis, payload):
     result = settle(genesis.studio, record)
     if card is None:
         return result
+    current = _card(genesis, card['id'])
+    history = list(current.get('settlements') or [])
+    before = current.get('settlement')
+    if before and before.get('outcome') != result.get('outcome'):
+        history.append({'outcome': before.get('outcome'), 'reason': str(before.get('reason') or '')[:300],
+                        'valid_to': datetime.now(timezone.utc).isoformat(), 'superseded_by': result.get('outcome')})  # A3: a belief is invalidated, not deleted
     try:
-        saved = genesis.card({**_card(genesis, card['id']), 'hypothesis': record, 'settlement': result})
+        saved = genesis.card({**current, 'hypothesis': record, 'settlement': result, 'settlements': history})
     except ValueError as exc:
         return {**result, 'card': card['id'], 'card_written': False, 'card_reason': str(exc)}
     if saved.get('settlement') != result:

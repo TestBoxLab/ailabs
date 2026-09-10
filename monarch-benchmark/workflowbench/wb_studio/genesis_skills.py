@@ -148,6 +148,13 @@ def earned(genesis, turn):
     recent = genesis.autonomy.tail(300)
     if any(e.get('kind') == 'skill-asked' and e.get('card') == card['id'] for e in recent):
         return None  # one question per card
+    from wb_studio.library import now_sao_paulo
+    today = now_sao_paulo().date().isoformat()
+    if any(e.get('kind') == 'skill-asked' and str(e.get('at', ''))[:10] == today for e in recent):
+        return None  # one question a day (L6)
+    others = [c for c in genesis.listing('cards') if c['id'] != card['id'] and c.get('kind') == card.get('kind') and c.get('stage') in ('review', 'complete')]
+    if not others:
+        return None  # a procedure is never written from a single card (L6)
     debriefed = any(e.get('kind') == 'debrief' and e.get('card') == card['id'] for e in recent)
     if debriefed or (review.get('status') == 'done' and review.get('verdict') == 'accept'):
         return card

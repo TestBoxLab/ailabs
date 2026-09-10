@@ -170,6 +170,8 @@ def _landing(requests_left):
         return '\n\n[Lab: two requests remain in this turn. Write your answer with the next one, citing what you have; save your analysis to the card first if it belongs there.]'
     if requests_left == 1:
         return '\n\n[Lab: this is the last request of the turn. Answer now; no further tool call will be run.]'
+    if requests_left == REQUEST_LIMIT // 2:
+        return '\n\n[Lab: half of the turn\'s requests are spent. Converge: read what you still need in one request, then write.]'
     return ''
 
 
@@ -193,6 +195,9 @@ def start_turn(genesis, turn):
     identity = turn['id']; scope = 'genesis-' + identity; maximum = Decimal(turn['maximum_usd']); studio = genesis.studio
     provider = providers.get(turn['model'])
     stopper = Stopper(); genesis.active[identity] = stopper
+    context = getattr(genesis, 'context', None)
+    if context is not None:
+        context.turn = identity  # tools called from this thread know their turn (S2)
     spent = Decimal('0'); last_reason = None; request_id = None; dispatched = settled = False
     defs = tool_defs(); tools = shaped(defs, provider.adapter)
     pending = []
@@ -305,5 +310,7 @@ def start_turn(genesis, turn):
         if not stopper.stopped.is_set():
             genesis.event(identity, 'failed', message='Genesis could not complete this turn. No experiment was launched.', error_type=type(exc).__name__, reason=last_reason)
     finally:
+        if context is not None:
+            context.turn = None
         genesis.active.pop(identity, None)
         studio.ledger.finish_run(scope)

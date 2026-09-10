@@ -467,6 +467,13 @@ check('genesis: chat first with the rail and the tracking pane; a dropped senten
     await p.locator('#genesis-tab-board').click(); await p.waitForSelector('#genesis-board-view:not(.hidden)');
     await snapshot(p, 'genesis-board-light');
     await noOverflowNoErrors(p, errors, 'genesis board');
+    at('phone width'); const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+    const q = await phone.newPage(); await q.goto(BASE + '/#genesis'); await q.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const narrow = await q.evaluate(() => ({ overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      composer: !!document.querySelector('#genesis-message')?.getClientRects().length, paneWidth: document.querySelector('.genesis-tracking')?.getBoundingClientRect().width || 0 }));
+    assert(narrow.overflow <= 1, 'the conversation overflows on a phone by ' + narrow.overflow + 'px');
+    assert(narrow.composer, 'the composer is on screen on a phone');
+    await phone.close();
   } finally { await context.close(); }
 });
 

@@ -27,6 +27,16 @@ MESSAGE = ('Nightly consolidation for {day}. Use memory_recent to list the recor
            'when its text makes the topic clear. Do not propose experiments and do not answer in prose.')
 
 
+def previous_brief(genesis, now):
+    """Yesterday's brief, so the night sees what it already said (L3: continuity, not a re-summary)."""
+    day = (now - timedelta(days=1)).date().isoformat()
+    try:
+        card = genesis.read('cards', 'brief-' + day)
+    except (ValueError, FileNotFoundError, OSError):
+        return ''
+    return '\n\nYesterday\'s brief (' + day + '): ' + str(card.get('body') or '')[:1500]
+
+
 def _titles(items, limit=5):
     names = [str(i.get('title') or i.get('id')) for i in items]
     return '; '.join(names[:limit]) + (f' and {len(names) - limit} more' if len(names) > limit else '')
@@ -69,7 +79,7 @@ def nightly(studio):
             if studio.ledger.status(now=now).available_usd < ceiling:
                 summary['errors'].append('consolidation: the weekly ledger cannot cover the night ceiling')
             else:
-                turn = genesis.chat({'message': MESSAGE.format(day=day), 'model': route['id'], 'maximum_usd': str(ceiling), 'purpose': 'Genesis nightly'})
+                turn = genesis.chat({'message': MESSAGE.format(day=day) + previous_brief(genesis, now), 'model': route['id'], 'maximum_usd': str(ceiling), 'purpose': 'Genesis nightly'})
         except Exception as exc:
             summary['errors'].append(f'consolidation: {type(exc).__name__}: {exc}')
     summary['consolidation_turn'] = turn['id'] if turn else None

@@ -117,6 +117,7 @@ class Memory:
         (self.root / 'cards').mkdir(parents=True, exist_ok=True)
         self.lab, self.monarch = self.root / 'LAB.md', self.root.parent / 'code-index' / 'MONARCH.md'  # written by the code index, read here
         self.soul = self.root / 'SOUL.md'  # written by a person from the interface, never by Genesis
+        self.next_path = self.root / 'LAB.next.md'  # what the night proposes; a person adopts or discards it (A1)
         if not self.soul.exists():
             self.soul.write_text(SOUL_DEFAULT, encoding='utf8', newline='\n')
         self.history, self.access_path, self.db = self.root / 'history.jsonl', self.root / 'access.json', self.root / 'record.sqlite3'
@@ -269,7 +270,7 @@ class Memory:
 
     def read(self, card=None):
         lab, soul = self._text(self.lab), self._text(self.soul)
-        out = {'soul': soul, 'lab': lab, 'monarch': self._text(self.monarch) or None, 'card': card, 'notes': None,
+        out = {'soul': soul, 'lab': lab, 'monarch': self._text(self.monarch) or None, 'next': self._text(self.next_path) or None, 'card': card, 'notes': None,
                'budgets': {'SOUL.md': {'size': len(soul), 'budget': SOUL_BUDGET}, 'LAB.md': {'size': len(lab), 'budget': LAB_BUDGET}, 'notes': {'size': 0, 'budget': NOTE_BUDGET}}}
         if card:
             out['notes'] = self.note_read(card)

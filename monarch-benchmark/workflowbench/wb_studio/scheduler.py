@@ -87,8 +87,15 @@ class Scheduler:
         entry["finished_at"] = now_sao_paulo().isoformat(timespec="seconds")
         with self.lock:
             stamps = self._read()
+            previous = stamps.get(name) or {}
+            if entry["status"] == "failed" and previous.get("status") == "failed" and previous.get("error") == entry["error"]:
+                entry["repeats"] = int(previous.get("repeats") or 0) + 1  # the same failure again: an incident, not news
             stamps[name] = entry
             write_json(self.stamps, stamps)
+        if entry.get("repeats"):
+            recorder = getattr(getattr(getattr(self.studio, "genesis", None), "autonomy", None), "record", None)
+            if callable(recorder):
+                recorder("job-incident", job=name, repeats=entry["repeats"], error=entry["error"][:200])
         return entry
 
     def run_due(self, now: datetime | None = None) -> list:

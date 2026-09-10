@@ -117,6 +117,21 @@ class Watcher:
         status = self.studio.ledger.status()
         if status.blocked or status.available_usd < ceiling:
             return f'Waiting: the weekly ledger cannot cover ${ceiling:.2f}'
+        ok, reason = self.genesis.envelope_allows(ceiling)
+        if not ok:
+            return 'Waiting: ' + reason
+        return None
+
+    def warning(self):
+        """A soft warning at 80% of the day's cap or of the envelope, before anything is refused (L4)."""
+        today, cap = self.today_usd(), self.cap_usd
+        if cap and today >= cap * Decimal('0.8'):
+            return f"Today's allowance is {int(today / cap * 100)}% spent (${today:.2f} of ${cap:.2f})"
+        envelope = self.genesis.envelope()
+        if envelope:
+            left, limit = Decimal(envelope['left_usd']), Decimal(envelope['envelope_usd'])
+            if limit and left <= limit * Decimal('0.2'):
+                return f"The weekly envelope has ${left:.2f} of ${limit:.2f} left"
         return None
 
     def triggers(self):
@@ -157,6 +172,9 @@ class Watcher:
         if self.genesis.autonomy.read()['paused']:
             self._write(reason='Paused by a person: Genesis does nothing until the switch is turned back on')
             return None
+        if self.genesis.autonomy.read()['cards'] == 'off':
+            self._write(reason='The Cards dial is off: Genesis only reads until a person turns it back on')
+            return None
         if self._read().get('paused') or self._cards('working'):
             return None
         queue = [c for c in self._cards('queued') if c.get('auto')]
@@ -186,5 +204,5 @@ class Watcher:
         queue = genesis_ranking.order(genesis_ranking.with_scores(self.genesis, [c for c in self._cards('queued') if c.get('auto')]))
         return {'paused': bool(state.get('paused')) or bool(self.genesis.autonomy.read()['paused']), 'queue': [c['id'] for c in queue],
                 'working': working[0]['id'] if working else None, 'today_usd': str(self.today_usd()), 'cap_usd': str(self.cap_usd),
-                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'),
+                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'), 'warning': self.warning(),
                 'interval_s': getattr(self, 'interval_s', 30)}

@@ -44,7 +44,7 @@ def test_touches_from_tool_events_land_in_access(genesis):
     assert suite.touches([]) == [] and suite.touches(None) == []
 
 
-def test_consolidation_ops_apply_in_order_and_stop_at_the_first_refusal(genesis):
+def test_consolidation_is_proposed_in_order_and_stops_at_the_first_refusal(genesis):
     genesis.card({'id': 'brief-2026-09-10', 'title': 'Daily brief 2026-09-10', 'kind': 'brief', 'stage': 'research'})
     answer = json.dumps({'ops': [{'op': 'add', 'text': 'Retry caps cut gateway failures', 'record': 'run:smoke-1', 'section': 'Known'},
                                  {'op': 'replace', 'old': 'Retry caps cut', 'new': 'Retry caps cut failures by a third', 'record': 'run:smoke-1'},
@@ -52,13 +52,15 @@ def test_consolidation_ops_apply_in_order_and_stop_at_the_first_refusal(genesis)
                                  {'op': 'add', 'text': 'Never reached', 'record': 'turn:t9'}],
                          'contradictions': ['Source new-1 disagrees with card c2 on retry caps.']})
     suite.ON_TURN(genesis, nightly_turn(answer))
-    known = genesis.memory.sections()['Known']
-    assert [e.split(' [')[0] for e in known] == ['Retry caps cut failures by a third']
-    assert 'Never reached' not in genesis.memory.lab.read_text(encoding='utf8')
+    assert not genesis.memory.lab.exists()                      # LAB.md waits for a person (A1)
+    proposed = genesis.memory.read()['next']
+    assert 'Retry caps cut failures by a third' in proposed and 'Never reached' not in proposed
     logged = genesis.autonomy.tail(1)[0]
-    assert logged['kind'] == 'consolidated' and [a['op'] for a in logged['applied']] == ['add', 'replace']
+    assert logged['kind'] == 'consolidation-proposed' and [a['op'] for a in logged['applied']] == ['add', 'replace']
     assert logged['refused']['op'] == 'add' and 'ignore previous' in logged['refused']['reason']
     assert genesis.read('cards', 'brief-2026-09-10')['brief']['contradictions'] == ['Source new-1 disagrees with card c2 on retry caps.']
+    card = genesis.read('cards', logged['card'])
+    assert card['kind'] == 'memory' and card['stage'] == 'approval' and [o['op'] for o in card['proposal']['ops']] == ['add', 'replace']
 
 
 def test_an_answer_that_is_not_ops_changes_nothing(genesis):

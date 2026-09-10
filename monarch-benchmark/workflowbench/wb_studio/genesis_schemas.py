@@ -61,7 +61,7 @@ LAUNCH = obj({'title': S, 'tasks': {**arr(S), 'description': 'Task ids from the 
 # name -> (sentence, parameters)
 SCHEMAS = {
     # --- evidence -------------------------------------------------------------------------
-    'list_runs': ('Every run with its status and per-attempt results. Large; prefer measures or read_run for one run.', obj({})),
+    'list_runs': ('Every run as one line: id, title, status, attempts, passed, setups, tasks. Read one with measures or read_run.', obj({})),
     'read_run': ('One run: its record, a page of its events (task filter, after, limit), the Studio analysis and earlier Genesis analyses.',
                  obj({'id': {**S, 'description': 'The run id.'}, 'task': {**S, 'description': 'Only events of this task.'},
                       'after': {**I, 'description': 'Only events with an id above this; use next_after from the last page.'},
@@ -75,7 +75,7 @@ SCHEMAS = {
     'task_catalog': ('Tasks with tier, domain, category, hash and the applications they change; filter by task set or catalog fields.',
                      obj({'task_set': S, 'filter': POPULATION['properties']['filter']})),
     'catalog': ('Architectures, product graphs, task sets, models and the creation contracts for save_architecture and save_product_graph.', obj({})),
-    'research_state': ('The whole Genesis state: cards, recent turns, threads, routes, analyses. Large; use it once, if at all.', obj({})),
+    'research_state': ('The board as lines: every card with its stage and work state, the last ten turns, the routes, the analyses, the watcher and the dials.', obj({})),
     'record_analysis': ('File a cited analysis of a run so unchanged evidence is not analysed twice; each finding names event ids and is a fact or a hypothesis.',
                         obj({'run': S, 'summary': S,
                              'findings': arr(obj({'kind': {'type': 'string', 'enum': ['fact', 'hypothesis']}, 'text': S, 'event_ids': arr(I)}, ['kind', 'text', 'event_ids']))},
@@ -150,7 +150,7 @@ SCHEMAS = {
 BUILTIN = ('research_state', 'list_runs', 'read_run', 'catalog', 'search_research', 'record_analysis', 'save_research',
            'library_list', 'library_read', 'library_save', 'library_analyze', 'library_use', 'library_reclassify',
            'propose_experiment', 'skill_list', 'skill_read', 'skill_write', 'skill_remove', 'ask_question', 'activity',
-           'record_search', 'memory_read', 'memory_add', 'memory_replace', 'memory_remove', 'memory_recent', 'note_write',
+           'record_search', 'memory_read', 'memory_add', 'memory_recent', 'note_write',
            'save_architecture', 'publish_architecture', 'save_product_graph',
            'code_status', 'code_search', 'code_explain', 'code_read', 'code_changes')
 

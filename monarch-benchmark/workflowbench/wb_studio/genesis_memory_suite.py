@@ -118,19 +118,48 @@ def _write_contradictions(genesis, turn, contradictions):
     return None
 
 
+def preview(genesis, ops) -> dict:
+    """The night's operations applied to a copy of LAB.md: the text that would result, what applied, what was refused."""
+    import shutil
+    from wb_studio.memory import Memory
+    root = genesis.memory.root.parent / 'memory-preview'
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    if genesis.memory.lab.exists():
+        shutil.copy(genesis.memory.lab, root / 'LAB.md')
+    copy = Memory(root)
+    result = apply_ops(copy, ops)
+    text = copy.lab.read_text(encoding='utf8') if copy.lab.exists() else ''
+    shutil.rmtree(root, ignore_errors=True)
+    return {**result, 'text': text}
+
+
 def consolidate(genesis, turn) -> dict:
-    """The nightly turn's answer, validated and applied. Never raises into the turn."""
+    """The nightly turn's answer, validated and applied to a copy: the result is LAB.next.md and a memory card in
+    Plan that a person adopts or declines (A1, the Dreams pattern). LAB.md itself changes only on approval."""
     try:
         data = json_answer(turn.get('answer'), 'The nightly turn')
     except ValueError as exc:
         genesis.autonomy.record('consolidated', turn=turn['id'], applied=0, refused={'reason': str(exc)})
         return {'applied': [], 'refused': {'reason': str(exc)}}
-    result = apply_ops(genesis.memory, data.get('ops') if isinstance(data.get('ops'), list) else [])
+    ops = data.get('ops') if isinstance(data.get('ops'), list) else []
+    result = preview(genesis, ops)
     contradictions = [str(c).strip()[:300] for c in (data.get('contradictions') or []) if str(c).strip()][:12]
     note = _write_contradictions(genesis, turn, contradictions)
-    genesis.autonomy.record('consolidated', turn=turn['id'], applied=result['applied'], refused=result['refused'],
+    accepted = ops[:len(result['applied'])]
+    card = None
+    if accepted:
+        genesis.memory.next_path.write_text(result['text'], encoding='utf8', newline='\n')
+        day = (_brief_card(turn) or 'brief-tonight')[6:]
+        lines = ['- ' + a['op'] + ': ' + str(a['entry'])[:200] for a in result['applied']]
+        if result['refused']:
+            lines.append('- refused ' + str(result['refused'].get('op')) + ': ' + str(result['refused'].get('reason'))[:200])
+        card = genesis.card({'title': 'Memory changes proposed for ' + day, 'kind': 'memory', 'stage': 'approval',
+                             'body': 'The night proposes these changes to LAB.md; adopt them or decline with a reason.\n\n' + '\n'.join(lines),
+                             'proposal': {'operation': 'memory', 'ops': accepted, 'day': day}, 'evidence': [{'kind': 'turn', 'id': turn['id']}], 'auto': False, 'by': 'genesis'})
+    genesis.autonomy.record('consolidation-proposed', turn=turn['id'], card=card['id'] if card else None, applied=result['applied'], refused=result['refused'],
                             contradictions=contradictions or None, note=note)
-    return result
+    return {**result, 'card': card['id'] if card else None}
 
 
 # ---- the nightly self-check ---------------------------------------------------------------

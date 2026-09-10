@@ -523,6 +523,33 @@ shorter protocol are the levers). Tests: `tests/test_genesis_loop.py` (10),
 `tests/test_genesis_repairs.py` (10); the Studio and Genesis suites green (895); the
 browser suite green (30 checks). Not built this evening: Tier 2 onward.
 
+**Tiers 2 to 4, later the same night (Lucas: "Continue building and shipping").**
+Loops: the envelope joins the watcher's preflight; a soft warning at 80% of the day's cap
+or of the envelope on the watcher line; taking a card and checking that no other card is
+working happen under one lock; the Cards dial off stops the watcher and Work now; a
+scheduler job that fails the same way twice is a job incident in the activity record;
+the nightly turn receives yesterday's brief; a skill is asked once a day and never from a
+single card; a checkpoint at half the turn's requests; the protocol asks for several tool
+calls per request and ten requests per card. Turns that start turns (ingest, review,
+patch) are bounded by the envelope and the daily cap rather than queued (L5 by gates,
+not by a queue). Memory: the night writes `LAB.next.md` and a memory card in Plan with
+its operations; a person adopts (the operations apply) or declines (the file is dropped);
+`memory_replace` and `memory_remove` are no longer tools of a card turn, a full LAB.md
+tells the model the night makes room; a settlement that changes keeps the one before with
+`valid_to` and `superseded_by`; the card body reaches the model wrapped as data and a
+body that reads as an instruction is flagged. Scientist: `claim_check` counts the
+sentences of a verdict that carry a number without a run tag and the card shows the
+count; a verdict on a planned card is refused unless the same turn read the run with
+`measures`, `failure_buckets` or `read_run` (the harness tells the tools their turn);
+the digest counts what the gates did (reviews by verdict, questions, answers, defaults
+taken, launches, plans held, refused turns); the Reviewer's three most flagged issue
+kinds of the week enter every prompt. Form: the Genesis page opens on the board once per
+session when something waits; the Memory tab shows the night's proposal with a way to the
+card; a memory card reads "Adopt the changes". Live: one nightly run on the local Studio
+proposed four entries in ten requests for US$ 0.20, LAB.md untouched until adopted. Tests:
+`tests/test_genesis_tiers.py` (14). Not built: SSE streaming (F1), answering from Slack
+(F4), the phone-width check (F5), the settlement history on the card sheet.
+
 ## 9. Decisions for Lucas
 
 1. **Replace Codex with the in-process loop (M1)?** It removes the second provider layer

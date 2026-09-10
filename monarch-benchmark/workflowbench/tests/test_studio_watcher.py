@@ -220,7 +220,7 @@ def test_routes_drop_status_pause_and_stop(tmp_path, monkeypatch):
         assert card['kind'] == 'hypothesis' and card['work']['status'] == 'queued'
         status, _, body = request(port, 'GET', '/api/genesis/watcher')
         assert status == 200
-        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None, 'interval_s': 30}
+        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None, 'warning': None, 'interval_s': 30}
         assert json.loads(request(port, 'GET', '/api/genesis')[2])['watcher']['queue'] == [card['id']]
         status, _, body = request(port, 'POST', '/api/genesis/watcher', json.dumps({'paused': True}), headers)
         assert status == 200 and json.loads(body)['paused'] is True

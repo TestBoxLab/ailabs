@@ -136,7 +136,27 @@ def digest(genesis, week) -> dict:
         track = [l for l in (genesis.memory.root / 'TRACK.md').read_text(encoding='utf8').splitlines() if l.startswith('Calibration')]
     except OSError:
         track = []
-    return {'week': week, 'from': start, 'to': end,
+    gates = {'reviews': {}, 'questions': 0, 'answers': 0, 'defaults_taken': 0, 'launches': 0, 'held': 0, 'refused_turns': 0}
+    defaults = {c['id']: c.get('default') for c in cards if c.get('kind') == 'question'}
+    for e in genesis.autonomy.tail(2000):
+        if not inside(e.get('at')):
+            continue
+        kind = e.get('kind')
+        if kind == 'review' and e.get('verdict'):
+            gates['reviews'][e['verdict']] = gates['reviews'].get(e['verdict'], 0) + 1
+        elif kind == 'question':
+            gates['questions'] += 1
+        elif kind == 'answer':
+            gates['answers'] += 1
+            if defaults.get(e.get('card')) and e.get('answer') == defaults.get(e.get('card')):
+                gates['defaults_taken'] += 1
+        elif kind == 'launch':
+            gates['launches'] += 1
+        elif kind == 'waiting':
+            gates['held'] += 1
+        elif kind == 'refused':
+            gates['refused_turns'] += 1
+    return {'week': week, 'from': start, 'to': end, 'gates': gates,
             'ran': [{'id': j['id'], 'title': j.get('title') or j['id'], 'status': j.get('status')} for j in jobs][:20],
             'done': [{'id': c['id'], 'title': c['title'], 'tag': '[rec:card:' + c['id'] + ']'} for c in done][:20],
             'supported': [h for h in hypotheses if h['outcome'] == 'supported'],
