@@ -647,7 +647,9 @@ class Orchestrator:
         evidence.write_manifest(
             ep_dir, episode_id=eid, contract_sha256=contract_hash(task),
             agent_messages="not_applicable" if isinstance(arm, _ScriptedAdapter) else
-                           getattr(arm, "message_evidence", "unavailable"))
+                           getattr(arm, "message_evidence", "unavailable"),
+            private_reasoning="summaries" if any(isinstance(t, dict) and (t.get("response") or {}).get("reasoning")
+                                                 for t in result.turn_log) else "unavailable")
 
         self.store.record_episode(row)
         for kind, name in (("snapshot0", "snapshot0.json"), ("snapshot1", "snapshot1.json"),

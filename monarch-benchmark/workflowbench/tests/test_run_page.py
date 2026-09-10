@@ -92,7 +92,7 @@ def test_index_has_evidence_tabs_and_runs_table_counts():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     tabs = re.search(r'<div class="inspector-tabs"[^>]*role="tablist"[^>]*>(.*?)</div>', html).group(1)
     names = re.findall(r'<button[^>]*role="tab"[^>]*>([^<]+)</button>', tabs)
-    assert names == ["Output", "Checks", "Trace", "Timeline"]
+    assert names == ["What happened", "Output", "Checks", "Trace", "Timeline"]
     header = re.search(r'<thead><tr><th scope="col">Run</th>(.*?)</tr></thead>', html).group(1)
     assert "Turns" in header and "Violations" in header
     assert '<th class="num">Actions</th>' in html

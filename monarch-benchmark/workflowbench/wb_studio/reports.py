@@ -39,6 +39,7 @@ def action(event, completion):
     else:
         title, detail = "Prepare the next action", "Processed content for the task."
     return {"title": title, "detail": detail, "event_id": event["id"], "node": event.get("node"),
+            "method": method if event.get("label") == "api_fetch" else None, "url": args.get("url"),
             "status": "pending" if completion is None else "error" if completion.get("status") == "error" else "observed",
             "qualification": "Application response recorded; outcome checked separately."}
 
@@ -124,6 +125,8 @@ def outcome_report(job, events, tasks, database=None):
                         "basis": "Recorded actions and deterministic task checks", "causal_claim": None,
                         "next_question": "Was the right entity selected, and were all required effects produced without additional changes?" if not result["passed"] else "Does this result repeat on the same frozen task under independent attempts?",
                         "event_ids": [e["id"] for e in trace], "limitations": "This account describes evidence. A reasoning-model review is a separate interpretation, not a replacement verdict."})
+        from wb_studio.narrative import story
+        reports[-1]["story"] = story(result, trace, reports[-1], assertions)
     return {"version": 1, "run": job["id"], "attempts": reports}
 
 

@@ -239,6 +239,15 @@ def model_findings(narrative, aliases_back) -> list:
     return out
 
 
+def short_name(name: str) -> str:
+    """The part of a setup name a figure label can hold: a build's version token
+    (anything with @, + or a slash) drops to the method section."""
+    parts = [p.strip() for p in str(name or "").split(" · ")]
+    kept = [p for p in parts if not any(ch in p for ch in "@+/")] or parts[:1]
+    short = " · ".join(kept)
+    return short if len(short) <= 36 else short[:34].rsplit(" ", 1)[0] + "…"
+
+
 def hero_rows(m, shown):
     rows = []
     for sid in shown:
@@ -246,7 +255,7 @@ def hero_rows(m, shown):
         if not s:
             continue
         p = s["pass"]
-        rows.append({"id": sid, "label": s["name"], "baseline": s["is_baseline"], "value": p["rate"], "low": p["low"], "high": p["high"],
+        rows.append({"id": sid, "label": short_name(s["name"]), "baseline": s["is_baseline"], "value": p["rate"], "low": p["low"], "high": p["high"],
                      "detail": f"{p['passed']} / {p['attempts']} · {pct(p['rate'])}%" if p["attempts"] else "not evaluated", "attempts": p["attempts"], "passed": p["passed"]})
     return rows
 
@@ -331,6 +340,7 @@ def task_set_id(job) -> str:
 
 def run_report(studio, identity, audience="public") -> dict:
     from wb_studio.failure_analysis import analysis as failure_analysis
+    from wb_studio.narrative import run_story
     job = studio.job(identity)
     events = studio.events(identity)
     m = measures.run_measures(job, events)
@@ -368,9 +378,10 @@ def run_report(studio, identity, audience="public") -> dict:
         "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
                      if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
         "model_findings": model_findings(narrative, aliases_back),
-        "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "summary", "next_experiment", "limitations", "model", "effort", "basis")},
+        "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
+        "story": run_story(fa_attempts, {sid: m["setups"][sid]["name"] for sid in shown if sid in m["setups"]}),
         "hero": hero_rows(m, shown), "paired": paired_table(job, m, shown, baseline_id),
-        "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
+        "setups": {sid: {**m["setups"][sid], "short_name": short_name(m["setups"][sid]["name"])} for sid in shown if sid in m["setups"]}, "order": shown,
         "hidden_setups": len(hidden), "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
         "failures": {"summary": fa["summary"], "buckets": fa["buckets"], "attempts": fa_attempts, "limitations": fa["limitations"]},
         "tasks": tasks, "matrix": matrix_cells(job, shown, studio.tasks),

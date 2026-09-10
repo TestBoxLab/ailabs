@@ -59,12 +59,13 @@ function renderReportsIndex(data) {
   const row = round => {
     const best = round.best ? '<strong>' + esc(round.best.name) + '</strong> passed ' + round.best.passed + ' of ' + round.best.attempts + ' (' + fmtPct(round.best.rate) + ')' : 'No evaluated attempts';
     const comparable = round.grade && round.grade.grade !== 'Not comparable';
-    return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status]) + '</li>').join('') + '</ul></td>' +
+    return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + (run.status === 'completed' ? '' : meta([run.status])) + '</li>').join('') + '</ul></td>' +
+      '<td class="round-date"><ul class="round-runs">' + round.runs.map(run => '<li>' + esc(fmtDate(run.created_at)) + '</li>').join('') + '</ul></td>' +
       '<td class="round-lead">' + (comparable ? gradeBadge(round.grade) : '') + '<span>' + best + '</span>' + (comparable ? '<span class="meta">' + esc(round.grade.reason) + '</span>' : '') + '</td>' +
       '<td>' + round.task_count + ' ' + (round.task_count === 1 ? 'task' : 'tasks') + '<br><span class="meta">' + esc(trackWords(round.track)) + ' · ' + round.setups + (round.setups === 1 ? ' setup' : ' setups') + '</span></td>' +
       '<td class="action"><a href="#round/' + encodeURIComponent(round.id) + audienceQuery() + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
   };
-  const table = rows => '<table class="table reports-table"><thead><tr><th>Runs</th><th>Result</th><th>Task set</th><th class="num">Report</th></tr></thead><tbody>' + rows.map(row).join('') + '</tbody></table>';
+  const table = rows => '<table class="table reports-table"><thead><tr><th>Runs</th><th>Date</th><th>Result</th><th>Task set</th><th class="num">Report</th></tr></thead><tbody>' + rows.map(row).join('') + '</tbody></table>';
   const benchmark = data.rounds.filter(r => r.full_benchmark), other = data.rounds.filter(r => !r.full_benchmark);
   box.innerHTML = '<div class="reports-toolbar">' + audienceToggle() + '</div>' +
     (benchmark.length ? '<h2 class="reports-group">Benchmark rounds</h2>' + table(benchmark) : '') +
@@ -113,7 +114,8 @@ const roundTitle = r => (r.full_benchmark ? 'Benchmark standings, ' : 'Standings
 
 const section = (id, title, body) => '<section class="report-section" id="report-' + id + '"><h2><a class="section-link" href="' + permalinkBase + '/' + id + audienceQuery() + '">' + esc(title) + '</a></h2>' + body + '</section>';
 const contents = ids => '<nav class="report-contents" aria-label="Contents"><ol>' + ids.map(([id, title]) => '<li><a href="' + permalinkBase + '/' + id + audienceQuery() + '">' + esc(title) + '</a></li>').join('') + '</ol></nav>';
-const setupName = (r, id) => r.setups[id]?.name || id;
+const setupName = (r, id) => r.setups[id]?.short_name || r.setups[id]?.name || id;
+const setupFullName = (r, id) => r.setups[id]?.name || id;
 
 function reportActions(r, kind) {
   return '<div class="report-actions">' + audienceToggle() + (kind === 'run' ? '<a class="button small" href="#run/' + encodeURIComponent(r.run) + '" data-open-run-evidence="' + esc(r.run) + '">Open run</a>' : '') +
@@ -135,7 +137,7 @@ function evidenceLink(evidence, r) {
   return '<a class="evidence" href="' + permalinkBase + '/' + anchor + audienceQuery() + '" data-evidence-anchor="report-' + anchor + '" data-evidence-setup="' + esc(evidence.setup || '') + '">' + esc(words[evidence.kind] || 'See the evidence') + '</a>';
 }
 
-function sourceText(r, what) { return (r.run ? 'Run ' + String(r.run).slice(0, 12) : 'Task set ' + String(r.task_set || '').slice(0, 12)) + ' \u00b7 ' + what; }
+function sourceText(r, what) { return 'Source: ' + (r.run ? 'run ' + String(r.run).slice(0, 12) : 'task set ' + String(r.task_set || '').slice(0, 12)); }
 function sourceLine(r, what) { return '<p class="chart-source">' + esc(sourceText(r, what)) + '</p>'; }
 function pairedTable(r) {
   if (!r.paired?.length) return '<p class="report-note">No evaluated attempts to compare.</p>';
@@ -146,23 +148,36 @@ function pairedTable(r) {
     const delta = c.delta === null || c.delta === undefined ? '' : '<span class="delta ' + (c.delta > 0 ? 'up' : c.delta < 0 ? 'down' : 'flat') + '">' + (c.delta > 0 ? '+' : '') + c.delta + '</span>';
     return '<td class="num">' + c.passed + ' / ' + c.attempts + delta + '</td>';
   }).join('') + '</tr>').join('');
-  return '<div class="table-scroll"><table class="paired"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' + sourceLine(r, 'passed over attempts per category') + (r.baseline ? '<p class="report-note">The small number is how many more or fewer tasks the setup passed than Bare in that category; green is more, red is fewer.</p>' : '');
+  return '<div class="table-scroll"><table class="paired"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' + sourceLine(r, '');
 }
 
 function heroFigure(r, title) {
   const rows = r.hero.map(h => ({ ...h, family: setupFamily(h.label), sub: r.setups[h.id]?.pass?.attempts ? null : undefined, data: { setup: h.id } }));
-  return Charts.dotWhisker({ title, rows, labelWidth: 220, source: 'Run ' + (r.run || r.method.runs.join(', ')) + ' · ' + r.method.task_count + ' tasks · task set ' + r.method.task_set + ' · whiskers show the 95% interval' });
+  return Charts.dotWhisker({ title, rows, labelWidth: 220, source: sourceText(r, '') });
 }
 
 function failuresBlock(r) {
   const buckets = (r.failures?.buckets || []).filter(b => b.count).map(b => ({ label: b.label, value: b.count, denominator: r.failures.summary.failed_attempts, cls: b.id === 'infrastructure' ? 'neutral' : 'fail', data: { bucket: b.id } }));
-  const bars = buckets.length ? Charts.bars({ title: r.failures.summary.failed_attempts + ' of ' + r.failures.summary.recorded_attempts + ' attempts failed', rows: buckets, labelWidth: 260, source: sourceText(r, 'reasons read from the recorded evidence, not guessed; one reason per failed attempt') }) : null;
+  const bars = buckets.length ? Charts.bars({ title: r.failures.summary.failed_attempts + ' of ' + r.failures.summary.recorded_attempts + ' attempts failed', rows: buckets, labelWidth: 260, source: sourceText(r, '') }) : null;
   const matrix = Charts.matrix({ tasks: r.tasks, setups: r.order.map(id => ({ id, name: setupName(r, id), baseline: id === r.baseline, family: setupFamily(setupName(r, id)) })), cells: r.matrix });
   const wrap = document.createElement('div'); wrap.className = 'failures-block';
   if (bars) wrap.appendChild(bars); else { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = 'No failed attempts.'; wrap.appendChild(p); }
-  const cap = document.createElement('p'); cap.className = 'chart-title'; cap.textContent = 'Every task, pass or fail per setup; tasks the setups disagree on come first' + (r.repetitions > 1 || r.method.repetitions > 1 ? '; cells show passes over repetitions' : ''); wrap.appendChild(cap);
+  const failed = (r.failures?.attempts || []).filter(a => !a.passed && a.story);
+  if (failed.length) {
+    const list = document.createElement('div'); list.className = 'failed-attempts';
+    const taskTitle = id => { const t = (r.tasks || []).find(t => t.id === id)?.title || id; const first = t.split(/(?<=\.)\s/)[0]; return first.length < t.length ? first : t; };
+    list.innerHTML = '<p class="chart-title">Each failed attempt, in one line; open one for what went wrong</p>' + failed.map(a => {
+      const s = a.story, facts = (s.went_wrong || []).slice(0, 4);
+      return '<details class="attempt-fold"><summary><span class="attempt-fold-task">' + esc(taskTitle(a.task)) + '</span><span class="meta">' + esc(setupName(r, a.model)) + ' · ' + esc(s.mode_label) + '</span></summary>' +
+        '<p>' + esc(s.verdict) + '</p>' + (s.turning_point ? '<p><strong>Where it turned.</strong> ' + esc(s.turning_point.text) + ' ' + evidenceLink({ kind: 'events', event_ids: [s.turning_point.event_id] }, r) + '</p>' : '') +
+        (facts.length ? '<ul class="story-facts">' + facts.map(f => '<li>' + esc(f.text) + ' ' + evidenceLink({ kind: 'events', event_ids: f.event_ids || [] }, r) + '</li>').join('') + '</ul>' : '') +
+        '<p><a class="text-button" href="#run/' + encodeURIComponent(r.run) + '/' + encodeURIComponent(a.task) + '/' + encodeURIComponent(a.model) + '">Open the attempt</a></p></details>';
+    }).join('');
+    wrap.appendChild(list);
+  }
+  const cap = document.createElement('p'); cap.className = 'chart-title'; cap.textContent = 'Tasks by setup, disagreements first' + (r.repetitions > 1 || r.method.repetitions > 1 ? '; cells show passes over repetitions' : ''); wrap.appendChild(cap);
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(matrix); wrap.appendChild(scroll);
-  const src = document.createElement('p'); src.className = 'chart-source'; src.textContent = sourceText(r, 'one cell per task and setup, pass or fail from the stored verdict'); wrap.appendChild(src);
+  const src = document.createElement('p'); src.className = 'chart-source'; src.textContent = sourceText(r, ''); wrap.appendChild(src);
   const claims = r.order.map(id => r.setups[id]).filter(s => s && s.false_completion?.count);
   if (claims.length) { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = claims.map(s => s.name + ' reported the work as done in ' + s.false_completion.count + ' of ' + s.false_completion.failed + ' failed attempts').join('; ') + ' (wording heuristic over the final output).'; wrap.appendChild(p); }
   return wrap;
@@ -170,17 +185,17 @@ function failuresBlock(r) {
 
 function costBlock(r) {
   const setups = r.order.map(id => r.setups[id]).filter(Boolean);
-  const points = setups.map(s => ({ label: s.name, x: s.cost.per_attempt, y: s.pass.rate, low: s.pass.low, high: s.pass.high, baseline: s.is_baseline, family: setupFamily(s.name), data: { setup: s.id } }));
+  const points = setups.map(s => ({ label: s.short_name || s.name, x: s.cost.per_attempt, y: s.pass.rate, low: s.pass.low, high: s.pass.high, baseline: s.is_baseline, family: setupFamily(s.name), data: { setup: s.id } }));
   const wrap = document.createElement('div'); wrap.className = 'cost-block';
   const anyCost = points.some(p => p.x > 0);
-  if (anyCost) wrap.appendChild(Charts.scatter({ title: 'Cost per attempt against pass rate', points: points.filter(p => p.x > 0), xLog: true, pareto: points.filter(p => p.x > 0).length > 1, source: 'Only settled costs are drawn; a setup missing a receipt for any attempt is left out.' }));
-  const tokens = setups.filter(s => Object.values(s.cost.tokens).some(v => v)).map(s => ({ label: s.name, parts: s.cost.tokens }));
-  if (tokens.length) wrap.appendChild(Charts.waterfall({ title: 'Tokens by kind', rows: tokens, labelWidth: 220, source: 'Provider usage receipts.' }));
+  if (anyCost) wrap.appendChild(Charts.scatter({ title: 'Cost per attempt against pass rate', points: points.filter(p => p.x > 0), xLog: true, pareto: points.filter(p => p.x > 0).length > 1, source: sourceText(r, '') }));
+  const tokens = setups.filter(s => Object.values(s.cost.tokens).some(v => v)).map(s => ({ label: s.short_name || s.name, parts: s.cost.tokens }));
+  if (tokens.length) wrap.appendChild(Charts.waterfall({ title: 'Tokens by kind', rows: tokens, labelWidth: 220, source: sourceText(r, '') }));
   const table = document.createElement('table'); table.className = 'paired cost-table';
   table.innerHTML = '<thead><tr><th>Setup</th><th class="num">Per attempt</th><th class="num">Per passed task</th><th class="num">Total</th><th class="num">Unpriced attempts</th><th class="num">Typical time</th></tr></thead><tbody>' +
-    setups.map(s => '<tr data-setup="' + esc(s.id) + '"><th scope="row">' + esc(s.name) + '</th><td class="num">' + esc(fmtMoney(s.cost.per_attempt)) + '</td><td class="num">' + (s.pass.passed === 0 && s.cost.per_pass === null ? 'no passes' : esc(fmtMoney(s.cost.per_pass))) + '</td><td class="num">' + esc(fmtMoney(s.cost.total)) + '</td><td class="num">' + s.cost.unknown_attempts + '</td><td class="num">' + (s.time.median === null ? '—' : s.time.median.toFixed(1) + 's') + '</td></tr>').join('') + '</tbody>';
+    setups.map(s => '<tr data-setup="' + esc(s.id) + '"><th scope="row">' + esc(s.short_name || s.name) + '</th><td class="num">' + esc(fmtMoney(s.cost.per_attempt)) + '</td><td class="num">' + (s.pass.passed === 0 && s.cost.per_pass === null ? 'no passes' : esc(fmtMoney(s.cost.per_pass))) + '</td><td class="num">' + esc(fmtMoney(s.cost.total)) + '</td><td class="num">' + s.cost.unknown_attempts + '</td><td class="num">' + (s.time.median === null ? '—' : s.time.median.toFixed(1) + 's') + '</td></tr>').join('') + '</tbody>';
   const tscroll = document.createElement('div'); tscroll.className = 'table-scroll'; tscroll.appendChild(table); wrap.appendChild(tscroll);
-  const csrc = document.createElement('p'); csrc.className = 'chart-source'; csrc.textContent = sourceText(r, 'settled receipts per setup; unpriced attempts counted, not costed'); wrap.appendChild(csrc);
+  const csrc = document.createElement('p'); csrc.className = 'chart-source'; csrc.textContent = sourceText(r, ''); wrap.appendChild(csrc);
   return wrap;
 }
 
@@ -192,8 +207,10 @@ const REPORT_TERMS = [
   ['Task', 'One request in plain language, its starting data, and an approval rule saying what must change and what must not.'],
   ['Attempt', 'One task tried once by one setup.'],
   ['Pass', 'The expected result is present, nothing else changed, and the attempt finished normally. Anything less is a fail.'],
-  ['95% interval', 'The range the pass rate would most likely fall in if the same tasks ran again. Few tasks give a wide range.'],
-  ['Paired comparison', 'The setup and Bare on exactly the same tasks, counted task by task as better, worse or the same. The chance sentence is a sign test.'],
+  ['95% interval', 'The range the pass rate would most likely fall in if the same tasks ran again; the whiskers on the pass-rate figure. Few tasks give a wide range.'],
+  ['Paired comparison', 'The setup and Bare on exactly the same tasks, counted task by task as better, worse or the same. In the category table the small number is how many more or fewer tasks the setup passed than Bare; green is more, red is fewer. The chance sentence is a sign test.'],
+  ['Failure reason', 'Read from the record by fixed rules, one per failed attempt, never guessed.'],
+  ['Cost', 'Settled provider receipts per setup; an attempt without a receipt is counted but not costed, and a setup missing any receipt is left off the cost figure.'],
   ['Grade', 'One word for the paired comparison: Improvement, Regression, Tie, Tradeoff when the tasks and the cost point in opposite directions, or Not comparable when there is no Bare to compare against.'],
   ['Thinking setting', 'How much reasoning effort the model was allowed per request.'],
   ['Violation', 'A change the task did not permit. One violation fails the attempt even when the requested result is present.'],
@@ -203,7 +220,7 @@ function methodList(r) {
   const m = r.method;
   const rows = [['Task set', m.task_set + (m.benchmark ? ' (' + m.benchmark + ')' : '') + ' · ' + m.task_count + ' tasks'], ['Track', trackWords(m.track || r.track)], ['Repetitions', String(m.repetitions || 1)], ['Interval', 'Wilson score, 95%, on attempts; it does not include task-selection variance'],
     ['Judge', m.judge ? (m.judge.id + ' · ' + String(m.judge.sha256 || '').slice(0, 12)) : 'historical, unpinned'], ['Corpus', 'AutomationBench ' + m.fork],
-    ['Runs', (m.runs || []).join(', ')], ['Attempts', m.recorded_attempts !== undefined ? m.recorded_attempts + ' recorded of ' + m.planned_attempts + ' planned' : ''],
+    ['Runs', (m.runs || []).join(', ')], ['Setups', (r.order || []).map(id => setupFullName(r, id)).join('; ')], ['Attempts', m.recorded_attempts !== undefined ? m.recorded_attempts + ' recorded of ' + m.planned_attempts + ' planned' : ''],
     ['Concurrency', m.concurrency ? String(m.concurrency) : ''], ['Spending limit', m.maximum_usd ? '$' + m.maximum_usd : ''], ['Instructions', m.configuration ? (m.configuration.prompt ? 'custom' : 'original task text') + (m.configuration.max_turns ? ' · ' + m.configuration.max_turns + ' turns max' : '') : '']];
   return '<dl class="method">' + rows.filter(([, v]) => v).map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl>';
 }
@@ -217,7 +234,15 @@ function narrativeBlock(r) {
 function modelReadingSection(r) {
   const n = r.narrative || {};
   if (n.status !== 'completed') return '';
-  return section('reading', 'Model reading', '<div class="model-reading"><p class="meta">' + esc(n.model || '') + (n.effort ? ' · ' + esc(n.effort) + ' thinking' : '') + ' · checked against the record, never a verdict</p><p>' + esc(n.summary || '') + '</p>' + (n.next_experiment ? '<p><strong>Next experiment.</strong> ' + esc(n.next_experiment) + '</p>' : '') + '</div>');
+  return section('reading', 'Model reading', '<div class="model-reading"><p class="meta">' + esc(n.model || '') + (n.effort ? ' · ' + esc(n.effort) + ' thinking' : '') + ' · checked against the record, never a verdict</p><p>' + esc(n.summary || '') + '</p>' + (n.what_went_right ? '<p><strong>What went right.</strong> ' + esc(n.what_went_right) + '</p>' : '') + (n.what_went_wrong ? '<p><strong>What went wrong.</strong> ' + esc(n.what_went_wrong) + '</p>' : '') + (n.next_experiment ? '<p><strong>Next experiment.</strong> ' + esc(n.next_experiment) + '</p>' : '') + '</div>');
+}
+function storySection(r) {
+  const s = r.story;
+  if (!s || !s.setups.length) return '';
+  const modes = s.setups.filter(x => x.failed).map(x => '<tr><th scope="row">' + esc(x.name) + '</th><td>' + x.failed + ' of ' + x.attempts + '</td><td>' + x.modes.map(m => esc(m.label) + ' (' + m.count + ')').join('; ') + '</td></tr>').join('');
+  const table = modes ? '<table class="table story-modes"><thead><tr><th scope="col">Setup</th><th scope="col">Failed</th><th scope="col">How it failed, most common first</th></tr></thead><tbody>' + modes + '</tbody></table>' : '';
+  const suspect = s.suspect_tasks.length ? '<p><strong>Suspect the task first.</strong> ' + s.suspect_tasks.map(t => esc(t.task) + ' (' + esc(t.mode_label.toLowerCase()) + ', every setup)').join('; ') + '.</p>' : '';
+  return section('story', 'What went right and wrong', s.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + table + suspect);
 }
 function termsList(r) {
   const names = new Set(['Setup', 'Task', 'Attempt', 'Pass', '95% interval']);
@@ -232,9 +257,9 @@ function renderRunReport(r) {
   const reading = (r.narrative || {}).status === 'completed';
   article.innerHTML = '<header class="report-head"><h1>' + esc(r.title || 'Run report') + '</h1>' + meta(['Run ' + String(r.run).slice(0, 12), r.method.task_count + (r.method.task_count === 1 ? ' task' : ' tasks'), r.order.length + (r.order.length === 1 ? ' setup' : ' setups'), trackWords(r.track), fmtDate(r.finished_at || r.created_at)]) +
     '<div class="grade-line">' + gradeBadge(r.grade) + '<span class="grade-reason">' + esc(r.grade.reason) + '</span></div>' + reportActions(r, 'run') + '</header>' +
-    contents([['verdict', 'Verdict'], ['findings', 'Findings'], ...(reading ? [['reading', 'Model reading']] : []), ['hero', 'Pass rate'], ['paired', 'By category'], ['failures', 'Where it failed'], ['cost', 'What it cost'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
+    contents([['verdict', 'Verdict'], ['findings', 'Findings'], ...(r.story && r.story.setups.length ? [['story', 'What went right and wrong']] : []), ...(reading ? [['reading', 'Model reading']] : []), ['hero', 'Pass rate'], ['paired', 'By category'], ['failures', 'Where it failed'], ['cost', 'What it cost'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
     section('verdict', 'Verdict', '<p class="verdict">' + esc(r.verdict) + '</p>' + narrativeBlock(r)) +
-    section('findings', 'Findings', findingsList(r.findings, r.model_findings, r)) + modelReadingSection(r) +
+    section('findings', 'Findings', findingsList(r.findings, r.model_findings, r)) + storySection(r) + modelReadingSection(r) +
     section('hero', 'Pass rate', '<div data-slot="hero"></div>') +
     section('paired', 'By category', pairedTable(r)) +
     section('failures', 'Where it failed', '<div data-slot="failures"></div>') +

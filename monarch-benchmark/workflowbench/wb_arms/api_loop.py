@@ -230,8 +230,13 @@ class _OpenAIAdapter:
             except json.JSONDecodeError as e:
                 entry["parse_error"] = str(e)
             calls.append(entry)
-        messages.append(json.loads(msg.model_dump_json(exclude_none=True)))
-        return {"tool_calls": calls, "text": msg.content,
+        sent = json.loads(msg.model_dump_json(exclude_none=True))
+        messages.append(sent)
+        # OpenAI-compatible providers (GLM, Kimi) return their reasoning as an
+        # extra field; the SDK keeps extras, so it survives non-streamed too.
+        reasoning = [sent["reasoning_content"]] if sent.get("reasoning_content") else []
+        return {"tool_calls": calls, "text": msg.content, "reasoning": reasoning,
+                "stop_reason": resp.choices[0].finish_reason,
                 "prompt_tokens": int(usage.get("prompt_tokens") or 0),
                 "output_tokens": int(usage.get("completion_tokens") or 0),
                 "cached_tokens": cached, "cache_source": source}
@@ -256,6 +261,7 @@ class _GeminiAdapter:
                                    http_options=types.HttpOptions(timeout=int(timeout * 1000)))
         self.config = types.GenerateContentConfig(
             system_instruction=None,  # set in start(); fixed thereafter
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
             tools=[types.Tool(function_declarations=[
                 types.FunctionDeclaration(name=d["name"], description=d["description"],
                                           parameters_json_schema=d["parameters"])
@@ -283,16 +289,20 @@ class _GeminiAdapter:
         usage = {"cached_content_token_count": getattr(meta, "cached_content_token_count", None)}
         cached, source = providers.extract_cached_tokens(usage)
         candidate = resp.candidates[0] if resp.candidates else None
-        calls, text = [], None
+        calls, text, reasoning = [], None, []
         if candidate and candidate.content:
             contents.append(candidate.content)
             for i, part in enumerate(candidate.content.parts or []):
                 if part.function_call:
                     calls.append({"id": f"fc{i}", "name": part.function_call.name,
                                   "args": dict(part.function_call.args or {})})
+                elif part.text and getattr(part, "thought", False):
+                    reasoning.append(part.text)
                 elif part.text:
                     text = (text or "") + part.text
-        return {"tool_calls": calls, "text": text,
+        stop = getattr(candidate, "finish_reason", None) if candidate else None
+        return {"tool_calls": calls, "text": text, "reasoning": reasoning,
+                "stop_reason": str(stop).rsplit(".", 1)[-1] if stop else None,
                 "prompt_tokens": int(getattr(meta, "prompt_token_count", 0) or 0),
                 "output_tokens": int(getattr(meta, "candidates_token_count", 0) or 0),
                 "cached_tokens": cached, "cache_source": source}
@@ -333,7 +343,7 @@ class _OpenAIResponsesAdapter:
         client = self.client.with_options(timeout=timeout) if timeout is not None else self.client
         try:
             params = dict(model=self.provider.model_id, instructions=self.instructions,
-                input=items, tools=self.tools, reasoning={"effort": self.effort}, max_output_tokens=16000)
+                input=items, tools=self.tools, reasoning={"effort": self.effort, "summary": "auto"}, max_output_tokens=16000)
             if getattr(self,"on_text",None):
                 resp = None
                 for event in client.responses.create(**params,stream=True):
@@ -354,10 +364,12 @@ class _OpenAIResponsesAdapter:
         u = resp.usage
         det = getattr(u, "input_tokens_details", None)
         cached = int(getattr(det, "cached_tokens", 0) or 0)
-        calls, text = [], None
+        calls, text, reasoning = [], None, []
         for item in resp.output:
             items.append(json.loads(item.model_dump_json(exclude_none=True)))
-            if item.type == "function_call":
+            if item.type == "reasoning":
+                reasoning.extend(s.text for s in (item.summary or []) if getattr(s, "text", None))
+            elif item.type == "function_call":
                 entry = {"id": item.call_id, "name": item.name, "args": {}}
                 try:
                     parsed = json.loads(item.arguments or "{}")
@@ -372,7 +384,8 @@ class _OpenAIResponsesAdapter:
                 for part in item.content or []:
                     if getattr(part, "type", "") == "output_text":
                         text = (text or "") + part.text
-        return {"tool_calls": calls, "text": text,
+        return {"tool_calls": calls, "text": text, "reasoning": reasoning,
+                "stop_reason": "incomplete" if getattr(resp, "status", None) == "incomplete" else "stop",
                 "prompt_tokens": int(u.input_tokens or 0), "output_tokens": int(u.output_tokens or 0),
                 "cached_tokens": cached, "cache_source": "usage.input_tokens_details.cached_tokens"}
 
@@ -441,9 +454,11 @@ class _AnthropicAdapter:
         # is a byte-stable extension of this one.
         messages.append({"role": "assistant",
                          "content": [b.model_dump(exclude_none=True) for b in resp.content]})
-        calls, text = [], None
+        calls, text, reasoning = [], None, []
         for b in resp.content:
-            if b.type == "tool_use":
+            if b.type == "thinking" and getattr(b, "thinking", None):
+                reasoning.append(b.thinking)
+            elif b.type == "tool_use":
                 entry = {"id": b.id, "name": b.name, "args": {}}
                 if isinstance(b.input, dict):
                     entry["args"] = b.input
@@ -454,8 +469,8 @@ class _AnthropicAdapter:
                 text = (text or "") + b.text
         if resp.stop_reason == "refusal":
             calls = []   # treated as a final answer; the grader decides the verdict
-        return {"tool_calls": calls, "text": text,
-                "prompt_tokens": prompt, "output_tokens": int(u.output_tokens or 0),
+        return {"tool_calls": calls, "text": text, "reasoning": reasoning,
+                "stop_reason": resp.stop_reason, "prompt_tokens": prompt, "output_tokens": int(u.output_tokens or 0),
                 "cached_tokens": cached, "cache_write_tokens": cache_write,
                 "cache_source": "usage.cache_read_input_tokens"}
 
@@ -479,7 +494,7 @@ def _json_messages(messages: list) -> list:
 
 
 class ApiLoopArm:
-    message_evidence = "normalized"  # observable messages; not raw provider/private reasoning
+    message_evidence = "normalized"  # observable messages; reasoning only as the provider's own summary
     """One arm instance per (provider, run); tools serialized once, reused verbatim.
 
     With a `ledger`, every provider request is reserved for its rate-card
@@ -622,7 +637,8 @@ class ApiLoopArm:
                           "output_tokens": t["output_tokens"],
                           "cache_source": t["cache_source"],
                           "tool_calls": [c["name"] for c in t["tool_calls"]],
-                          "response": {"text": t["text"], "tool_calls": _json_messages(t["tool_calls"])},
+                          "response": {"text": t["text"], "tool_calls": _json_messages(t["tool_calls"]),
+                                       "reasoning": t.get("reasoning", []), "stop_reason": t.get("stop_reason")},
                           "status": "completed", "finished_monotonic": time.monotonic()})
             ep.record_agent_event({"type": "agent_response", **entry})
             saw_cache_source = saw_cache_source or t["cache_source"] is not None
