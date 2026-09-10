@@ -713,14 +713,14 @@ def _check_monarch_env(h, hpath, env) -> None:
     first use so a missing variable stops the run at `wb run`, not halfway
     through it (FR-029).
     """
-    for field in ("base_url", "fd_url", "langfuse_url"):
-        for name in _PLACEHOLDER.findall(getattr(h, field) or ""):
+    for attr in ("base_url", "fd_url", "langfuse_url"):
+        for name in _PLACEHOLDER.findall(getattr(h, attr) or ""):
             if not env.get(name):
-                raise ConfigError(hpath, field, f"environment variable {name} is not set")
-    for field in ("langfuse_public_key_env", "langfuse_secret_key_env"):
-        name = getattr(h, field)
+                raise ConfigError(hpath, attr, f"environment variable {name} is not set")
+    for attr in ("langfuse_public_key_env", "langfuse_secret_key_env"):
+        name = getattr(h, attr)
         if name and not env.get(name):
-            raise ConfigError(hpath, field, f"environment variable {name} is not set")
+            raise ConfigError(hpath, attr, f"environment variable {name} is not set")
 
 
 def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import threading
 import uuid
@@ -216,7 +215,6 @@ class Genesis:
                           'auto':auto,'work':{'status':'queued','queued_at':stamp()} if auto else None})
     def drop(self,payload):
         """Classify dropped text: a link becomes a library source, a run id a run card, anything else a hypothesis."""
-        from wb_studio.genesis_watcher import fetch_page
         from wb_studio.library import _source_type
         text=str(payload.get('text','')).strip()
         if not text or len(text)>20000: raise ValueError('Drop a link, a run id or a hypothesis up to 20,000 characters')

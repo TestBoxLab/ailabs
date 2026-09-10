@@ -126,3 +126,22 @@ def test_round_standings_carry_intervals_over_tasks_pairings_and_excluded_runs(s
     assert sorted(e["title"] for e in report["excluded"]) == ["First", "Second"]
     assert all(e["reason"] == "not the frozen 50-task benchmark" for e in report["excluded"])
 
+
+
+def test_public_reports_keep_the_timeline_but_not_the_reasoning(studio):
+    job = finished_run(studio)
+    task = list(studio.tasks)[0]
+    # Slip one model turn with a reasoning summary into the sloppy attempt's record, before it finished.
+    log = studio.directory / job["id"] / "events.jsonl"
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    at = next(i for i, e in enumerate(events) if e["type"] == "attempt_finished" and e["task"] == task and e["model"] == "sloppy")
+    events.insert(at, {"type": "model_finished", "at": events[at]["at"], "task": task, "model": "sloppy", "output": "I changed it.",
+                       "reasoning": ["Private plan: patch the phone field."], "stop_reason": "end_turn"})
+    log.write_text("".join(json.dumps({**e, "id": i + 1}) + "\n" for i, e in enumerate(events)), encoding="utf-8")
+    public = report_data.run_report(studio, job["id"], audience="public")
+    internal = report_data.run_report(studio, job["id"], audience="internal")
+    def turns(report):
+        return [t for a in report["failures"]["attempts"] if a["story"] for t in a["story"]["timeline"]]
+    assert turns(public) and all(t["reasoning"] == "" and "Private plan" not in t["sentence"] for t in turns(public))
+    assert any("Private plan" in t["reasoning"] for t in turns(internal))
+    assert "Private plan" not in json.dumps(public)

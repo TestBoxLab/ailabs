@@ -191,7 +191,7 @@ check('reports are the front door: index, run report, round report, back', async
     await p.waitForSelector('#report-article .verdict');
     assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
     const order = await p.evaluate(() => [...document.querySelectorAll('#report-article h2')].map(h => h.textContent));
-    assert(order.join('|') === 'Verdict|Findings|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured', 'section order: ' + order.join('|'));
+    assert(order.join('|') === 'Verdict|Findings|What went right and wrong|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured', 'section order: ' + order.join('|'));
     assert(await p.evaluate(() => document.querySelectorAll('#report-article figure.chart svg').length >= 2), 'figures drawn');
     assert(await p.evaluate(() => document.querySelector('#report-article .grade').textContent.trim().length > 0), 'grade shown');
     assert(await p.evaluate(() => !document.querySelector('[style]')), 'no inline styles');
@@ -299,9 +299,14 @@ check('run page: a failing check and its event in two clicks from the Runs table
     await p.waitForSelector('#report-view .matrix-cell button');
     assert((await p.locator('#report-view .outcome-matrix tfoot').innerText()).includes('3 / 3'), 'matrix footer counts passes per setup');
     at('click 2: open the failing attempt'); await p.locator('.matrix-cell.fail button').first().click();
-    await p.waitForSelector('#output .check-row.failed');
+    await p.waitForSelector('#output .verdict');
     const tabs = await p.evaluate(() => [...document.querySelectorAll('.inspector-tabs [role=tab]')].map(b => b.textContent + ':' + b.getAttribute('aria-selected')));
-    assert(tabs.join('|') === 'Output:false|Checks:true|Trace:false|Timeline:false', 'tabs: ' + tabs.join('|'));
+    assert(tabs.join('|') === 'What happened:true|Output:false|Checks:false|Trace:false|Timeline:false', 'tabs: ' + tabs.join('|'));
+    const story = await p.locator('#output').innerText();
+    assert(story.startsWith('Failed:') && story.includes('What went wrong') && story.includes('Denver'), 'the story opens first, names the verdict and the change that failed it: ' + story.slice(0, 200));
+    assert(await p.evaluate(() => document.querySelectorAll('#output .story-facts button').length > 0), 'every fact in the story links its evidence');
+    at('checks tab'); await p.locator('#inspector-tab-checks').click();
+    await p.waitForSelector('#output .check-row.failed');
     const failed = await p.locator('#output .check-row.failed').first().innerText();
     assert(failed.includes('Failed') && failed.includes('No changes outside the permitted scope'), 'failed row names the check and its verdict: ' + failed);
     const checks = await p.locator('#output').innerText();
@@ -480,7 +485,10 @@ check('genesis: chat first with the rail and the tracking pane; a dropped senten
     }
   } finally {
     await browser.close();
-    server.kill();
+    // `uv run` wraps the fixture server in a child process; on Windows killing the
+    // wrapper alone leaves the Python listener behind (the stale-server error above).
+    if (process.platform === 'win32') require('child_process').spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    else server.kill();
   }
   console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
   process.exit(failed ? 1 : 0);

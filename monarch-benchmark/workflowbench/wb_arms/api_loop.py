@@ -98,6 +98,11 @@ def build_tools_anthropic() -> list[dict]:
     return tools
 
 
+# Stop reasons that mean "finished on purpose", per provider vocabulary; anything
+# else (length, max_tokens, MAX_TOKENS, incomplete, content_filter) is an abnormal end.
+NORMAL_STOPS = {None, "", "stop", "STOP", "end_turn", "completed", "tool_calls", "tool_use", "function_call"}
+
+
 class InfraError(Exception):
     def __init__(self, kind: str, msg: str, retry_after: float | None = None,
                  retryable: bool = True):
@@ -655,6 +660,12 @@ class ApiLoopArm:
 
             if not t["tool_calls"]:
                 res.final_text = t["text"]
+                # The same rule as the Studio loop: no tool call and no text, or a
+                # stop the provider itself calls abnormal (length, max_tokens,
+                # incomplete), is not a finished answer.
+                if not t["text"] or t.get("stop_reason") not in NORMAL_STOPS:
+                    res.termination = "agent_error"
+                    res.error = "Model stopped without a complete final answer" + (f" (stop reason: {t['stop_reason']})" if t.get("stop_reason") else "")
                 break
             for call in t["tool_calls"]:
                 if call.get("parse_error"):

@@ -25,8 +25,28 @@ def decode(value):
         except ValueError: pass
     return value
 
+def tool_error(completion):
+    """The error a tool call ended with, whether the harness raised or the
+    application answered with an error body ({"error": {"code", "message"}})."""
+    if completion is None:
+        return None
+    output = decode(completion.get("output"))
+    if completion.get("status") == "error":
+        return (output.get("error") if isinstance(output, dict) else None) or completion.get("output") or "tool failed"
+    if isinstance(output, dict) and output.get("error"):
+        return output["error"]
+    return None
+
+
+def _error_text(error):
+    if isinstance(error, dict):
+        return " ".join(str(error[k]) for k in ("code", "message") if error.get(k) not in (None, "")) or json.dumps(error)
+    return str(error)
+
+
 def action(event, completion):
     args = event.get("arguments", {})
+    error = tool_error(completion)
     method = args.get("method", "GET")
     service = urlsplit(args.get("url", "")).hostname or "application"
     service = "Salesforce" if "salesforce" in service else "Gmail" if "gmail" in service or "googleapis" in service else service.split(".")[0].title()
@@ -40,7 +60,8 @@ def action(event, completion):
         title, detail = "Prepare the next action", "Processed content for the task."
     return {"title": title, "detail": detail, "event_id": event["id"], "node": event.get("node"),
             "method": method if event.get("label") == "api_fetch" else None, "url": args.get("url"),
-            "status": "pending" if completion is None else "error" if completion.get("status") == "error" else "observed",
+            "status": "pending" if completion is None else "error" if error is not None else "observed",
+            "error": _error_text(error) if error is not None else None,
             "qualification": "Application response recorded; outcome checked separately."}
 
 IDENTITY_KEYS = ("to", "channel", "channel_name", "action_key")
@@ -119,7 +140,11 @@ def outcome_report(job, events, tasks, database=None):
         if invariant is False: summary += " Changes outside the permitted scope caused the overall failure."
         elif invariant is True: summary += " No changes outside the permitted scope were found."
         elif not result["passed"] and all(c["passed"] for c in requirements): summary += " Visible requirement checks passed, but the overall verdict did not; inspect the full evaluator evidence."
-        actions = [action(e, next((end for end in trace if end.get("node") == e.get("node") and end["type"] == "node_finished"), None)) for e in trace if e["type"] == "node_started"]
+        ends = {}
+        for e in trace:
+            if e["type"] == "node_finished":
+                ends.setdefault(e.get("node"), e)
+        actions = [action(e, ends.get(e.get("node"))) for e in trace if e["type"] == "node_started"]
         reports.append({"task": task_id, "model": model, "title": title, "summary": summary, "passed": result["passed"], "infrastructure": infra,
                         "requirements": [] if infra else requirements, "scope_respected": None if infra else invariant, "unexpected_changes": changes, "change_summaries": [change_summary(c) for c in changes], "changes": [change_row(c) for c in changes], "actions": actions,
                         "basis": "Recorded actions and deterministic task checks", "causal_claim": None,

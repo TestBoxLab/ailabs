@@ -578,7 +578,6 @@ def _handler_signatures() -> dict[tuple[str, str, str], dict[str, str]]:
     """
     import importlib
     import inspect
-    import typing
 
     out: dict[tuple[str, str, str], dict[str, str]] = {}
     for service in sorted(_raw_schemas()):
