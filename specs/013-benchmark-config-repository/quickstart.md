@@ -16,6 +16,13 @@ The default hosted cache is `$STUDIO_DATA_DIR/config-revisions`.
 `WB_CONFIG_CACHE` overrides the CLI cache. Local CLI use can also use an existing
 GitHub CLI login. The hosted service never falls back to that login.
 
+For a reviewed offline revision, set `WB_CONFIG_SNAPSHOT` to an existing source
+manifest JSON containing `repository`, `branch`, `commit` and `files` with text
+and SHA-256 hashes. This mode takes precedence over GitHub access, verifies the
+approved repository/main revision through the immutable cache, and permits
+preview and authorized execution while refusing edits. Missing or invalid
+snapshots fail without falling back to GitHub or bundled configuration.
+
 In Studio, open Settings, then Benchmark configuration. Select or create a file,
 edit its YAML, validate, inspect the diff, enter your name and a commit message,
 then save to main. Multiple edits form one commit. A conflicting main revision

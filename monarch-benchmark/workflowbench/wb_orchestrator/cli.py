@@ -208,7 +208,7 @@ def _selected_config(args):
         if getattr(args, "revision", None):
             raise ConfigError("configuration", "revision", "--revision cannot be used with --local-config")
         return config.resolve(_pick_or_flag(args.product, "product"), _pick_or_flag(args.plan, "plan"))
-    if os.environ.get("WB_CONFIG_REPOSITORY") or getattr(args, "revision", None):
+    if os.environ.get("WB_CONFIG_REPOSITORY") or "WB_CONFIG_SNAPSHOT" in os.environ or getattr(args, "revision", None):
         return config.resolve_selection(args.product, args.plan, revision=getattr(args, "revision", None))
     return config.resolve(_pick_or_flag(args.product, "product"), _pick_or_flag(args.plan, "plan"))
 

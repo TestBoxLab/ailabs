@@ -183,3 +183,56 @@ def test_migration_preserves_raw_line_endings_and_refuses_overwrite(tmp_path):
     assert manifest["files"]["config/README.md"] == hashlib.sha256(raw).hexdigest()
     with pytest.raises(ValueError, match="empty"):
         prepare(source, target)
+
+
+@pytest.fixture
+def offline_source(tmp_path, monkeypatch):
+    source = {"repository": cr.REPOSITORY, "branch": "main", "commit": "a" * 40,
+              "files": cr._records({"config/README.md": "Reviewed configuration.\r\n"})}
+    path = tmp_path / "source.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+    env = {"WB_CONFIG_SNAPSHOT": str(path), "WB_CONFIG_CACHE": str(tmp_path / "cache"),
+           "WB_CONFIG_REPOSITORY": cr.REPOSITORY, "WB_CONFIG_GITHUB_TOKEN": "unused"}
+    monkeypatch.setattr(cr.Repository, "_request", lambda *a: pytest.fail("Offline source used GitHub"))
+    monkeypatch.setattr(cr.subprocess, "run", lambda *a, **k: pytest.fail("Offline source used gh"))
+    return path, source, env
+
+
+def test_offline_snapshot_reads_exact_bytes_and_refuses_writes(offline_source):
+    _, source, env = offline_source
+    env.pop("WB_CONFIG_REPOSITORY")
+    reader = cr.Repository.from_env(env=env)
+    assert reader.repository == cr.REPOSITORY and reader.token is None
+    snapshot = reader.snapshot()
+    assert snapshot["commit"] == source["commit"]
+    assert (Path(snapshot["directory"]) / "config/README.md").read_bytes() == source["files"][0]["text"].encode()
+    assert reader.snapshot(source["commit"]) == snapshot
+    with pytest.raises(ValueError, match="commit"):
+        reader.snapshot("b" * 40)
+    with pytest.raises(ValueError, match="read-only"):
+        reader.validate(source["commit"], [])
+    with pytest.raises(ValueError, match="read-only"):
+        reader.save(source["commit"], [], "Edit", "Carlos")
+    (Path(snapshot["directory"]) / "config/README.md").write_text("tampered")
+    with pytest.raises(ValueError, match="changed"):
+        reader.snapshot()
+
+
+@pytest.mark.parametrize("invalid", ["missing", "json", "identity", "branch", "commit", "hash", "path", "empty", "oversized"])
+def test_offline_snapshot_fails_closed(offline_source, invalid, monkeypatch):
+    path, source, env = offline_source
+    if invalid == "missing":
+        path.unlink()
+    elif invalid == "json":
+        path.write_text("{")
+    else:
+        if invalid == "identity": source["repository"] = "unrelated/repository"
+        if invalid == "branch": source["branch"] = "other"
+        if invalid == "commit": source["commit"] = "main"
+        if invalid == "hash": source["files"][0]["text"] += "changed"
+        if invalid == "path": source["files"][0]["path"] = "config/../../outside"
+        if invalid == "empty": source["files"] = []
+        if invalid == "oversized": monkeypatch.setattr(cr, "MAX_TREE", 1)
+        path.write_text(json.dumps(source), encoding="utf-8")
+    with pytest.raises(cr.RepositoryError):
+        cr.Repository.from_env(env=env)

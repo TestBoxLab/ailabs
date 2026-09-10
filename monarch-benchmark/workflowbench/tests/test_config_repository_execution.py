@@ -143,3 +143,13 @@ def test_remote_resume_cannot_raise_ceiling_without_new_run(site, tmp_path, monk
     monkeypatch.setattr(orch, "_arms", lambda: pytest.fail("ceiling drift reached an arm"))
     with pytest.raises(ConfigDrift, match="ceiling"):
         orch.resume("original")
+
+
+def test_cli_snapshot_environment_uses_shared_selection(monkeypatch):
+    from types import SimpleNamespace
+    from wb_orchestrator.cli import _selected_config
+    monkeypatch.delenv("WB_CONFIG_REPOSITORY", raising=False)
+    monkeypatch.setenv("WB_CONFIG_SNAPSHOT", "source.json")
+    marker = object()
+    monkeypatch.setattr(config, "resolve_selection", lambda *a, **k: marker)
+    assert _selected_config(SimpleNamespace(product="simulated-apps", plan="tier-simple")) is marker

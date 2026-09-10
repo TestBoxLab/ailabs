@@ -199,6 +199,26 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise RepositoryError("Repository redirect refused")
 
 
+class _SnapshotRepository:
+    """A reviewed source manifest supplies one revision without network access."""
+    token = None
+
+    def __init__(self, source, cache_dir):
+        self.repository = source["repository"]
+        self.source, self.cache_dir = source, cache_dir
+        self.snapshot()
+
+    def snapshot(self, commit=None):
+        if commit is not None and commit != self.source["commit"]:
+            raise RepositoryError("Requested commit is unavailable in the read-only configuration snapshot")
+        return restore_snapshot(self.source, self.cache_dir)
+
+    def validate(self, *args, **kwargs):
+        raise RepositoryError("Configuration snapshot is read-only; editing requires repository access")
+
+    save = validate
+
+
 class Repository:
     def __init__(self, repository=REPOSITORY, token=None, cache_dir=None, *, request=None):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -210,6 +230,23 @@ class Repository:
     @classmethod
     def from_env(cls, cache_dir=None, env=None):
         env = os.environ if env is None else env
+        if "WB_CONFIG_SNAPSHOT" in env:
+            try:
+                path = Path(env["WB_CONFIG_SNAPSHOT"])
+                if path.is_symlink():
+                    raise ValueError("Snapshot must be a regular file")
+                with path.open("rb") as stream:
+                    raw = stream.read(MAX_TREE * 8 + 1)
+                if len(raw) > MAX_TREE * 8:
+                    raise ValueError("Snapshot manifest is too large")
+                source = json.loads(raw)
+                if (not isinstance(source, dict) or source.get("repository") != REPOSITORY
+                        or source.get("branch") != "main" or not source.get("files")
+                        or env.get("WB_CONFIG_REPOSITORY", REPOSITORY) != REPOSITORY):
+                    raise ValueError("Snapshot must name the approved repository and main branch")
+                return _SnapshotRepository(source, cache_dir or env.get("WB_CONFIG_CACHE"))
+            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                raise RepositoryError("Configuration snapshot is missing or invalid; no repository fallback was used") from None
         repository = env.get("WB_CONFIG_REPOSITORY")
         if not repository:
             return None
