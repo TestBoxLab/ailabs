@@ -92,3 +92,24 @@ The AI Labs implementation is committed locally on `ailabs/config-repository`;
 it has not been pushed to AI Labs GitHub. Configuration repository commits are
 published to main as explicitly authorized. Hosted browse/save/preview completion
 still requires the restricted token to access the private repository.
+
+## Integration with the latest AI Labs main
+
+Remote main advanced to `08b7a399b6fde0be2edfdf1c415ac59abb5808a4` while this
+feature was being implemented. It adds recorded-attempt narratives, reasoning
+evidence and the hosted Genesis CLI installation. It was merged without conflicts
+into `ailabs/config-repository` at `3e63186`, preserving those changes.
+The combined configuration/Studio/narrative/reasoning/streaming regression group
+passed: 136 tests in 46.41 seconds. Both README entry points now link this guide,
+and `.env.example` documents the optional repository settings without enabling
+remote mode by default. No tasks or concrete bundled configuration changed.
+
+The merged browser fixture passed all configuration flows at desktop and mobile
+sizes. Deployment `e192c71e-21a9-4f8c-9d9a-7f4642b9a971` from clean source
+`3e63186` reached SUCCESS, superseding deployment `723fa1c7` above. Image digest:
+`sha256:dcdd18e87033125c03470989c8efac70171b7e8fe4ab22f3cf051dbc4df8c2ab`.
+Authenticated HTTP reads confirmed exact SHA-256 agreement between the deployed
+`benchmark-config.js`, `reports.js`, `app.js` and this merged source. The hosted
+Settings page loaded without JavaScript errors and continued to report GitHub's
+HTTP 404 for repository access. Carlos is arranging the token permission; no
+bypass or broader hosted credential was used. No paid benchmark was launched.
