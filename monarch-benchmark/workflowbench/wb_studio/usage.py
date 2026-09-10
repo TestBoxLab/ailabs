@@ -24,27 +24,6 @@ def ledger_lines(studio, now=None):
         if by.startswith('human:'): return by.split(':',1)[1] or 'Studio user'
         if by=='genesis' or scope.startswith('genesis-') or str(meta.get('purpose','')).startswith('Genesis'): return 'Genesis'
         return 'Studio'
-    def who(meta, scope):
-        if meta.get('operator'): return meta['operator']
-        by=str(meta.get('by') or '')
-        if by=='person': return 'Studio user'
-        if by.startswith('human:'): return by.split(':',1)[1] or 'Studio user'
-        if by=='genesis' or scope.startswith('genesis-') or str(meta.get('purpose','')).startswith('Genesis'): return 'Genesis'
-        return 'Studio'
-    def who(meta, scope):
-        if meta.get('operator'): return meta['operator']
-        by=str(meta.get('by') or '')
-        if by=='person': return 'Studio user'
-        if by.startswith('human:'): return by.split(':',1)[1] or 'Studio user'
-        if by=='genesis' or scope.startswith('genesis-') or str(meta.get('purpose','')).startswith('Genesis'): return 'Genesis'
-        return 'Studio'
-    def who(meta, scope):
-        if meta.get('operator'): return meta['operator']
-        by=str(meta.get('by') or '')
-        if by=='person': return 'Studio user'
-        if by.startswith('human:'): return by.split(':',1)[1] or 'Studio user'
-        if by=='genesis' or scope.startswith('genesis-') or str(meta.get('purpose','')).startswith('Genesis'): return 'Genesis'
-        return 'Studio'
     lines=[]
     for env in ledger.run_reservations():
         if env.week_start!=week: continue

@@ -172,3 +172,27 @@ def test_manifest_declares_recorded_reasoning_summaries(tmp_path):
     assert manifest["coverage"]["private_reasoning"] == "summaries"
     assert evidence.write_manifest(root, episode_id="e", contract_sha256="c",
                                    agent_messages="normalized")["coverage"]["private_reasoning"] == "unavailable"
+
+
+@pytest.mark.parametrize("text,stop,termination", [
+    ("done", "end_turn", "completed"), ("done", None, "completed"),
+    ("", "end_turn", "agent_error"), ("half an answer", "max_tokens", "agent_error"), ("half", "length", "agent_error"),
+])
+def test_api_loop_treats_an_abnormal_stop_as_no_answer(monkeypatch, text, stop, termination):
+    """The CLI loop follows the Studio loop: no text, or a stop the provider calls
+    abnormal, is not a finished attempt (it used to be recorded as completed)."""
+    class _Adapter:
+        def start(self, system, brief):
+            return [{"role": "user", "content": brief}]
+
+        def turn(self, messages, timeout=None):
+            return {"tool_calls": [], "text": text, "reasoning": [], "stop_reason": stop,
+                    "prompt_tokens": 3, "output_tokens": 2, "cached_tokens": 0, "cache_source": None}
+
+    monkeypatch.setattr(ApiLoopArm, "_adapter", lambda self: _Adapter())
+    ep = SimpleNamespace(task={"prompt": [{"content": "sys"}, {"content": "brief"}]}, episode_id="e1", record_agent_event=lambda e: None)
+    res = ApiLoopArm("claude-opus-4-8").run(ep)
+    assert res.termination == termination
+    assert res.final_text == text
+    if termination == "agent_error":
+        assert res.error.startswith("Model stopped without a complete final answer")

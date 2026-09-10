@@ -20,7 +20,6 @@ Rules that hold everywhere here:
 from __future__ import annotations
 
 import json
-import re
 import statistics
 from pathlib import Path
 from typing import Any

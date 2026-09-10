@@ -27,10 +27,9 @@ from wb_orchestrator.config import derive_langfuse_keys
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
 from wb_results.store import Store
-from wb_world.episode import load_suite, load_task_file, contract_hash, EvidenceWriteError
+from wb_world.episode import load_task_file, contract_hash, EvidenceWriteError
 from wb_studio.reports import public_task, outcome_report
 from wb_studio.difficulty import difficulty
-from wb_studio.agents import episode_executor, run_loop
 from wb_studio.execution import ArchitectureArm, bound_graphs, execution_manifest, load_version, bind_comparison_model
 from wb_studio import enterprise
 from wb_studio.components import Components
@@ -96,6 +95,7 @@ class Studio:
         # Every finished run gets its interpretation automatically, under this per-run ceiling (US$).
         self.analysis_ceiling = Decimal(os.environ.get("STUDIO_ANALYSIS_USD", "0.50" if gateway_factory is None else "0"))
         self.lock = threading.RLock()
+        self._event_counts: dict[str, tuple[int, int]] = {}
         self.cancelled = {}
         self.token = secrets.token_urlsafe(32)
         from wb_studio.genesis import Genesis
@@ -272,12 +272,18 @@ class Studio:
     def emit(self, identity, kind, **data):
         with self.lock:
             file = self.directory / identity / "events.jsonl"
-            count = sum(1 for _ in file.open(encoding="utf-8")) if file.exists() else 0
+            # Ids are line numbers. Count once per file, then trust the cached
+            # count while the file is the size this process left it.
+            size = file.stat().st_size if file.exists() else 0
+            count, known_size = self._event_counts.get(identity, (0, -1))
+            if size != known_size:
+                count = sum(1 for _ in file.open(encoding="utf-8")) if size else 0
             event = {"id": count + 1, "type": kind, "at": now(), **data}
             with file.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+            self._event_counts[identity] = (count + 1, file.stat().st_size)
             return event
 
     def events(self, identity, after=0):
@@ -293,6 +299,24 @@ class Studio:
                 except ValueError:
                     pass  # A crash may leave a partial final line.
         return result
+
+    def events_from(self, identity, offset=0):
+        """Events appended after byte ``offset``, and the offset to resume from.
+        A partial final line (a crash mid-write) is left for the next read."""
+        file = self.directory / identity / "events.jsonl"
+        if not file.exists():
+            return [], 0
+        with file.open("rb") as stream:
+            stream.seek(offset)
+            data = stream.read()
+        complete = data.rfind(b"\n") + 1
+        result = []
+        for line in data[:complete].decode("utf-8", errors="replace").splitlines():
+            try:
+                result.append(json.loads(line))
+            except ValueError:
+                pass
+        return result, offset + complete
 
     def _runner_arms(self, selected):
         """Validate runner selections for Without Monarch and describe each as an arm."""
@@ -711,8 +735,9 @@ class LiveArm:
                 value = original(tool, arguments, call)
                 self.emit("node_finished", node=node, label=tool, output=value, status="completed")
                 return value
-            except Exception:
-                self.emit("node_finished", node=node, label=tool, output="Tool failed; inspect the retained trace.", status="error")
+            except Exception as exc:
+                # The same text the model receives from the tool (see _exec_tool).
+                self.emit("node_finished", node=node, label=tool, output=json.dumps({"error": str(exc)[:500]}), status="error")
                 raise
         ep._observe = observe
         if self.name in ("oracle", "sloppy"):
@@ -978,8 +1003,14 @@ def handler(studio):
                     self.send_header("Cache-Control", "no-cache")
                     self.send_header("X-Accel-Buffering", "no")
                     self.end_headers()
+                    # Catch up by id once, then tail the file by byte offset: a
+                    # long run must not be re-read from the top every tick.
+                    offset = 0
                     while True:
-                        for event in studio.events(identity, cursor):
+                        events, offset = studio.events_from(identity, offset)
+                        for event in events:
+                            if event["id"] <= cursor:
+                                continue
                             self.wfile.write(f"id: {event['id']}\ndata: {json.dumps(event)}\n\n".encode())
                             cursor = event["id"]
                         self.wfile.write(b": keepalive\n\n")
@@ -1061,6 +1092,18 @@ def handler(studio):
                 # The message stays generic for the browser; the server log keeps the cause.
                 print(f"studio GET {url.path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
                 self.send_json({"error": "Unknown comparison or invalid cursor"}, 404)
+            except Exception as exc:
+                self.unexpected("GET", url.path, exc)
+
+        def unexpected(self, method, path, exc):
+            """A defect answered as a 500 with the exception's name only; the
+            traceback goes to the server log, never to the browser."""
+            import traceback
+            print(f"studio {method} {path}: unexpected {type(exc).__name__}: {exc}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+            try:
+                self.send_json({"error": f"The Studio hit a defect answering this request ({type(exc).__name__}); the server log has the trace."}, 500)
+            except OSError:
+                pass  # Headers already sent (a stream) or the client left.
 
         STATIC_TYPES = {"html": "text/html; charset=utf-8", "js": "text/javascript", "css": "text/css",
                         "svg": "image/svg+xml", "woff2": "font/woff2", "png": "image/png", "json": "application/json",
@@ -1236,6 +1279,10 @@ def handler(studio):
                 self.send_json({"error": str(exc)}, 409)
             except (ValueError, TypeError, KeyError, FileNotFoundError) as exc:
                 self.send_json({"error": str(exc)}, 400)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            except Exception as exc:
+                self.unexpected("POST", self.path, exc)
     return Handler
 
 

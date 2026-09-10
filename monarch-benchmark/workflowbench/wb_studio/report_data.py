@@ -340,7 +340,7 @@ def task_set_id(job) -> str:
 
 def run_report(studio, identity, audience="public") -> dict:
     from wb_studio.failure_analysis import analysis as failure_analysis
-    from wb_studio.narrative import run_story
+    from wb_studio.narrative import run_story, without_reasoning
     job = studio.job(identity)
     events = studio.events(identity)
     m = measures.run_measures(job, events)
@@ -349,6 +349,8 @@ def run_report(studio, identity, audience="public") -> dict:
     baseline = m["setups"].get(baseline_id) if baseline_id else None
     fa = failure_analysis(studio, identity)
     fa_attempts = [a for a in fa["attempts"] if a["model"] in shown]
+    if audience != "internal":
+        fa_attempts = [{**a, "story": without_reasoning(a.get("story"))} for a in fa_attempts]
     candidates = [m["setups"][s] for s in shown if s in m["setups"] and s != baseline_id and m["setups"][s]["pass"]["attempts"]]
     subject = max(candidates, key=lambda s: (s["pass"]["rate"] or 0, s["name"])) if candidates else (baseline or (m["setups"][shown[0]] if shown and shown[0] in m["setups"] else None))
     reused = historical_baseline(studio, job, subject["id"]) if subject and baseline_id is None else None

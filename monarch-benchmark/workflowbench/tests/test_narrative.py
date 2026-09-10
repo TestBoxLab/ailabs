@@ -123,3 +123,18 @@ def test_failure_analysis_carries_the_story():
     fa = analysis(studio, "run-1")
     assert fa["attempts"][0]["story"]["mode"] == "wrong_result"
     assert fa["story"]["setups"][0]["failed"] == 1
+
+
+def test_application_error_bodies_count_as_tool_errors():
+    """The simulator answers a bad call with {"error": {...}} and status completed;
+    the story must still see it as a failed call, not a success."""
+    events = [ev(1, "attempt_started"), ev(2, "model_finished", output="", reasoning=[], stop_reason="tool_use"),
+              ev(3, "node_started", node="tool-0", label="api_fetch", arguments={"method": "GET", "url": "https://x.salesforce.com/nope"}),
+              ev(4, "node_finished", node="tool-0", status="completed", output='{"error": {"code": 404, "message": "Unknown API URL"}}'),
+              ev(5, "model_finished", output="I could not find it.", stop_reason="end_turn"), ev(6, "attempt_finished")]
+    attempt = account([result_for("bare")], events)["attempts"][0]
+    assert attempt["actions"][0]["status"] == "error" and attempt["actions"][0]["error"] == "404 Unknown API URL"
+    s = attempt["story"]
+    assert s["mode"] == "tool_error" and s["turning_point"]["event_id"] == 3
+    assert not any(f["text"].startswith("Every tool call succeeded") for f in s["went_right"])
+    assert any("404 Unknown API URL" in f["text"] for f in s["went_wrong"])

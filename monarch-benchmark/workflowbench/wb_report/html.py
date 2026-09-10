@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from wb_report.metrics import (NOT_APPLICABLE_REASON, PHASE_WORDS, is_monarch,
-                               is_not_applicable, monarch_outcomes)
+                               monarch_outcomes)
 
 
 def _esc(value: Any) -> str:

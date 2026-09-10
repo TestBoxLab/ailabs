@@ -31,7 +31,6 @@ import re
 import json
 import os
 import subprocess
-import threading
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse

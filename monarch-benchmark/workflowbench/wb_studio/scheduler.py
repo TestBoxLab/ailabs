@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 import threading
 import traceback
 from datetime import datetime
@@ -93,8 +94,9 @@ class Scheduler:
             while not self._stop.wait(interval_s):
                 try:
                     self.run_due()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # The thread must survive; the cause must not vanish.
+                    print(f"studio scheduler: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         self._thread = threading.Thread(target=loop, daemon=True, name="studio-scheduler")
         self._thread.start()
 
