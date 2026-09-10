@@ -267,10 +267,15 @@ except RuntimeError as error:
     sys.exit(23)
 """
     command = [sys.executable, '-c', script, str(tmp_path / 'studio')]
+    # Generous, because the timeout is not what this test is about: importing
+    # wb_studio.runtime alone takes about 9 s on a cold Windows interpreter, so a
+    # 10 s budget killed the contender before it could report the lock it had
+    # correctly failed to take, and the lock looked broken when it was not.
+    LAUNCH_S = 60
     with single_host_owner(tmp_path / 'studio'):
-        contender = subprocess.run(command, text=True, capture_output=True, timeout=10)
+        contender = subprocess.run(command, text=True, capture_output=True, timeout=LAUNCH_S)
         assert contender.returncode == 23, contender.stderr
         assert contender.stdout.strip() == 'Another Studio process owns this data directory'
-    successor = subprocess.run(command, text=True, capture_output=True, timeout=10)
+    successor = subprocess.run(command, text=True, capture_output=True, timeout=LAUNCH_S)
     assert successor.returncode == 0, successor.stderr
     assert successor.stdout.strip() == 'acquired'

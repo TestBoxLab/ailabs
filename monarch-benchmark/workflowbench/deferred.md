@@ -126,10 +126,3 @@ are not fetched for the Activity lane.
   --expect-version 1.0.6+evalrepair.10 --tree-id <id> --replace`, then `uv lock`
   and `uv sync`. The four tier sets and `check-collateral` declare no world
   revision, so they run unaffected. Seen 10 Sep 2026.
-- `test_studio_runtime_controls.py::test_single_host_owner_excludes_other_process_and_releases_lock`
-  fails on this machine: it spawns a subprocess with a 10 s timeout, and
-  importing `wb_studio.runtime` alone takes 9.4 s here (measured), so the
-  contender is killed before it can report the lock it correctly failed to take.
-  The lock itself is fine; the margin is not. Raising the subprocess timeout, or
-  importing less at module scope, would fix it. Lucas's test (bd2f2fa). Seen
-  10 Sep 2026.
