@@ -15,6 +15,7 @@ const script = async () => {
   const original = api, calls = [];
   let conflict = false, blocked = false, offline = false;
   const catalog = {configured:true,writable:true,repository:'TestBoxLab/ailabls-benchmark-config',branch:'main',commit:'a'.repeat(40),history_url:'https://github.com/TestBoxLab/ailabls-benchmark-config/commits/main',files:[{path:'config/models/example.yaml',text:'name: example\nprice: 1\n'},{path:'config/plans/example.yaml',text:'name: example\nrepetitions: 1\n'},{path:'config/products/example.yaml',text:'name: example\n'}]};
+  for(const suffix of ['knowledge-map','monarch-kb','monarch-recipes'])catalog.files.push({path:'config/products/example.'+suffix+'.yaml',text:'fixture: supporting file\n'});
   api = async (path, body) => {
     if(!path.startsWith('/api/benchmark-config'))return original(path, body);
     calls.push({path,body});
@@ -30,6 +31,8 @@ const script = async () => {
   const click = async id => {el(id).click();await new Promise(r=>setTimeout(r,80));};
   await document.getElementById('nav-runtime').onclick();await window.loadBenchmarkConfig();
   assert(el('files').value==='config/models/example.yaml' && el('text').value.includes('price: 1'),'Initial file must be selected and loaded');
+  assert([...el('product').options].map(o=>o.value).join(',')==='example','Product options must exclude knowledge maps, knowledge bases and recipes');
+  assert(['knowledge-map','monarch-kb','monarch-recipes'].every(s=>[...el('files').options].some(o=>o.value==='config/products/example.'+s+'.yaml')),'Supporting files remain editable');
   input('text','invalid');await click('validate');
   assert(el('save').disabled && el('validation').textContent.includes('invalid YAML'),'Invalid YAML must block save');
   input('text','name: example\nprice: 2\n');

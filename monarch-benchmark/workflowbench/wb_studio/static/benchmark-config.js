@@ -5,7 +5,7 @@
   const draft=new Map(), el=id=>document.getElementById('bc-'+id);
   const changes=()=>[...draft].map(([path,text])=>({path,text}));
   const status=text=>{el('status').textContent=text;};
-  const names=kind=>(catalog?.files||[]).filter(f=>f.path.startsWith('config/'+kind+'/')&&f.path.endsWith('.yaml')&&!/\.monarch-(kb|recipes)\.yaml$/.test(f.path)).map(f=>f.path.split('/').pop().slice(0,-5));
+  const names=kind=>(catalog?.files||[]).filter(f=>f.path.startsWith('config/'+kind+'/')&&f.path.endsWith('.yaml')&&!/\.(knowledge-map|monarch-kb|monarch-recipes)\.yaml$/.test(f.path)).map(f=>f.path.split('/').pop().slice(0,-5));
   function controls(){
     el('save').disabled=busy||!catalog?.writable||!checked||!draft.size||!el('message').value.trim()||!el('operator').value.trim();
     el('validate').disabled=busy||!draft.size;
