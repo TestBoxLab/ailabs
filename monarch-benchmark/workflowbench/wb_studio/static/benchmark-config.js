@@ -19,6 +19,7 @@
     el('delete').disabled=busy||!catalog?.writable||!selected;
     el('delete').textContent=draft.get(selected)===null?'Restore file':'Delete file from draft';
     el('product').disabled=busy;el('plan').disabled=busy;
+    el('operator').disabled=busy;
     el('dirty').textContent=draft.size?draft.size+' changed file'+(draft.size===1?'':'s')+' in this tab.':'No unsaved changes.';
   }
   function clearPreview(){preview=null;requestId=null;el('preview-result').textContent='Preview the saved revision to see attempts, cost and readiness.';controls();}
@@ -74,7 +75,8 @@
         const option=[...el('files').options].find(o=>o.value===selected);if(option)option.textContent=selected+(draft.has(selected)?' · changed':'');
         checked=false;el('validation').textContent='Validate this draft before saving.';el('diff').classList.add('hidden');clearPreview();
       };
-      for(const id of ['message','operator','new-path'])el(id).oninput=controls;
+      for(const id of ['message','new-path'])el(id).oninput=controls;
+      el('operator').oninput=clearPreview;
       function changed(){checked=false;el('validation').textContent='Validate this draft before saving.';el('diff').classList.add('hidden');clearPreview();render();}
       el('new').onclick=()=>{
         const path=el('new-path').value.trim();
@@ -101,7 +103,7 @@
       });
       el('preview').onclick=()=>operation(async()=>{
         preview=null;requestId=null;el('preview-result').textContent='Checking the saved plan…';
-        preview=await api('/api/benchmark-config/preview',{commit:catalog.commit,product:el('product').value,plan:el('plan').value});
+        preview=await api('/api/benchmark-config/preview',{commit:catalog.commit,product:el('product').value,plan:el('plan').value,operator:el('operator').value.trim()});
         const competitors=preview.competitors.map(c=>typeof c==='string'?c:c.name||c.id).join(', ');
         const facts=[['Revision',preview.commit],['Product / plan',preview.product+' / '+preview.plan],['Tasks',Array.isArray(preview.tasks)?preview.tasks.length:preview.tasks],['Competitors',competitors],['Attempts including retries',preview.attempts_min+'–'+preview.attempts_max],['Cost ceiling',money(preview.cost_ceiling_usd)],['Readiness',preview.launchable?'Ready for an explicit launch':'Blocked'],['Configuration hash',preview.config_hash]];
         el('preview-result').innerHTML='<dl class="facts">'+facts.map(([label,value])=>'<dt>'+esc(label)+'</dt><dd>'+esc(value)+'</dd>').join('')+'</dl>'+(preview.reasons.length?'<ul>'+preview.reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>':'')+'<p>Run uses this revision even if main changes. Launch rechecks approval, billing and budget.</p>';
