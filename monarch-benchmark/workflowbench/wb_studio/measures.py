@@ -331,6 +331,45 @@ def time_by_phase(rows) -> dict:
             "total_s": round(total, 4), "reconciles": reconciles, "attempts": counted}
 
 
+def per_execution(rows) -> dict:
+    """FR-027. What one execution of an already-saved workflow costs and takes.
+
+    The second half of the break-even curve. In run-only mode nothing is authored —
+    the recipe was configured once by `wb monarch recipes`, outside the round — so
+    every attempt here is one execution, and `configure_usd` is NOT_APPLICABLE rather
+    than zero: reporting zero would make the engine look free to set up.
+
+    A task nobody could price stays unknown on its own row and blinds only the cohort
+    figure, which cannot be summed without it.
+    """
+    tasks: dict = {}
+    for r in evaluated(rows):
+        task = tasks.setdefault(r["task"], {"executions": 0, "cost_usd": 0.0,
+                                            "seconds": 0.0, "passed": 0})
+        task["executions"] += 1
+        task["passed"] += bool(r.get("passed"))
+        seconds = phase_seconds(r, TOTAL_PHASE)
+        task["seconds"] += 0.0 if is_unknown(seconds) else seconds
+        value = known_cost(r)
+        if value is None:
+            task["cost_usd"] = UNKNOWN
+        elif not is_unknown(task["cost_usd"]):
+            task["cost_usd"] += value
+    for task in tasks.values():
+        if not is_unknown(task["cost_usd"]):
+            task["cost_usd"] = round(task["cost_usd"], 6)
+        task["seconds"] = round(task["seconds"], 4)
+    executions = sum(t["executions"] for t in tasks.values())
+    blind = any(is_unknown(t["cost_usd"]) for t in tasks.values())
+    total = UNKNOWN if blind else sum(t["cost_usd"] for t in tasks.values())
+    seconds = sum(t["seconds"] for t in tasks.values())
+    return {"tasks": tasks, "executions": executions, "tasks_counted": len(tasks),
+            "cost_usd": UNKNOWN if blind else (round(total / executions, 6) if executions else None),
+            "seconds": round(seconds / executions, 4) if executions else None,
+            # Paid once, elsewhere. Absent from this round is not free.
+            "configure_usd": NOT_APPLICABLE}
+
+
 def cost_per_pass(rows):
     """FR-028. Cohort cost divided by passes: a cheap competitor that fails is not cheap.
 

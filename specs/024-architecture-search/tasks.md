@@ -242,28 +242,28 @@ then inspect the stored row.
 
 ### Cost by phase (FR-024) — R2, wiring only
 
-- [ ] T084 [P] [US4] Write a failing test in `wb/tests/test_studio_measures.py` asserting a Monarch result row exposes `cost_by_phase` with `authoring` and `execution`
-- [ ] T085 [US4] Carry `cost.by_phase` from `wb/wb_arms/monarch.py:453` onto the result row rather than only into the turn log, making T084 pass
-- [ ] T086 [US4] Teach `measures.cost` at `wb/wb_studio/measures.py:127` to read the phase breakdown, asserting parts reconcile with the total within one cent
-- [ ] T087 [US4] Record `authoring` as `n/a` for a competitor with no authoring phase, distinct from unknown and zero, in `wb/wb_arms/api_loop.py`, with a test in `wb/tests/test_arms_m2.py`
+- [x] T084 [P] [US4] Write a failing test in `wb/tests/test_studio_measures.py` asserting a Monarch result row exposes `cost_by_phase` with `authoring` and `execution`
+- [x] T085 [US4] Carry `cost.by_phase` from `wb/wb_arms/monarch.py:453` onto the result row rather than only into the turn log, making T084 pass
+- [x] T086 [US4] Teach `measures.cost` at `wb/wb_studio/measures.py:127` to read the phase breakdown, asserting parts reconcile with the total within one cent
+- [x] T087 [US4] Record `authoring` as `n/a` for a competitor with no authoring phase, distinct from unknown and zero, in `wb/wb_arms/api_loop.py`, with a test in `wb/tests/test_arms_m2.py`
 
 ### Time by phase (FR-025) — R3, the one new recorded value
 
-- [ ] T088 [P] [US4] Write a failing test in `wb/tests/test_arms_m2.py` asserting a Monarch attempt records `authoring_ended_at`
-- [ ] T089 [US4] Record the authoring-end timestamp between `_author` (`wb/wb_arms/monarch.py:660`) and `_start_run` (`:773`), making T088 pass
-- [ ] T090 [US4] Derive `configure_s` and `execute_s` in `wb/wb_studio/measures.py`, asserting they reconcile with `duration_s` within one second
+- [x] T088 [P] [US4] Write a failing test in `wb/tests/test_arms_m2.py` asserting a Monarch attempt records `authoring_ended_at`
+- [x] T089 [US4] Record the authoring-end timestamp between `_author` (`wb/wb_arms/monarch.py:660`) and `_start_run` (`:773`), making T088 pass
+- [x] T090 [US4] Derive `configure_s` and `execute_s` in `wb/wb_studio/measures.py`, asserting they reconcile with `duration_s` within one second
 
 ### Unknown stays unknown (FR-026)
 
-- [ ] T091 [P] [US4] Write a failing test in `wb/tests/test_langfuse_cost.py` asserting an unreadable phase records `unknown` and holds its reservation, never zero
-- [ ] T092 [US4] Extend the existing `cost_missing` discipline to the per-phase split in `wb/wb_arms/monarch.py:411`, making T091 pass
+- [x] T091 [P] [US4] Write a failing test in `wb/tests/test_langfuse_cost.py` asserting an unreadable phase records `unknown` and holds its reservation, never zero
+- [x] T092 [US4] Extend the existing `cost_missing` discipline to the per-phase split in `wb/wb_arms/monarch.py:411`, making T091 pass
 
 ### Repeated execution and per-pass cost (FR-027, FR-028) — R10
 
 - [ ] T093 [US4] Generate recipe data with the already-built `wb monarch recipes` for `tasks/dev-50` and record the command, cost and outcome in `monarch-benchmark/docs/rounds/2026-09-11-recipes.md` **(paid — state attempts and a cost band first)**
-- [ ] T094 [P] [US4] Write a failing test in `wb/tests/test_monarch_recipes.py` asserting a run-only run produces per-execution cost and time per task
-- [ ] T095 [US4] Surface per-execution cost and time from run-only results in `wb/wb_studio/measures.py`, making T094 pass
-- [ ] T096 [P] [US4] Add `cost_per_pass` to `wb/wb_studio/measures.py` returning "no passes" when nothing passed, with a test in `wb/tests/test_studio_measures.py`
+- [x] T094 [P] [US4] Write a failing test in `wb/tests/test_monarch_recipes.py` asserting a run-only run produces per-execution cost and time per task
+- [x] T095 [US4] Surface per-execution cost and time from run-only results in `wb/wb_studio/measures.py`, making T094 pass
+- [x] T096 [P] [US4] Add `cost_per_pass` to `wb/wb_studio/measures.py` returning "no passes" when nothing passed, with a test in `wb/tests/test_studio_measures.py`
 
 **Checkpoint**: the fitness function is measurable. Independently shippable.
 
@@ -548,3 +548,97 @@ removes the only evidence the microphone works. That is the path verification ex
 since the headless browser reports `reduce`.
 
 Unchanged by any of this: **T002**, and **US4 / US5**, T084–T112.
+
+---
+
+## User Story 4 complete, 11 September 2026
+
+The fitness function is measurable. T093 is refused rather than done, for reasons that
+are correct — see below and `monarch-benchmark/docs/rounds/2026-09-11-recipes.md`.
+
+**Most of this story was already recorded, and nobody was reading it.** Eighteen readers
+over the cost, time, recipe, contract and test surfaces returned one finding that
+reorganised the work: the arm has written per-phase cost and wall clock since feature
+002. `monarch.py:463` puts `cost.by_phase` onto `res.phases`; each phase's clock is
+stamped in a `finally`, so a timed-out attempt still says where the deadline passed;
+and `EpisodeRow.phases` carries all of it to storage. The plan assumed none of this
+existed.
+
+Three of the plan's premises were wrong, and the tasks are marked done against what was
+actually needed:
+
+| Task | The plan said | What was true |
+|---|---|---|
+| T085 | carry `cost.by_phase` onto the result row | already there since feature 002; what was missing was a reader |
+| T087 | record `n/a` in `wb_arms/api_loop.py` | inverted — `api_loop` never writes `phases` at all, so "no authoring phase" is *already* the absent key. It belongs in the reader |
+| T088–T089 | record a new `authoring_ended_at` timestamp | redundant. `phases['authoring'].wall_clock_s` has existed since feature 002 and survives a timeout, which an end-timestamp would not |
+
+**The blocker no task covered.** `wb_studio/app.py:790` built the Studio's result row
+with one flat `cost_usd` and one `seconds`, and dropped `phases` entirely. That dict is
+the only input `wb_studio/measures.py` ever receives, so the split was out of reach of
+every report and every measure. Four lines fixed it; without them T086 and T090 are not
+merely hard but impossible.
+
+### Two live defects, each with a test that reproduces it first
+
+**`attempt_seconds` reported roughly double.** `wb_report/metrics.py:40` summed the
+`run` phase — the whole attempt — together with `authoring` and `execution`, which are
+its parts. A 100-second Monarch attempt reported 200. `_phase_block`, thirty lines
+below, already skips `run` and `model:*` by name, so the module knew the rule and this
+function did not follow it. No fixture carried `run` beside real phases, so the covering
+test could not see it. It is also the number Lucas's "faster than a harness" claim is
+read off.
+
+**An unpriced phase read as free.** `_phase_block` did `phase.get("cost_usd") or 0.0`.
+`PhaseMetrics.cost_usd` is already `None` when nobody could price the phase, so the
+discipline was right at the arm and lost at the reader. It matters because an attempt
+whose cost cannot be read **holds its whole ceiling against the week** instead of
+settling — US$ 25.00 apiece by default. Ten unreadable attempts hold the entire US$ 300
+week. Rendering them as US$ 0.00 tells a reader the round was cheap while the ledger is
+still holding the money.
+
+### What `measures` gained
+
+- `phase_cost` keeps three states apart, using the `Sentinel` convention already in the
+  module. `n/a` is a competitor with no such phase — a bare model never configures
+  anything, and calling that zero makes it look free at the one thing Monarch charges
+  for. `unknown` is a phase that ran and nobody priced.
+- `cost_by_phase` reconciles parts against the total and returns whatever the named
+  phases do not claim as `unattributed`, rather than dropping it. This is not
+  hypothetical: `monarch.py:464` only updates phases that already exist, and only
+  `authoring` and `execution` are pre-created, so discovery spend genuinely falls
+  outside them. `reconciles` is how a reader learns the bucket was needed.
+- `time_by_phase` reads the clocks already recorded, one second of tolerance per
+  attempt.
+- `per_execution` reads a run-only round as the engine alone. `configure_usd` is
+  `NOT_APPLICABLE` there, never zero: the recipe was authored once by
+  `wb monarch recipes`, outside the round.
+- `cost_per_pass` returns `NO_PASSES`, not `unknown`, when nothing passed. The record is
+  complete and the answer is undefined; a reader told "unknown" goes looking for data
+  that does not exist.
+
+### T093 is refused, twice, and both refusals are correct
+
+```
+$ wb monarch recipes --tasks tasks/tier-simple
+paid launch refused: wb monarch recipes: Monarch instance not verified: milestone M5
+exit 2
+```
+
+The refusal fires before any client is built — no request, no reservation, no spend.
+And `tasks/dev-50` does not exist: `wb corpus split` has never been run, so there is no
+development slate to author recipes for. Drawing the split is free and is the first
+step; the paid launch then needs milestone M5 and a named human approver per decision
+D5. An agent never approves its own round.
+
+The measurement side landed without it. What is missing is the run, not the reader.
+
+### One deviation from the plan
+
+T094 was written into `tests/test_studio_measures.py` rather than
+`tests/test_monarch_recipes.py`. `per_execution` is a pure function over stored rows and
+belongs beside the other measures and their `result`/`split` helpers; the recipes file
+tests the CLI.
+
+Still open: **T002**, **T093** (blocked above), and **US5** — the curve and the gap
+list, T097–T112.

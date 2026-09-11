@@ -166,6 +166,40 @@ def test_cost_per_pass_says_no_passes_rather_than_unknown():
     assert measures.is_unknown(measures.cost_per_pass(blind))
 
 
+def test_per_execution_reads_a_run_only_round_as_the_engine_alone():
+    """FR-027. A frozen recipe run N times: the second half of the break-even curve.
+
+    In run-only nothing is authored, so `authoring` is absent from every row and the
+    whole attempt is one execution of an artefact configured once, elsewhere. That is
+    what makes the per-execution figure comparable with a harness paying per prompt.
+    """
+    rows = [result("t1", "monarch", True, cost=0.10, seconds=4.0,
+                   phases=split(None, 0.10, total=0.10, execution_s=4.0, seconds=4.0)),
+            result("t1", "monarch", True, cost=0.12, seconds=5.0,
+                   phases=split(None, 0.12, total=0.12, execution_s=5.0, seconds=5.0)),
+            result("t2", "monarch", False, cost=0.08, seconds=3.0,
+                   phases=split(None, 0.08, total=0.08, execution_s=3.0, seconds=3.0))]
+    out = measures.per_execution(rows)
+    assert out["executions"] == 3
+    assert out["tasks"]["t1"] == {"executions": 2, "cost_usd": pytest.approx(0.22),
+                                  "seconds": pytest.approx(9.0), "passed": 2}
+    assert out["cost_usd"] == pytest.approx(0.30 / 3)
+    assert out["seconds"] == pytest.approx(12.0 / 3)
+    # Configure is not zero here — it was paid once by `wb monarch recipes`, outside
+    # this round. Reporting zero would make the engine look free to set up.
+    assert measures.is_not_applicable(out["configure_usd"])
+
+
+def test_per_execution_keeps_a_task_unknown_without_blinding_the_others():
+    rows = [result("t1", "monarch", True, cost=0.10, phases=split(None, 0.10, total=0.10)),
+            result("t2", "monarch", True, cost=0.10, flags=["cost_missing"],
+                   phases=split(None, None, total=None, execution_s=2.0))]
+    out = measures.per_execution(rows)
+    assert out["tasks"]["t1"]["cost_usd"] == pytest.approx(0.10)
+    assert measures.is_unknown(out["tasks"]["t2"]["cost_usd"])
+    assert measures.is_unknown(out["cost_usd"])     # the cohort figure cannot be summed
+
+
 def test_turns_count_model_finished_events_per_attempt():
     events = [{"type": "model_finished", "task": "t1", "model": "a"}, {"type": "model_finished", "task": "t1", "model": "a"},
               {"type": "node_finished", "task": "t1", "model": "a"}]
