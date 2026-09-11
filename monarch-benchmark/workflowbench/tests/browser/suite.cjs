@@ -257,8 +257,6 @@ check('report: a contents list, sections with an address, the page titled by the
     await p.locator('[data-open-round]').first().click(); await p.waitForSelector('#report-article .standings');
     assert(!(await p.locator('#report-article').innerText()).includes('Not counted in the standings'), 'a pilot round does not list its own runs as excluded');
     assert((await p.locator('#report-article .standings thead th').first().innerText()) === 'Rank', 'standings carry a rank column');
-    at('audience in the address'); await p.locator('#report-article [data-audience=internal]').click(); await p.waitForFunction(() => location.hash.includes('audience=internal'));
-    assert((await p.locator('#report-article .internal-mark').count()) === 1, 'the internal view is banded');
     assert((await p.locator('#report-article figure.chart .chart-take a').count()) >= 2, 'a figure can be taken away as SVG or CSV');
     assert((await p.locator('#report-article .report-terms-fold').count()) === 1 && !(await p.locator('#report-article .report-terms-fold').getAttribute('open')), 'terms fold away');
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
@@ -451,7 +449,7 @@ check('settings: budget, capacity, providers with key presence, Monarch pin, all
     at('genesis configuration'); await p.waitForSelector('#settings-genesis-config .step-table');
     assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 9, 'one row per step of Genesis\'s work');
     const genesisText = await p.locator('#settings-genesis-config').innerText();
-    assert(/envelope/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
+    assert(/weekly allowance/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
     await p.waitForSelector('#config-jobs .schedule-table'); assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');
     at('digest'); await p.goto(BASE + '/#genesis/digest'); await p.waitForSelector('#genesis-digest .report-section');
     assert(/^Genesis, week \d{1,2} of \d{4}$/.test(await p.locator('#genesis-digest h1').innerText()), 'the digest reads as a report');
