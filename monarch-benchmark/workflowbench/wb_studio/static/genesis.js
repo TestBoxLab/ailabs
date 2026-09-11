@@ -84,8 +84,18 @@ function stepList(t){
  }
  return out;
 }
+// A `show` result is the one tool step that is meant to be acted on, so it renders as a
+// real link rather than a row of JSON. An anchor is a user request under WCAG 3.2.5 and
+// carries middle-click, copy link and the back button for free; the server never moves
+// anyone's screen (feature 024, stage S1).
+function showLink(step){
+ let r=step.result;if(typeof r==='string'){try{r=JSON.parse(r);}catch(e){return '';}}
+ if(!r||typeof r!=='object'||typeof r.route!=='string'||!r.route.startsWith('#'))return '';
+ return '<p class="genesis-goto"><a href="'+esc(r.route)+'" data-genesis-goto="'+esc(r.route)+'">'+esc(r.label||('Open '+r.route))+'</a>'
+  +(r.why?'<span class="meta">'+esc(r.why)+'</span>':'')+'</p>';}
 function stepsHtml(t){const steps=stepList(t);if(!steps.length)return '';
- return '<ol class="turn-steps">'+steps.map(s=>'<li class="'+(s.model?'model':'tool')+(s.result===null&&!s.model&&t.status==='running'?' live':'')+'"><details><summary><span class="step-action">'+esc(s.model?s.action:human(s.action))+'</span><span class="step-summary">'+esc(String(s.payload||'').slice(0,90))+'</span>'+(s.cost?'<span class="meta">$'+esc(s.cost)+'</span>':'')+(s.result!==null&&!s.model?'<span class="meta">done</span>':'')+'</summary><div class="step-body">'+(s.payload?'<p class="meta">Payload</p><pre>'+esc(String(s.payload))+'</pre>':'')+(s.result!==null&&s.result!==undefined?'<p class="meta">Result</p><pre>'+esc(String(s.result))+'</pre>':'')+'</div></details></li>').join('')+'</ol>';}
+ const links=steps.filter(s=>s.action==='show'&&s.result!==null).map(showLink).join('');
+ return '<ol class="turn-steps">'+steps.map(s=>'<li class="'+(s.model?'model':'tool')+(s.result===null&&!s.model&&t.status==='running'?' live':'')+'"><details><summary><span class="step-action">'+esc(s.model?s.action:human(s.action))+'</span><span class="step-summary">'+esc(String(s.payload||'').slice(0,90))+'</span>'+(s.cost?'<span class="meta">$'+esc(s.cost)+'</span>':'')+(s.result!==null&&!s.model?'<span class="meta">done</span>':'')+'</summary><div class="step-body">'+(s.payload?'<p class="meta">Payload</p><pre>'+esc(String(s.payload))+'</pre>':'')+(s.result!==null&&s.result!==undefined?'<p class="meta">Result</p><pre>'+esc(String(s.result))+'</pre>':'')+'</div></details></li>').join('')+'</ol>'+links;}
 function stoppedLine(t){
  if(t.status!=='failed')return '';
  const ev=[...(t.events||[])].reverse().find(e=>e.type==='failed'||e.type==='request_error');const reason=ev?.reason||ev?.message||'Genesis could not complete this turn.';
@@ -102,13 +112,22 @@ let genesisPaused=false,genesisPending=null;
 function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
  if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
 $('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
+function announceShow(t){
+ const shown=stepList(t).filter(s=>s.action==='show'&&s.result!==null);
+ if(!shown.length)return;
+ let r=shown[shown.length-1].result;if(typeof r==='string'){try{r=JSON.parse(r);}catch(e){return;}}
+ if(!r||!r.label)return;
+ const region=$('#genesis-pointer');
+ const line='Genesis pointed at '+r.label+(r.why?': '+r.why:'')+'.';
+ if(region.textContent!==line){region.textContent=line;setTimeout(()=>{if(region.textContent===line)region.textContent='';},400);}}
 function paintTurn(t){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
  const messages=$('#genesis-messages'),follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<60;
  el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);
  linkRecTags(el);bindTurnChips();el.querySelector('.genesis-turn-status').textContent=t.status==='running'?'Working…':'';
  const old=el.querySelector('.turn-stopped');if(old)old.remove();
  el.querySelector('.scientist-message').insertAdjacentHTML('beforeend',stoppedLine(t));
- if(follow)messages.scrollTop=messages.scrollHeight;}
+ if(follow)messages.scrollTop=messages.scrollHeight;
+ announceShow(t);}
 function pollGenesis(id){clearTimeout(genesisPoll);$('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';const stop=$('#genesis-stop');stop.hidden=false;$('#genesis-pause-updates').hidden=false;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
  genesisPoll=setTimeout(async()=>{try{const i=threadTurns.findIndex(x=>x.id===id);const known=i>=0?threadTurns[i]:null;const last=known?.events?.length?known.events[known.events.length-1].id:0;const fresh=await api('/api/genesis/turns/'+id+(known?'?after='+last:''));const t=known&&fresh.partial?{...fresh,events:known.events.concat(fresh.events)}:fresh;if(i>=0)threadTurns[i]=t;const el=$$('[data-turn]').find(e=>e.dataset.turn===id);
   // Paused: keep the newest turn and paint it when the reader asks, so nothing is lost.

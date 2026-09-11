@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from wb_studio import genesis_tools as T
+from wb_studio.failure_analysis import BUCKETS
 
 TASKS = ['finance.t%02d' % i for i in range(1, 7)]
 SETUP, BARE = 'blueprint.a.v2', 'claude-code@medium'
@@ -29,10 +30,22 @@ def rows(arm, passed, tasks=TASKS, termination='completed'):
             for i, t in enumerate(tasks)]
 
 
+def live_hashes(tasks=TASKS):
+    """Hashes that match the catalog these runs were graded against.
+
+    A report excludes any attempt whose recorded task hash no longer matches the corpus
+    (feature 024, FR-012) — the mark that makes a non-regradable row visible. These
+    fixtures used 'hash-<task>', so every attempt read as superseded and every measure
+    came back zero once that check landed. A run under test is a live one.
+    """
+    from wb_world.episode import contract_hash
+    return {t: contract_hash(CATALOG.get(t) or task(t)) for t in tasks}
+
+
 def job(identity, results, tasks=TASKS, hashes=None):
     return {'id': identity, 'title': 'Run ' + identity, 'status': 'completed',
             'created_at': '2026-09-01T00:00:00+00:00', 'finished_at': '2026-09-01T00:00:00+00:00',
-            'task_hashes': hashes or {t: 'hash-' + t for t in tasks},
+            'task_hashes': hashes or live_hashes(tasks),
             'settings': {'arms': [{'id': SETUP, 'kind': 'version', 'name': 'V2'},
                                   {'id': BARE, 'kind': 'native', 'version': 'without-monarch', 'name': 'Bare'}],
                          'tasks': list(tasks), 'models': [SETUP, BARE], 'track': 'agentic-request'},
@@ -122,8 +135,12 @@ def test_failure_buckets_keep_counts_denominators_and_one_evidence_event(tmp_pat
               {'id': 2, 'type': 'attempt_finished', 'task': 'finance.t01', 'model': SETUP}]
     genesis = genesis_for([job('run-1', rows(SETUP, 0, ['finance.t01']))], tmp_path, events)
     found = T.TOOLS['failure_buckets'](genesis, {'run': 'run-1'})
-    unmet = next(b for b in found['buckets'] if b['id'] == 'requirement_unmet')
-    assert (unmet['count'], unmet['percent_failed'], unmet['evidence_event']) == (1, 100.0, 1)
+    # The bucket ids are `narrative.MODES` now: one taxonomy, derived, rather than a
+    # second classifier that disagreed with the narrative on the same attempts
+    # (feature 024, FR-013). An attempt that changed nothing is `stopped_short`.
+    assert {b['id'] for b in found['buckets']} <= set(BUCKETS)
+    short = next(b for b in found['buckets'] if b['id'] == 'stopped_short')
+    assert (short['count'], short['percent_failed'], short['evidence_event']) == (1, 100.0, 1)
     assert found['summary']['failed_attempts'] == 1
     assert 'All recorded failed attempts' in found['denominators']['percent_failed']
     assert found['limitations']
