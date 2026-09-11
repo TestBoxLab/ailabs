@@ -338,3 +338,30 @@ them is retired (11 Sep 2026), so no pattern needs adding before publication.
 - Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>.html`. (Carlos)
 - Are sortable columns worth their twelve lines of inline JavaScript, or should the page be pure markup? Proposed: keep them, with `--no-sort` to drop them. (Carlos)
 - Monarch's cost per model comes from the per-family breakdown the competitor writes to `turns.jsonl` (`{"cost": ...}`), not from phase keys; the report reads it from there. (Carlos)
+
+## Decision D10 — Monarch phase telemetry, satisfied 11 September 2026
+
+D10 asked for per-phase telemetry from Monarch so a round could say what authoring
+cost against what execution cost. It is satisfied, and mostly was already: the
+contract's span table in `wb_arms/langfuse_cost.py` maps `recipe.*` spans to
+`authoring`, `engine.*` to `execution` and `discovery.run` to `discovery`, and
+`CostSummary.by_phase` has carried the split since feature 002. The Monarch arm has
+written it onto `EpisodeRow.phases`, with a wall clock per phase, since the same
+feature.
+
+What was missing was a reader, and feature 024 supplied it. The Studio's result row
+dropped the phase block entirely, so no measure or report could see it; `measures`
+now exposes `cost_by_phase`, `time_by_phase`, `per_execution` and `curve`, and the
+round report opens with the break-even point they compute.
+
+Two facts worth keeping with the decision, because both were defects found in
+satisfying it:
+
+- Anything the named phases do not claim is reported as `unattributed`, not dropped.
+  The arm pre-creates only `authoring` and `execution`, so discovery spend genuinely
+  falls outside them.
+- An unpriced phase stays unknown and never becomes zero. An attempt whose cost
+  cannot be read holds its whole ceiling against the week instead of settling, so a
+  zero tells a reader the round was cheap while the ledger is still holding the money.
+
+Frente C is closed for the simulated product. Nothing here changes §1.

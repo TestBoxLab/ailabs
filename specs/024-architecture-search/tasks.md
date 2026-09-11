@@ -278,19 +278,19 @@ audience and confirm no fact is asserted in one and contradicted in another.
 
 ### The curve (FR-029, FR-030)
 
-- [ ] T097 [P] [US5] Write a failing test in `wb/tests/test_studio_measures.py` asserting the crossing point is the least n where cumulative cost falls below the comparator, or `none-in-range`
-- [ ] T098 [US5] Add the curve computation to `wb/wb_studio/measures.py` per [contracts/measures.md](./contracts/measures.md), making T097 pass
-- [ ] T099 [US5] Draw the curve in `wb/wb_studio/static/charts.js` with a downloadable data table and a source line, matching the existing figure conventions
-- [ ] T100 [US5] Open a round with the curve, the accuracy comparison with its uncertainty and sample count, and the gap list, in `wb/wb_studio/report_data.py` and `static/reports.js`, with a test in `wb/tests/test_studio_reports.py`
-- [ ] T101 [US5] Assert in `wb/tests/test_studio_measures.py` that the curve never extrapolates beyond the observed range of n
+- [x] T097 [P] [US5] Write a failing test in `wb/tests/test_studio_measures.py` asserting the crossing point is the least n where cumulative cost falls below the comparator, or `none-in-range`
+- [x] T098 [US5] Add the curve computation to `wb/wb_studio/measures.py` per [contracts/measures.md](./contracts/measures.md), making T097 pass
+- [x] T099 [US5] Draw the curve in `wb/wb_studio/static/charts.js` with a downloadable data table and a source line, matching the existing figure conventions
+- [x] T100 [US5] Open a round with the curve, the accuracy comparison with its uncertainty and sample count, and the gap list, in `wb/wb_studio/report_data.py` and `static/reports.js`, with a test in `wb/tests/test_studio_reports.py`
+- [x] T101 [US5] Assert in `wb/tests/test_studio_measures.py` that the curve never extrapolates beyond the observed range of n
 
 ### The gap list (FR-031, FR-032, FR-034)
 
-- [ ] T102 [P] [US5] Write a failing test in `wb/tests/test_studio_reports.py` asserting a `code-reading` gap item is never rendered as a peer of a `confirmed-result`
-- [ ] T103 [US5] Add the gap item record per [data-model.md](./data-model.md) in `wb/wb_studio/report_data.py`, making T102 pass
-- [ ] T104 [US5] Render the gap list for the engine-team, lab and executive audiences from one base in `wb/wb_studio/report_data.py`, with a test asserting no rendering contradicts another
-- [ ] T105 [US5] Add `--audience engine-team` to `wb report` in `wb/wb_orchestrator/cli.py`, and keep `code-reading` items internal-only, with a test in `wb/tests/test_html_report.py`
-- [ ] T106 [US5] Produce the written proposal from a held-out confirmation per [data-model.md](./data-model.md) in `wb/wb_studio/genesis_hypotheses.py`, with a test in `wb/tests/test_genesis_hypotheses.py`
+- [x] T102 [P] [US5] Write a failing test in `wb/tests/test_studio_reports.py` asserting a `code-reading` gap item is never rendered as a peer of a `confirmed-result`
+- [x] T103 [US5] Add the gap item record per [data-model.md](./data-model.md) in `wb/wb_studio/report_data.py`, making T102 pass
+- [x] T104 [US5] Render the gap list for the engine-team, lab and executive audiences from one base in `wb/wb_studio/report_data.py`, with a test asserting no rendering contradicts another
+- [x] T105 [US5] Add `--audience engine-team` to `wb report` in `wb/wb_orchestrator/cli.py`, and keep `code-reading` items internal-only, with a test in `wb/tests/test_html_report.py`
+- [x] T106 [US5] Produce the written proposal from a held-out confirmation per [data-model.md](./data-model.md) in `wb/wb_studio/genesis_hypotheses.py`, with a test in `wb/tests/test_genesis_hypotheses.py`
 
 **Checkpoint**: the deliverable exists. Feature complete.
 
@@ -299,10 +299,10 @@ audience and confirm no fact is asserted in one and contradicted in another.
 ## Phase 8: Polish & cross-cutting
 
 - [ ] T107 Run the full suite detached from `wb/` with `uv run python -m pytest tests -q` and compare against the T001 baseline; no previously-passing test may fail
-- [ ] T108 [P] Run `node tests/browser/suite.cjs` from `wb/` and review the snapshots for the US2 and US5 frontend changes
-- [ ] T109 [P] Correct `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` §3, which lists feature 004 as "specified, not built" when `wb_orchestrator/monarch_recipes.py` is complete
-- [ ] T110 [P] Add the slate manifest, the research envelope and the front-door secret to the file map in `CLAUDE.md`
-- [ ] T111 [P] Record in `monarch-benchmark/PLAN.md` that decision D10's phase telemetry is satisfied by `langfuse_cost.by_phase` and now reaches the report
+- [x] T108 [P] Run `node tests/browser/suite.cjs` from `wb/` and review the snapshots for the US2 and US5 frontend changes
+- [x] T109 [P] Correct `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` §3, which lists feature 004 as "specified, not built" when `wb_orchestrator/monarch_recipes.py` is complete
+- [x] T110 [P] Add the slate manifest, the research envelope and the front-door secret to the file map in `CLAUDE.md`
+- [x] T111 [P] Record in `monarch-benchmark/PLAN.md` that decision D10's phase telemetry is satisfied by `langfuse_cost.by_phase` and now reaches the report
 - [ ] T112 Refresh the Graphify knowledge graph through the installed Graphify skill, per constitution V
 
 ---
@@ -642,3 +642,81 @@ tests the CLI.
 
 Still open: **T002**, **T093** (blocked above), and **US5** — the curve and the gap
 list, T097–T112.
+
+
+---
+
+## User Story 5 complete, and the polish pass, 11 September 2026
+
+The round now opens with the argument it is for: accuracy with its uncertainty, then
+what it costs to configure once and run again.
+
+**The curve refuses three different ways, and they are not interchangeable.** A crossing
+is a measurement. `none-in-range` means the lines have not met inside the evidence — they
+may meet later, and the figure says so in words rather than drawing a projection past the
+executions actually recorded. `never` means one execution costs at least as much as one
+whole request, so no n can ever cross; rendering that as "not yet" would be a claim the
+data refutes. A round with nothing reusable in it gets a sentence, not an empty chart,
+because a bare model pays per request by construction and giving it a configure step
+would invent the very asymmetry the figure exists to measure.
+
+**The gap list has no flat `items` key.** That is the whole of FR-032 as code: a
+`code-reading` is somebody reading Monarch's source and a `confirmed-result` was
+measured, and a caller who reaches for the obvious field cannot render them as peers.
+An unconfirmed measured result sits in the same tier as a code reading with a different
+caveat, because `confirmed` is true only after a held-out confirmation.
+
+### T105 is built somewhere other than the plan says
+
+Two reasons, and the first is the same shape as `sortable`:
+
+1. `wb report` goes through `wb_report/report.py`, which never imports `report_data`.
+   The gap list does not exist on that path, so `--audience` there would have been a
+   parameter threaded through signatures no body reads.
+2. `report_data.py:38` records Lucas's ruling of 11 September — one report, every reader
+   sees the same page — and says the audiences file and its gate went that day. Adding
+   `--audience` to `wb report` would have reinstated it.
+
+So the audience is a query parameter on the Studio's report route, scoped in the code to
+the gap list's *wording*: same page, same setups, same numbers, verified in the pane by
+comparing the standings across all three. An unknown value falls back to `lab` rather
+than erroring, because a report that refuses to render over a query string is worse than
+one that reads in the default voice.
+
+### The browser suite earned its place
+
+It caught a regression from stage S4 that no Python test could: the voice control strip
+did not wrap, so at 375px the hold-to-talk button, the state text and the volume slider
+together overran the composer and pushed the whole page sideways by 54 pixels. Fixed by
+letting the strip wrap, verified in the pane at 375px with overflow 0.
+
+Two other checks failed and were **not** defects — port contention with another session's
+suite on the same fixture ports. Driving the editor path by hand showed it working, and a
+clean re-run gave 31 pass, 0 fail. Worth knowing before anyone chases one: a stale fixture
+server answers with old code and the suite says so, but a *concurrent* one just times out.
+
+### Polish
+
+T108 (browser suite, 31 pass), T109 (feature 004 was listed as "specified, not built"
+when `wb_orchestrator/monarch_recipes.py` is complete and the CLI refuses only on the M5
+gate), T110 (the split, the envelope, the front-door secret and the fitness measures in
+the `CLAUDE.md` file map), T111 (decision D10 recorded as satisfied, with the two defects
+found in satisfying it).
+
+Still open: **T093**, blocked on milestone M5 and on a development slate that has never
+been drawn; **T107**, the full suite; **T112**, the Graphify refresh.
+
+### T112 cannot be done, and the reason is worth recording
+
+Graphify is not installed on this machine and **`graphify-out/` does not exist at all** —
+no skill under `~/.claude/skills`, no `graphify` on the path, no directory in the repo.
+
+That matters beyond this task. `CLAUDE.md` tells every agent working here to "read
+`graphify-out/GRAPH_REPORT.md` before answering architecture or codebase questions" and
+to refresh it after code changes. The file has never been there. So either every agent
+has silently skipped that instruction, or some have claimed a refresh they could not have
+performed — which is precisely what the constitution's wording ("do not silently claim a
+refresh if Graphify is unavailable") was written to prevent.
+
+Not marked done, and not faked. Either install Graphify and build the graph, or strike
+the instruction from `CLAUDE.md` so it stops asking for something that is not there.
