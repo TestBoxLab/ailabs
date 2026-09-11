@@ -211,7 +211,9 @@ class Studio:
     def job(self, identity):
         if not ID.fullmatch(identity):
             raise ValueError("Invalid comparison ID")
-        return json.loads((self.directory / identity / "job.json").read_text(encoding="utf-8"))
+        from wb_studio.report_inputs import configured_job
+        return configured_job(json.loads((self.directory / identity / "job.json").read_text(encoding="utf-8")),
+                              self.directory / identity)
 
     def save(self, job):
         with self.lock:

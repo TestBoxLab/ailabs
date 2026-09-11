@@ -1,7 +1,7 @@
 # Tier-simple: hosted launch and operational continuation
 
-Final operational status: **stopped by a run-envelope reservation refusal** at
-23:16 UTC. Initial tasks finished; the configured retry allowance was not completed.
+Final operational status: **completed**, 106 results, September 11 00:45:27 UTC.
+All seven remaining Monarch retries finished after the earlier budget refusal.
 Operator and continuation authorization: Carlos, 10 September 2026.
 
 ## Identity and original launch

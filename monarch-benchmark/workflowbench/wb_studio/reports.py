@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from urllib.parse import urlsplit
-from wb_results.store import Store
+from wb_studio.report_inputs import saved_rows
 
 CATEGORIES = {"simple": "Everyday requests", "finance": "Finance", "hr": "People & HR", "marketing": "Marketing", "operations": "Operations", "sales": "Sales", "support": "Customer support"}
 
@@ -98,16 +98,14 @@ def requirement_facts(assertion):
 def outcome_report(job, events, tasks, database=None):
     rows = {}
     if database and database.exists():
-        store = Store(database)
-        try: rows = {(r["task_id"], r["arm"]): r for r in store.episodes(run=job["id"])["rows"]}
-        finally: store.close()
+        rows = {r["episode_id"]: r for r in saved_rows(database, job["id"])}
     reports = []
     for result in job["results"]:
         task_id, model = result["task"], result["model"]
         trace = [e for e in events if e.get("task") == task_id and e.get("model") == model]
-        row = rows.get((task_id, model), {})
+        row = rows.get(result.get("episode_id"), {})
         changes = row.get("unexpected_changes", result.get("unexpected_changes", []))
-        checks = result.get("checks", [])
+        checks = result.get("checks", row.get("check_results", []))
         assertions = tasks.get(task_id, {}).get("info", {}).get("assertions", [])
         requirements = [{"title": requirement(assertions[i], i) if i < len(assertions) else words(c["type"]).capitalize(),
                          "passed": c["passed"], "check_index": i, **requirement_facts(assertions[i] if i < len(assertions) else {})}

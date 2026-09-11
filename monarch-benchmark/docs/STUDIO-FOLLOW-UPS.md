@@ -50,6 +50,15 @@ results. Current incident: run `f2799405-f9b3-4fb2-8e41-a517e9c39260`.
 
 ## Complete UI metrics and billing visibility
 
+- Completed September 10: repaired configured-plan report inputs:
+  align configured and versioned competitor identities, load complete stored
+  results by episode identity, and use recorded world/version and retry semantics.
+  The old tier-simple HTML reported Monarch as unevaluated despite 17 evaluated
+  attempts, and named the server's vendor instead of the recorded world.
+  Deployed and browser verified; re-export historical HTML to get the corrected
+  report. No result or frozen metadata migration was needed.
+  [Diagnosis and verification](rounds/2026-09-10-tier-simple-report-diagnosis.md).
+
 - Distinguish a run-envelope refusal from exhaustion of the weekly budget. This
   continuation rejected an USD 8 attempt reservation while only USD 5.974484
   was unreserved and three other attempts still held capacity. It then drained

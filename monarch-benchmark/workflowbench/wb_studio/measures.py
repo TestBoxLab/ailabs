@@ -207,6 +207,8 @@ def paired(rows, baseline_rows, task_hashes=None, baseline_hashes=None) -> dict:
 def baseline_id(job):
     """The Bare setup of a run when there is one: a native harness without an
     architecture, else the API control, else nothing."""
+    if job.get("settings", {}).get("plan_semantics"):
+        return job["settings"].get("baseline")
     arms = [a for a in (job.get("settings") or {}).get("arms") or [] if a.get("kind") != "scripted" and a.get("id") not in ("oracle", "sloppy", "null")]
     for arm in arms:
         if arm.get("kind") == "native" and arm.get("version") == "without-monarch":
@@ -238,6 +240,14 @@ def run_measures(job, events) -> dict:
     baseline = baseline_id(job)
     planned = len(settings.get("tasks") or []) * len(setups)
     recorded = {(r["task"], r["model"]) for r in results}
+    required = None
+    if settings.get("plan_semantics"):
+        k = settings.get("repetitions", 1)
+        retry = settings.get("retry_on_fail", 0)
+        required = {(task, model, trial) for task in settings.get("tasks", []) for model in setups for trial in range(k)}
+        required.update((r["task"], r["model"], r["trial"] + k) for r in results
+                        if not r.get("passed") and not is_infrastructure(r) and r.get("trial", 0) // k < retry)
+        planned = len(required)
     per_setup = {}
     for setup in setups:
         rows = groups.get(setup, [])
@@ -252,8 +262,8 @@ def run_measures(job, events) -> dict:
     return {"version": 1, "run": job.get("id"), "baseline": baseline, "setups": per_setup, "order": setups,
             "overlap": overlap({s: groups.get(s, []) for s in setups}),
             "planned_attempts": planned, "recorded_attempts": len(results),
-            "unrecorded_attempts": max(0, planned - len({k for k in recorded if k[1] in setups})),
-            "repetitions": max((pass_k(groups.get(s, [])).get("k") or 1) for s in setups) if setups else 1}
+            "unrecorded_attempts": len(required - {(r["task"], r["model"], r.get("trial", 0)) for r in results}) if required is not None else max(0, planned - len({k for k in recorded if k[1] in setups})),
+            "repetitions": settings.get("repetitions", 1) if required is not None else max((pass_k(groups.get(s, [])).get("k") or 1) for s in setups) if setups else 1}
 
 def run_counts(job, events) -> dict:
     """The Runs table's two numbers: mean model turns per evaluated attempt

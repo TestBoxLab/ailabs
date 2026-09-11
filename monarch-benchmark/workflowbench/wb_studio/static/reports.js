@@ -141,7 +141,7 @@ function sourceText(r, what) { return 'Source: ' + (r.run ? 'run ' + String(r.ru
 function sourceLine(r, what) { return '<p class="chart-source">' + esc(sourceText(r, what)) + '</p>'; }
 function pairedTable(r) {
   if (!r.paired?.length) return '<p class="report-note">No evaluated attempts to compare.</p>';
-  const head = '<tr><th>Category</th>' + r.order.map(id => '<th class="num' + (id === r.baseline ? ' baseline' : '') + '">' + esc(setupName(r, id)) + (id === r.baseline ? ' <span class="meta">Bare</span>' : '') + '</th>').join('') + '</tr>';
+  const head = '<tr><th>Category</th>' + r.order.map(id => '<th class="num' + (id === r.baseline ? ' baseline' : '') + '">' + esc(setupName(r, id)) + (id === r.baseline ? ' <span class="meta">'+(r.method?.configured_plan?'Baseline':'Bare')+'</span>' : '') + '</th>').join('') + '</tr>';
   const rows = r.paired.map(row => '<tr><th scope="row">' + esc(row.category) + '</th>' + r.order.map(id => {
     const c = row.cells[id];
     if (!c) return '<td class="num muted">—</td>';
@@ -218,7 +218,7 @@ const REPORT_TERMS = [
 
 function methodList(r) {
   const m = r.method;
-  const rows = [['Task set', m.task_set + (m.benchmark ? ' (' + m.benchmark + ')' : '') + ' · ' + m.task_count + ' tasks'], ['Track', trackWords(m.track || r.track)], ['Repetitions', String(m.repetitions || 1)], ['Interval', 'Wilson score, 95%, on attempts; it does not include task-selection variance'],
+  const rows = [['Task set', m.task_set + (m.benchmark ? ' (' + m.benchmark + ')' : '') + ' · ' + m.task_count + ' tasks'], ['Track', trackWords(m.track || r.track)], ['Repetitions', m.configured_plan ? (m.repetitions || 1)+' initial; up to '+(m.retry_on_fail || 0)+' retry on failure' : String(m.repetitions || 1)], ['Interval', 'Wilson score, 95%, on attempts; it does not include task-selection variance'],
     ['Judge', m.judge ? (m.judge.id + ' · ' + String(m.judge.sha256 || '').slice(0, 12)) : 'historical, unpinned'], ['Corpus', 'AutomationBench ' + m.fork],
     ['Runs', (m.runs || []).join(', ')], ['Setups', (r.order || []).map(id => setupFullName(r, id)).join('; ')], ['Attempts', m.recorded_attempts !== undefined ? m.recorded_attempts + ' recorded of ' + m.planned_attempts + ' planned' : ''],
     ['Concurrency', m.concurrency ? String(m.concurrency) : ''], ['Spending limit', m.maximum_usd ? '$' + m.maximum_usd : ''], ['Instructions', m.configuration ? (m.configuration.prompt ? 'custom' : 'original task text') + (m.configuration.max_turns ? ' · ' + m.configuration.max_turns + ' turns max' : '') : '']];
@@ -246,7 +246,7 @@ function storySection(r) {
 }
 function termsList(r) {
   const names = new Set(['Setup', 'Task', 'Attempt', 'Pass', '95% interval']);
-  if (r?.baseline) ['Bare', 'Paired comparison', 'Grade'].forEach(x => names.add(x));
+  if (r?.baseline&&!r.method?.configured_plan) ['Bare', 'Paired comparison', 'Grade'].forEach(x => names.add(x));
   if (Object.values(r?.setups || {}).some(s => /thinking|reasoning|effort/i.test(s.name || ''))) names.add('Thinking setting');
   if ((r?.failures?.buckets || []).some(b => b.id === 'unintended_changes' && b.count) || (r?.paired || []).some(row => /outside|violation/i.test(row.category || ''))) names.add('Violation');
   return '<details class="report-terms-fold"><summary>Terms used in this report</summary><dl class="report-terms">' + REPORT_TERMS.filter(([term]) => names.has(term)).map(([term, text]) => '<dt>' + esc(term) + '</dt><dd>' + esc(text) + '</dd>').join('') + '</dl></details>';
