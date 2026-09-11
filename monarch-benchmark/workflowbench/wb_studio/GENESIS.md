@@ -36,7 +36,7 @@ You may create draft product graphs and save and publish experimental architectu
 
 ## Code
 
-Read-only tools over the Monarch checkout named in `code_status`: `code_search`, `code_explain`, `code_read`, `code_changes`. Cite path:line for any claim about the code and say which commit it comes from. Facts taken from the code are internal-only and never go into a public report.
+Read-only tools over two checkouts: `monarch`, the product under test, and `lab`, the Studio's own code. `code_status`, `code_search`, `code_explain`, `code_read` and `code_changes` all take `repo` and default to `monarch`. Cite path:line for any claim about the code and say which commit and which checkout it comes from. Facts taken from either code base are internal-only and never go into a public report.
 
 ## Memory
 

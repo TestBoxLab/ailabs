@@ -13,10 +13,12 @@ import threading
 from pathlib import Path
 
 # Every step of Genesis's work that spends a model turn, in the order the page shows them.
-STEPS = ('chat', 'reading', 'review', 'ranking', 'consolidation', 'sweep', 'extraction', 'embedding', 'patch')
+STEPS = ('chat', 'reading', 'review', 'ranking', 'consolidation', 'sweep', 'extraction', 'embedding', 'patch',
+         'implement', 'critic')
 # Steps that judge or write take the strongest available route by list price until an admin names
 # one (Lucas, 10 Sep 2026); every other step takes the cheapest.
-DEFAULT_STRONG = ('review', 'patch')
+DEFAULT_STRONG = ('review', 'patch', 'implement', 'critic')
+EFFORTS = ('minimal', 'low', 'medium', 'high')  # thinking level per step; unset means the provider's own default
 
 
 def list_price(route_id: str) -> float:
@@ -51,24 +53,44 @@ class Config:
         except (OSError, ValueError):
             data = {}
         models = data.get('models') if isinstance(data.get('models'), dict) else {}
-        return {'models': {s: models.get(s) for s in STEPS}, 'steps': list(STEPS)}
+        effort = data.get('effort') if isinstance(data.get('effort'), dict) else {}
+        return {'models': {s: models.get(s) for s in STEPS}, 'effort': {s: effort.get(s) for s in STEPS},
+                'steps': list(STEPS), 'efforts': list(EFFORTS)}
 
     def set(self, payload: dict, routes=None) -> dict:
-        """A person's change: `models` maps step to route id or null. Unknown steps and routes are refused."""
-        models = payload.get('models')
-        if not isinstance(models, dict):
+        """A person's change: `models` maps step to route id or null, `effort` to a thinking level or
+        null. Unknown steps, routes and levels are refused."""
+        models, effort = payload.get('models'), payload.get('effort')
+        if models is None and effort is None:
             raise ValueError('models maps each step to a route id or null.')
+        if models is not None and not isinstance(models, dict):
+            raise ValueError('models maps each step to a route id or null.')
+        if effort is not None and not isinstance(effort, dict):
+            raise ValueError('effort maps each step to ' + ', '.join(EFFORTS) + ' or null.')
         known = {r['id'] for r in (routes if routes is not None else self._routes())}
-        current = self.read()['models']
-        for step, route in models.items():
+        current = self.read()
+        for step, route in (models or {}).items():
             if step not in STEPS:
                 raise ValueError('Unknown step ' + str(step) + '; steps are ' + ', '.join(STEPS) + '.')
             if route is not None and route not in known:
                 raise ValueError('Unknown route ' + str(route) + ' for ' + step + '.')
-            current[step] = route
+            current['models'][step] = route
+        for step, level in (effort or {}).items():
+            if step not in STEPS:
+                raise ValueError('Unknown step ' + str(step) + '; steps are ' + ', '.join(STEPS) + '.')
+            if level is not None and level not in EFFORTS:
+                raise ValueError('Thinking is ' + ', '.join(EFFORTS) + ' or null, not ' + str(level) + '.')
+            current['effort'][step] = level
         with self.lock:
-            self.path.write_text(json.dumps({'models': current}, indent=1), encoding='utf8', newline='\n')
+            self.path.write_text(json.dumps({'models': current['models'], 'effort': current['effort']}, indent=1),
+                                 encoding='utf8', newline='\n')
         return self.read()
+
+    def effort_for(self, step: str) -> str | None:
+        """The thinking level a step asks for, or None for the provider's own default."""
+        if step not in STEPS:
+            raise ValueError('Unknown step ' + str(step))
+        return self.read()['effort'].get(step)
 
     @staticmethod
     def _routes():

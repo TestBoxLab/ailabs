@@ -20,7 +20,8 @@ import importlib
 
 MODULES = ('wb_studio.genesis_hypotheses', 'wb_studio.genesis_tools', 'wb_studio.genesis_ingest',
            'wb_studio.genesis_reviewer', 'wb_studio.genesis_ranking', 'wb_studio.genesis_memory_suite',
-           'wb_studio.genesis_people', 'wb_studio.genesis_channels', 'wb_studio.genesis_patch')
+           'wb_studio.genesis_people', 'wb_studio.genesis_channels', 'wb_studio.genesis_patch',
+           'wb_studio.genesis_engineer', 'wb_studio.genesis_critic', 'wb_studio.figures')
 
 
 def modules() -> list:

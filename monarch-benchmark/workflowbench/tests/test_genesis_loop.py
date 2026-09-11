@@ -24,8 +24,8 @@ class FakeAdapter:
         self.provider, self.tools, self.timeout = provider, tools, timeout
         FakeAdapter.made.append(self)
 
-    def start(self, system, brief):
-        self.system, self.brief = system, brief
+    def start(self, system, brief, images=None):
+        self.system, self.brief, self.images = system, brief, images
         self.captured = [{'role': 'user', 'content': brief}]
         return self.captured
 
@@ -102,7 +102,7 @@ def test_a_tool_refusal_reaches_the_model_as_a_sentence(genesis):
     harness.start_turn(genesis, turn)
     adapter = FakeAdapter.made[0]
     messages = [m for m in adapter.captured if m.get('role') == 'tool']
-    assert json.loads(messages[0]['content']) == {'error': "Missing or wrong field 'id' for read_run."}
+    assert json.loads(messages[0]['content']) == {'error': 'Name the run to read, as run.'}
     assert json.loads(messages[1]['content']) == {'error': 'Give the research card a short title'}
     assert genesis.read('turns', 't1')['status'] == 'completed'
 
@@ -166,7 +166,7 @@ def test_every_action_has_a_typed_tool_in_every_shape():
         assert expected in names
     defs = tool_defs()
     assert all(d['parameters']['type'] == 'object' for d in defs)
-    assert next(d for d in defs if d['name'] == 'read_run')['parameters']['required'] == ['id']
+    assert next(d for d in defs if d['name'] == 'read_run')['parameters']['required'] == ['run']
     assert [t['name'] for t in shaped(defs, 'anthropic')] == names and shaped(defs, 'anthropic')[-1]['cache_control'] == {'type': 'ephemeral'}
     assert shaped(defs, 'openai')[0]['function']['name'] == names[0]
     assert shaped(defs, 'openai_responses')[0]['type'] == 'function' and 'function' not in shaped(defs, 'openai_responses')[0]
@@ -187,8 +187,8 @@ def test_sdk_message_objects_do_not_break_the_size_estimate(genesis):
         def model_dump(self, mode='json', exclude_none=True): return {'text': self.text}
 
     class ObjectAdapter(FakeAdapter):
-        def start(self, system, brief):
-            self.system, self.brief = system, brief
+        def start(self, system, brief, images=None):
+            self.system, self.brief, self.images = system, brief, images
             self.captured = [Content(brief)]
             return self.captured
 

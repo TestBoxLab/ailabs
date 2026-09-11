@@ -156,6 +156,23 @@ def _exec_tool(ep: Episode, name: str, args: dict) -> str:
         return json.dumps({"error": str(e)})
 
 
+def images_of(images) -> list[tuple[str, str]]:
+    """(media type, base64) for each image a caller passes `start`. A path, or bytes already read.
+    PNG unless the name says otherwise; anything unreadable is left out rather than failing a turn."""
+    import base64
+    from pathlib import Path
+    out = []
+    for item in images or []:
+        try:
+            data = item if isinstance(item, (bytes, bytearray)) else Path(item).read_bytes()
+        except OSError:
+            continue
+        suffix = '' if isinstance(item, (bytes, bytearray)) else Path(item).suffix.lower()
+        kind = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif'}.get(suffix, 'image/png')
+        out.append((kind, base64.b64encode(bytes(data)).decode('ascii')))
+    return out
+
+
 class _OpenAIAdapter:
     """Chat-completions transport for glm/kimi/fireworks (and the test mock)."""
 
@@ -171,8 +188,12 @@ class _OpenAIAdapter:
         self.client = openai.OpenAI(api_key=key, base_url=provider.base_url,
                                     timeout=timeout, max_retries=0)
 
-    def start(self, system: str, brief: str) -> list[dict]:
-        return [{"role": "system", "content": system}, {"role": "user", "content": brief}]
+    def start(self, system: str, brief: str, images=None) -> list[dict]:
+        shots = images_of(images)
+        content = brief if not shots else (
+            [{"type": "text", "text": brief}]
+            + [{"type": "image_url", "image_url": {"url": f"data:{kind};base64,{data}"}} for kind, data in shots])
+        return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
     def _cap(self) -> dict:
         # `max_output`, when a caller sets it, is the output cap the caller reserved for (Genesis).
@@ -281,9 +302,13 @@ class _GeminiAdapter:
                                           parameters_json_schema=d["parameters"])
                 for d in tools])])
 
-    def start(self, system: str, brief: str) -> list:
+    def start(self, system: str, brief: str, images=None) -> list:
+        import base64
         self.config.system_instruction = system
-        return [self.types.Content(role="user", parts=[self.types.Part(text=brief)])]
+        parts = [self.types.Part(text=brief)]
+        parts += [self.types.Part.from_bytes(data=base64.b64decode(data), mime_type=kind)
+                  for kind, data in images_of(images)]
+        return [self.types.Content(role="user", parts=parts)]
 
     def turn(self, contents: list, timeout: float | None = None) -> dict:
         # (Gemini client timeout is fixed at construction; the loop's deadline
@@ -359,9 +384,13 @@ class _OpenAIResponsesAdapter:
         self.effort = os.environ.get("WB_OPENAI_EFFORT") or provider.effort
         self.instructions = ""
 
-    def start(self, system: str, brief: str) -> list[dict]:
+    def start(self, system: str, brief: str, images=None) -> list[dict]:
         self.instructions = system
-        return [{"role": "user", "content": brief}]
+        shots = images_of(images)
+        if not shots:
+            return [{"role": "user", "content": brief}]
+        return [{"role": "user", "content": [{"type": "input_text", "text": brief}]
+                 + [{"type": "input_image", "image_url": f"data:{kind};base64,{data}"} for kind, data in shots]}]
 
     def turn(self, items: list[dict], timeout: float | None = None) -> dict:
         o = self._openai
@@ -439,9 +468,14 @@ class _AnthropicAdapter:
         self.effort = os.environ.get("WB_ANTHROPIC_EFFORT") or provider.effort
         self.system: list[dict] = []
 
-    def start(self, system: str, brief: str) -> list[dict]:
+    def start(self, system: str, brief: str, images=None) -> list[dict]:
         self.system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        return [{"role": "user", "content": brief}]
+        shots = images_of(images)
+        if not shots:
+            return [{"role": "user", "content": brief}]
+        return [{"role": "user", "content": [{"type": "text", "text": brief}]
+                 + [{"type": "image", "source": {"type": "base64", "media_type": kind, "data": data}}
+                    for kind, data in shots]}]
 
     def turn(self, messages: list[dict], timeout: float | None = None) -> dict:
         a = self._anthropic

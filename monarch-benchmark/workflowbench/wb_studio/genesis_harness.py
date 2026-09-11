@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from decimal import Decimal
@@ -33,6 +34,8 @@ from wb_studio import genesis_plugins
 from wb_studio.genesis_schemas import shaped, tool_defs
 
 OUTPUT_CAP = 16000        # output tokens one request may produce at most
+IMAGE_TOKENS = 2000       # what one screenshot costs, near enough, at the sizes the browser suite takes
+IMAGE_DATA = re.compile(r'[A-Za-z0-9+/]{1500,}={0,2}')  # a base64 run in a serialised message: billed by tile, not by length
 OUTPUT_FLOOR = 1024       # below this an answer cannot finish; the request is refused instead
 THINKING_ALLOWANCE = {'gemini': 65535}  # Gemini bills thinking as output; the most its thinking_budget accepts, allowed when the turn can pay
 REQUEST_LIMIT = 24        # provider requests in one turn
@@ -220,7 +223,7 @@ def start_turn(genesis, turn):
         system, brief = build_prompt(genesis, turn)
         folder = genesis.root / 'sessions' / identity; folder.mkdir(parents=True, exist_ok=True)
         (folder / 'prompt.txt').write_text(system + '\n\n' + brief, encoding='utf8')  # the same text prompt_text() gives
-        messages = adapter.start(system, brief)
+        messages = adapter.start(system, brief, turn.get('images'))  # feature 023: the critic sees the pages it reviews
         genesis.event(identity, 'harness_started', harness=HARNESS, model=provider.model_id, tools=len(defs))
         deadline = time.monotonic() + TURN_SECONDS
         for number in range(1, REQUEST_LIMIT + 1):
@@ -229,7 +232,12 @@ def start_turn(genesis, turn):
             if time.monotonic() > deadline:
                 raise GenesisRefused(f'Genesis ran past {TURN_SECONDS // 60} minutes in one turn')
             dispatched = settled = False
-            input_tokens = (len(system) + len(canonical_json(_json_messages(messages))) + len(canonical_json(tools))) // 2 + 1024  # SDK objects (Gemini) serialise through model_dump
+            # SDK objects (Gemini) serialise through model_dump. An image is billed by tile, not by
+            # the length of its base64, so it is counted once instead of by its characters — left in,
+            # a single screenshot would reserve the whole turn's allowance and refuse itself.
+            body = canonical_json(_json_messages(messages))
+            shots = len(turn.get('images') or [])  # they sit in the first user message, so every request carries them
+            input_tokens = (len(system) + len(IMAGE_DATA.sub('', body)) + len(canonical_json(tools))) // 2 + 1024 + shots * IMAGE_TOKENS
             max_output, thinking, ceiling = request_bounds(provider, input_tokens, maximum - spent)
             adapter.max_output = max_output
             if provider.adapter == 'gemini':

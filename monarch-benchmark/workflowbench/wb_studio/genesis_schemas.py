@@ -17,6 +17,13 @@ from wb_studio.genesis_plugins import actions as plugin_actions
 
 S = {'type': 'string'}
 I = {'type': 'integer'}
+REPO = {'type': 'string', 'enum': ['monarch', 'lab'],
+        'description': "Which checkout: 'monarch', the product under test (default), or 'lab', the Studio's own code."}
+try:  # the figure kinds are the catalogue's, so a kind added there reaches the model without a second edit
+    from wb_studio.figures import KINDS as _FIGURES
+    FIGURE_KINDS = tuple(_FIGURES)
+except ImportError:  # pragma: no cover - the module lands with the feature
+    FIGURE_KINDS = ()
 N = {'type': 'number'}
 B = {'type': 'boolean'}
 
@@ -62,10 +69,11 @@ LAUNCH = obj({'title': S, 'tasks': {**arr(S), 'description': 'Task ids from the 
 SCHEMAS = {
     # --- evidence -------------------------------------------------------------------------
     'list_runs': ('Every run as one line: id, title, status, attempts, passed, setups, tasks. Read one with measures or read_run.', obj({})),
+    # `run`, like every other tool that names a run; `id` is still accepted for callers written against the old name.
     'read_run': ('One run: its record, a page of its events (task filter, after, limit), the Studio analysis and earlier Genesis analyses.',
-                 obj({'id': {**S, 'description': 'The run id.'}, 'task': {**S, 'description': 'Only events of this task.'},
+                 obj({'run': {**S, 'description': 'The run id.'}, 'task': {**S, 'description': 'Only events of this task.'},
                       'after': {**I, 'description': 'Only events with an id above this; use next_after from the last page.'},
-                      'limit': {**I, 'description': '1 to 500 events, default 100.'}}, ['id'])),
+                      'limit': {**I, 'description': '1 to 500 events, default 100.'}}, ['run'])),
     'measures': ("Every measure of one run with Wilson intervals, computed by the Studio; group_by adds a tally per setup, task or category.",
                  obj({'run': S, 'group_by': {'type': 'string', 'enum': ['setup', 'task', 'category']}}, ['run'])),
     'compare': ('Paired delta, interval, sign test and solved-task overlap between a run and its Bare baseline, or between two runs.',
@@ -131,14 +139,21 @@ SCHEMAS = {
                     obj({'name': {**S, 'description': 'A slug like read-a-run.'}, 'text': S}, ['name', 'text'])),
     'skill_remove': ('Remove one skill.', obj({'name': S}, ['name'])),
     # --- code -----------------------------------------------------------------------------
-    'code_status': ('The Monarch code index: commit, when it was built, counts.', obj({})),
-    'code_search': ('Search the Monarch index for a symbol, path or phrase.', obj({'query': S, 'limit': I}, ['query'])),
-    'code_explain': ('One symbol with its neighbours in the Monarch index.', obj({'symbol': S}, ['symbol'])),
-    'code_read': ('A range of one Monarch file (at most 200 lines).', obj({'path': S, 'start': I, 'end': I}, ['path'])),
-    'code_changes': ('What moved in Monarch since a commit, or since the previous index.', obj({'since': S})),
+    'code_status': ('The code index of one repository: commit, when it was built, counts.', obj({'repo': REPO})),
+    'code_search': ('Search a code index for a symbol, path or phrase.', obj({'query': S, 'limit': I, 'repo': REPO}, ['query'])),
+    'code_explain': ('One symbol with its neighbours in a code index.', obj({'symbol': S, 'repo': REPO}, ['symbol'])),
+    'code_read': ('A range of one file (at most 200 lines).', obj({'path': S, 'start': I, 'end': I, 'repo': REPO}, ['path'])),
+    'code_changes': ('What moved in a repository since a commit, or since the previous index.', obj({'since': S, 'repo': REPO})),
     'propose_patch': ('Draft a Monarch patch for a failed attempt as a card with a diff, path:line citations and a review. Paid. Internal only.', obj({'run': S, 'task': S}, ['run'])),
     'code_diff_check': ('Whether a unified diff applies cleanly to the indexed Monarch commit.', obj({'diff': S}, ['diff'])),
     'read_patch': ('A patch card: its diff, citations, check result and review.', obj({'card': S}, ['card'])),
+    # --- figures ----------------------------------------------------------------------------
+    'figure': ('Compute a figure from a run and get its id; put [figure:<id>] in the card body where it belongs. '
+               'The Studio computes every number and draws it in the lab\'s own style.',
+               obj({'kind': {'type': 'string', 'enum': list(FIGURE_KINDS)},
+                    'run': {**S, 'description': 'The run the figure is drawn from.'},
+                    'caption': {**S, 'description': 'One sentence saying what the reader should see. Optional.'}},
+                   ['kind', 'run'])),
     # --- architectures ----------------------------------------------------------------------
     'save_architecture': ('Save an architecture draft (see catalog.creation_contracts.save_architecture for the graph shape).',
                           obj({'name': S, 'track': S, 'revision': I, 'graph': obj({}, extra=True), 'notes': S, 'id': S}, ['name', 'graph'])),

@@ -43,7 +43,8 @@ def genesis(tmp_path, repo, monkeypatch):
     monkeypatch.setattr('wb_studio.genesis_harness.model_routes', lambda: [{'id': 'cheap', 'available': True}])
     out = tmp_path / 'genesis' / 'code-index'
     monkeypatch.setattr(code_index, 'settings',
-                        lambda studio: {'repo': repo, 'ref': 'main', 'out': out, 'build': None})
+                        lambda studio, which='monarch': {'repo': repo, 'ref': 'main', 'out': out, 'build': None,
+                                                         'target': code_index.target(which)})
     studio = SimpleNamespace(directory=tmp_path, create=Mock(), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=Mock())
     studio.genesis = Genesis(studio)
