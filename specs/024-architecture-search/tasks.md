@@ -505,3 +505,46 @@ that was never promising is not a confirmation.
 
 Still not done: **T002** (the baseline report note) and **US4 / US5** — the fitness
 function and the curve, T084–T112.
+
+---
+
+## Stages S0–S6: the voice and presence work, 11 September 2026
+
+Asked for mid-implementation and not in this plan's numbering, so it is recorded here
+rather than renumbered into it. Full account in the design of record, appendix; the
+options and the refusals in `.tmp/genesis-voice.md`.
+
+| | What landed | Commit |
+|---|---|---|
+| S0 | Five infinite animations removed; Pause updates; four checks added to `tests/test_static_csp.py` | `9635bb8` |
+| S1 | `show` as a link the reader may take, never a move (`wb_studio/genesis_show.py`) | `42cb031` |
+| S2 | `GET /api/genesis/turns/<id>/events`; the 650 ms poll deleted; a row that lands says so | `b89b7e1` |
+| S3 | Hold to talk; the mark driven by the signal's own envelope; on-device recognition or nothing | `72588d2` |
+| S4 | Genesis answers aloud in a local voice, off by default, only text already on the page | `db8ebc9` |
+| S5 | Follow Genesis, off by default, broken by any gesture | `a3dc93c` |
+| S6 | `POST /api/voice/stt`: the clip goes to our own origin, reserved and settled in the weekly ledger | `954676a` |
+
+**Why any of it is allowed to move.** The earlier pass refused a pulsing indicator, and
+was right to: a pulse on an agent doing typed tool calls claims "I can hear you" about
+work happening off-screen. With a microphone the pulse stops being a claim and becomes a
+measurement — it is the signal's RMS envelope, so it goes flat on a muted device. It
+indicates capture and never activity; the minutes Genesis spends on tool calls keep the
+step list they already had.
+
+**The finding the CSP test cannot make for us.** `webkitSpeechRecognition` without
+`processLocally` sends every utterance to Google through the browser's own machinery: no
+`securitypolicyviolation` fires, nothing appears in the network tab, and
+`tests/test_static_csp.py` stays green. This screen carries provider keys and unreleased
+results. So there is no remote-recognition fallback anywhere in the code — on-device, the
+typed box, or S6's route to our own origin, and a `network` speech error is reported as a
+refusal in those words.
+
+**Two rules worth carrying to the next view.** Motion belongs inside
+`@media (prefers-reduced-motion: no-preference)` and never as a `reduce` override, because
+the blanket rule at the end of `ui.css` cannot stop a transform written from JavaScript;
+the S0 check now enforces the opt-in form. And under `reduce` the indicator is *replaced*
+by five discrete blocks at 2 Hz rather than frozen — a frozen mark conveys nothing and
+removes the only evidence the microphone works. That is the path verification exercises,
+since the headless browser reports `reduce`.
+
+Unchanged by any of this: **T002**, and **US4 / US5**, T084–T112.
