@@ -41,4 +41,4 @@ def build(job, rows, tasks):
     data = {"run": job["id"], "tasks": selected, "attempts": attempts}
     # Escape the HTML script terminator without changing parsed JSON values.
     encoded = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
-    return (Path(__file__).parent / "static/evidence-guide.html").read_text(encoding="utf-8").replace("__GUIDE_DATA__", encoded)
+    return (Path(__file__).parent / "templates/evidence-guide.html").read_text(encoding="utf-8").replace("__GUIDE_DATA__", encoded)
