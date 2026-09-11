@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
@@ -43,6 +44,23 @@ MICROUSD = 1_000_000
 MAX_SQLITE_INTEGER = 2**63 - 1
 AUTHORIZED_WEEKLY_MICROUSD = 300 * MICROUSD
 TIMEZONE = 'America/Sao_Paulo'
+
+
+def default_ledger_path(repo: Path | None = None) -> Path:
+    """Where the one shared weekly ledger lives, for every process that reserves in it.
+
+    `STUDIO_LEDGER_PATH` wins, then a hosted Studio's mounted volume
+    (`STUDIO_DATA_DIR`), then `repo`'s own `research/` — this repository unless a
+    caller names another root. One rule in one place: a caller that guesses a
+    different path reads a different week's spend and lets through what the
+    ledger would have refused.
+    """
+    override = os.environ.get('STUDIO_LEDGER_PATH')
+    if override:
+        return Path(override).expanduser()
+    data = os.environ.get('STUDIO_DATA_DIR')
+    root = Path(data) if data else (repo or Path(__file__).resolve().parents[3])
+    return root / 'research' / 'budget.sqlite3'
 
 
 class BudgetExceeded(RuntimeError):
