@@ -112,6 +112,10 @@ let genesisPaused=false,genesisPending=null;
 function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
  if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
 $('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
+// The opening sentence of the answer, which is the part a person waiting for a verdict
+// actually needs. The whole answer is on screen; reading all of it aloud is a lecture.
+function firstSentence(text){const plain=String(text||'').replace(/[#*`>_]/g,' ').replace(/\s+/g,' ').trim();
+ const cut=plain.search(/[.!?](\s|$)/);return (cut>0?plain.slice(0,cut+1):plain).slice(0,300);}
 function announceShow(t){
  const shown=stepList(t).filter(s=>s.action==='show'&&s.result!==null);
  if(!shown.length)return;
@@ -163,7 +167,8 @@ function streamGenesis(id){
   const j=threadTurns.findIndex(x=>x.id===id);
   if(j>=0&&settled)threadTurns[j]={...settled,events:threadTurns[j].events||[]};
   const t=j>=0?threadTurns[j]:null;
-  if(t){if(genesisPending){genesisPending=null;}paintTurn(t,{fresh:false});}
+  if(t){if(genesisPending){genesisPending=null;}paintTurn(t,{fresh:false});
+   if(window.genesisAnnounce&&t.answer)window.genesisAnnounce(firstSentence(t.answer));}
   setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;
   $('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;
   $('#genesis-status').textContent=(t&&t.status==='completed')?'':'Stopped';

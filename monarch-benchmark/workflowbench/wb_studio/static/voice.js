@@ -180,6 +180,122 @@
     });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-  else start();
+  // --- speaking -----------------------------------------------------------------------
+  // Off by default and persisted. Local voices only: Chrome's `Google …` voices report
+  // localService === false and are network-backed, so reading an unreleased pass rate
+  // through one sends that text to Google. One filter closes it.
+  //
+  // `announce` either speaks or writes to a live region, never both — an app speaking
+  // over a screen reader is the most common failure when the two run together.
+  //
+  // It never SPEAKS a string that is not already rendered on the page; such a string
+  // still reaches the live region, because that is text and not audio. That one rule
+  // keeps the whole WCAG 1.2 media family out of scope: spoken words that are also
+  // written words are an alternative for text, not audio content. Enforced in the
+  // function rather than asked for in review.
+  const SAY_KEY = 'genesis.voice.speak';
+  const VOL_KEY = 'genesis.voice.volume';
+  const PREFIX = 'Genesis: ';
+  let primed = false;
+
+  function speakingOn() { try { return localStorage.getItem(SAY_KEY) === '1'; } catch (e) { return false; } }
+  function volume() { try { return Math.min(1, Math.max(0, Number(localStorage.getItem(VOL_KEY) ?? 0.8))); } catch (e) { return 0.8; } }
+
+  function localVoice() {
+    if (!window.speechSynthesis) return null;
+    const all = speechSynthesis.getVoices().filter(v => v.localService);
+    if (!all.length) return null;
+    const lang = document.documentElement.lang || 'en';
+    // A distinct voice and rate, because on macOS speechSynthesis and VoiceOver draw on
+    // the same system voices and are otherwise indistinguishable by ear.
+    return all.find(v => v.lang && v.lang.toLowerCase().startsWith(lang.toLowerCase().slice(0, 2)))
+        || all.find(v => v.default) || all[0];
+  }
+
+  function onScreen(text) {
+    // The exemption is the point: if it is not on the page, it is audio content and owes
+    // an alternative. Refuse rather than acquire the obligation.
+    const body = document.body ? document.body.innerText || '' : '';
+    const needle = String(text || '').trim();
+    return needle.length > 0 && body.indexOf(needle) !== -1;
+  }
+
+  function stopSpeaking() {
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    const b = $('#genesis-hush'); if (b) b.hidden = true;
+  }
+
+  function announce(text, opts) {
+    const channel = (opts && opts.channel) || 'status';
+    const region = $('#genesis-spoken');
+    const said = String(text || '').trim();
+    if (!said) return false;
+    if (!speakingOn() || !window.speechSynthesis || !onScreen(said)) {
+      // Not spoken: the live region carries it instead. Never both.
+      if (region && region.textContent !== said) {
+        region.textContent = said;
+        setTimeout(() => { if (region.textContent === said) region.textContent = ''; }, 400);
+      }
+      return false;
+    }
+    const voice = localVoice();
+    if (!voice) { say('No on-device voice is installed; Genesis stays quiet.'); return false; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(PREFIX + said);
+    u.voice = voice;                 // always explicit: the default is not stable
+    u.lang = voice.lang;
+    u.rate = 1.05;
+    u.volume = volume();
+    const hush = $('#genesis-hush');
+    let began = false;
+    u.onstart = () => { began = true; if (hush) hush.hidden = false; };
+    u.onend = u.onerror = () => { if (hush) hush.hidden = true; };
+    speechSynthesis.speak(u);
+    // Safari fails silently when speak() lacks sticky user activation. No onstart within
+    // a second means it did not play; fall back to the region rather than lose the text.
+    setTimeout(() => {
+      if (began) return;
+      if (hush) hush.hidden = true;
+      if (region) { region.textContent = said; setTimeout(() => { if (region.textContent === said) region.textContent = ''; }, 400); }
+      say('The browser would not speak. Turn it on again after clicking the page.');
+    }, 1000);
+    return true;
+  }
+
+  function startSpeech() {
+    const toggle = $('#genesis-speak');
+    const hush = $('#genesis-hush');
+    const vol = $('#genesis-volume');
+    if (!toggle) return;
+    if (!window.speechSynthesis) { toggle.hidden = true; if (vol) vol.hidden = true; return; }
+    toggle.checked = speakingOn();
+    if (vol) vol.value = String(volume());
+    toggle.addEventListener('change', () => {
+      try { localStorage.setItem(SAY_KEY, toggle.checked ? '1' : '0'); } catch (e) {}
+      if (toggle.checked) {
+        // Prime inside the click: speak() needs sticky user activation, and an empty
+        // utterance here is what buys every later one.
+        primed = true;
+        const u = new SpeechSynthesisUtterance(' ');
+        const v = localVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+        u.volume = 0; speechSynthesis.speak(u);
+        say('Genesis will read its answers aloud.');
+      } else { stopSpeaking(); say(''); }
+    });
+    if (vol) vol.addEventListener('change', () => {
+      try { localStorage.setItem(VOL_KEY, String(vol.value)); } catch (e) {}
+    });
+    if (hush) hush.addEventListener('click', stopSpeaking);
+    // WCAG 1.4.2: audio that plays by itself needs a way to stop it that is not the
+    // system volume. Escape is the second one.
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') stopSpeaking(); });
+    if (speechSynthesis.getVoices().length === 0)
+      speechSynthesis.addEventListener('voiceschanged', () => {}, { once: true });
+  }
+
+  window.genesisAnnounce = announce;
+  window.genesisStopSpeaking = stopSpeaking;
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { start(); startSpeech(); });
+  else { start(); startSpeech(); }
 })();
