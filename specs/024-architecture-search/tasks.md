@@ -776,3 +776,32 @@ and never carried out has been described as an existing asset ever since.
 So T112 is not "a tool is missing"; it is an instruction that has been wrong for nine
 days. Two ways to close it, and both are a person's call: run `/graphify-init` and build
 the graph, or delete the Graphify section from `CLAUDE.md`.
+
+### One thing worth carrying out of this feature
+
+Every defect this feature found has the same shape: **something that reads as present
+and is not, or reads as absent and is not.** A text scan cannot see either direction.
+
+- A phase block dropped between the arm and the reader, so cost and time by phase were
+  recorded for nine days and consumed by nothing.
+- `attempt_seconds` summing `run` with its own parts — present, wrong, and no fixture
+  carried the shape that would show it.
+- An unpriced phase read as `or 0.0`, so a hold the ledger was still carrying rendered
+  as free.
+- HEAD importing a symbol no commit defined, three times, each with a green suite —
+  because the suite runs the working tree, not the commit.
+- `CLAUDE.md` instructing every agent to read a knowledge graph that has never existed.
+  Stage 0 of the pipeline was unfollowable and never once surfaced as an error.
+- A class built as `'view-' + name` reading as dead to a grep, and three shadowed
+  definitions reading as live code that never ran.
+
+The check for the CSS case is written up in
+`docs/AI-LABS-STUDIO-DESIGN-SYSTEM-2026-09-09.md` §"Removing a rule (11 Sep)" — enumerate
+every `'prefix-' + var` in the JavaScript before cutting a rule, and *regenerate* that
+list rather than trusting a published one. The session that wrote it found its own list
+incomplete by two prefixes immediately after publishing it, which is the best argument
+for the rule that exists.
+
+The general form, for the next feature: **verify the consumer, not just the producer.**
+A value that is written and never read is indistinguishable from one that is never
+written, until someone checks the far end.
