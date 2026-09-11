@@ -10,11 +10,12 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from wb_results.evidence import write_json
 from wb_studio.library import now_sao_paulo
 
 TERMINAL = ('completed', 'failed', 'cancelled', 'interrupted')
+FILED_LIMIT = 5000  # how many filed keys the watcher's own state carries
 
 
 def _on(name):
@@ -89,8 +90,16 @@ class Watcher:
         self.notify()
 
     def today_usd(self):
-        """What every Genesis turn of today (America/Sao_Paulo) cost, cards or not (R5): the settled receipts of
-        finished turns, the full ceiling of a running one."""
+        """What Genesis committed today (America/Sao_Paulo): the settled receipts of
+        finished turns, the full ceiling of a running one, and the reserved maximum of
+        every run it launched.
+
+        The launches were missing (feature 024, FR-004). A run is by far the most
+        expensive thing Genesis can start, so summing only its own turns meant N
+        self-launched runs each saw the same untouched allowance, while the number a
+        person read on the Genesis page barely moved. The reserved maximum is the right
+        figure for a gate: it is what the lab is committed to before the work runs.
+        """
         zone = now_sao_paulo().tzinfo
         today = now_sao_paulo().date()
         total = Decimal('0')
@@ -101,6 +110,24 @@ class Watcher:
                 total += Decimal(str(turn['maximum_usd']))
             else:
                 total += sum((Decimal(str(e.get('cost_usd') or 0)) for e in turn.get('events', []) if e.get('type') == 'usage'), Decimal('0'))
+        return total + self._launched_today(zone, today)
+
+    def _launched_today(self, zone, today) -> Decimal:
+        """The reserved maximum of every run Genesis launched today, whoever pressed it.
+
+        The activity record is the source: `_dispatch` writes one `launch` entry per
+        run with the plan's ceiling, so this needs no second store and no ledger read.
+        """
+        total = Decimal('0')
+        for entry in self.genesis.autonomy.tail(limit=1000):
+            if entry.get('kind') != 'launch' or entry.get('maximum_usd') is None:
+                continue
+            try:
+                when = datetime.fromisoformat(entry['at']).astimezone(zone).date()
+                if when == today:
+                    total += Decimal(str(entry['maximum_usd']))
+            except (ValueError, TypeError, KeyError, InvalidOperation):
+                continue   # an unreadable entry must not open the gate or close it
         return total
 
     def _cards(self, status):
@@ -117,7 +144,7 @@ class Watcher:
         status = self.studio.ledger.status()
         if status.blocked or status.available_usd < ceiling:
             return f'Waiting: the weekly ledger cannot cover ${ceiling:.2f}'
-        ok, reason = self.genesis.envelope_allows(ceiling)
+        ok, reason = self.genesis.allowance_allows(ceiling)
         if not ok:
             return 'Waiting: ' + reason
         return None
@@ -128,11 +155,11 @@ class Watcher:
         today, cap = self.today_usd() if today is None else today, self.cap_usd
         if cap and today >= cap * Decimal('0.8'):
             return f"Today's allowance is {int(today / cap * 100)}% spent (${today:.2f} of ${cap:.2f})"
-        envelope = self.genesis.envelope()
-        if envelope:
-            left, limit = Decimal(envelope['left_usd']), Decimal(envelope['envelope_usd'])
+        allowance = self.genesis.allowance()
+        if allowance and allowance['left_usd'] is not None:
+            left, limit = Decimal(allowance['left_usd']), Decimal(allowance['limit_usd'])
             if limit and left <= limit * Decimal('0.2'):
-                return f"The weekly envelope has ${left:.2f} of ${limit:.2f} left"
+                return f"The weekly allowance has ${left:.2f} of ${limit:.2f} left"
         return None
 
     def triggers(self):
@@ -146,24 +173,39 @@ class Watcher:
         if not since:
             since = datetime.now(timezone.utc).isoformat()
             self._write(since=since)
+        # What the watcher has already filed, kept in its own state. `pointed` alone is not enough:
+        # it reads the card's kind and evidence, and `save_research` lets the model rewrite both, so a
+        # relabelled card made the trigger file the same run again on every wake, for ever.
+        filed = list(state.get('filed') or [])
+        seen, opened = set(filed), len(filed)
         if _on('STUDIO_GENESIS_AUTO_RUNS'):
             for job in self.studio.jobs():
                 if (job.get('finished_at') or job.get('created_at') or '') < since:
                     continue
-                if job.get('status') in TERMINAL and not scripted_only(job) and ('run', 'run', job['id']) not in pointed:
-                    self.genesis.intake('run', str(job.get('title') or job['id']), job['id'], [{'kind': 'run', 'id': job['id']}])
+                key = 'run:' + str(job['id'])
+                if key in seen or job.get('status') not in TERMINAL or scripted_only(job) or ('run', 'run', job['id']) in pointed:
+                    continue
+                self.genesis.intake('run', str(job.get('title') or job['id']), job['id'], [{'kind': 'run', 'id': job['id']}])
+                filed.append(key); seen.add(key)
         if _on('STUDIO_GENESIS_AUTO_SOURCES'):
             for source in self.genesis.library.records():
                 if (source.get('created_at') or '') < since:
                     continue
-                if source.get('full_text_available') and source.get('status') == 'saved' and ('source', 'library', source['id']) not in pointed:
-                    self.genesis.intake('source', source['title'], source.get('url') or source['title'], [{'kind': 'library', 'id': source['id']}])
-                    if source.get('columns') is None and source.get('url') and not self.refusal():  # feature 022: extract its columns, one paid turn behind the same gates
-                        from wb_studio import genesis_ingest
-                        try:
-                            genesis_ingest.ingest(self.genesis, source['id'])
-                        except Exception as exc:
-                            self._write(last_error='ingest ' + source['id'] + ': ' + type(exc).__name__ + ': ' + str(exc)[:200])
+                key = 'source:' + str(source['id'])
+                if key in seen or not source.get('full_text_available') or source.get('status') != 'saved' or ('source', 'library', source['id']) in pointed:
+                    continue
+                self.genesis.intake('source', source['title'], source.get('url') or source['title'], [{'kind': 'library', 'id': source['id']}])
+                filed.append(key); seen.add(key)
+                if source.get('columns') is None and source.get('url') and not self.refusal():  # feature 022: extract its columns, one paid turn behind the same gates
+                    from wb_studio import genesis_ingest
+                    try:
+                        genesis_ingest.ingest(self.genesis, source['id'])
+                    except Exception as exc:
+                        self._write(last_error='ingest ' + source['id'] + ': ' + type(exc).__name__ + ': ' + str(exc)[:200])
+        if len(filed) != opened:
+            # ponytail: a rolling window of the newest keys; a lab that files more than this many
+            # records wants the set in the index, not in one JSON file.
+            self._write(filed=filed[-FILED_LIMIT:])
 
     def wake(self):
         """One pass: create trigger cards, then work the oldest queued card if nothing is working and the gates allow."""

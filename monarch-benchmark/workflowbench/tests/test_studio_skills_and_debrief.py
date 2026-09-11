@@ -19,7 +19,11 @@ def genesis(tmp_path, monkeypatch):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(return_value={'id': 'run-1'}), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=ledger)
     monkeypatch.setattr('wb_studio.runtime_registry.check_launch', lambda studio, architectures, selected, track='agentic-request': [{'id': 'without-monarch', 'name': 'API control'}])
-    return Genesis(studio)
+    # Feature 024 FR-002 turns every dial off by default; these tests are about
+    # what Genesis does once a person has turned it on.
+    genesis = Genesis(studio)
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
+    return genesis
 
 
 def test_skills_are_bounded_scanned_and_enter_the_prompt_by_kind(genesis, monkeypatch):

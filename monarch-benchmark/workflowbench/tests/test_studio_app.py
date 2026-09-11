@@ -360,29 +360,41 @@ def _echo_server():
 
 
 def test_front_door_path_relays_to_the_shim_without_login(studio, monkeypatch):
+    """The competitor under test still reaches the world with no credentials.
+
+    Feature 024 FR-001 added a secret segment to the address, because Basic Auth
+    cannot gate a path the competitor calls. Monarch sends nothing new: the segment
+    rides in the seed URL. The login still guards the Studio itself.
+    """
     monkeypatch.setenv("STUDIO_AUTH_USER", "admin")
     monkeypatch.setenv("STUDIO_AUTH_PASSWORD", "pw")
+    monkeypatch.setenv("STUDIO_FRONT_DOOR_SECRET", "door-secret")
     with _echo_server() as (port, seen):
         monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", str(port))
         with server_for(studio) as studio_port:
-            status, _, body = request(studio_port, "GET", "/front-door/salesforce/services/data?q=1",
+            status, _, body = request(studio_port, "GET", "/front-door/door-secret/salesforce/services/data?q=1",
                                       headers={"Host": "evil.example"})
             assert status == 200 and json.loads(body)["path"] == "/salesforce/services/data?q=1"
-            status, _, body = request(studio_port, "POST", "/front-door/fetch", "{\"a\": 1}",
+            status, _, body = request(studio_port, "POST", "/front-door/door-secret/fetch", "{\"a\": 1}",
                                       {"Content-Type": "application/json", "X-Bench-Episode-Id": "ep-1"})
             assert status == 201 and json.loads(body)["body"] == "{\"a\": 1}"
-            assert request(studio_port, "PATCH", "/front-door/x/1", "{}", {"Content-Type": "application/json"})[0] == 200
-            assert request(studio_port, "DELETE", "/front-door/x/1")[0] == 200
+            assert request(studio_port, "PATCH", "/front-door/door-secret/x/1", "{}", {"Content-Type": "application/json"})[0] == 200
+            assert request(studio_port, "DELETE", "/front-door/door-secret/x/1")[0] == 200
             assert request(studio_port, "GET", "/api/state")[0] == 401, "the Studio itself still needs the login"
-            assert request(studio_port, "PUT", "/api/state", "{}")[0] == 404
+            # and the same calls without the segment never reach the shim
+            assert request(studio_port, "DELETE", "/front-door/x/1")[0] in (401, 403, 404)
+            # PUT exists only to serve the front door. It used to answer 404 without
+            # authenticating at all; it now challenges first (feature 024, FR-001).
+            assert request(studio_port, "PUT", "/api/state", "{}")[0] == 401
         assert [s[0] for s in seen] == ["GET", "POST", "PATCH", "DELETE"]
         assert seen[1][3] == "ep-1"
 
 
 def test_front_door_without_a_running_shim_says_so(studio, monkeypatch):
     monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", "1")   # nothing listens there
+    monkeypatch.setenv("STUDIO_FRONT_DOOR_SECRET", "door-secret")
     with server_for(studio) as port:
-        status, _, body = request(port, "GET", "/front-door/salesforce/x")
+        status, _, body = request(port, "GET", "/front-door/door-secret/salesforce/x")
         assert status == 502 and "front door is not running" in body
 
 

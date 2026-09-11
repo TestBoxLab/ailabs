@@ -10,7 +10,7 @@ import pytest
 
 from wb_arms import providers
 from wb_studio import genesis_harness as harness
-from wb_studio.genesis_config import Config, STEPS, cheapest, list_price
+from wb_studio.genesis_config import Config, EFFORTS, STEPS, cheapest, list_price
 
 
 OPUS = providers.get('claude-opus-4-8')
@@ -38,7 +38,8 @@ def test_tool_events_carry_a_short_credential_free_summary():
 def test_route_for_prefers_the_configured_route_then_the_cheapest_available(tmp_path):
     config = Config(tmp_path)
     routes = [{'id': 'claude-opus-4-8', 'available': True}, {'id': 'glm-5.3', 'available': True}, {'id': 'gpt-5.6-sol', 'available': False}]
-    assert config.read() == {'models': {s: None for s in STEPS}, 'steps': list(STEPS)}
+    assert config.read() == {'models': {s: None for s in STEPS}, 'effort': {s: None for s in STEPS},
+                             'steps': list(STEPS), 'efforts': list(EFFORTS)}
     assert list_price('glm-5.3') < list_price('claude-opus-4-8')
     assert config.route_for('reading', routes)['id'] == 'glm-5.3'            # cheapest available, never the first in file order
     assert cheapest([{'id': 'm', 'available': True}])['id'] == 'm'         # an unpriced route is still a route
@@ -90,7 +91,10 @@ def test_a_plugin_gate_holds_a_smoke_launch_and_a_persons_approval(tmp_path, mon
     monkeypatch.setattr('wb_studio.runtime_registry.check_launch', lambda studio, architectures, selected, track='agentic-request': [{'id': 'without-monarch', 'name': 'API control'}])
     studio = SimpleNamespace(directory=tmp_path / 'studio', create=Mock(return_value={'id': 'run-1'}), jobs=Mock(return_value=[]), job=Mock(), events=Mock(return_value=[]), ledger=Mock())
     (tmp_path / 'studio').mkdir()
+    # Feature 024 FR-002 turns every dial off by default; these tests are about
+    # what Genesis does once a person has turned it on.
     genesis = Genesis(studio)
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
     proposal = {'title': 'Smoke', 'tasks': ['t1', 't2'], 'models': ['gpt-5.6-sol'], 'maximum_usd': '1.00', 'track': 'agentic-request'}
     # Within every allowance, so the autonomy gate says yes; the plugin gate holds it in Plan with the reason.
     result = genesis.propose_experiment(proposal)

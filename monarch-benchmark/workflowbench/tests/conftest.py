@@ -23,6 +23,18 @@ def _clear_provider_keys(names):
 
 
 @pytest.fixture(autouse=True)
+def a_named_operator(monkeypatch):
+    """Every paid launch names the person who asked for it (decision D5, feature 024 FR-007).
+
+    Tests are not the product: they exercise what happens *after* a launch is admitted,
+    so they get a default operator rather than repeating one in every payload. A test
+    about the gate itself deletes WB_OPERATOR and asserts the refusal
+    (tests/test_studio_launch_gates.py).
+    """
+    monkeypatch.setenv("WB_OPERATOR", "test-operator")
+
+
+@pytest.fixture(autouse=True)
 def no_live_providers():
     """No test reaches a real provider.
 

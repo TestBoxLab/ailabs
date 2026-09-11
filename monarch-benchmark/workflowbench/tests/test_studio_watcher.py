@@ -32,7 +32,11 @@ def genesis(tmp_path, monkeypatch):
                              jobs=Mock(return_value=[]), events=Mock(return_value=[]),
                              ledger=BudgetLedger(tmp_path / 'budget.sqlite3'))
     studio.job = Mock(side_effect=lambda identity: next((dict(j) for j in studio.jobs() if j['id'] == identity), None) or (_ for _ in ()).throw(FileNotFoundError(identity)))
-    return Genesis(studio)
+    genesis = Genesis(studio)
+    # Feature 024 FR-002 turns the dials off by default, and the watcher stops at
+    # cards == 'off'. These tests are about what it does once a person has turned it on.
+    genesis.autonomy.set({'cards': 'act'}, by='human:lucas')
+    return genesis
 
 
 class SyncThread:

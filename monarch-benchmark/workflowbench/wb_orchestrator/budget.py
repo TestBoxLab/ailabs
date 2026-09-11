@@ -14,8 +14,11 @@ Late billing can therefore charge multiple weeks even if execution finished earl
 these capacity charges are not a claim about when provider usage occurred. Never
 sum weekly capacity charges as total paid spend. Unresolved reservations consume
 current capacity across every rollover until verified settlement.
-An actual above its reserved maximum is recorded, then permanently blocks new
-admissions. Request reservations have no override, expiry, or cancellation path.
+An actual above its reserved maximum is recorded, then blocks new admissions until
+a named person acknowledges that one overrun with a reason (`acknowledge_overrun`,
+`wb budget acknowledge`). The acknowledgement changes no money and removes nothing
+from the record; it replaces hand-editing the database, which is out of scope here.
+Request reservations still have no override, expiry, or cancellation path.
 Run envelopes hold unallocated capacity before scheduling; child request holds
 replace that capacity rather than adding it again. Closing an envelope prevents
 further dispatch and releases only unallocated capacity, never unknown billing.
@@ -284,7 +287,16 @@ class BudgetLedger:
             held += unused
             if envelope['week_start'] < week:
                 carried += unused
-        overruns = tuple(sorted(row['reservation_id'] for row in rows if row['actual_microusd'] is not None and row['actual_microusd'] > row['maximum_microusd']))
+        # An overrun a named person has answered for stops blocking; it stays on the
+        # record and its money is unchanged (feature 024, FR-006).
+        def unanswered(row) -> bool:
+            if row['actual_microusd'] is None or row['actual_microusd'] <= row['maximum_microusd']:
+                return False
+            try:
+                return not json.loads(row['metadata_json']).get('overrun_acknowledged')
+            except (ValueError, TypeError):
+                return True   # metadata we cannot read is not an acknowledgement
+        overruns = tuple(sorted(row['reservation_id'] for row in rows if unanswered(row)))
         return BudgetStatus(week, self.weekly_limit_microusd, actual, held, carried, overruns)
 
     def status(self, *, now: datetime | None = None) -> BudgetStatus:
@@ -536,6 +548,41 @@ class BudgetLedger:
                 connection.execute('UPDATE budget_reservations SET actual_microusd=?, settled_at=? WHERE reservation_id=?', (actual, timestamp, reservation_id))
                 row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
             langfuse_export.record(connection, dict(row), usage=usage, outcome=outcome, trace_ids=trace_ids)
+            return Reservation(**dict(row))
+
+    def acknowledge_overrun(self, reservation_id: str, *, by: str, reason: str,
+                            now: datetime | None = None) -> Reservation:
+        """A named person answers for one recorded overrun, so work can resume.
+
+        An overrun blocks every admission, which is right: a provider that charged
+        above what it promised is exactly when the lab should stop and look. What was
+        missing is the looking. The only recovery was editing the ledger file by hand,
+        which this module puts out of scope, so one under-estimated request could stop
+        every run, every Genesis turn and `wb run` itself for good (feature 024, FR-006).
+
+        This does not undo or reduce anything. The settled total stays immutable and the
+        overrun stays on the record; the acknowledgement is written beside it with who,
+        when and why, and only then does that particular overrun stop blocking. Each one
+        is answered separately: a later overrun blocks again.
+        """
+        _identity(reservation_id, 'reservation_id')
+        who, why = str(by or '').strip(), str(reason or '').strip()
+        if not who:
+            raise ValueError('acknowledging an overrun names the person doing it')
+        if not why:
+            raise ValueError('acknowledging an overrun states why, for the record')
+        _, timestamp = self._time(now)
+        with self._transaction() as connection:
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f'no reservation {reservation_id!r} in the ledger')
+            if row['actual_microusd'] is None or row['actual_microusd'] <= row['maximum_microusd']:
+                raise ValueError(f'reservation {reservation_id!r} did not overrun its maximum')
+            metadata = json.loads(row['metadata_json'])
+            metadata['overrun_acknowledged'] = {'by': who, 'reason': why[:500], 'at': timestamp}
+            connection.execute('UPDATE budget_reservations SET metadata_json=? WHERE reservation_id=?',
+                               (json.dumps(metadata, sort_keys=True), reservation_id))
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
             return Reservation(**dict(row))
 
     def record_summary(self, identity: str, summary: dict) -> None:

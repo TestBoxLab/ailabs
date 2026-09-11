@@ -187,20 +187,19 @@ class Genesis:
         """A record enters the search index when it is written, not at 03:00 (R8); indexing never fails a write."""
         try: self.memory.index_records(rows)
         except Exception: pass
-    def envelope(self):
-        """What Genesis's weekly envelope holds now, or None when the ledger cannot say."""
+    def allowance(self):
+        """What Genesis's weekly allowance holds now, or None when the ledger cannot say."""
         try:
-            from wb_studio.usage import ledger_lines
-            return self.access.envelope(ledger_lines(self.studio)['lines'])
+            from wb_studio import allowances
+            return allowances.state(self.studio,'genesis')
         except Exception: return None
-    def envelope_allows(self,amount):
-        """(ok, reason): whether the envelope still covers `amount` (R4)."""
-        from decimal import Decimal
-        state=self.envelope()
-        if state is None: return True,None
-        left=Decimal(state['left_usd'])
-        if left<Decimal(str(amount)): return False,f"Genesis's weekly envelope cannot cover ${Decimal(str(amount)):.2f}: ${left:.2f} left of ${Decimal(state['envelope_usd']):.2f}. Raise it under Settings, Genesis, or wait for the week to reset."
-        return True,None
+    def allowance_allows(self,amount):
+        """(ok, reason): whether the weekly allowance still covers `amount` (R4).
+
+        Every Genesis spend path passes here before it reserves; the allowance is
+        a gate inside the one lab week, not a second budget."""
+        from wb_studio import allowances
+        return allowances.allows(self.studio,'genesis',amount)
     def card(self,payload):
         with self.lock:
             identity=payload.get('id') or uuid.uuid4().hex
@@ -429,7 +428,7 @@ class Genesis:
         card=self.read('cards',identity)
         if card.get('job') or card['stage']!='approval' or not card.get('plan'): return {'card':identity,'launched':False,'reason':'This card has no plan waiting.'}
         ok,reason=self.autonomy.may_launch(card['plan'],self.watcher.today_usd(),self.watcher.card_usd,self.watcher.cap_usd)
-        if ok: ok,reason=self.envelope_allows(card['plan']['maximum_usd'])
+        if ok: ok,reason=self.allowance_allows(card['plan']['maximum_usd'])
         if ok:
             from wb_studio.genesis_plugins import gate_launch
             ok,reason=gate_launch(self,card)
@@ -542,11 +541,19 @@ class Genesis:
         identity=payload.get('id') or uuid.uuid4().hex
         if self.path('turns',identity).exists(): raise ValueError('This turn id is already taken')
         purpose=str(payload.get('purpose') or 'Genesis conversation')
-        ok,reason=self.envelope_allows(maximum)  # R4: the envelope is a gate, checked once per turn before its reservation
+        # FR-003: Pause is the kill switch, and this is the one funnel every paid turn
+        # passes through. It was read in may_launch, work_now, the initiative job and the
+        # watcher, but never here, so the night, the ranking and the channel sweeps each
+        # started a paid turn through a Pause. A person typing in the chat box is
+        # attended and can lift the dial in the same breath, so only unattended work stops.
+        if purpose!='Genesis conversation' and self.autonomy.read()['paused']:
+            raise ValueError('Genesis is paused; a person has to turn it back on before '+purpose+' can spend.')
+        ok,reason=self.allowance_allows(maximum)  # R4: the allowance is a gate, checked once per turn before its reservation
         if not ok: raise ValueError(reason)
         thread=self.thread_for(payload,text) if purpose=='Genesis conversation' else None
         self.studio.ledger.reserve_run('genesis-'+identity,maximum,metadata={'purpose':purpose,'model':model['id'],'by':'person' if purpose=='Genesis conversation' else 'genesis'})
-        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'thread':thread['id'] if thread else None,'by':payload.get('by') or ('human:studio' if purpose=='Genesis conversation' else 'genesis')}
+        images=[str(p) for p in (payload.get('images') or [])][:8]  # feature 023: screenshots the turn looks at; paths, never pasted into the message
+        turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'images':images,'thread':thread['id'] if thread else None,'by':payload.get('by') or ('human:studio' if purpose=='Genesis conversation' else 'genesis')}
         write_json(self.path('turns',identity),turn)
         if thread:
             with self.lock:
@@ -607,7 +614,9 @@ class Genesis:
                             'setups':sorted({str(r.get('model')) for r in rows}),'tasks':sorted({str(r.get('task')) for r in rows})[:20]})
             return out
         if action=='read_run':
-            job=self.studio.job(payload['id'])
+            identity=payload.get('run') or payload.get('id')  # every sibling tool names it `run`; `id` stays accepted
+            if not identity: raise ValueError('Name the run to read, as run.')
+            job=self.studio.job(identity)
             analysis=self.studio.directory/job['id']/'analysis.json'
             events=self.studio.events(job['id'])
             if payload.get('task'): events=[e for e in events if e.get('task')==payload['task']]
@@ -633,15 +642,20 @@ class Genesis:
             with urlopen(req,timeout=20) as response: data=json.loads(response.read(2_000_000))
             return [{'title':r.get('title',[]),'url':r.get('URL'),'doi':r.get('DOI'),'published':r.get('published'),'cited_by':r.get('is-referenced-by-count'),'abstract':r.get('abstract'),'note':'Metadata only; not a full-paper review'} for r in data['message']['items']]
         if action=='record_analysis':
+            findings=payload.get('findings') or []
+            # Shape first, before the run is read: a call with no findings used to page the whole event
+            # log twice and take the lock before it was refused.
+            if not isinstance(findings,list) or not findings or any(not isinstance(f,dict) or f.get('kind') not in ('fact','hypothesis') or not f.get('event_ids') for f in findings):
+                raise ValueError('Each finding must cite existing events and distinguish fact from hypothesis')
             job=self.studio.job(payload['run'])
-            key=digest({'run':job['id'],'results':job.get('results',[]),'events':self.studio.events(job['id'])})
+            rows=self.studio.events(job['id'])  # read once, not once per check
+            key=digest({'run':job['id'],'results':job.get('results',[]),'events':rows})
             folder=self.root/'analyses';folder.mkdir(exist_ok=True)
             file=folder/(key+'.json')
             with self.lock:
                 if file.exists(): return {'reused':True,**json.loads(file.read_text(encoding='utf8'))}
-                events={e['id'] for e in self.studio.events(job['id'])}
-                findings=payload.get('findings',[])
-                if not findings or any(not f.get('event_ids') or not set(f['event_ids'])<=events or f.get('kind') not in ('fact','hypothesis') for f in findings): raise ValueError('Each finding must cite existing events and distinguish fact from hypothesis')
+                events={e['id'] for e in rows}
+                if any(not set(f['event_ids'])<=events for f in findings): raise ValueError('Each finding must cite existing events and distinguish fact from hypothesis')
                 result={'run':job['id'],'fingerprint':key,'findings':findings,'summary':str(payload.get('summary','')),'created_at':stamp(),'status':'completed','basis':'Genesis interpretation; citations require review'}
                 write_json(file,result);return result
         if action=='save_research': return self.card(payload)

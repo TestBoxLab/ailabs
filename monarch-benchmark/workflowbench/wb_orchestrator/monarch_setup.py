@@ -63,12 +63,39 @@ def expand(value: str | None, env: dict, field: str) -> str:
 
     return _VAR.sub(sub, value).rstrip("/")
 
+def front_door_secret(env) -> str:
+    """The segment the Studio's front door demands, or "" when it is not configured.
+
+    Basic Auth cannot gate that path: the competitor under test calls it and holds no
+    credentials. The secret travels in the address the seeds name instead, so Monarch
+    sends nothing it did not send before. Rotate it per round by changing the variable
+    before `wb monarch setup` writes the seeds.
+    """
+    return (env.get("STUDIO_FRONT_DOOR_SECRET") or "").strip().strip("/")
+
+
+def front_door_path(base: str, env) -> str:
+    """The seed URL for the front door: the base plus the secret segment when there is one.
+
+    A base that does not point at a Studio front door is left alone — a direct shim
+    address or an ngrok tunnel straight to the shim has no such segment to carry.
+    """
+    secret = front_door_secret(env)
+    base = base.rstrip("/")
+    if not secret or not base.endswith("/front-door"):
+        return base
+    return base + "/" + secret
+
+
 def public_front_door_url(harness, env) -> str:
     """The address Monarch's containers use to reach the front door: the harness's
     `shim_public_url` (a tunnel such as ngrok; `${VAR}` expanded) when set, else
-    `http://<shim_public_host>:<shim_port>` for Monarch in Docker on this machine."""
+    `http://<shim_public_host>:<shim_port>` for Monarch in Docker on this machine.
+
+    When that address is a Studio front door, the secret segment is appended so the
+    seeds name a door that will actually open (feature 024, FR-001)."""
     if harness.shim_public_url:
-        return expand(harness.shim_public_url, env, "shim_public_url").rstrip("/")
+        return front_door_path(expand(harness.shim_public_url, env, "shim_public_url"), env)
     return f"http://{harness.shim_public_host}:{harness.shim_port}"
 
 

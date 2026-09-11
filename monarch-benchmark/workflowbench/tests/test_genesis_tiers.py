@@ -23,7 +23,11 @@ def genesis(tmp_path, monkeypatch):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(return_value={'id': 'run-new'}), jobs=Mock(return_value=[]),
                              events=Mock(return_value=[]), ledger=BudgetLedger(tmp_path / 'budget.sqlite3'), budget=Mock(return_value={}))
     studio.job = Mock(side_effect=FileNotFoundError)
-    return Genesis(studio)
+    # Feature 024 FR-002 turns every dial off by default; these tests are about
+    # what Genesis does once a person has turned it on.
+    genesis = Genesis(studio)
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
+    return genesis
 
 
 # ---- tier 2 -----------------------------------------------------------------------------------
@@ -53,10 +57,13 @@ def test_the_watcher_warns_at_eighty_percent_and_refuses_on_the_envelope(genesis
     write_json(genesis.path('turns', 'x1'), turn)
     assert genesis.watcher.status()['warning'].startswith("Today's allowance is 85% spent")
     monkeypatch.setenv('STUDIO_GENESIS_DAILY_USD', '6.00')
-    genesis.access.set_settings({'envelope_usd': '1.00'})
-    monkeypatch.setattr('wb_studio.usage.ledger_lines', lambda studio, now=None: {'lines': [{'who': 'Genesis', 'state': 'open', 'maximum_usd': '0.90', 'actual_usd': None}]})
-    assert genesis.watcher.refusal().startswith("Waiting: Genesis's weekly envelope cannot cover")
-    assert 'envelope has $0.10 of $1.00 left' in genesis.watcher.status()['warning']
+    # The envelope became a named weekly allowance; `set_settings` no longer carries it,
+    # so this used to set nothing and the gate was never reached (feature 024, FR-005).
+    from wb_studio import allowances
+    allowances.set_limit(genesis.studio, 'genesis', '1.00')
+    monkeypatch.setattr('wb_studio.usage.ledger_lines', lambda studio, now=None: {'lines': [{'who': 'Genesis', 'allowance': 'genesis', 'state': 'open', 'maximum_usd': '0.90', 'actual_usd': None}]})
+    assert genesis.watcher.refusal().startswith('Waiting: The weekly allowance for genesis research cannot cover')
+    assert '$0.10 of $1.00 left' in genesis.watcher.status()['warning']
 
 
 def test_a_job_that_fails_the_same_way_twice_is_an_incident(tmp_path):

@@ -22,13 +22,20 @@ from wb_orchestrator.config import SMOKE_SCALE_ATTEMPTS
 CARD_LEVELS = ('act', 'off')
 RUN_LEVELS = ('smoke', 'propose', 'off')
 INITIATIVE_LEVELS = ('open', 'off')
-DEFAULTS = {'cards': 'act', 'runs': 'smoke', 'initiative': 'off', 'paused': False}
+ENGINEER_LEVELS = ('propose', 'off')  # there is no level at which a fix applies itself
+# Every dial defaults off. An absent autonomy.json means a workspace nobody has
+# configured, and such a workspace must do nothing paid: a fresh Studio with provider
+# keys used to begin working cards within thirty seconds and could dispatch a run whose
+# operator was `genesis:smoke` and whose approver was a model turn (feature 024, FR-002).
+DEFAULTS = {'cards': 'off', 'runs': 'off', 'initiative': 'off', 'engineer': 'off', 'paused': False}
 WORDS = {
     'cards': {'act': 'Genesis creates, moves and writes cards and reports it', 'off': 'Genesis only reads; a person moves every card'},
     'runs': {'smoke': f'Genesis launches plans of at most {SMOKE_SCALE_ATTEMPTS} attempts per competitor within its allowances',
              'propose': 'Every plan waits for a person, whatever its size', 'off': 'Genesis never proposes a run'},
     'initiative': {'open': "Genesis opens one card a day from the lab's open threads, and may take it to a smoke run",
                    'off': 'Genesis works only the cards people and triggers give it'},
+    'engineer': {'propose': 'Once a day Genesis specs one failure and a Codex agent writes the diff; every fix waits for a person',
+                 'off': 'Genesis does not write fixes'},
 }
 
 
@@ -72,6 +79,10 @@ class Autonomy:
             if payload['initiative'] not in INITIATIVE_LEVELS:
                 raise ValueError('Initiative is open or off.')
             changes['initiative'] = payload['initiative']
+        if 'engineer' in payload:
+            if payload['engineer'] not in ENGINEER_LEVELS:
+                raise ValueError('Engineer is propose or off.')
+            changes['engineer'] = payload['engineer']
         if 'paused' in payload:
             changes['paused'] = bool(payload['paused'])
         with self.lock:
@@ -176,3 +187,16 @@ def plan_lines(studio, proposal: dict) -> dict:
     ]
     return {'lines': lines, 'attempts_per_competitor': attempts, 'attempts': total, 'competitors': competitors,
             'maximum_usd': str(maximum), 'smoke': attempts <= SMOKE_SCALE_ATTEMPTS, 'task_count': len(tasks)}
+
+
+def background_wanted(autonomy) -> bool:
+    """Whether any dial asks for unattended work, so the watcher and scheduler may start.
+
+    All dials off means a workspace nobody has configured. Starting the background
+    threads there costs money for work no one asked for, so the owner starts them only
+    when a person has turned something on (feature 024, FR-002).
+    """
+    dials = autonomy.read()
+    if dials.get('paused'):
+        return False
+    return any(dials.get(key, 'off') != 'off' for key in ('cards', 'runs', 'initiative', 'engineer'))

@@ -20,9 +20,11 @@ from wb_results.evidence import write_json
 from wb_studio.library import now_sao_paulo
 
 MODULES = ("wb_studio.code_index", "wb_studio.genesis_sleep", "wb_studio.genesis_initiative",
+           "wb_studio.genesis_engineer", "wb_studio.genesis_critic",
            "wb_studio.genesis_ranking", "wb_studio.genesis_memory_suite", "wb_studio.genesis_channels")  # feature 022 lanes; missing ones are skipped
 # genesis_initiative comes after genesis_sleep: due jobs run in this order, so the morning reads a
-# record the night has already consolidated.
+# record the night has already consolidated. genesis_engineer follows both, and the code index at
+# 04:00 before them, so a spec is written against an index built the same morning.
 
 
 class Scheduler:
@@ -100,7 +102,30 @@ class Scheduler:
                 recorder("job-incident", job=name, repeats=entry["repeats"], error=entry["error"][:200])
         return entry
 
+    def paused(self) -> bool:
+        try:
+            return bool(self.studio.genesis.autonomy.read()["paused"])
+        except AttributeError:
+            return False   # a Studio without Genesis has nothing to pause
+
     def run_due(self, now: datetime | None = None) -> list:
+        """Every due job, unless a person has hit Pause.
+
+        FR-003: six daily jobs reach paid model turns, and none of them read the dial.
+        Gating them here rather than in each module means a job added later is paused
+        too, without its author having to remember. A skipped job is not stamped, so it
+        runs when the pause is lifted rather than being silently lost for the day.
+        """
+        if self.paused():
+            skipped = []
+            for job in self.due(now):
+                entry = {"name": job["name"], "status": "skipped",
+                         "reason": "Genesis is paused; a person has to turn it back on."}
+                recorder = getattr(getattr(getattr(self.studio, "genesis", None), "autonomy", None), "record", None)
+                if callable(recorder):
+                    recorder("job-skipped", job=job["name"], reason=entry["reason"])
+                skipped.append(entry)
+            return skipped
         return [self.run(j["name"], now) for j in self.due(now)]
 
     def status(self) -> list:

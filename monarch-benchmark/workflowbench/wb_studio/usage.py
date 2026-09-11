@@ -24,12 +24,25 @@ def ledger_lines(studio, now=None):
         if by.startswith('human:'): return by.split(':',1)[1] or 'Studio user'
         if by=='genesis' or scope.startswith('genesis-') or str(meta.get('purpose','')).startswith('Genesis'): return 'Genesis'
         return 'Studio'
+    def allowance(meta, scope):
+        """Which weekly allowance this line draws on.
+
+        Separate from `who`, which names the requester for a reader. A person's
+        Genesis turn is shown as theirs and still spends Genesis's research
+        allowance; deciding the second from the first hid every such turn from the
+        gate meant to bound it (feature 024, FR-005).
+        """
+        if scope.startswith('genesis-') or str(meta.get('purpose') or '').startswith('Genesis') or str(meta.get('by') or '')=='genesis':
+            return 'genesis'
+        if purpose(meta, scope)=='post-run-analysis': return 'analysis'
+        return 'rounds'
     lines=[]
     for env in ledger.run_reservations():
         if env.week_start!=week: continue
         meta=env.metadata; kids=children.pop(env.scope_id,[])
         settled=[k for k in kids if k.actual_microusd is not None]
         lines.append({'kind':'run','id':env.scope_id,'what':purpose(meta,env.scope_id),'who':who(meta,env.scope_id),
+                      'allowance':allowance(meta,env.scope_id),
                       'created_at':env.created_at,'closed_at':env.closed_at,'maximum_usd':_cents(env.maximum_usd),
                       'actual_usd':_cents(_usd_sum(settled)) if settled else None,'requests':len(kids),'settled':len(settled),
                       'state':'closed' if env.closed_at else 'open','run':env.scope_id if env.scope_id in titles else None})
@@ -38,6 +51,7 @@ def ledger_lines(studio, now=None):
             if r.week_start!=week: continue
             meta=r.metadata
             lines.append({'kind':'request','id':r.reservation_id,'what':purpose(meta,scope),'who':who(meta,scope),
+                          'allowance':allowance(meta,scope),
                           'created_at':r.created_at,'closed_at':r.settled_at,'maximum_usd':_cents(r.maximum_usd),
                           'actual_usd':None if r.actual_usd is None else _cents(r.actual_usd),'requests':1,'settled':int(r.actual_usd is not None),
                           'state':'settled' if r.settled_at else 'open','run':None})
