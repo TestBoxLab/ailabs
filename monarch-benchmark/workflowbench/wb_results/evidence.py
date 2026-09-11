@@ -54,6 +54,11 @@ def _plain(path: Path) -> str:
     text = str(path)
     if text.startswith("\\\\?\\"):
         text = text[4:]
+        # `_long` writes a UNC path as \\?\UNC\server\share; dropping only the four
+        # characters leaves "UNC\server\share", which is not the same path and made
+        # write_attempt reject its own journal on a network --out.
+        if text.upper().startswith("UNC\\"):
+            text = "\\\\" + text[4:]
     return os.path.normcase(os.path.abspath(text))
 
 

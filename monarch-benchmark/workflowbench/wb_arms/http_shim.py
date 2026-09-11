@@ -149,11 +149,34 @@ class EpisodeHTTPShim:
             def do_PATCH(self): self._rest("PATCH")
             def do_DELETE(self): self._rest("DELETE")
 
+            def _admin(self, url: str) -> bool:
+                """Whether this URL names an administrative operation of the world.
+
+                Both surfaces ask, because both reach the same world: `_rest` builds the
+                URL from a path, and `/fetch` takes one the competitor wrote. The world's
+                own `admin_paths` are relative to a service, so the service segment comes
+                off first -- the same thing an adapter's router does before it checks.
+                """
+                admin = getattr(outer.interfaces, "admin_paths", ())
+                if not admin:
+                    return False
+                path = url if url.startswith("/") else "/" + url.split("://", 1)[-1].split("/", 1)[-1]
+                head, _, rest = path.lstrip("/").partition("/")
+                candidates = [path, "/" + rest] if head in outer.interfaces.services() else [path]
+                return any(c.startswith(a) for c in candidates for a in admin)
+
             def _tool(self):
                 try:
                     req = json.loads(self._body() or b"{}")
                     ep = outer.episode
                     if self.path == "/fetch":
+                        # The tool surface reaches the same world as the REST one, so the
+                        # door refuses the same operations on it (feature 026, FR-034).
+                        if self._admin(str(req.get("url") or "")):
+                            self._reply(403, {"error": f"{req.get('url')} is an administrative "
+                                                       "operation of the product under test, "
+                                                       "not part of the task"})
+                            return
                         out = ep.api_fetch(req["method"], req["url"],
                                            params=_as_json_str(req.get("params")),
                                            body=_as_json_str(req.get("body")))
@@ -181,16 +204,7 @@ class EpisodeHTTPShim:
                 # in the competitor's hands writes the expected result directly or
                 # erases the evidence, so the door refuses them for every world rather
                 # than trusting each adapter to remember (feature 026, FR-034).
-                #
-                # Matched against the path within the service, which is how a world's
-                # own document names its operations. Matching `rest_url` instead reads
-                # naturally and silently never fires: that value carries the service
-                # segment in front, so `/gym-itsm-mcp/api/sql-runner` does not start
-                # with `/api/sql-runner` and every request sailed through to the
-                # adapter -- which happened to refuse it, leaving this door shut in
-                # name only.
-                admin = getattr(outer.interfaces, "admin_paths", ())
-                if any(("/" + rest.lstrip("/")).startswith(a) for a in admin):
+                if self._admin(url):
                     self._reply(403, {"error": f"{url} is an administrative operation of "
                                                f"the product under test, not part of the task"})
                     return
@@ -270,6 +284,11 @@ if __name__ == "__main__":   # serve one task's world by hand, for the live chec
     ap.add_argument("--port", type=int, default=9105)
     ap.add_argument("--task", default=None, help="task JSON (default: first in tasks/)")
     a = ap.parse_args()
+    # Imported here rather than at module scope: the shim serves any world satisfying
+    # the adapter contract and must not drag the AutomationBench one into every import.
+    # The top-level import went away with feature 026 and took this entry point with it.
+    from wb_world.episode import Episode, load_task_file
+
     tasks = Path(__file__).resolve().parents[1] / "tasks"
     path = Path(a.task) if a.task else sorted(tasks.glob("*.json"))[0]
     shim = EpisodeHTTPShim(Episode(load_task_file(path), episode_id="manual"),

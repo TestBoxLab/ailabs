@@ -315,7 +315,10 @@ def paired_table(job, m, shown, baseline_id):
     results = job.get("results") or []
     by_cat = defaultdict(lambda: defaultdict(lambda: {"passed": 0, "attempts": 0}))
     for r in results:
-        if measures.is_infrastructure(r) or r["model"] not in shown:
+        # Ungraded leaves a table for the same reason infrastructure does: our own
+        # checker could not answer, so the cell would count a verdict nobody made.
+        # `measures.evaluated` and `pass_rate` already exclude it; these two did not.
+        if measures.is_infrastructure(r) or measures.is_ungraded(r) or r["model"] not in shown:
             continue
         cell = by_cat[category_of(r["task"])][r["model"]]
         cell["attempts"] += 1
@@ -355,7 +358,7 @@ def matrix_cells(job, shown, tasks):
         if r["model"] in shown:
             per[(r["task"], r["model"])].append(r)
     for (task, sid), rows in per.items():
-        valid = [r for r in rows if not measures.is_infrastructure(r)]
+        valid = [r for r in rows if not measures.is_infrastructure(r) and not measures.is_ungraded(r)]
         reps = [bool(r.get("passed")) for r in valid]
         stored_hash = next((r.get("contract_sha256") for r in rows if r.get("contract_sha256")), None) or task_hashes.get(task)
         liveness = task_liveness(task, stored_hash, tasks)

@@ -411,6 +411,14 @@ def break_even(configure_usd, execute_usd, per_request_usd, max_n: int) -> dict:
     if is_unknown(configure_usd) or is_unknown(execute_usd) or is_unknown(per_request_usd):
         return {"product": [], "comparator": [], "crossing": UNKNOWN, "reason": "unknown",
                 "max_n": max_n, "note": "A cost on one side could not be read."}
+    # There is a third sentinel, and `curve` hands it to us: a cohort that never passed
+    # has no cost per pass. Only UNKNOWN and NOT_APPLICABLE were answered for, so
+    # NO_PASSES fell through to float() and took the whole round report down with a
+    # TypeError. It is not an unknown -- we know exactly why there is no number.
+    if any(v is NO_PASSES for v in (configure_usd, execute_usd, per_request_usd)):
+        return {"product": [], "comparator": [], "crossing": NO_PASSES, "reason": "no_passes",
+                "max_n": max_n,
+                "note": "A side never passed a task, so it has no cost per pass to plot."}
     # A per-request competitor has no configure step; its curve starts at the origin.
     setup = 0.0 if is_not_applicable(configure_usd) else float(configure_usd)
     execute, per_request = float(execute_usd), float(per_request_usd)

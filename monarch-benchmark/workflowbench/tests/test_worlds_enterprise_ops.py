@@ -296,6 +296,62 @@ def test_the_front_door_refuses_them_without_help_from_the_world():
         shim.stop()
 
 
+@pytest.mark.parametrize("url", ["/gym-itsm-mcp/api/sql-runner", "/api/sql-runner",
+                                 "http://host/gym-itsm-mcp/api/reset-database"])
+def test_the_tool_surface_refuses_them_too(url):
+    """Two surfaces, one world, so one rule. `POST /fetch` takes a URL the competitor
+    wrote; refusing only on the REST path left the shorter way in open."""
+    from wb_arms.http_shim import EpisodeHTTPShim
+
+    class _Obliging:
+        reached = []
+
+        def interfaces(self):
+            return _Offline().interfaces()
+
+        def api_fetch(self, method, url, params=None, body=None):
+            _Obliging.reached.append(url)
+            return json.dumps({"rows": [{"secret": "written"}]})
+
+    shim = EpisodeHTTPShim(_Obliging()).start()
+    try:
+        req = urllib.request.Request(f"{shim.url}/fetch", method="POST",
+                                     data=json.dumps({"method": "POST", "url": url}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 403
+        assert _Obliging.reached == [], f"/fetch let {url} reach the world"
+    finally:
+        shim.stop()
+
+
+def test_the_tool_surface_still_passes_ordinary_calls():
+    """The guard must not close the door on the world's real work."""
+    from wb_arms.http_shim import EpisodeHTTPShim
+
+    class _Plain:
+        reached = []
+
+        def interfaces(self):
+            return _Offline().interfaces()
+
+        def api_fetch(self, method, url, params=None, body=None):
+            _Plain.reached.append(url)
+            return json.dumps({"incidents": []})
+
+    shim = EpisodeHTTPShim(_Plain()).start()
+    try:
+        req = urllib.request.Request(f"{shim.url}/fetch", method="POST",
+                                     data=json.dumps({"method": "GET",
+                                                      "url": "/gym-itsm-mcp/incidents"}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        assert urllib.request.urlopen(req).status == 200
+        assert _Plain.reached == ["/gym-itsm-mcp/incidents"]
+    finally:
+        shim.stop()
+
+
 def test_upstream_comparisons_keep_types_and_single_row_shape():
     assert matches([{"x": 1, "y": 2}], {"x": 1, "y": 2}, "equals") is True
     assert matches([{"n": "5"}], 3, "greater_than") is False

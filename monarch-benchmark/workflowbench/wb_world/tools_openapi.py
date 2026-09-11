@@ -38,7 +38,10 @@ def build_tool_spec(service: str, tools: list[dict[str, Any]], server_url: str) 
         paths[f"/{service}/{name}"] = {
             "post": {
                 "operationId": name,
-                "summary": (tool.get("description") or name).strip().splitlines()[0][:120],
+                # `or name` again after stripping: a description that is present but
+                # only whitespace leaves no lines at all, and [0] would take the whole
+                # service's document down with an IndexError.
+                "summary": ((tool.get("description") or "").strip().splitlines() or [name])[0][:120],
                 "description": tool.get("description") or name,
                 "requestBody": {
                     "required": True,

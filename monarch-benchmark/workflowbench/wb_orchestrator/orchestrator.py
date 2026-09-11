@@ -629,7 +629,14 @@ class Orchestrator:
             try:
                 if self.ledger and self.run_config and (self.run_config.product.source or self.run_config.native_runtimes):
                     from wb_orchestrator.external_runtime import run_attempt
-                    result = run_attempt(arm, ep, self.run_config, self.ledger, self._budget_run_id, deadline)
+                    # getattr, matching `_execute`'s finally: `_admit` returns early when
+                    # the remaining paid liability is zero and never opens the round
+                    # envelope, which a resume reaches whenever every paid competitor is
+                    # complete and a scripted control still has work. Reading it bare
+                    # raised AttributeError inside the attempt, and the blanket handler
+                    # below filed that as a scored agent_error against the competitor.
+                    result = run_attempt(arm, ep, self.run_config, self.ledger,
+                                         getattr(self, "_budget_run_id", None), deadline)
                 else:
                     result = arm.run(ep, deadline=deadline)
                 attempt_result = result

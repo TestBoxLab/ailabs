@@ -235,6 +235,13 @@ def test_break_even_keeps_unknown_and_no_passes_out_of_the_arithmetic():
     bare = measures.break_even(configure_usd=measures.NOT_APPLICABLE, execute_usd=0.5,
                                per_request_usd=0.5, max_n=3)
     assert bare["product"][0] == pytest.approx(0.5) and bare["crossing"] is None
+    # This test's name promised NO_PASSES and did not check it, which is how the third
+    # sentinel reached float() and took the whole round report down with a TypeError.
+    # `curve` hands it over whenever a side never passed a task.
+    none = measures.break_even(configure_usd=0.2, execute_usd=0.1,
+                               per_request_usd=measures.NO_PASSES, max_n=5)
+    assert none["crossing"] is measures.NO_PASSES and none["reason"] == "no_passes"
+    assert none["product"] == [] and "never passed" in none["note"]
 
 
 def test_the_curve_reads_two_cohorts_per_successful_task():
