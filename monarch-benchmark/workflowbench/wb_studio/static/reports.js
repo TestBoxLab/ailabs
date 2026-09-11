@@ -34,8 +34,12 @@ const audienceQuery = () => reportAudience === 'internal' ? '?audience=internal'
 // A report is a document: every section has an address, and the page is titled by the report.
 let permalinkBase = '';
 function goToSection(section) {
+  section = ({caveats: 'method', story: 'diagnosis', reading: 'why'}[section] || section);
   const target = section && document.getElementById('report-' + section);
-  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (target) {
+    for (let parent = target; parent; parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 function settle(kind, id, section, title) {
   const base = '#' + kind + '/' + encodeURIComponent(id), want = (section ? base + '/' + encodeURIComponent(section) : base) + audienceQuery();
@@ -128,7 +132,9 @@ const setupFullName = (r, id) => r.setups[id]?.name || id;
 
 function reportActions(r, kind) {
   return '<div class="report-actions">' + audienceToggle() + (kind === 'run' ? '<a class="button small" href="#run/' + encodeURIComponent(r.run) + '" data-open-run-evidence="' + esc(r.run) + '">Open run</a>' : '') +
-    '<button class="button small" id="report-print">Print</button><button class="button small" id="report-save">Save as HTML</button>' +
+    '<button class="button small" id="report-print">Print</button><button class="button small" id="report-save">Download report (HTML)</button>' +
+    (kind === 'run' ? ['logs', 'prompts'].map(part => '<a class="button small" data-report-download="' + part + '" href="/api/reports/run/' + encodeURIComponent(r.run) + '/downloads/' + part + '?audience=' + encodeURIComponent(reportAudience) + '" download>Download ' + part + ' (JSON)</a>').join('') : '') +
+    (kind === 'run' ? '<a class="button small" data-report-download="guide" href="/api/reports/run/' + encodeURIComponent(r.run) + '/downloads/guide?audience=' + encodeURIComponent(reportAudience) + '" download>Download review guide (HTML)</a>' : '') +
     (reportAudience === 'internal' ? '<span class="internal-mark">Internal view' + (r.hidden_setups ? ' · ' + r.hidden_setups + ' lab ' + (r.hidden_setups === 1 ? 'setup' : 'setups') + ' shown only here' : '') + '</span>' : '') + '</div>';
 }
 
@@ -204,7 +210,7 @@ function costBlock(r) {
   const tokens = setups.filter(s => Object.values(s.cost.tokens).some(v => v)).map(s => ({ label: s.short_name || s.name, parts: s.cost.tokens }));
   if (tokens.length) wrap.appendChild(Charts.waterfall({ title: 'Tokens by kind', rows: tokens, labelWidth: 220, source: sourceText(r, '') }));
   const table = document.createElement('table'); table.className = 'paired cost-table';
-  table.innerHTML = '<thead><tr><th>Setup</th><th class="num">Per attempt</th><th class="num">Per passed task</th><th class="num">Total</th><th class="num">Unpriced attempts</th><th class="num">Typical time</th></tr></thead><tbody>' +
+  table.innerHTML = '<thead><tr><th>Setup</th><th class="num">Per attempt</th><th class="num">Per passed attempt</th><th class="num">Total</th><th class="num">Unpriced attempts</th><th class="num">Typical time</th></tr></thead><tbody>' +
     setups.map(s => '<tr data-setup="' + esc(s.id) + '"><th scope="row">' + esc(s.short_name || s.name) + '</th><td class="num">' + esc(fmtMoney(s.cost.per_attempt)) + '</td><td class="num">' + (s.pass.passed === 0 && s.cost.per_pass === null ? 'no passes' : esc(fmtMoney(s.cost.per_pass))) + '</td><td class="num">' + esc(fmtMoney(s.cost.total)) + '</td><td class="num">' + s.cost.unknown_attempts + '</td><td class="num">' + (s.time.median === null ? '—' : s.time.median.toFixed(1) + 's') + '</td></tr>').join('') + '</tbody>';
   const tscroll = document.createElement('div'); tscroll.className = 'table-scroll'; tscroll.appendChild(table); wrap.appendChild(tscroll);
   const csrc = document.createElement('p'); csrc.className = 'chart-source'; csrc.textContent = sourceText(r, ''); wrap.appendChild(csrc);
@@ -222,7 +228,7 @@ const REPORT_TERMS = [
   ['95% interval', 'The range the pass rate would most likely fall in if the same tasks ran again; the whiskers on the pass-rate figure. Few tasks give a wide range.'],
   ['Paired comparison', 'The setup and Bare on exactly the same tasks, counted task by task as better, worse or the same. In the category table the small number is how many more or fewer tasks the setup passed than Bare; green is more, red is fewer. The chance sentence is a sign test.'],
   ['Failure reason', 'Read from the record by fixed rules, one per failed attempt, never guessed.'],
-  ['Cost', 'Settled provider receipts per setup; an attempt without a receipt is counted but not costed, and a setup missing any receipt is left off the cost figure.'],
+  ['Cost', 'Recorded provider cost includes failed work and retries. Unknown charges are never zero; competitors without complete receipts are omitted from cost charts, with unpriced attempts counted in the table.'],
   ['Grade', 'One word for the paired comparison: Improvement, Regression, Tie, Tradeoff when the tasks and the cost point in opposite directions, or Not comparable when there is no Bare to compare against.'],
   ['Thinking setting', 'How much reasoning effort the model was allowed per request.'],
   ['Violation', 'A change the task did not permit. One violation fails the attempt even when the requested result is present.'],
@@ -230,32 +236,13 @@ const REPORT_TERMS = [
 
 function methodList(r) {
   const m = r.method;
-  const rows = [['Task set', m.task_set + (m.benchmark ? ' (' + m.benchmark + ')' : '') + ' · ' + m.task_count + ' tasks'], ['Track', trackWords(m.track || r.track)], ['Repetitions', m.configured_plan ? (m.repetitions || 1)+' initial; up to '+(m.retry_on_fail || 0)+' retry on failure' : String(m.repetitions || 1)], ['Interval', 'Wilson score, 95%, on attempts; it does not include task-selection variance'],
+  const rows = [['Task set', m.task_set + (m.benchmark ? ' (' + m.benchmark + ')' : '') + ' · ' + m.task_count + ' tasks'], ['Track', trackWords(m.track || r.track)], ['Repetitions', m.configured_plan ? (m.repetitions || 1)+' initial; up to '+(m.retry_on_fail || 0)+' retry on failure' : String(m.repetitions || 1)], ['Interval', r.reading ? 'Wilson score, 95%, on selected tasks in the reading chart/table. Technical attempt metrics remain separate; task-selection variance is not included.' : 'Wilson score, 95%, on attempts; it does not include task-selection variance'],
     ['Judge', m.judge ? (m.judge.id + ' · ' + String(m.judge.sha256 || '').slice(0, 12)) : 'historical, unpinned'], ['Corpus', 'AutomationBench ' + m.fork],
     ['Runs', (m.runs || []).join(', ')], ['Setups', (r.order || []).map(id => setupFullName(r, id)).join('; ')], ['Attempts', m.recorded_attempts !== undefined ? m.recorded_attempts + ' recorded of ' + m.planned_attempts + ' planned' : ''],
     ['Concurrency', m.concurrency ? String(m.concurrency) : ''], ['Spending limit', m.maximum_usd ? '$' + m.maximum_usd : ''], ['Instructions', m.configuration ? (m.configuration.prompt ? 'custom' : 'original task text') + (m.configuration.max_turns ? ' · ' + m.configuration.max_turns + ' turns max' : '') : '']];
   return '<dl class="method">' + rows.filter(([, v]) => v).map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl>';
 }
 
-function narrativeBlock(r) {
-  const n = r.narrative || {};
-  if (n.status === 'failed') return '<p class="meta">The model reading did not complete; the recorded verdicts stand on their own.</p>';
-  if (n.status === 'completed' || !n.reason || /nothing to interpret|scripted/i.test(n.reason)) return '';
-  return '<p class="meta">Analysis due: ' + esc(n.reason) + '</p>';
-}
-function modelReadingSection(r) {
-  const n = r.narrative || {};
-  if (n.status !== 'completed') return '';
-  return section('reading', 'Model reading', '<div class="model-reading"><p class="meta">' + esc(n.model || '') + (n.effort ? ' · ' + esc(n.effort) + ' thinking' : '') + ' · checked against the record, never a verdict</p><p>' + esc(n.summary || '') + '</p>' + (n.what_went_right ? '<p><strong>What went right.</strong> ' + esc(n.what_went_right) + '</p>' : '') + (n.what_went_wrong ? '<p><strong>What went wrong.</strong> ' + esc(n.what_went_wrong) + '</p>' : '') + (n.next_experiment ? '<p><strong>Next experiment.</strong> ' + esc(n.next_experiment) + '</p>' : '') + '</div>');
-}
-function storySection(r) {
-  const s = r.story;
-  if (!s || !s.setups.length) return '';
-  const modes = s.setups.filter(x => x.failed).map(x => '<tr><th scope="row">' + esc(x.name) + '</th><td>' + x.failed + ' of ' + x.attempts + '</td><td>' + x.modes.map(m => esc(m.label) + ' (' + m.count + ')').join('; ') + '</td></tr>').join('');
-  const table = modes ? '<table class="table story-modes"><thead><tr><th scope="col">Setup</th><th scope="col">Failed</th><th scope="col">How it failed, most common first</th></tr></thead><tbody>' + modes + '</tbody></table>' : '';
-  const suspect = s.suspect_tasks.length ? '<p><strong>Suspect the task first.</strong> ' + s.suspect_tasks.map(t => esc(t.task) + ' (' + esc(t.mode_label.toLowerCase()) + ', every setup)').join('; ') + '.</p>' : '';
-  return section('story', 'What went right and wrong', s.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + table + suspect);
-}
 function termsList(r) {
   const names = new Set(['Setup', 'Task', 'Attempt', 'Pass', '95% interval']);
   if (r?.baseline&&!r.method?.configured_plan) ['Bare', 'Paired comparison', 'Grade'].forEach(x => names.add(x));
@@ -264,25 +251,102 @@ function termsList(r) {
   return '<details class="report-terms-fold"><summary>Terms used in this report</summary><dl class="report-terms">' + REPORT_TERMS.filter(([term]) => names.has(term)).map(([term, text]) => '<dt>' + esc(term) + '</dt><dd>' + esc(text) + '</dd>').join('') + '</dl></details>';
 }
 
+// Shared reading blocks: format server measures without deriving new verdicts.
+const readingCost = (value, unknown = 0) => esc(fmtMoney(value)) + (unknown ? ' <span class="report-note">+ ' + unknown + ' unpriced</span>' : '');
+const readingMinutes = value => value == null ? 'unknown' : (value / 60).toFixed(2);
+const executionLabel = kind => ({monarch: 'Workflow builder', api: 'API control', scripted: 'Scripted control', native: 'Native agent'}[kind] || kind || 'Execution setup not recorded');
+function readingTable(headers, rows, cls = '') {
+  return '<div class="table-scroll"><table class="paired ' + cls + '"><thead><tr>' + headers.map(h => '<th scope="col">' + esc(h) + '</th>').join('') +
+    '</tr></thead><tbody>' + rows.map(row => '<tr>' + row.map((value, i) => '<' + (i ? 'td' : 'th scope="row"') + ' data-label="' + esc(headers[i]) + '">' + value + '</' + (i ? 'td' : 'th') + '>').join('') + '</tr>').join('') + '</tbody></table></div>';
+}
+function readingHighlights(s) {
+  return '<dl class="reading-highlights">' + [
+    [s.initial_solved + ' / ' + s.tasks, 'Initially solved'],
+    [s.solved + ' / ' + s.tasks, 'Including retries'],
+    [readingCost(s.cost, s.unknown_costs), 'Recorded USD'],
+    [String(s.attempts), 'Recorded attempts']
+  ].map(([value, label]) => '<div><dt>' + label + '</dt><dd>' + value + '</dd></div>').join('') + '</dl>';
+}
+function readingBuckets(reading) {
+  if (!reading.buckets.length) return '<p>No failed attempts recorded for this competitor.</p>';
+  return '<p class="report-note" style="font-size:inherit">One primary category per failed attempt; retries count separately. Cited interpretations are labeled separately from recorded outcomes; neither alone proves a root cause.</p>' +
+    readingTable(['Category', 'Failed attempts', 'Share of failures', 'Recorded USD'], reading.buckets.map(b => [
+      esc(b.label) + (b.basis ? '<small>' + esc(b.basis) + '</small>' : ''), String(b.count), esc(fmtPct(b.percent_failed / 100)), readingCost(b.cost, b.unknown_costs)
+    ]), 'reading-buckets');
+}
+function readingCases(reading, r) {
+  if (!reading.cases.length) return '<p>No failed attempts to diagnose.</p>';
+  return readingTable(['Task', 'Failed attempts · cost', 'Diagnosis', 'Responsibility'], reading.cases.map(c => [
+    esc(c.title || c.task) + (c.event_ids?.length ? '<div class="studio-only">' + evidenceLink({kind: 'events', event_ids: c.event_ids}, r) + '</div>' : ''),
+    c.failed_attempts + ' · ' + readingCost(c.cost, c.unknown_costs),
+    esc(c.diagnosis), esc(c.responsibility || 'Undetermined')
+  ]), 'reading-diagnoses');
+}
+function readingComparison(reading, r) {
+  return readingTable(['Competitor', 'Initially solved', 'Including retries', '95% interval', 'Attempts', 'Recorded USD', 'Retry USD', 'Median minutes'], reading.comparison.map(s => [
+    esc(setupName(r, s.id)) + '<small>' + esc(executionLabel(s.kind)) + '</small>',
+    s.initial_solved + ' / ' + s.tasks, s.solved + ' / ' + s.tasks,
+    s.low == null ? 'unavailable' : esc(fmtPct(s.low) + '–' + fmtPct(s.high)),
+    String(s.attempts), readingCost(s.cost, s.unknown_costs), readingCost(s.retry_cost, s.retry_unknown_costs), readingMinutes(s.median_seconds)
+  ]), 'reading-comparison') + '<p class="report-note">Task success includes the recorded retries; it is distinct from the share of attempts that passed. Costs include failed work. Intervals describe task-level uncertainty, not proof of a difference between competitors.</p>' +
+    reading.comparison.filter(s => s.missing_tasks || s.infrastructure_tasks).map(s => '<p class="report-note">' + esc(setupName(r, s.id)) + ': ' + s.missing_tasks + ' tasks without a recorded evaluation; ' + s.infrastructure_tasks + ' tasks with infrastructure interruptions.</p>').join('');
+}
+function readingCharts(reading, r, container) {
+  const rows = reading.comparison.filter(s => s.kind !== 'scripted');
+  if (!rows.length) { container.innerHTML = '<p>Only scripted controls are present; see their measured results below.</p>'; return; }
+  const base = s => ({label: setupName(r, s.id), family: setupFamily(s.name)});
+  container.appendChild(Charts.dotWhisker({title: 'Tasks solved, including retries', width: 380, labelWidth: 126, xLabel: 'share of selected tasks',
+    rows: rows.map(s => ({...base(s), value: s.rate, low: s.low, high: s.high, detail: s.solved + ' / ' + s.tasks}))}));
+  container.appendChild(Charts.bars({title: 'Recorded cost', width: 380, labelWidth: 126, xLabel: 'USD', format: fmtMoney,
+    rows: rows.filter(s => s.cost != null).map(s => ({...base(s), value: s.cost, detail: fmtMoney(s.cost) + (s.unknown_costs ? ' + ?' : '')}))}));
+  container.appendChild(Charts.bars({title: 'Typical attempt duration', width: 380, labelWidth: 126, xLabel: 'minutes', format: v => v.toFixed(1),
+    rows: rows.filter(s => s.median_seconds != null).map(s => ({...base(s), value: s.median_seconds / 60, detail: readingMinutes(s.median_seconds)}))}));
+  container.insertAdjacentHTML('beforeend', '<p class="report-note">Unknown costs and durations are omitted from their charts; gaps remain visible in the table. Scripted controls are listed separately below.</p>');
+}
+function readingMatrix(r) {
+  const labels = {initial_pass: 'Initial pass', retry_pass: 'Retry pass', failed: 'Failed', infrastructure: 'Infrastructure', missing: 'Not evaluated'};
+  return readingTable(['Task', ...r.order.map(id => setupName(r, id))], r.tasks.map(t => [
+    esc(t.title), ...r.order.map(id => {
+      const cell = r.matrix[t.id + ' ' + id] || {}, state = cell.state || 'missing';
+      return '<span class="result-state ' + esc(state) + '">' + esc(labels[state] || 'Not evaluated') + '</span>';
+    })
+  ]), 'reading-matrix') + sourceLine(r, 'one outcome per task and competitor; initial and retry success remain separate');
+}
+function measurementDetails(r, extra = '', runs = '') {
+  const terms = termsList(r).replace(/^<details[^>]*><summary>[^<]*<\/summary>/, '').replace(/<\/details>$/, '');
+  return '<details class="measurement-details" id="report-method"><summary>Measurement definitions and limitations</summary>' +
+    '<div class="measurement-content"><ul class="caveats">' + (r.caveats || []).map(c => '<li>' + esc(c) + '</li>').join('') + extra + '</ul>' +
+    '<h3>Definitions</h3>' + terms + '<h3>Measurement record</h3>' + methodList(r) + runs + '</div></details>';
+}
+
 function renderRunReport(r) {
   const article = $('#report-article');
-  const reading = (r.narrative || {}).status === 'completed';
-  article.innerHTML = '<header class="report-head"><h1>' + esc(r.title || 'Run report') + '</h1>' + meta(['Run ' + String(r.run).slice(0, 12), r.method.task_count + (r.method.task_count === 1 ? ' task' : ' tasks'), r.order.length + (r.order.length === 1 ? ' setup' : ' setups'), trackWords(r.track), fmtDate(r.finished_at || r.created_at)]) +
-    '<div class="grade-line">' + gradeBadge(r.grade) + '<span class="grade-reason">' + esc(r.grade.reason) + '</span></div>' + reportActions(r, 'run') + '</header>' +
-    contents([['verdict', 'Verdict'], ['findings', 'Findings'], ...(r.story && r.story.setups.length ? [['story', 'What went right and wrong']] : []), ...(reading ? [['reading', 'Model reading']] : []), ['hero', 'Pass rate'], ['paired', 'By category'], ['failures', 'Where it failed'], ['cost', 'What it cost'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
-    section('verdict', 'Verdict', '<p class="verdict">' + esc(r.verdict) + '</p>' + narrativeBlock(r)) +
-    section('findings', 'Findings', findingsList(r.findings, r.model_findings, r)) + storySection(r) + modelReadingSection(r) +
-    section('hero', 'Pass rate', '<div data-slot="hero"></div>') +
-    section('paired', 'By category', pairedTable(r)) +
-    section('failures', 'Where it failed', '<div data-slot="failures"></div>') +
-    section('cost', 'What it cost', '<div data-slot="cost"></div>') +
-    section('caveats', 'What to keep in mind', '<ul class="caveats">' + r.caveats.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>') +
-    section('method', 'How it was measured', methodList(r)) + termsList(r);
-  const subject = r.setups[r.subject], base = r.setups[r.baseline];
-  const heroTitle = subject ? subject.name + ' passed ' + subject.pass.passed + ' of ' + subject.pass.attempts + (base ? ', ' + base.name + ' ' + base.pass.passed + ' of ' + base.pass.attempts : '') : 'Pass rate per setup';
-  $('[data-slot="hero"]', article).replaceWith(heroFigure(r, heroTitle));
-  $('[data-slot="failures"]', article).replaceWith(failuresBlock(r));
-  $('[data-slot="cost"]', article).replaceWith(costBlock(r));
+  const reading = r.reading, subject = reading.comparison.find(s => s.id === reading.subject);
+  article.classList.add('readable-report');
+  article.innerHTML = '<header class="report-head"><h1>' + esc(reading.headline || r.title || 'Run report') + '</h1>' +
+    meta([r.title, 'Run ' + r.run, r.method.task_count + ' tasks', r.status, fmtDate(r.finished_at || r.created_at)]) +
+    '<p class="report-summary" id="report-verdict">' + esc(reading.summary) + '</p>' + reportActions(r, 'run') + '</header>' +
+    (subject ? readingHighlights(subject) : '<p>No recorded attempts yet.</p>') +
+    contents([['hero', 'Comparison'], ['why', 'Why these results?'], ['buckets', 'Error buckets'], ['diagnosis', 'Task diagnosis'], ['cost', 'Detailed results'], ['failures', 'By task'], ['method', 'Definitions']]) +
+    section('hero', 'Compare the same tasks', '<p class="report-note">' + esc(reading.execution_note || 'Execution setups are labeled below. API controls, native agents and workflow builders do different work; this does not isolate model quality.') + '</p><div class="reading-charts" data-slot="hero"></div>') +
+    section('why', 'Why these results?', '<p>' + esc(reading.why || 'Analysis pending. Measured results are available; a reviewed explanation has not been recorded.') + '</p>' +
+      '<p class="report-note">' + esc(reading.status === 'completed' ? (reading.analysis?.basis || 'Recorded interpretation; citations do not establish causation.') : reading.status === 'failed' ? 'Analysis failed. The measured results remain available.' : 'Analysis pending') + '</p>' +
+      (reading.status === 'completed' ? meta([reading.analysis?.model, reading.analysis?.revision ? 'Analysis revision ' + reading.analysis.revision : '']) : '')) +
+    section('buckets', 'Error buckets' + (subject ? ': ' + setupName(r, subject.id) : ''), readingBuckets(reading)) +
+    section('diagnosis', 'What actually went wrong', readingCases(reading, r)) +
+    (reading.actions.length ? section('actions', 'What to change first', '<ol class="reading-actions">' + reading.actions.map(a => '<li><p>' + esc(a.text) + '</p>' + (a.acceptance ? '<p class="report-note"><strong>Check:</strong> ' + esc(a.acceptance) + '</p>' : '') + '</li>').join('') + '</ol>') : '') +
+    section('cost', 'Comparison and retry value', readingComparison(reading, r)) +
+    section('failures', 'Results by task', readingMatrix(r)) +
+    '<details class="studio-only technical-details"><summary>Investigate the recorded evidence</summary>' +
+      '<p>Attempt metrics below use attempts as their denominator, including retries.</p>' +
+      section('findings', 'Recorded findings', findingsList(r.findings, r.model_findings, r)) +
+      section('paired', 'By category: attempts', pairedTable(r)) +
+      section('attempts', 'Attempt evidence', '<div data-slot="attempts"></div>') +
+      '<div data-slot="technical-cost"></div></details>' +
+    measurementDetails(r, (reading.limitations || []).map(x => '<li>' + esc(x) + '</li>').join(''));
+  readingCharts(reading, r, $('[data-slot="hero"]', article));
+  $('[data-slot="attempts"]', article).replaceWith(failuresBlock(r));
+  $('[data-slot="technical-cost"]', article).replaceWith(costBlock(r));
   bindReportActions(article, r);
 }
 
@@ -314,17 +378,17 @@ function excludedTable(r) {
 
 function renderRoundReport(r) {
   const article = $('#report-article');
+  article.classList.add('readable-report');
   const when = r.first && r.latest && fmtDate(r.first) !== fmtDate(r.latest) ? fmtDate(r.first) + ' to ' + fmtDate(r.latest) : fmtDate(r.latest);
   article.innerHTML = '<header class="report-head"><h1>' + esc(roundTitle(r)) + '</h1>' + meta([(r.full_benchmark ? 'Benchmark round' : 'Round'), 'task set ' + r.task_set, r.task_count + (r.task_count === 1 ? ' task' : ' tasks'), trackWords(r.track), r.runs.length + (r.runs.length === 1 ? ' run' : ' runs'), when]) +
     reportActions(r, 'round') + '</header>' +
-    contents([['standings', 'Standings'], ['hero', 'Pass rate'], ...(r.trend.length > 1 ? [['trend', 'Over time']] : []), ['paired', 'By category'], ['failures', 'Task matrix'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
+    contents([['standings', 'Standings'], ['hero', 'Pass rate'], ...(r.trend.length > 1 ? [['trend', 'Over time']] : []), ['paired', 'By category'], ['failures', 'Task matrix'], ['method', 'Definitions']]) +
     section('standings', 'Standings', standingsTable(r) + pairingsTable(r) + '' + excludedTable(r)) +
     section('hero', 'Pass rate', '<div data-slot="hero"></div>') +
     (r.trend.length > 1 ? section('trend', 'Over time', '<div data-slot="trend"></div>') : '') +
     section('paired', 'By category', pairedTable(r)) +
     section('failures', 'Task matrix', '<div data-slot="matrix"></div>') +
-    section('caveats', 'What to keep in mind', '<ul class="caveats">' + r.caveats.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>') +
-    section('method', 'How it was measured', methodList({ ...r, method: { ...r.method, track: r.track } }) + '<h3>Runs in this round</h3><ul class="round-runs">' + r.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status, run.full_benchmark ? 'full benchmark' : '']) + '</li>').join('') + '</ul>') + termsList(r);
+    measurementDetails({ ...r, method: { ...r.method, track: r.track } }, '', '<h3>Runs in this round</h3><ul class="round-runs">' + r.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status, run.full_benchmark ? 'full benchmark' : '']) + '</li>').join('') + '</ul>');
   $('[data-slot="hero"]', article).replaceWith(heroFigure(r, 'Pass rate per setup, pooled over ' + r.runs.length + ' ' + (r.runs.length === 1 ? 'run' : 'runs')));
   if (r.trend.length > 1) {
     const series = {};
@@ -340,7 +404,7 @@ function renderRoundReport(r) {
 
 function bindReportActions(article, r) {
   bindReportLinks(article);
-  $$('a.section-link, .report-contents a', article).forEach(a => a.onclick = e => { e.preventDefault(); history.replaceState(null, '', a.getAttribute('href')); goToSection(a.getAttribute('href').split('/').pop()); });
+  $$('a.section-link, .report-contents a', article).forEach(a => a.onclick = e => { e.preventDefault(); history.replaceState(null, '', a.getAttribute('href')); goToSection(a.getAttribute('href').split('?')[0].split('/').pop()); });
   $$('[data-open-run-evidence]', article).forEach(b => b.onclick = e => { e.preventDefault(); openJob(b.dataset.openRunEvidence); });
   $$('[data-evidence-anchor]', article).forEach(b => b.onclick = e => { e.preventDefault(); history.replaceState(null, '', b.getAttribute('href')); const target = document.getElementById(b.dataset.evidenceAnchor); target?.scrollIntoView({ behavior: 'smooth', block: 'start' }); const setup = b.dataset.evidenceSetup; const row = setup && target ? [...target.querySelectorAll('[data-setup]')].find(n => n.dataset.setup === setup) : null; (row || target)?.classList.add('lit'); setTimeout(() => (row || target)?.classList.remove('lit'), 2400); });
   $$('[data-evidence-run]', article).forEach(b => b.onclick = async () => { await openJob(b.dataset.evidenceRun); setTimeout(() => $('[data-evidence="' + b.dataset.evidenceEvent + '"]')?.click(), 400); });
@@ -364,17 +428,20 @@ async function inlineFonts(css) {
   return css;
 }
 async function saveReportHtml(article, r) {
+  const clone = article.cloneNode(true);
   const sheets = ['/vendor/radix-colors/radix-colors.css', '/tokens.css', '/ui.css', '/charts.css', '/report.css'];
   let css = '';
   for (const href of sheets) { try { css += (await (await fetch(href)).text()) + '\n'; } catch { /* the export still reads with system fonts */ } }
   css = await inlineFonts(css);
-  const clone = article.cloneNode(true);
-  clone.querySelectorAll('.report-actions').forEach(n => n.remove());
-  clone.querySelectorAll('button').forEach(b => b.replaceWith(document.createTextNode(b.textContent)));
-  clone.querySelectorAll('a.section-link, .report-contents a').forEach(a => a.setAttribute('href', '#report-' + a.getAttribute('href').split('/').pop()));
+  clone.querySelectorAll('.report-actions, .studio-only, .chart-take, button').forEach(n => n.remove());
+  clone.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href'), sectionId = a.dataset.evidenceAnchor || (href.startsWith('#report-') ? href.slice(1) : 'report-' + href.split('?')[0].split('/').pop());
+    if (href.startsWith('#') && [...clone.querySelectorAll('[id]')].some(n => n.id === sectionId)) a.setAttribute('href', '#' + sectionId);
+    else a.replaceWith(document.createTextNode(a.textContent));
+  });
   clone.querySelectorAll('[tabindex], [role=button]').forEach(n => { n.removeAttribute('tabindex'); if (n.getAttribute('role') === 'button') n.removeAttribute('role'); });
   const title = (r.title || roundTitle(r)) + ' — AI Labs';
-  const html = '<!doctype html><html lang="en"' + (document.documentElement.classList.contains('dark') ? ' class="dark"' : '') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + '</title>' + styleTag(css) + '</head><body class="export"><main><article class="report">' + clone.innerHTML + '</article></main></body></html>';
+  const html = '<!doctype html><html lang="en"' + (document.documentElement.classList.contains('dark') ? ' class="dark"' : '') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + '</title>' + styleTag(css) + '</head><body class="export"><main><article class="' + esc(clone.className) + '">' + clone.innerHTML + '</article></main></body></html>';
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' })), a = document.createElement('a');
   a.href = url; a.download = ('report-' + (r.run || r.cohort) + '.html'); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

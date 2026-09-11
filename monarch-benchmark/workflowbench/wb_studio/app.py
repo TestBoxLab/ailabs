@@ -1063,6 +1063,17 @@ def handler(studio):
                 if url.path == '/api/reports':
                     from wb_studio.report_data import index as report_index
                     return self.send_json(report_index(studio, self.audience(url)))
+                download_match = re.fullmatch(r'/api/reports/run/([a-zA-Z0-9_-]+)/downloads/(logs|prompts|guide)', url.path)
+                if download_match:
+                    from wb_studio.report_downloads import download
+                    identity, kind = download_match.groups()
+                    if kind == 'guide':
+                        from wb_studio.evidence_guide import download as download_guide
+                        return self.send_text(download_guide(studio, identity, self.audience(url)),
+                                              'text/html; charset=utf-8', filename=f'{identity}-evidence-guide.html')
+                    value = download(studio, identity, kind, self.audience(url))
+                    return self.send_text(json.dumps(value, ensure_ascii=False, indent=2),
+                                          'application/json; charset=utf-8', filename=f'{identity}-{kind}.json')
                 report_match = re.fullmatch(r'/api/reports/(run|round)/([a-zA-Z0-9_-]+)', url.path)
                 if report_match:
                     from wb_studio.report_data import round_report, run_report

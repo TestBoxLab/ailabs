@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monarch benchmark · Evidence guide</title>
+<style>
+:root{font:16px/1.6 system-ui,sans-serif;color:#202927;background:#faf9f5}body{margin:0}main{max-width:1050px;margin:auto;padding:40px 24px}h1{font-size:2.2rem;line-height:1.2}h2{margin-top:2rem}p{max-width:78ch}.muted{color:#52605b}.controls{display:flex;flex-wrap:wrap;gap:20px;border-block:1px solid #b7c3ba;padding:20px 0}label{display:block;font-weight:600}select,input,button{font:inherit;max-width:100%;padding:8px}select{width:100%}.controls>div{flex:1;min-width:220px}button{cursor:pointer;background:#fff;border:1px solid #647b6d;border-radius:4px;color:inherit}button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #227f65;outline-offset:3px}pre{font:14px/1.6 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#eeeee7;padding:14px}code{overflow-wrap:anywhere}details{margin:12px 0;border-bottom:1px solid #d7dcd5;padding:10px 0}summary{cursor:pointer;overflow-wrap:anywhere}.status{font-weight:600}li{margin:14px 0}.file-area{padding:18px;background:#eaf0e9}#load-status{min-height:1.5em}#brief{white-space:pre-wrap}a{color:#146047}@media(max-width:600px){main{padding:20px 16px}h1{font-size:1.8rem}.controls{display:block}.controls>div{margin:12px 0}pre{font-size:13px}}
+</style></head><body><main>
+<p class="muted">MONARCH BENCHMARK · HUMAN REVIEW</p><h1>From the task to the evidence</h1>
+<p>Choose a task and an attempt. Compare the requested result with the recorded checks, then follow each prompt to its matching log records. This guide works offline and does not send your files anywhere.</p>
+<p>Run: <code id="run"></code></p>
+<div class="file-area"><label for="files">Load the logs and prompts attachments (.json or .json.gz)</label><input id="files" type="file" multiple accept=".json,.gz"><p id="load-status" role="status" aria-live="polite">Tasks and saved results are already included. Select both supporting files to inspect the execution.</p></div>
+<div class="controls"><div><label for="task">Task</label><select id="task"></select></div><div><label for="attempt">Competitor and attempt</label><select id="attempt"></select></div></div>
+<h2>Requested result</h2><p id="brief"></p><p class="muted">Frozen task hash: <code id="task-hash"></code></p>
+<details><summary>Full task messages and starting data</summary><pre id="task-data"></pre></details>
+<h2>Expected result checks</h2><p>The task's assertions below are the recorded positive checks. They may cover only part of the request. Passing also requires the approval rule for changes and a normal finish; these checks are not a newly generated answer.</p><ol id="expected"></ol>
+<details><summary>Allowed and expected changes</summary><pre id="changes"></pre></details>
+<h2>Recorded result for this attempt</h2><p id="result" class="status"></p><p>Attempt ID: <code id="attempt-id"></code></p><details><summary>Saved check results and unexpected changes</summary><pre id="outcome"></pre></details>
+<h2>Prompts</h2><p>API records contain retained input messages. Monarch records contain the builder's goal, not its complete system prompt. Repeated observations of the same prompt share their source links.</p><div id="prompts"></div>
+<h2 id="log-heading" tabindex="-1">Logs</h2><p id="log-count" role="status"></p><button id="all-logs" type="button">Show all logs for this attempt</button><div id="logs"></div><button id="more" type="button" hidden>Show 40 more records</button>
+<details><summary>Measurement definitions and limitations</summary><p>Trials are zero-based. The selector labels initial repetitions and retries using the run's retained configuration. Log records are observations, not separate attempts: live journals and finalized journals may overlap. Use attempt IDs to group work and log IDs to locate a specific observation. A completed run is not necessarily a pass.</p><p>Tasks are included only after recomputing their hash and matching the run's frozen hash. Outcomes are read from stored results without regrading. Public sharing copies remove credential patterns and provider reasoning. Internal-audience attachments may retain provider summaries. Missing context is not reconstructed.</p></details>
+</main><script id="guide-data" type="application/json">__GUIDE_DATA__</script><script>
+'use strict';
+const guide=JSON.parse(document.getElementById('guide-data').textContent), $=id=>document.getElementById(id);
+let logs=[],prompts=[],loaded=new Set(),shownLogs=[],limit=40;
+const pretty=value=>JSON.stringify(value,null,2), selected=()=>guide.attempts.find(a=>a.attempt_id===$('attempt').value);
+function option(parent,value,label){const o=document.createElement('option');o.value=value;o.textContent=label;parent.append(o);}
+function detail(parent,label,value){const d=document.createElement('details'),s=document.createElement('summary'),p=document.createElement('pre');s.textContent=label;d.append(s,p);d.addEventListener('toggle',()=>{if(d.open&&!p.textContent)p.textContent=pretty(value);});parent.append(d);return d;}
+function renderLogs(){
+  $('logs').replaceChildren();$('log-count').textContent=loaded.has('logs')?shownLogs.length+' matching observations. Showing '+Math.min(limit,shownLogs.length)+'.':'Load the logs attachment to inspect this attempt.';
+  for(const item of shownLogs.slice(0,limit)){const r=item.record||{},label=[r.type||r.kind||r.method||'Recorded observation',r.tool||r.path||r.url||'',r.status||''].filter(Boolean).join(' · ');detail($('logs'),label+' · '+item.log_id,item);}
+  $('more').hidden=limit>=shownLogs.length;
+}
+function allLogs(){shownLogs=logs.filter(x=>x.attempt_id===selected()?.attempt_id);limit=40;renderLogs();}
+function renderAttempt(){
+  const a=selected();if(!a){$('attempt-id').textContent='';$('result').textContent='No recorded attempt for this task.';$('outcome').textContent='';$('prompts').replaceChildren();shownLogs=[];limit=40;renderLogs();return;}
+  $('attempt-id').textContent=a.attempt_id;$('result').textContent=(a.passed===true?'Passed':a.passed===false?'Failed':'Not evaluated')+' · Finish: '+a.termination;
+  $('outcome').textContent=pretty(a);$('prompts').replaceChildren();
+  const matching=prompts.filter(p=>p.attempt_id===a.attempt_id);
+  if(!matching.length)$('prompts').textContent=loaded.has('prompts')?'No retained prompt for this attempt. See coverage in the attachment.':'Load the prompts attachment to inspect this attempt.';
+  matching.forEach((p,i)=>{const d=detail($('prompts'),(p.input_kind==='monarch_goal'?'Monarch goal':'Input messages')+' · '+(i+1),p.request);const b=document.createElement('button');b.type='button';b.textContent='Show linked log records ('+p.log_ids.length+')';b.onclick=()=>{const ids=new Set(p.log_ids);shownLogs=logs.filter(l=>ids.has(l.log_id));limit=40;renderLogs();$('log-heading').focus();$('log-heading').scrollIntoView({block:'start'});};d.insertBefore(b,d.querySelector('pre'));});allLogs();
+}
+function renderTask(){
+  const t=guide.tasks.find(t=>t.id===$('task').value);$('brief').textContent=(t.prompt||[]).filter(m=>m.role==='user').map(m=>m.content).join('\n\n');$('task-hash').textContent=t.hash;$('task-data').textContent=pretty({prompt:t.prompt,initial_state:t.initial_state});$('changes').textContent=pretty({expected_changes:t.expected_changes,allowed_changes:t.allowed_changes});$('expected').replaceChildren();
+  t.assertions.forEach(check=>{const li=document.createElement('li'),title=document.createElement('strong'),pre=document.createElement('pre');title.textContent=check.type.replaceAll('_',' ');pre.textContent=pretty(Object.fromEntries(Object.entries(check).filter(([k])=>k!=='type')));li.append(title,pre);$('expected').append(li);});
+  $('attempt').replaceChildren();guide.attempts.filter(a=>a.task===t.id).sort((a,b)=>Number(!a.competitor.startsWith('monarch@'))-Number(!b.competitor.startsWith('monarch@'))||a.competitor.localeCompare(b.competitor)||a.trial-b.trial).forEach(a=>option($('attempt'),a.attempt_id,a.competitor+' · '+(a.is_retry?'Retry '+Math.max(1,a.trial-a.initial_repetitions+1):'Initial'+(a.initial_repetitions>1?' '+(a.trial+1):''))));renderAttempt();
+}
+$('files').onchange=async event=>{
+  $('load-status').textContent='Reading files locally…';
+  try{for(const file of event.target.files){let stream=file.stream();if(file.name.endsWith('.gz'))stream=stream.pipeThrough(new DecompressionStream('gzip'));const data=JSON.parse(await new Response(stream).text());if(data.run!==guide.run||data.version!==2||!['logs','prompts'].includes(data.kind))throw Error('Select version 2 logs/prompts for this run.');if(data.kind==='logs')logs=data.events;else prompts=data.prompts;loaded.add(data.kind);}$('load-status').textContent='Loaded: '+logs.length+' log observations and '+prompts.length+' prompt records. Nothing was uploaded.';renderAttempt();}catch(error){$('load-status').textContent='Could not load attachment: '+error.message;}
+};
+$('run').textContent=guide.run;guide.tasks.forEach(t=>option($('task'),t.id,t.id));$('task').onchange=renderTask;$('attempt').onchange=renderAttempt;$('all-logs').onclick=allLogs;$('more').onclick=()=>{limit+=40;renderLogs();};renderTask();
+</script></body></html>

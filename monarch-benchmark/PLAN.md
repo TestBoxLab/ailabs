@@ -9,6 +9,13 @@ the targets change. Update it in place.
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
+11 September readable reports: Carlos approved the diagnostic format for Studio
+and exported HTML, plus separate authenticated logs and prompts downloads.
+Implemented and browser verified locally on `ailabs/report-template`; not yet
+deployed. Historical results and upstream inputs remain unchanged. Template and
+verification: [report format](docs/REPORT-TEMPLATE.md),
+[feature 014](../specs/014-readable-reports/quickstart.md).
+
 11 September Studio controls: configured Pause and explicit Resume implemented,
 deployed and browser verified. Git configuration integration is deployed in
 read-only snapshot mode; PAT repository access remains blocked. Historical files

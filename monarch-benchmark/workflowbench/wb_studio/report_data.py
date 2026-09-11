@@ -115,7 +115,8 @@ def historical_baseline(studio, job, subject_id):
             continue
         when = other.get("finished_at") or other.get("created_at") or ""
         if best is None or when > best["finished_at"]:
-            best = {"run": other["id"], "title": other.get("title") or other["id"], "finished_at": when, "arm": bare_arm, "results": rows}
+            best = {"run": other["id"], "title": other.get("title") or other["id"], "finished_at": when,
+                    "arm": {**bare_arm, "initial_repetitions": measures.initial_repetitions(other, bare)}, "results": rows}
     return best
 
 
@@ -171,7 +172,11 @@ def verdict_text(subject, baseline, g, task_count, reused=None) -> str:
     """Three sentences: the outcome with its interval, what changed that should not have, the cost. Numbers from measures only."""
     p = subject["pass"]
     if p["attempts"]:
-        parts = [f"{subject['name']} passed {rate_phrase(p)}" + (f"; {baseline['name']} passed {rate_phrase(baseline['pass'])}." if baseline and baseline["pass"]["attempts"] else ".")]
+        def outcome(s):
+            phrase = rate_phrase(s["pass"])
+            progress = s.get("task_progress") or {}
+            return phrase.replace(" tasks", " attempts") if s["pass"]["attempts"] > progress.get("evaluated_tasks", s["pass"]["attempts"]) else phrase
+        parts = [f"{subject['name']} passed {outcome(subject)}" + (f"; {baseline['name']} passed {outcome(baseline)}." if baseline and baseline["pass"]["attempts"] else ".")]
     else:
         parts = [f"{subject['name']} has no evaluated attempts."]
     harm = harm_sentence(subject)
@@ -296,10 +301,14 @@ def matrix_cells(job, shown, tasks):
     for r in job.get("results") or []:
         if r["model"] in shown:
             per[(r["task"], r["model"])].append(r)
+    for sid in shown:
+        for task in (job.get("settings") or {}).get("tasks") or []:
+            per[(task, sid)]
     for (task, sid), rows in per.items():
         valid = [r for r in rows if not measures.is_infrastructure(r)]
         reps = [bool(r.get("passed")) for r in valid]
-        cells[f"{task} {sid}"] = {"rate": (sum(reps) / len(reps)) if reps else None, "reps": reps, "infra": len(rows) - len(valid)}
+        state = measures.task_progress(rows, [task], measures.initial_repetitions(job, sid))["states"][task]
+        cells[f"{task} {sid}"] = {"rate": (sum(reps) / len(reps)) if reps else None, "reps": reps, "infra": len(rows) - len(valid), "state": state}
     return cells
 
 
@@ -336,6 +345,136 @@ def task_set_id(job) -> str:
     return hashlib.sha256(json.dumps(sorted(hashes.items()), separators=(",", ":")).encode()).hexdigest()[:12]
 
 
+def setup_kind(arm, job=None):
+    """Execution identity from the retained configuration, never its score."""
+    kind = arm.get("kind")
+    if not kind and job:
+        resolved = job.get("resolved_config") or {}
+        for competitor in (resolved.get("plan") or {}).get("competitors") or []:
+            name = f"{competitor['model']}/{competitor['harness']}" if competitor.get("model") else competitor["harness"]
+            if name == arm.get("id"):
+                kind = (resolved.get("harnesses") or {}).get(competitor["harness"], {}).get("kind")
+    if kind == "scripted":
+        return kind
+    if kind in ("monarch", "enterprise", "lab") or str(arm.get("id", "")).startswith("monarch") or str(arm.get("name", "")).lower().startswith("monarch"):
+        return "monarch"
+    return "api" if kind in ("runner", "api", "api_loop") else "native" if kind in ("cli", "cli_agent") else kind or "unknown"
+
+
+def reading_data(job, m, shown, hidden, subject, fa, narrative, tasks):
+    """Shared reader-facing run data; all counts and prose use the shown scope.
+
+    Buckets distinguish recorded outcomes from cited model interpretations.
+    Only cited analysis supplies diagnosis or responsibility, with provenance.
+    """
+    from wb_studio.failure_analysis import BUCKETS, _percentages
+    from wb_studio.narrative import MODES
+    arms = {a["id"]: a for a in (job.get("settings") or {}).get("arms") or []}
+    comparison = []
+    for sid in shown:
+        s = m["setups"][sid]
+        comparison.append({"id": sid, "name": s["name"], "kind": setup_kind(arms.get(sid, {"id": sid, "name": s["name"]}), job),
+                           **{k: v for k, v in s["task_progress"].items() if k != "states"},
+                           "attempts": s["cost"]["attempts"], "cost": s["cost"]["total"],
+                           "unknown_costs": s["cost"]["unknown_attempts"], "median_seconds": s["time"]["median"],
+                           "unknown_times": s["time"]["unknown_attempts"]})
+    sid = subject["id"] if subject else None
+    subject_attempts = [a for a in fa["attempts"] if a["model"] == sid]
+    failed = [a for a in subject_attempts if not a["passed"]]
+    results = {"attempt-" + str(i + 1): row for i, row in enumerate(job.get("results") or [])}
+    def spend(attempts):
+        measured = measures.cost([results[a["id"]] for a in attempts])
+        return {"cost": measured["total"], "unknown_costs": measured["unknown_attempts"]}
+    classification = {a["id"]: (a["bucket"], BUCKETS[a["bucket"]], "Recorded outcome") for a in failed}
+    # Cited prose may still describe a hidden competitor; suppress the whole
+    # interpretation whenever the report excludes any of its input setups.
+    usable = narrative.get("status") == "completed" and not hidden
+    allowed = {event for a in fa["attempts"] if a["model"] in shown for event in a["event_ids"]}
+    subject_events = {event for a in subject_attempts for event in a["event_ids"]}
+    def cited(ids, scope):
+        return isinstance(ids, list) and bool(ids) and all(type(i) is int and i in scope for i in ids)
+    aliases = narrative.get("aliases") or {}
+    names = {aliases.get(s, s): m["setups"][s]["name"] for s in shown}
+    def prose(value):
+        text = value if isinstance(value, str) else ""
+        for alias in sorted(names, key=len, reverse=True):
+            text = text.replace(alias, names[alias])
+        return text
+    cases, reviewed_count = [], 0
+    titles = {t["id"]: t["title"] for t in tasks}
+    for task in dict.fromkeys(a["task"] for a in failed):
+        attempts = [a for a in failed if a["task"] == task]
+        diagnoses, responsibilities = [], []
+        reviewed_ids, review_events = set(), set()
+        for a in attempts:
+            for review in narrative.get("attempts") or []:
+                if not usable or not isinstance(review, dict) or review.get("task") != task or review.get("model") not in (sid, aliases.get(sid, sid)):
+                    continue
+                refs = review.get("event_ids") or ([review["turning_point_event_id"]] if review.get("turning_point_event_id") is not None else [])
+                turning = review.get("turning_point_event_id")
+                if not cited(refs, set(a["event_ids"])) or (turning is not None and (type(turning) is not int or turning not in a["event_ids"])):
+                    continue
+                diagnosis = prose(review.get("diagnosis") or review.get("explanation"))
+                if diagnosis:
+                    diagnoses.append(diagnosis)
+                    reviewed_ids.add(a["id"])
+                    review_events.update(refs)
+                    mode = review.get("failure_mode")
+                    if mode in MODES and (not a["infrastructure"] or mode == "infrastructure"):
+                        classification[a["id"]] = ("reviewed_" + mode, MODES[mode], "Model interpretation")
+                    responsibility = review.get("responsibility", "undetermined")
+                    responsibilities.append(responsibility if responsibility in ("Monarch", "WorkflowBench", "AutomationBench", "shared", "undetermined") else "undetermined")
+        complete = len(reviewed_ids) == len(attempts)
+        reviewed_count += len(reviewed_ids)
+        diagnosis = " ".join(dict.fromkeys(diagnoses)) if diagnoses else "Analysis pending. The recorded verdict does not establish a cause."
+        if diagnoses and not complete:
+            diagnosis += " Analysis pending for the remaining failed attempts."
+        cases.append({"task": task, "title": titles.get(task, task), "failed_attempts": len(attempts), **spend(attempts),
+                      "diagnosis": diagnosis, "responsibility": responsibilities[0] if complete and len(set(responsibilities)) == 1 else "undetermined",
+                      "event_ids": sorted(review_events or {e for a in attempts for e in a["event_ids"]}), "attempt_ids": [a["id"] for a in attempts]})
+    grouped = defaultdict(list)
+    for a in failed:
+        grouped[classification[a["id"]]].append(a)
+    percentages = _percentages([len(v) for v in grouped.values()], len(failed))
+    buckets = [{"id": key, "label": label, "basis": basis, "count": len(attempts), "percent_failed": percentages[i],
+                **spend(attempts), "attempt_ids": [a["id"] for a in attempts]}
+               for i, ((key, label, basis), attempts) in enumerate(grouped.items())]
+    row = next((r for r in comparison if r["id"] == sid), None)
+    headline = f"{subject['name']} solved {row['solved']} of {row['tasks']} tasks" if row else "No evaluated attempts"
+    summary = (f"{row['initial_solved']} tasks solved initially; {row['solved']} including retries. "
+               f"{row['attempts']} attempts recorded. Total cost: {fmt_money(row['cost'])}." if row else "This run has no recorded results to compare.")
+    opening = usable and cited(narrative.get("opening_event_ids"), allowed) and bool(subject_events.intersection(narrative.get("opening_event_ids") or []))
+    if opening:
+        headline = prose(narrative.get("headline")) or headline
+        supplied_summary = prose(narrative.get("summary"))
+        if supplied_summary and len(supplied_summary.split()) <= 100:
+            summary = supplied_summary
+    why = prose(narrative.get("why")) if opening else ""
+    if not why:
+        why = "No failed attempts were recorded for this subject." if subject_attempts and not failed else "Analysis pending. Recorded outcomes alone do not establish why the attempts failed."
+    actions = [{"text": prose(a["text"]), "acceptance": prose(a["acceptance"]), "event_ids": a["event_ids"]}
+               for a in narrative.get("next_actions") or [] if usable and isinstance(a, dict)
+               and isinstance(a.get("text"), str) and isinstance(a.get("acceptance"), str)
+               and cited(a.get("event_ids"), subject_events)][:3] if failed else []
+    status = "failed" if narrative.get("status") == "failed" else "completed" if usable and (opening or reviewed_count) else "pending"
+    limitations = ["Task success counts each selected task once; initial success uses planned initial trials, and success including retries uses any passing trial. Missing and infrastructure-only tasks remain in the selected-task denominator.",
+                   "Intervals are 95% Wilson intervals over selected tasks, not independent retry attempts. Small or selected task sets do not establish general performance.",
+                   "Buckets distinguish recorded outcomes from cited model interpretations; neither proves a cause. Diagnosis and responsibility require human review.",
+                   "Costs include all recorded attempts, including retries and interruptions. Any missing receipt makes the total unknown. Typical duration uses recorded evaluated attempts only."]
+    if hidden:
+        limitations.append("Model interpretation is withheld because its inputs include internal-only competitors.")
+    if (job.get("settings") or {}).get("repetitions", 1) > 1:
+        limitations.append("Initial success means any passing initial repetition; it is not repeated-trial reliability.")
+    return {"subject": sid, "status": status, "reviewed_attempts": reviewed_count, "headline": headline, "summary": summary, "why": why,
+            "comparison": comparison, "buckets": buckets, "cases": cases, "actions": actions, "limitations": limitations,
+            "analysis": {"model": narrative.get("model") if usable else None, "effort": narrative.get("effort") if usable else None,
+                         "basis": narrative.get("basis") if usable else None,
+                         "revision": hashlib.sha256(json.dumps(narrative, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if usable else None,
+                         "input_sha256": narrative.get("input_sha256") if usable else None,
+                         "rubric_sha256": narrative.get("rubric_sha256") if usable else None,
+                         "event_ids": narrative.get("opening_event_ids", []) if opening else []}}
+
+
 def run_report(studio, identity, audience="public") -> dict:
     from wb_studio.failure_analysis import analysis as failure_analysis
     from wb_studio.narrative import run_story, without_reasoning
@@ -351,6 +490,10 @@ def run_report(studio, identity, audience="public") -> dict:
         fa_attempts = [{**a, "story": without_reasoning(a.get("story"))} for a in fa_attempts]
     candidates = [m["setups"][s] for s in shown if s in m["setups"] and s != baseline_id and m["setups"][s]["pass"]["attempts"]]
     subject = max(candidates, key=lambda s: (s["pass"]["rate"] or 0, s["name"])) if candidates else (baseline or (m["setups"][shown[0]] if shown and shown[0] in m["setups"] else None))
+    arms = {a["id"]: a for a in (job.get("settings") or {}).get("arms") or []}
+    monarch = next((sid for sid in shown if setup_kind(arms.get(sid, {"id": sid}), job) == "monarch"), None)
+    if monarch:
+        subject = m["setups"].get(monarch, subject)
     reused = historical_baseline(studio, job, subject["id"]) if subject and baseline_id is None else None
     if reused:
         job = with_baseline(job, reused)
@@ -366,12 +509,31 @@ def run_report(studio, identity, audience="public") -> dict:
     else:
         g = grade(subject, baseline, baseline["name"] if baseline and job.get("settings", {}).get("plan_semantics") else "Bare") if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
     narrative = narrative_status(studio.directory / identity)
+    scoped_job, scoped_measures = job, m
+    if hidden:
+        from wb_studio.failure_analysis import _percentages
+        settings = job.get("settings") or {}
+        scoped_job = {**job, "results": [r for r in job.get("results") or [] if r["model"] in shown],
+                      "settings": {**settings, "models": shown, "arms": [a for a in settings.get("arms") or [] if a["id"] in shown]}}
+        scoped_measures = measures.run_measures(scoped_job, events)
+        failed = sum(not a["passed"] for a in fa_attempts)
+        counts = [sum(a["bucket"] == b["id"] for a in fa_attempts) for b in fa["buckets"]]
+        percentages = _percentages(counts, failed)
+        fa = {**fa, "summary": {"recorded_attempts": len(fa_attempts), "successful_attempts": len(fa_attempts) - failed,
+              "failed_attempts": failed, "infrastructure_attempts": sum(a["infrastructure"] for a in fa_attempts),
+              "planned_attempts": scoped_measures["planned_attempts"], "unrecorded_attempts": scoped_measures["unrecorded_attempts"]},
+              "buckets": [{**b, "count": counts[i], "percent_failed": percentages[i],
+                           "percent_all": round(counts[i] * 100 / len(fa_attempts), 2) if fa_attempts else None,
+                           "attempt_ids": [a["id"] for a in fa_attempts if a["bucket"] == b["id"]]}
+                          for i, b in enumerate(fa["buckets"])]}
+        narrative = {"status": "pending", "reason": "model interpretation is withheld because its inputs include internal-only competitors."}
     aliases_back = {alias: m["setups"].get(real, {}).get("name", real) for real, alias in (narrative.get("aliases") or {}).items()}
     settings = job.get("settings") or {}
     tasks = task_rows(job, studio.tasks)
     return {
         "version": 1, "run": identity, "title": job.get("title"), "status": job.get("status"), "audience": audience,
         "created_at": job.get("created_at"), "finished_at": job.get("finished_at"), "track": settings.get("track", "agentic-request"),
+        "reading": reading_data(job, m, shown, hidden, subject, fa, narrative, tasks),
         "grade": g, "subject": subject["id"] if subject else None, "baseline": baseline_id,
         "baseline_source": {"run": reused["run"], "title": reused["title"], "finished_at": reused["finished_at"]} if reused else None,
         "verdict": verdict_text(subject, baseline, g, len(settings.get("tasks") or []), reused) if subject else "This run has no evaluated attempts.",
@@ -385,13 +547,13 @@ def run_report(studio, identity, audience="public") -> dict:
         "hidden_setups": len(hidden), "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
         "failures": {"summary": fa["summary"], "buckets": fa["buckets"], "attempts": fa_attempts, "limitations": fa["limitations"]},
         "tasks": tasks, "matrix": matrix_cells(job, shown, studio.tasks),
-        "caveats": caveats.for_run(job, m, narrative, hidden, audience, reused=reused),
+        "caveats": caveats.for_run(scoped_job, scoped_measures, narrative, hidden, audience, reused=reused),
         "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "task_hashes": job.get("task_hashes") or {},
                    "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "retry_on_fail": settings.get("retry_on_fail"), "configured_plan": bool(settings.get("plan_semantics")), "track": settings.get("track", "agentic-request"),
                    "judge": (job.get("component_manifest") or {}).get("judge"), "components": job.get("component_manifest"),
                    "world": job.get("world_manifest"), "configuration": settings.get("configuration"), "concurrency": settings.get("concurrency", 1),
                    "maximum_usd": settings.get("maximum_usd"), "fork": job.get("recorded_world_version") or caveats.fork_version(), "runs": [identity],
-                   "planned_attempts": m["planned_attempts"], "recorded_attempts": m["recorded_attempts"]},
+                   "planned_attempts": scoped_measures["planned_attempts"], "recorded_attempts": scoped_measures["recorded_attempts"]},
     }
 
 
