@@ -4,10 +4,10 @@ Requested by Carlos on 10 September 2026. This is a backlog, not a claim that
 these capabilities already exist. Preserve AutomationBench inputs and historical
 results. Current incident: run `f2799405-f9b3-4fb2-8e41-a517e9c39260`.
 
-Drafts for Carlos's review: [short brainstorm](../../specs/013-benchmark-config-repository/operational-follow-ups/brainstorm.md)
+Approved by Carlos on September 11: [short brainstorm](../../specs/013-benchmark-config-repository/operational-follow-ups/brainstorm.md)
 and [acceptance specification](../../specs/013-benchmark-config-repository/operational-follow-ups/spec.md).
-These cover resume, pause and Git activation after PAT approval; they do not
-claim implementation or replace the separate deployment and metrics backlog.
+These cover resume, pause and Git activation after PAT approval. Implementation
+and verification are recorded [here](rounds/2026-09-11-studio-run-controls.md).
 
 ## Resume interrupted runs from the UI
 
@@ -18,16 +18,18 @@ claim implementation or replace the separate deployment and metrics backlog.
   and partial observations. Never represent an observed snapshot as final.
 - Make continuation an explicit, idempotent action with remaining work and cost
   shown before dispatch. Verify recovery after an actual process termination.
-- The current incident is being handled operationally; that does not constitute
-  a general-purpose Resume feature in the UI.
+- Implemented September 11: configured runs use an explicit recovery preview,
+  exclusive execution ownership and immutable configuration restore. Offline
+  process-termination and concurrent-resume tests preserve finalized results.
+  Unresolved paid requests still require reconciliation before continuation.
 
 ## Pause configured benchmark runs
 
 - Stop admitting new attempts and allow active attempts to finish. Display
   Pausing and Paused accurately, then continue without replaying completed work.
 - Keep cancellation distinct from pause, including Monarch authoring and workflow
-  execution. Ordinary Studio runs already have pause controls; repository plans
-  currently refuse pause.
+  execution. Implemented September 11 for repository plans as well: active work
+  drains; paused state persists; continuation reuses the recovery checks.
 
 ## Prevent deployments from interrupting paid work
 
@@ -52,6 +54,9 @@ claim implementation or replace the separate deployment and metrics backlog.
   configuration repository. Preserve configuration revisions on historical runs.
 - Finish browser verification and the remaining feature-013 tasks. Do not remove
   the temporary source or change runtime configuration during an active run.
+- September 11: the configured token authenticates, but the repository and main
+  ref return HTTP 404. Keep snapshot mode read-only until actual repository
+  access is verified. [Activation record](../../specs/013-benchmark-config-repository/operational-follow-ups/git-activation.md).
 
 ## Complete UI metrics and billing visibility
 
@@ -79,9 +84,10 @@ claim implementation or replace the separate deployment and metrics backlog.
   `95 / 140` means 45 attempts are still pending or that all runs must reach 140.
 - Expose all retained attempt metrics and an Excel-compatible export from the UI,
   including timing, actions, tokens, retries and authoring/execution costs.
-- Connect configured-plan activity events: the Results count and run status can
-  update while Activity still says it is waiting for the first task. Do not infer
-  execution inactivity from that panel until its event mapping is implemented.
+- Completed September 11: Activity consumes configured-plan `result` events,
+  including retained historical events and continuation segments. Inspect now
+  opens the selected task correctly. Detailed per-repetition presentation and
+  the wider metrics/export backlog remain separate.
 - Show known spending separately from unresolved charges and reserved capacity.
 - Verify Langfuse delivery for interrupted work as well as completed attempts;
   summary telemetry must not duplicate generation costs.

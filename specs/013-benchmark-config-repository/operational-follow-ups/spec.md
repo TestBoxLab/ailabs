@@ -1,6 +1,6 @@
 # Specification: configured run controls and Git activation
 
-Date: 2026-09-10. Status: draft for review. Parent: [feature 013](../spec.md).
+Date: 2026-09-10. Status: approved by Carlos for implementation on 2026-09-11. Parent: [feature 013](../spec.md).
 Scope: three follow-ups requested by Carlos; this document does not implement them.
 
 ## US1: Resume an interrupted run (P1)

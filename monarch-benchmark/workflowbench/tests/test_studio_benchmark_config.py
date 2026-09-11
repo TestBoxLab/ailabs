@@ -115,13 +115,12 @@ def test_http_accepts_a_bounded_configuration_edit_larger_than_legacy_job_body(w
         assert not remote.writes
 
 
-def test_configured_pause_is_explicitly_refused_and_cancel_is_preserved(workspace):
+def test_configured_pause_is_supported_and_cancel_is_preserved(workspace):
     studio, remote = workspace
     payload = {"commit": remote.head, "product": "simulated-apps", "plan": "free-check", "operator": "Carlos", "request_id": "cancelled-plan"}
     payload["preview_id"] = bc.preview(studio, payload)["preview_id"]
     job = bc.create(studio, payload, start=False)
-    with pytest.raises(ValueError, match="pause"):
-        studio.pause(job["id"])
+    assert studio.pause(job["id"])["status"] == "paused"
     studio.cancel(job["id"])
     studio.execute(job["id"])
     assert studio.job(job["id"])["status"] == "cancelled"

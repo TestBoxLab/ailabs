@@ -1,16 +1,13 @@
 """Studio editing and execution of committed plans through the CLI resolver."""
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import re
 import threading
 import uuid
 
 from wb_orchestrator import approvals, config
 from wb_orchestrator.config_repository import Repository, RepositoryError, Conflict, validate_files
-from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
 from wb_results.store import Store
 
@@ -151,74 +148,8 @@ def create(studio, payload, start=True):
 
 
 def execute(studio, identity):
-    job = studio.job(identity)
-    folder = studio.directory / identity
-    if job["status"] not in ("queued", "cancelling"):
-        return
-    try:
-        with (folder / "execution.claimed").open("x") as claim:
-            claim.write(_now())
-            claim.flush()
-            os.fsync(claim.fileno())
-    except FileExistsError:
-        return
-    store = Store(folder / "results.sqlite3")
-    try:
-        rc = config.resume_config(job["resolved_config"])
-        if rc.hash != job["config_hash"]:
-            raise ValueError("Task inputs changed after admission")
-        reasons = _readiness(studio, rc, {**os.environ, "WB_OPERATOR": job["operator"]})
-        if reasons:
-            raise ValueError("; ".join(reasons))
-        orch = Orchestrator.from_config(store, rc, folder / "evidence", ledger=studio.ledger if approvals.is_paid(rc) else None,
-                                        operator=job["operator"])
-        orch.approval_request_id = job.get("approval_request_id")
-        cancel = studio.cancelled.setdefault(identity, threading.Event())
-        if cancel.is_set() or job["status"] == "cancelling":
-            job["status"] = "cancelled"
-            return
-        job["status"] = "running"
-        studio.save(job)
-        studio.emit(identity, "running")
-        seen = set()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(orch.run, identity)
-            while True:
-                if cancel.is_set():
-                    orch.cancel()
-                rows = store.episodes(run=identity)["rows"]
-                job["results"] = [{"task": r["task_id"], "model": r["arm"], "passed": r["passed"],
-                                   "termination": r["termination"], "cost_usd": r["cost_usd"],
-                                   "error": r.get("error"), "flags": r.get("flags", []),
-                                   "episode_id": r["episode_id"]} for r in rows]
-                job["completed"] = len(rows)
-                unknown_cost = any(r["cost_usd"] is None or {"billing=unknown", "cost_missing"}.intersection(r.get("flags") or [])
-                                   for r in rows)
-                job["cost_usd"] = None if unknown_cost else sum(r["cost_usd"] for r in rows)
-                studio.save(job)
-                for result in job["results"]:
-                    if result["episode_id"] not in seen:
-                        seen.add(result["episode_id"])
-                        studio.emit(identity, "result", **result)
-                if future.done():
-                    future.result()
-                    # One more read includes the final transaction before completion.
-                    if len(store.episodes(run=identity)["rows"]) == len(rows):
-                        break
-                cancel.wait(0.5) if not cancel.is_set() else threading.Event().wait(0.5)
-        stopped = store.run(identity).get("stop_reason")
-        job["status"] = "cancelled" if stopped == "cancelled" else "completed" if not stopped else "failed"
-        if stopped and stopped != "cancelled":
-            job["error"] = "Run stopped: " + stopped
-    except Exception as exc:
-        import traceback
-        (folder / "execution.error.log").write_text(traceback.format_exc(), encoding="utf-8")
-        job.update(status="failed", error=f"Configured plan stopped ({type(exc).__name__}): {exc}")
-    finally:
-        job["finished_at"] = _now()
-        studio.save(job)
-        studio.emit(identity, "finished", job=job, budget=studio.budget())
-        store.close()
+    from wb_studio.configured_controls import execute as execute_controlled
+    return execute_controlled(studio, identity)
 
 
 def dispatch(studio, action, payload, person=None):

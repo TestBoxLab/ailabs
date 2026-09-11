@@ -164,14 +164,16 @@ class Orchestrator:
     @classmethod
     def from_config(cls, store: Store, run_config: config_mod.RunConfig, out_dir: str | Path,
                     provider_concurrency: int | None = None, ledger=None,
-                    operator: str | None = None) -> "Orchestrator":
+                    operator: str | None = None, attempt_admission=None,
+                    attempt_release=None) -> "Orchestrator":
         plan = run_config.plan
         # arms=[] skips the old key validation; competitor names are set below.
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
                    provider_concurrency=provider_concurrency or plan.concurrency,
                    tasks=run_config.tasks, retry_on_fail=plan.retry_on_fail,
-                   ledger=ledger, operator=operator)
+                   ledger=ledger, operator=operator, attempt_admission=attempt_admission,
+                   attempt_release=attempt_release)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
         return self
@@ -180,7 +182,8 @@ class Orchestrator:
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None,
                  tasks: list[dict] | None = None, retry_on_fail: int = 0,
-                 ledger=None, operator: str | None = None, grader=None):
+                 ledger=None, operator: str | None = None, grader=None,
+                 attempt_admission=None, attempt_release=None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         if retry_on_fail < 0:
@@ -209,6 +212,9 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
         self._spent = 0.0            # cumulative cost_usd, carried over on resume
         self._stop_reason: str | None = None
+        self.attempt_admission = attempt_admission
+        self.attempt_release = attempt_release
+        self._paused = threading.Event()
         # The shared weekly ledger paid arms reserve through, who launched the
         # run, and the approval record it runs under (milestone M3).
         self.ledger = ledger
@@ -246,6 +252,8 @@ class Orchestrator:
         run = self.store.run(run_id)
         if run is None:
             raise KeyError(f"unknown run {run_id!r}")
+        if run["stop_reason"] == "cancelled":
+            raise RunKilled(f"run {run_id} was explicitly cancelled and cannot resume")
         recorded_config = json.loads(run["config_json"])
         source = recorded_config.get("config_source")
         if source and (self.run_config is None or source != self.run_config.config_source):
@@ -304,6 +312,29 @@ class Orchestrator:
                         and (task["task"], arm_name, trial + self.k) not in completed):
                     work.append((task, trial + self.k))
         return work
+
+    def _pending_work(self, run_id: str, arm_name: str,
+                      completed: set[tuple[str, str, int]]) -> list[tuple[dict, int]]:
+        work = [(task, trial) for task in self.tasks for trial in range(self.k)
+                if (task["task"], arm_name, trial) not in completed]
+        return work + self._pending_retries(run_id, arm_name)
+
+    def pending_work(self, run_id: str, *, competitor_names: list[str]) -> dict[str, int]:
+        """Preview recorded identities without constructing or preparing provider adapters.
+
+        Callers supply the frozen result identities, including Monarch's version.
+        Conditional retries count only future failures reachable from pending work.
+        """
+        completed = self.store.completed_identities(run_id)
+        initial = retries = conditional = 0
+        for name in competitor_names:
+            for _, trial in self._pending_work(run_id, name, completed):
+                initial += trial < self.k
+                retries += trial >= self.k
+                conditional += max(0, self.retry_on_fail - trial // self.k)
+        return dict(required_initial=initial, earned_retries=retries,
+                    required_attempts=initial + retries, conditional_retries=conditional,
+                    maximum_attempts=initial + retries + conditional)
 
     def _earns_a_retry(self, passed: bool, termination: str) -> bool:
         """A failed attempt is retried unless the infrastructure was what failed:
@@ -374,10 +405,7 @@ class Orchestrator:
         arms = arms if arms is not None else self._arms()
         threads = []
         for arm in arms:
-            work = [(task, trial) for task in self.tasks for trial in range(self.k)
-                    if (task["task"], arm.name, trial) not in skip]
-            work += [(t, trial) for t, trial in self._pending_retries(run_id, arm.name)
-                     if (t["task"], arm.name, trial) not in skip]
+            work = self._pending_work(run_id, arm.name, skip)
             if not work:
                 continue
             t = threading.Thread(target=self._run_arm_group, args=(run_id, arm, work),
@@ -419,6 +447,10 @@ class Orchestrator:
             if self._stop_reason == "cancelled":
                 self.store.set_stop_reason(run_id, "cancelled")
             raise RunKilled(f"run {run_id} killed after {self._recorded} episodes")
+        if self._paused.is_set() and self.pending_work(
+                run_id, competitor_names=[arm.name for arm in arms])["required_attempts"]:
+            self.store.set_stop_reason(run_id, "paused")
+            raise RunKilled(f"run {run_id} paused after {self._recorded} attempts; active attempts drained")
         self.store.finish_run(run_id)
         self.store.export_jsonl(run_id, self._run_dir(run_id) / "episodes.jsonl")
 
@@ -465,7 +497,22 @@ class Orchestrator:
         with sem:
             if self._abort.is_set():
                 return
-            earned = self._run_episode(run_id, arm, task, trial)
+            identity = (task["task"], arm.name, trial)
+            if self.attempt_admission is not None:
+                reason = self.attempt_admission(*identity)
+                if reason == "paused":
+                    self._paused.set()
+                    return
+                if reason == "cancelled":
+                    self.cancel()
+                    return
+                if reason is not None:
+                    raise ValueError(f"invalid attempt admission decision: {reason!r}")
+            try:
+                earned = self._run_episode(run_id, arm, task, trial)
+            finally:
+                if self.attempt_release is not None:
+                    self.attempt_release(*identity)
         if earned and queue is not None and self._retry_budget_left(trial):
             with self._count_lock:
                 queue.append((task, trial + self.k))

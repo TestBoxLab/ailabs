@@ -177,7 +177,7 @@ def recover(folder, receipt, ledger, *, execute=False):
                 arm.run = marked
             return result
         orch._arms = marked_arms
-        emitter = SimpleNamespace(directory=folder.parent, lock=threading.RLock())
+        emitter = SimpleNamespace(directory=folder.parent, lock=threading.RLock(), _event_counts={})
         def emit(kind, **data):
             return Studio.emit(emitter, identity, kind, **data)
         job.update(status="running", recovery=preview, resumed_at=datetime.now(timezone.utc).isoformat(),

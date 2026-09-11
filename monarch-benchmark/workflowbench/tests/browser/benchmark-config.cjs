@@ -67,17 +67,17 @@ const script = async () => {
   const sample=structuredClone(state.jobs[0]);sample.status='running';sample.pause_requested=false;
   for(const marker of [{config_source:{commit:catalog.commit}},{settings:{...sample.settings,plan_semantics:true}}]){
     syncJob({...sample,...marker});
-    assert(document.getElementById('pause-run').classList.contains('hidden') && document.getElementById('resume-run').classList.contains('hidden'),'Configured runs must hide unsupported pause and resume');
-    assert(document.getElementById('run-message').textContent.includes('cannot be paused') && !document.getElementById('cancel-run').classList.contains('hidden'),'Configured runs must explain cancel behavior');
+    assert(!document.getElementById('pause-run').classList.contains('hidden') && document.getElementById('resume-run').classList.contains('hidden'),'Running configured plans offer Pause without Resume');
+    assert(!document.getElementById('cancel-run').classList.contains('hidden'),'Configured runs retain Cancel');
     syncJob({...sample,...marker,status:'failed',error:'Fixture run stopped'});
     assert(document.getElementById('run-again').classList.contains('hidden'),'Run again must not convert configured plans to ad hoc runs');
     assert(!document.querySelector('[data-run-again="'+sample.id+'"]'),'Configured history must also hide ad hoc Run again');
-    assert(document.getElementById('run-message').textContent.includes('Settings') && document.getElementById('run-message').textContent.includes('Fixture run stopped'),'Explain configured rerun without hiding errors');
+    assert(!document.getElementById('resume-run').classList.contains('hidden') && document.getElementById('run-message').textContent.includes('spending') && document.getElementById('run-message').textContent.includes('Fixture run stopped'),'Explain configured continuation without hiding errors');
     const before=localStorage.getItem('ailabs-run-draft');runAgain({...sample,...marker});assert(localStorage.getItem('ailabs-run-draft')===before,'Shared rerun function must preserve configured semantics');
   }
   syncJob(sample);assert(!document.getElementById('pause-run').classList.contains('hidden'),'Ordinary Studio runs retain Pause');
   assert(!document.documentElement.scrollWidth || document.documentElement.scrollWidth<=innerWidth+1,'Editor must not overflow');
-  return 'PASS: Settings navigation, invalid YAML, warnings, create/delete, multi-file save, conflict/network draft retention, operator readiness, pinned explicit launch and configured pause refusal';
+  return 'PASS: Settings navigation, invalid YAML, warnings, create/delete, multi-file save, conflict/network draft retention, operator readiness, pinned explicit launch and configured controls';
 };
 // stdin avoids shell interpretation of the browser script on Windows.
 console.log(execFileSync(bin, ['--session','benchmark-config','eval','--stdin'], {input:`(${script.toString()})()`,encoding:'utf8'}));

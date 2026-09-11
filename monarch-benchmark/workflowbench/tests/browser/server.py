@@ -111,15 +111,41 @@ def configured_results_handler(studio):
     return ResultHandler
 
 
+def configured_controls(directory):
+    """Real configured endpoints and answer-key execution, slowed for UI controls."""
+    import time
+    from pytest import MonkeyPatch
+    from tests.test_studio_benchmark_config import workspace
+    from wb_orchestrator.orchestrator import Orchestrator
+    from wb_studio import benchmark_config as bc
+
+    studio, remote = workspace.__wrapped__(directory, MonkeyPatch())
+    payload = dict(commit=remote.head, product="simulated-apps", plan="free-check",
+                   operator="Carlos", request_id="browser-configured-controls")
+    payload["preview_id"] = bc.preview(studio, payload)["preview_id"]
+    bc.create(studio, payload, start=False)
+    control = bc.create(studio, {**payload, "request_id": "browser-uninterrupted-control"}, start=False)
+    studio.execute(control["id"])
+    original = Orchestrator._run_episode
+
+    def slow(self, identity, competitor, task, trial):
+        time.sleep(2)
+        return original(self, identity, competitor, task, trial)
+
+    Orchestrator._run_episode = slow
+    return studio
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--keep", action="store_true", help="keep the temporary workspace")
     parser.add_argument("--live", action="store_true", help="add a run left mid-stream for the live views")
     parser.add_argument("--configured-results", action="store_true", help="emit configured result events with retries")
+    parser.add_argument("--configured-controls", action="store_true", help="real free configured pause/resume endpoints")
     args = parser.parse_args(argv)
     directory = Path(tempfile.mkdtemp(prefix="ailabs-browser-"))
-    studio = build(directory / "studio", live=args.live)
+    studio = configured_controls(directory) if args.configured_controls else build(directory / "studio", live=args.live)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), configured_results_handler(studio) if args.configured_results else handler(studio))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -1,0 +1,52 @@
+// Start: uv run python tests/browser/server.py --port 8778 --configured-controls
+// Real HTTP, SSE and configured execution; only the free answer-key competitor runs.
+'use strict';
+const {execFileSync}=require('node:child_process');
+const bin=process.env.AGENT_BROWSER_BIN||(process.platform==='win32'?require('node:path').join(process.env.APPDATA,'npm/node_modules/agent-browser/bin/agent-browser-win32-x64.exe'):'agent-browser');
+console.log(execFileSync(bin,['--session','controls-ui','open',`http://127.0.0.1:${process.env.BROWSER_PORT||8778}`],{encoding:'utf8'}));
+const test=async()=>{
+  const assert=(ok,message)=>{if(!ok)throw Error(message);};
+  const el=id=>document.getElementById(id);
+  const wait=async(predicate,message)=>{for(let i=0;i<200;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,100));}throw Error(message);};
+  await wait(()=>el('connection').dataset.status==='connected','Studio did not connect');
+  const fixture=state.jobs.find(j=>j.id==='browser-configured-controls');
+  assert(fixture,'Enable the configured-controls fixture');await openJob(fixture.id);
+  assert(job.status==='queued'&&job.completed===0,'Fixture must start queued and empty');
+  const pinned={id:job.id,hash:job.config_hash,source:JSON.stringify(job.config_source)};
+  await el('pause-run').onclick();
+  assert(job.status==='paused'&&job.completed===0,'Queued pause must dispatch no attempts');
+  const resume=async()=>{
+    await el('resume-run').onclick();
+    assert(el('resume-dialog').open&&el('resume-dialog').getBoundingClientRect().width>0&&!el('resume-confirm').disabled,'Real preview should permit a visible reviewed continuation: '+el('resume-error').textContent);
+    assert(el('resume-summary').textContent.includes('$0.00'),'Free attempts must retain zero known spending');
+    await el('resume-form').onsubmit({preventDefault(){}});
+    assert(!el('resume-dialog').open,'Real confirmed continuation must be admitted: '+el('resume-error').textContent);
+  };
+  await resume();
+  await wait(async()=>{const next=await api('/api/jobs/'+pinned.id);if(next.active_attempts===1){syncJob(next);return true;}return false;},'Configured worker never admitted an attempt');
+  await el('pause-run').onclick();
+  assert(job.status==='pausing'&&el('run-message').textContent.includes('active attempts'),'Pause must report real draining activity');
+  await wait(()=>job.status==='paused'&&job.completed===1,'Real stream did not report drained pause');
+  const first=JSON.stringify(job.results[0]);
+  await resume();
+  await wait(()=>job.status==='completed','Resumed stream did not reach Completed');
+  assert(job.id===pinned.id&&job.config_hash===pinned.hash&&JSON.stringify(job.config_source)===pinned.source,'Continuation must preserve identity and frozen configuration');
+  assert(job.completed===4&&job.results.length===4,'Continuation must finish exactly four attempts');
+  const control=await api('/api/jobs/browser-uninterrupted-control');
+  const outcomes=rows=>rows.map(r=>({task:r.task,passed:r.passed,termination:r.termination,n_changes:r.n_changes})).sort((a,b)=>a.task.localeCompare(b.task));
+  assert(JSON.stringify(outcomes(job.results))===JSON.stringify(outcomes(control.results)),'Continuation outcomes must match uninterrupted execution, including original failures');
+  assert(job.results.some(r=>JSON.stringify(r)===first),'Previously finalized result must remain unchanged');
+  assert(job.cost_usd===0&&el('result-count').textContent==='4','UI totals must include the continuation at zero spend');
+  const finalReport=await api('/api/jobs/'+pinned.id+'/report');
+  assert(finalReport.attempts.length===4,'Report must include every finalized attempt from both segments');
+  assert(el('resume-run').classList.contains('hidden')&&el('pause-run').classList.contains('hidden'),'Completed configured run must have no continuation controls');
+  assert(events.some(e=>e.type==='run_control'&&e.status==='paused')&&events.some(e=>e.type==='result'),'Activity must retain pause and result records across segments');
+  renderObservatory();
+  assert(document.querySelector('.observatory-count').textContent==='4 / 4 finished','Activity completion must include both execution segments');
+  document.querySelector('.workstream footer button').onclick();
+  assert(el('attempt-dialog').open,'Activity must open the retained attempt evidence');clearSelection();
+  const observed=events;events=events.filter(e=>e.type==='result');renderObservatory();
+  assert(document.querySelector('.observatory-count').textContent==='4 / 4 finished','Historical result-only activity must remain visible');events=observed;renderObservatory();
+  return {result:'PASS: real queued pause, reviewed resume, active drain, resumed SSE, four unchanged/finalized results',id:job.id,attempts:job.completed,cost:job.cost_usd,segments:job.execution_segments.length};
+};
+console.log(execFileSync(bin,['--session','controls-ui','eval','--stdin'],{input:`(${test.toString()})()`,encoding:'utf8'}));

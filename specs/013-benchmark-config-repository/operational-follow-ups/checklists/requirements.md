@@ -5,4 +5,4 @@
 - [x] CHK003: Historical evidence, frozen inputs and spending gates are preserved.
 - [x] CHK004: No new worker service, paid experiment or benchmark-data migration.
 - [x] CHK005: PAT approval is an external prerequisite, not assumed completed.
-- [ ] CHK006: Carlos reviews the draft before implementation planning.
+- [x] CHK006: Carlos approved implementation on September 11.
