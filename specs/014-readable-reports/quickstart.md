@@ -93,3 +93,28 @@ The report note was measured at 12px before correction and 16px afterward,
 matching its explanatory paragraph. No report metric or editorial text changed.
 Final graph scope requested nine files; eight produced AST nodes (HTML parsing
 unavailable), 247 nodes and 588 edges. The scoped report discloses that limit.
+
+## Hosted preview corrections
+
+The deployed CSP blocks inline style attributes. A browser check reproduced a
+13px bucket note beside 16px explanatory prose. The shared stylesheet now sets
+the note size; the browser regression checks equality with the explanatory text.
+
+Static-policy checks then reproduced three failures: the standalone guide's
+embedded styles and colors were inside the served static tree, and new print
+rules used `!important`. The guide now lives in `wb_studio/templates/`, read by
+the attachment builder, and the new print rules use normal specificity.
+The policy tests were not weakened.
+
+```powershell
+uv run python -m pytest tests/test_static_csp.py tests/test_evidence_guide.py tests/test_report_downloads.py -q
+```
+
+Result after correction: **16 passed**. The exported HTML was printed with its
+measurement disclosure closed. PDF text extraction, normalized for font
+ligatures, confirmed the definitions and Wilson limitations remain present.
+No dependency was added to the project; `pypdf` was used in a temporary
+`uv run --with pypdf` verification environment.
+
+See the [hosted release record](../../monarch-benchmark/docs/rounds/2026-09-11-readable-report-ui-release.md)
+for the separate production source baseline and acceptance checks.
