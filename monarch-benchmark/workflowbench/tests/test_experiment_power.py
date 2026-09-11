@@ -62,7 +62,8 @@ def test_ten_tasks_at_one_repetition_cannot_be_settled():
     verdict = settleable(tasks=10, repetitions=1)
     assert verdict["ok"] is False
     assert verdict["expected_pairs"] < 6
-    assert "6" in verdict["reason"] and "10" in verdict["reason"]
+    reason = verdict["reason"].lower()
+    assert ("6" in reason or "six" in reason) and "10 tasks" in reason
 
 
 def test_the_development_slate_at_three_repetitions_can_be():

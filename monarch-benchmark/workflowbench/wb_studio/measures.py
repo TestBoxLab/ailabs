@@ -277,16 +277,21 @@ def settleable(tasks: int, repetitions: int = 1, flip_rate: float = None) -> dic
     floor = minimum_discordant_pairs()
     needed = wins_needed(expected)
     sufficient = math.ceil(floor / rate) if rate > 0 else None
+    floor_word = "Six" if floor == 6 else str(floor)
     if needed is None:
         return {"ok": False, "tasks": tasks, "repetitions": repetitions, "flip_rate": rate,
-                "expected_pairs": expected, "wins_needed": None, "sufficient_tasks": sufficient,
-                "reason": (f"{tasks} tasks at {repetitions} repetition{'s' if repetitions != 1 else ''} "
-                           f"can reach about {expected} discordant pairs, assuming a flip rate of {rate}. "
-                           f"{floor} are needed before any win count reaches p<0.05, so this hypothesis "
+                "assumed_flip_rate": rate, "expected_pairs": expected, "expected_discordant_pairs": expected,
+                "minimum_needed": floor, "wins_needed": None, "sufficient_tasks": sufficient,
+                "reason": (f"refused: {tasks} tasks at {repetitions} repetition{'s' if repetitions != 1 else ''} "
+                           f"can reach at most {expected} discordant pairs, assuming a flip rate of {rate}. "
+                           f"{floor_word} are needed before any win count reaches p<0.05, so this hypothesis "
                            f"cannot be settled at this size however it turns out. "
-                           f"Use at least {sufficient} tasks.")}
+                           f"Use at least {sufficient} tasks. Repetitions do not help: the pairing is "
+                           f"per task, so they raise confidence in each task's share and never change "
+                           f"how many tasks can disagree.")}
     return {"ok": True, "tasks": tasks, "repetitions": repetitions, "flip_rate": rate,
-            "expected_pairs": expected, "wins_needed": needed, "sufficient_tasks": sufficient,
+            "assumed_flip_rate": rate, "expected_pairs": expected, "expected_discordant_pairs": expected,
+            "minimum_needed": floor, "wins_needed": needed, "sufficient_tasks": sufficient,
             "reason": (f"{tasks} tasks at a flip rate of {rate} give about {expected} discordant pairs; "
                        f"{needed} of them must be wins to reach p<0.05.")}
 

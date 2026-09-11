@@ -318,3 +318,23 @@ def test_a_cost_claim_has_its_own_certainty_from_the_measure_not_the_pass_test(t
     same = H.settle(studio_for([job('run-1', rows(A['id'], 5, cost=1.0) + rows(B['id'], 5, cost=1.0))], tmp_path),
                     record(measure='cost_per_pass', direction='a_lower', minimum_effect=1.2))
     assert same['certainty']['word'] == 'cannot tell' and same['outcome'] == 'inconclusive'
+
+
+def test_power_field_carries_sizing_details_and_refusal_text(tmp_path):
+    rec = record(population={'filter': {'task_ids': list(TASKS[:10])}}, minimum_effect=0.35)
+    plan = H.smallest_plan(studio_for(tmp_path=tmp_path), rec)
+    power = plan['power']
+    assert power['ok'] is False
+    assert power['assumed_flip_rate'] == 0.35
+    assert power['expected_discordant_pairs'] == 3
+    assert power['minimum_needed'] == 6
+    assert 'refused: 10 tasks at 1 repetition' in power['reason']
+    assert 'Six are needed before any win count reaches p<0.05' in power['reason']
+    # The refusal used to advise raising repetitions. It does not help and saying so was
+    # misleading: the pairing is per task, so `settleable(10, 3)` still reaches three
+    # discordant pairs. Only the task count moves this (feature 024, FR-021).
+    assert 'Use at least 18 tasks' in power['reason']   # ceil(6 / 0.35), the default flip rate
+    assert 'Repetitions do not help' in power['reason']
+    from wb_studio.measures import settleable
+    assert settleable(10, 3)['expected_discordant_pairs'] == settleable(10, 1)['expected_discordant_pairs']
+

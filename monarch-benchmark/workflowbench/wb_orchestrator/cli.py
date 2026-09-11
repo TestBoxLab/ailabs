@@ -148,6 +148,70 @@ def cmd_genesis_index(args) -> int:
     return 0
 
 
+def _experiment_studio(args):
+    from wb_studio.app import Studio
+    return Studio(args.out) if getattr(args, "out", None) else Studio()
+
+
+def _experiment_record(args) -> dict:
+    """The args as the record `genesis_hypotheses` already validates. No new shape."""
+    return {"claim": args.claim, "measure": args.measure, "direction": args.direction,
+            "minimum_effect": float(args.minimum_effect),
+            "population": {"task_set": args.task_set},
+            "slate": args.slate, "repetitions": int(args.repetitions),
+            "id": args.id, "parent": args.parent,
+            "comparison": {"a": {"kind": "architecture", "id": args.a, **({"model": args.model} if args.model else {})},
+                           "b": {"kind": "architecture", "id": args.b, **({"model": args.model} if args.model else {})}}}
+
+
+def cmd_experiment_propose(args) -> int:
+    """Size an experiment against the test that settles it, and refuse what cannot conclude.
+
+    Offline. Nothing is reserved here: a proposal the paired sign test could not decide at
+    the size asked for is refused before any money is committed (feature 024, FR-021).
+    """
+    from wb_studio import genesis_hypotheses as H
+    try:
+        record = H.check_hypothesis(_experiment_record(args))
+        plan = H.smallest_plan(_experiment_studio(args), record)
+    except (ValueError, KeyError) as exc:
+        print(f"experiment: {exc}", file=sys.stderr)
+        return 2
+    power = plan.get("power") or {}
+    if not power.get("ok", True):
+        # The reason already opens with "refused"; do not say it twice.
+        reason = str(power.get("reason") or "")
+        print(reason if reason.lower().startswith("refused") else f"refused: {reason}", file=sys.stderr)
+        return 2
+    print(f"admitted  lineage {record.get('lineage') or '(new)'}  slate {record['slate']}")
+    print(f"  {plan['tasks']} tasks of {plan['population']}, {record['repetitions']} "
+          f"repetition{'s' if record['repetitions'] != 1 else ''}, {plan['competitors']} competitors")
+    print(f"  expected {power.get('expected_pairs')} discordant pairs; "
+          f"{power.get('wins_needed')} must be wins to reach p<0.05")
+    print(f"  maximum ${plan['proposal']['maximum_usd']}")
+    print(f"  {plan['basis']}")
+    if plan.get("not_launchable"):
+        print(f"  not launchable yet: {plan['not_launchable']}")
+    return 0
+
+
+def cmd_experiment_confirm(args) -> int:
+    """Whether a lineage may run on the held-out slate. Refuses; never launches."""
+    from wb_studio import genesis_hypotheses as H
+    try:
+        studio = _experiment_studio(args)
+        ok, why = H.may_confirm(studio.genesis, args.lineage)
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"experiment: {exc}", file=sys.stderr)
+        return 2
+    if not ok:
+        print(f"refused: {why}", file=sys.stderr)
+        return 2
+    print(f"lineage {args.lineage} may be confirmed once on the held-out slate.")
+    print("  Run it with `wb run --product <p> --plan <held-out plan>`; the result settles the lineage either way.")
+    return 0
+
+
 def cmd_budget_acknowledge(args) -> int:
     """A named person answers for one recorded overrun so admissions resume.
 
@@ -212,6 +276,140 @@ def cmd_budget_reconcile(args) -> int:
     return 0
 
 
+def _experiments_this_week(genesis_dir: Path, week_start: str) -> tuple[int, int]:
+    from wb_studio.genesis_access import _week_of
+    counted_cards = set()
+    admitted = 0
+    refused = 0
+    activity_file = genesis_dir / "activity.jsonl"
+    if activity_file.exists():
+        for line in activity_file.read_text(encoding="utf8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                at = entry.get("at")
+                if at:
+                    inst = datetime.fromisoformat(at)
+                    if _week_of(inst) != week_start:
+                        continue
+                card_id = entry.get("card")
+                if card_id and card_id in counted_cards:
+                    continue
+                if entry.get("kind") == "experiment-admitted":
+                    admitted += 1
+                    if card_id:
+                        counted_cards.add(card_id)
+                elif entry.get("kind") in ("experiment-refused", "experiment-rejected"):
+                    refused += 1
+                    if card_id:
+                        counted_cards.add(card_id)
+            except Exception:
+                pass
+    cards_dir = genesis_dir / "cards"
+    if cards_dir.exists():
+        for p in cards_dir.glob("*.json"):
+            try:
+                c = json.loads(p.read_text(encoding="utf8"))
+                if not c.get("hypothesis") or c.get("id") in counted_cards:
+                    continue
+                created = c.get("created_at")
+                if created:
+                    inst = datetime.fromisoformat(created)
+                    if _week_of(inst) != week_start:
+                        continue
+                if c.get("not_launchable") or (c.get("waiting") and "refused" in str(c.get("waiting"))):
+                    refused += 1
+                    counted_cards.add(c.get("id"))
+                elif c.get("stage") in ("running", "approval", "review", "complete"):
+                    admitted += 1
+                    counted_cards.add(c.get("id"))
+            except Exception:
+                pass
+    return admitted, refused
+
+
+def cmd_budget_envelope(args) -> int:
+    from decimal import Decimal
+    from wb_studio.genesis_access import Envelope
+    from wb_orchestrator.budget import BudgetLedger
+
+    genesis_dir = Path(args.genesis_dir) if getattr(args, "genesis_dir", None) else None
+    if genesis_dir is None:
+        # The envelope file decides, not the folder. `or cand.exists()` made the first
+        # test dead, so an empty `genesis/` beside the real one reported "$0.00 (not set)".
+        candidates = [Path("genesis"), Path("out/studio/genesis"),
+                      Path(__file__).resolve().parents[1] / "out" / "studio" / "genesis"]
+        genesis_dir = next((c for c in candidates if (c / "envelope.json").exists()),
+                           next((c for c in candidates if c.is_dir()), Path("genesis")))
+
+    env = Envelope(genesis_dir)
+
+    # Handle --set
+    if getattr(args, "envelope_set", None) is not None:
+        if not getattr(args, "per_experiment", None) or not getattr(args, "by", None):
+            print("wb budget envelope: --set, --per-experiment and --by are all required", file=sys.stderr)
+            return 2
+        try:
+            saved = env.set(
+                amount_usd=args.envelope_set,
+                per_experiment_ceiling_usd=args.per_experiment,
+                by=args.by,
+            )
+            who = saved["set_by"].removeprefix("human:").capitalize()
+            print(f"research envelope set to ${Decimal(saved['amount_usd']):.2f} "
+                  f"(per-experiment ceiling ${Decimal(saved['per_experiment_ceiling_usd']):.2f}) "
+                  f"by {who} for week of {saved['week_start']}.")
+            return 0
+        except ValueError as e:
+            print(f"wb budget envelope: {e}", file=sys.stderr)
+            return 2
+
+    # Status
+    ledger_path = getattr(args, "envelope_ledger", None) or getattr(args, "ledger", None) or DEFAULT_LEDGER
+    try:
+        ledger = BudgetLedger(ledger_path)
+    except Exception:
+        ledger = None
+
+    status = env.status(ledger=ledger)
+    week = status["week_start"]
+    print(f"week of {week} (America/Sao_Paulo)")
+
+    amount = Decimal(status["amount_usd"])
+    held = Decimal(status["held_usd"])
+    settled = Decimal(status["settled_usd"])
+    left = Decimal(status["left_usd"])
+
+    if status["is_set"]:
+        who = str(status.get("set_by") or "").removeprefix("human:").capitalize()
+        env_col = f"research envelope   ${amount:.2f} set by {who}"
+    else:
+        env_col = "research envelope   $0.00 (not set)"
+
+    env_col = f"{env_col:<44}"
+    print(f"{env_col}reserved ${held:.2f}   settled ${settled:.2f}   left ${left:.2f}")
+
+    if ledger is not None:
+        try:
+            led_st = ledger.status()
+            lab_limit = led_st.weekly_limit_usd
+            lab_held = led_st.held_usd
+            lab_settled = led_st.actual_usd
+            lab_left = led_st.available_usd
+            lab_col = f"lab weekly ceiling  ${lab_limit:.2f}"
+            lab_col = f"{lab_col:<44}"
+            print(f"{lab_col}reserved ${lab_held:.2f}   settled ${lab_settled:.2f}   left ${lab_left:.2f}")
+        except Exception as exc:
+            # A budget command that silently drops the lab ceiling reads as "no ceiling".
+            print(f"lab weekly ceiling  unavailable ({type(exc).__name__}: {exc})")
+
+    admitted, refused = _experiments_this_week(genesis_dir, week)
+    print(f"experiments this week: {admitted} admitted, {refused} refused")
+    return 0
+
+
+
 def _paid_gate(rc, args):
     """The ledger a paid run config reserves in, or an exit code when it may not launch today."""
     reasons = approvals.launch_readiness(rc, os.environ)
@@ -242,6 +440,11 @@ def cmd_run(args) -> int:
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
+    if getattr(args, "repetitions", None) is not None:
+        if args.repetitions < 1:
+            print("wb run: repetitions must be at least 1", file=sys.stderr)
+            return 2
+        rc.plan.repetitions = args.repetitions
     ledger = launch = None
     if approvals.is_paid(rc):
         ledger = _paid_gate(rc, args)
@@ -515,7 +718,57 @@ def cmd_corpus(args) -> int:
         return _corpus_tiers(args)
     if args.corpus_cmd == "slate":
         return _corpus_slate(args)
+    if args.corpus_cmd == "split":
+        return _corpus_split(args)
     return 2
+
+
+def _corpus_split(args) -> int:
+    """Draw development and held-out slates stratified by tier and domain (FR-017, FR-018, FR-033)."""
+    from pathlib import Path
+
+    from wb_orchestrator import slate
+
+    dirs: list[Path] = []
+    if args.corpus:
+        for c in args.corpus:
+            for part in c.split(","):
+                part = part.strip()
+                p = Path(part)
+                if "*" in part:
+                    matched = sorted(p.parent.glob(p.name)) if p.parent.exists() else []
+                    dirs.extend(matched)
+                else:
+                    dirs.append(p)
+    else:
+        dirs = sorted(Path("corpus").glob("imported-*"))
+
+    dirs = sorted(set(dirs))
+    missing = [str(d) for d in dirs if not d.is_dir()]
+    if missing or not dirs:
+        print(f"corpus folder missing or empty: {missing or 'corpus/imported-*'}",
+              file=sys.stderr)
+        return 3
+
+    try:
+        r = slate.split(
+            dirs=dirs,
+            size=args.size,
+            seed=args.seed,
+            dev_out=args.dev_out,
+            heldout_out=args.heldout_out,
+            manifest=args.manifest,
+            because=args.because,
+        )
+    except slate.Refusal as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(slate.format_split_summary(r))
+    return 0
 
 
 def _corpus_slate(args) -> int:
@@ -774,11 +1027,49 @@ def main(argv: list[str] | None = None) -> int:
     ba.add_argument("--reason", required=True, help="why this overrun is understood; kept with the reservation")
     ba.add_argument("--by", default=None, help="the person acknowledging; default: WB_OPERATOR")
     ba.set_defaults(fn=cmd_budget_acknowledge)
+    be = bsub.add_parser("envelope", help="sets and shows the weekly research envelope")
+    be.add_argument("envelope_action", nargs="?", choices=("status",), default=None,
+                    help="status (optional)")
+    be.add_argument("--set", dest="envelope_set", default=None,
+                    help="set the weekly envelope amount in USD")
+    be.add_argument("--per-experiment", dest="per_experiment", default=None,
+                    help="per-experiment ceiling in USD")
+    be.add_argument("--by", dest="by", default=None,
+                    help="the person setting the envelope (e.g. Lucas)")
+    be.add_argument("--ledger", dest="envelope_ledger", default=None,
+                    help="ledger to inspect; default: the top-level --ledger")
+    be.add_argument("--genesis-dir", dest="genesis_dir", default=None,
+                    help="genesis directory (optional)")
+    be.set_defaults(fn=cmd_budget_envelope)
+
+    p = sub.add_parser("experiment",
+                       help="size and gate a hypothesis: the record Genesis already keeps, from a terminal")
+    esub = p.add_subparsers(dest="experiment_cmd", required=True)
+    ep = esub.add_parser("propose", help="size it against the sign test that settles it; refuses what cannot conclude")
+    ep.add_argument("--claim", required=True)
+    ep.add_argument("--measure", default="pass_rate")
+    ep.add_argument("--direction", default="a_higher", choices=["a_higher", "a_lower"])
+    ep.add_argument("--minimum-effect", dest="minimum_effect", required=True, type=float,
+                    help="the smallest difference worth calling real; also the share of tasks expected to flip")
+    ep.add_argument("--task-set", dest="task_set", required=True)
+    ep.add_argument("--a", required=True, help="the version under test")
+    ep.add_argument("--b", required=True, help="what it is compared against")
+    ep.add_argument("--model", default=None)
+    ep.add_argument("--repetitions", type=int, default=1)
+    ep.add_argument("--slate", default="development", choices=["development", "held-out"])
+    ep.add_argument("--id", default=None)
+    ep.add_argument("--parent", default=None, help="the record this descends from; it keeps that lineage")
+    ep.set_defaults(fn=cmd_experiment_propose)
+    ec = esub.add_parser("confirm", help="whether a lineage may reach the held-out slate; it reaches it once")
+    ec.add_argument("lineage")
+    ec.set_defaults(fn=cmd_experiment_confirm)
 
     p = sub.add_parser("run")
     p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
     p.add_argument("--plan", default=None, help="name in config/plans or a path; asked if omitted")
     p.add_argument("--run-id", default=None)
+    p.add_argument("--repetitions", type=int, default=None,
+                   help="planned attempts per prompt and competitor; default 1 (FR-019)")
     p.add_argument("--request", default=None,
                    help="run an approved approval request (wb approvals); the config hash must still match")
     p.set_defaults(fn=cmd_run)
@@ -898,6 +1189,22 @@ def main(argv: list[str] | None = None) -> int:
                          "is recorded in the manifest (a refusal otherwise)")
     cs.add_argument("--corpus", action="append", default=None,
                     help="repeatable; default: every corpus/imported-* folder")
+    csp = csub.add_parser("split",
+                          help="draw development and held-out slates stratified by difficulty tier and domain")
+    csp.add_argument("--corpus", action="append", default=None,
+                     help="repeatable; default: every corpus/imported-* folder")
+    csp.add_argument("--size", type=int, required=True,
+                     help="tasks per slate (both slates get this count)")
+    csp.add_argument("--seed", type=int, required=True,
+                     help="seed for the stratified draw, recorded in the manifest")
+    csp.add_argument("--dev-out", required=True,
+                     help="folder where the development slate is written")
+    csp.add_argument("--heldout-out", required=True,
+                     help="folder where the held-out slate is written")
+    csp.add_argument("--manifest", required=True,
+                     help="file where the split manifest is written")
+    csp.add_argument("--because", required=True,
+                     help="why the split exists, recorded in the manifest")
     p.set_defaults(fn=cmd_corpus)
 
     p = sub.add_parser("monarch", help="prepare Monarch for a product")

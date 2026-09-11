@@ -27,6 +27,8 @@ KINDS = ('architecture', 'bare', 'monarch')
 FILTER_KEYS = ('tier', 'domain', 'category', 'applications', 'task_ids')
 # A record's setup kind against the arm kinds `Studio.create` writes into `settings.arms`.
 ARM_KINDS = {'architecture': ('version',), 'bare': ('native', 'runner'), 'monarch': ('enterprise',)}
+DEVELOPMENT, HELD_OUT = 'development', 'held-out'
+SLATES = (DEVELOPMENT, HELD_OUT)
 RATIO_MEASURES = ('cost_per_pass',)
 # Tokens per attempt when no recorded attempt carries a count; stated in the plan's basis.
 DEFAULT_TOKENS = {'input': 60000, 'output': 4000}
@@ -63,14 +65,38 @@ def check_hypothesis(record) -> dict:
         raise ValueError('The minimum effect is a number above 0: a fraction of pass rate for rates, a count for violations and turns, a ratio for cost per passed task.')
     if measure in RATIO_MEASURES and effect <= 1:
         raise ValueError('For cost per passed task the minimum effect is a ratio above 1, for example 1.25 for a quarter more.')
+    slate = record.get('slate')
+    if slate is None:
+        slate = 'development'
+    elif slate not in SLATES:
+        raise ValueError('The slate is development or held-out.')
     out = {'claim': claim, 'population': _check_population(record.get('population')),
            'comparison': _check_comparison(record.get('comparison')), 'measure': measure,
-           'direction': direction, 'minimum_effect': float(effect)}
+           'direction': direction, 'minimum_effect': float(effect), 'slate': slate}
     prior = record.get('prior')
     if prior is not None:
         if not _number(prior) or not 0 <= prior <= 1:
             raise ValueError('The prior is a probability between 0 and 1, or left out.')
         out['prior'] = float(prior)
+    power = record.get('power')
+    if power is not None:
+        if not isinstance(power, dict):
+            raise ValueError('The power field is an object, or left out.')
+        out['power'] = power
+    # How many times each task is attempted, and the lineage the once-only held-out rule
+    # counts. The slate is checked above (feature 024, FR-019/FR-022).
+    repetitions = record.get('repetitions', 1)
+    if type(repetitions) is not int or isinstance(repetitions, bool) or repetitions < 1:
+        raise ValueError('Repetitions is a whole number of attempts per task, 1 or more.')
+    out['repetitions'] = repetitions
+    for key in ('id', 'parent'):
+        if record.get(key) is not None:
+            if not isinstance(record[key], str) or not record[key].strip():
+                raise ValueError('The ' + key + ' is a non-empty id, or left out.')
+            out[key] = record[key].strip()
+    # A lineage is the root record's id. A fork, a re-wording or a nudged minimum effect
+    # stays in the same lineage, so none of them mints a fresh ticket to the held-out slate.
+    out['lineage'] = str(record.get('lineage') or out.get('parent') or out.get('id') or '').strip() or None
     return out
 
 
@@ -593,6 +619,42 @@ def smallest_plan(studio, record) -> dict:
         # could never conclude reached a launch.
         out['not_launchable'] = power['reason']
         return out
+
+    # Check the research envelope (FR-035) before any reservation or Studio launch check
+    from pathlib import Path
+    from wb_studio.genesis_access import Envelope
+
+    envelope = getattr(studio, 'envelope', None)
+    if envelope is None and hasattr(studio, 'genesis') and hasattr(studio.genesis, 'envelope'):
+        envelope = studio.genesis.envelope
+    elif envelope is None and hasattr(studio, 'directory') and studio.directory:
+        envelope = Envelope(Path(studio.directory) / 'genesis')
+
+    if envelope is not None:
+        ledger = getattr(studio, 'ledger', None)
+        status = envelope.status(ledger=ledger)
+        env_left = status['available_usd']
+        per_exp = Decimal(status['per_experiment_ceiling_usd'])
+        max_usd = Decimal(proposal['maximum_usd'])
+
+        # Check per-experiment ceiling
+        if status['is_set'] and per_exp > 0 and max_usd > per_exp:
+            shortfall = max_usd - per_exp
+            out['not_launchable'] = (
+                f"refused: this experiment reserves up to ${max_usd:.2f}; "
+                f"the per-experiment ceiling is ${per_exp:.2f}. Short by ${shortfall:.2f}."
+            )
+            return out
+
+        # Check envelope remainder
+        if max_usd > env_left:
+            shortfall = max_usd - env_left
+            out['not_launchable'] = (
+                f"refused: this experiment reserves up to ${max_usd:.2f}; "
+                f"the research envelope has ${env_left:.2f} left this week. "
+                f"Short by ${shortfall:.2f}. It will not draw on the lab's weekly ceiling."
+            )
+            return out
     try:
         from wb_studio.genesis_autonomy import plan_lines
         out['lines'] = plan_lines(studio, proposal)
@@ -668,3 +730,43 @@ PROTOCOL = (
     'for propose_experiment. The Studio computes every number in these results; write none of them yourself, '
     'and cite the tags rather than adding attempts up by hand.'
 )
+
+
+def lineage_records(genesis, lineage: str) -> list:
+    """Every hypothesis card in one lineage, oldest first."""
+    out = []
+    for card in genesis.listing('cards'):
+        record = card.get('hypothesis')
+        if record and record.get('lineage') == lineage:
+            out.append(card)
+    return sorted(out, key=lambda c: c.get('created_at') or '')
+
+
+def may_confirm(genesis, lineage: str) -> tuple:
+    """(ok, reason): whether this lineage may run on the held-out slate.
+
+    Two conditions, and the second is the one that matters. A lineage reaches held-out
+    only after a `supported` verdict on development — confirming something that was never
+    promising is not a confirmation. And it reaches it **once**, whatever that attempt
+    returned: `not supported` is a result, and being free to retry it is a search over the
+    confirmation set rather than a confirmation, which spends the only uncontaminated
+    measurement the lab has (feature 024, FR-022).
+    """
+    records = lineage_records(genesis, lineage)
+    if not records:
+        return False, 'No hypothesis is recorded in lineage ' + str(lineage) + '.'
+    spent = next((c for c in records if (c.get('hypothesis') or {}).get('slate') == HELD_OUT
+                  and (c.get('settlement') or {}).get('outcome')), None)
+    if spent:
+        outcome = (spent.get('settlement') or {}).get('outcome')
+        return False, ('Lineage ' + str(lineage) + ' already reached the held-out slate as '
+                       + str(spent['id']) + ' (' + str(outcome) + '). A lineage reaches it once, '
+                       'whatever it returned.')
+    supported = [c for c in records
+                 if (c.get('hypothesis') or {}).get('slate') == DEVELOPMENT
+                 and (c.get('settlement') or {}).get('outcome') == 'supported']
+    if not supported:
+        return False, ('Lineage ' + str(lineage) + ' has no supported result on the development '
+                       'slate yet. The held-out slate confirms a variant that already won; it does '
+                       'not look for one.')
+    return True, None
