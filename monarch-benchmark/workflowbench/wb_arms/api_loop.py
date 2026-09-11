@@ -305,6 +305,13 @@ class _GeminiAdapter:
             raise InfraError("infra:harness_crash", str(e)) from e
 
         meta = resp.usage_metadata
+        # Gemini bills thinking at the output rate and reports it apart from the answer; both belong in
+        # output_tokens or the settled cost is short of the receipt. Same accounting as wb_studio.gateways.
+        prompt_count = int(getattr(meta, "prompt_token_count", 0) or 0)
+        candidates = int(getattr(meta, "candidates_token_count", 0) or 0)
+        thoughts = getattr(meta, "thoughts_token_count", None)
+        if thoughts is None:
+            thoughts = max(0, int(getattr(meta, "total_token_count", 0) or 0) - prompt_count - candidates)
         usage = {"cached_content_token_count": getattr(meta, "cached_content_token_count", None)}
         cached, source = providers.extract_cached_tokens(usage)
         candidate = resp.candidates[0] if resp.candidates else None
@@ -322,8 +329,7 @@ class _GeminiAdapter:
         stop = getattr(candidate, "finish_reason", None) if candidate else None
         return {"tool_calls": calls, "text": text, "reasoning": reasoning,
                 "stop_reason": str(stop).rsplit(".", 1)[-1] if stop else None,
-                "prompt_tokens": int(getattr(meta, "prompt_token_count", 0) or 0),
-                "output_tokens": int(getattr(meta, "candidates_token_count", 0) or 0),
+                "prompt_tokens": prompt_count, "output_tokens": candidates + int(thoughts),
                 "cached_tokens": cached, "cache_source": source}
 
     def append_tool_result(self, contents: list, call: dict, result: str) -> None:

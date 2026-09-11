@@ -295,7 +295,9 @@ class Memory:
         head = self.soul_block() if soul else ''
         if not parts:
             return head
-        return head + '\n\nCore memory (cite entries by their [rec:...] tags; edit with memory_add, memory_replace, memory_remove):\n\n' + '\n\n'.join(parts)
+        # memory_add is the only memory tool Genesis holds: rewriting and removing are the night's
+        # proposal and a person's adoption (A2). Naming the other two here sent it after tools it has not got.
+        return head + '\n\nCore memory (cite entries by their [rec:...] tags; add one with memory_add. An entry that is wrong or spent is rewritten by the nightly consolidation, which a person adopts; you never rewrite or remove one yourself):\n\n' + '\n\n'.join(parts)
 
     def soul_block(self):
         """SOUL.md as the first block of a prompt, or nothing when it is empty."""

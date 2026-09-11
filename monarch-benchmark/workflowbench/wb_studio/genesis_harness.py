@@ -219,7 +219,7 @@ def start_turn(genesis, turn):
         adapter.on_text = on_text
         system, brief = build_prompt(genesis, turn)
         folder = genesis.root / 'sessions' / identity; folder.mkdir(parents=True, exist_ok=True)
-        (folder / 'prompt.txt').write_text(system + '\n\n' + brief, encoding='utf8')  # the same text prompt_text() gives  # the same text prompt_text() gives  # the same text prompt_text() gives
+        (folder / 'prompt.txt').write_text(system + '\n\n' + brief, encoding='utf8')  # the same text prompt_text() gives
         messages = adapter.start(system, brief)
         genesis.event(identity, 'harness_started', harness=HARNESS, model=provider.model_id, tools=len(defs))
         deadline = time.monotonic() + TURN_SECONDS

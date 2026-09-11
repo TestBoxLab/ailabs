@@ -124,7 +124,7 @@ def preview(genesis, ops) -> dict:
     from wb_studio.memory import Memory
     root = genesis.memory.root.parent / 'memory-preview'
     shutil.rmtree(root, ignore_errors=True)
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)  # rmtree ignores errors; a locked leftover must not fail the night
     if genesis.memory.lab.exists():
         shutil.copy(genesis.memory.lab, root / 'LAB.md')
     copy = Memory(root)

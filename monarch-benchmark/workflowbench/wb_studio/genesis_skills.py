@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from wb_studio.memory import scan
@@ -149,8 +150,8 @@ def earned(genesis, turn):
     if any(e.get('kind') == 'skill-asked' and e.get('card') == card['id'] for e in recent):
         return None  # one question per card
     from wb_studio.library import now_sao_paulo
-    today = now_sao_paulo().date().isoformat()
-    if any(e.get('kind') == 'skill-asked' and str(e.get('at', ''))[:10] == today for e in recent):
+    now = now_sao_paulo()  # the activity record stamps UTC; the day is the lab's, or the gate opens every evening
+    if any(e.get('kind') == 'skill-asked' and datetime.fromisoformat(e['at']).astimezone(now.tzinfo).date() == now.date() for e in recent):
         return None  # one question a day (L6)
     others = [c for c in genesis.listing('cards') if c['id'] != card['id'] and c.get('kind') == card.get('kind') and c.get('stage') in ('review', 'complete')]
     if not others:

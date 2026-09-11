@@ -217,7 +217,8 @@ TOOLS = {'request_review': lambda genesis, payload: request_review(genesis, payl
 
 PROTOCOL = ('The Reviewer is the lab\'s second chamber: a separate turn on its own model that judges one '
             'artifact against the methodology and answers accept, revise or reject with its issues. Call '
-            'request_review with the card and a subject (hypothesis, plan, verdict, skill or patch) before you '
-            'propose a launch and again after you write a verdict, then read_review to read it back. A plan does '
+            'request_review with the card and a subject (hypothesis, plan, verdict, skill or patch). It judges what '
+            'the card already carries, so call propose_experiment first and ask about the plan it wrote, then again '
+            'after you write a verdict, and read_review to read it back. A plan does '
             'not launch without an accepted review of that exact plan; if the plan changes, ask again. You may '
             'answer one revise; the second review is the last, so fix everything it named.')

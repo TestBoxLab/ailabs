@@ -223,7 +223,10 @@ def test_nightly_with_a_route_starts_one_bounded_turn(genesis, monkeypatch):
     genesis.chat = Mock(return_value={'id': 'turn-night'})
     summary = genesis_sleep.nightly(genesis.studio)
     payload = genesis.chat.call_args.args[0]
-    assert payload['model'] == 'm' and payload['maximum_usd'] == '0.50' and 'record_search' in payload['message'] and 'memory_replace' in payload['message']
+    assert payload['model'] == 'm' and payload['maximum_usd'] == '0.50' and 'record_search' in payload['message']
+    # the ops vocabulary, and that the night only proposes; it is never told to call memory_replace or
+    # memory_remove, which are withheld from Genesis (see test_card_turns_cannot_rewrite_or_remove_memory)
+    assert '"replace"' in payload['message'] and 'adopt or decline' in payload['message']
     assert summary['consolidation_turn'] == 'turn-night'
     assert genesis.read('cards', summary['brief'])['evidence'] == [{'turn': 'turn-night'}]
     genesis.studio.ledger.status.return_value = SimpleNamespace(available_usd=Decimal('0.10'))

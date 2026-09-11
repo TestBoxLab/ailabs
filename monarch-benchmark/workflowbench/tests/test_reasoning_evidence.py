@@ -73,6 +73,29 @@ def test_gemini_sdk_asks_for_thoughts_and_keeps_them_apart_from_the_answer(monke
     assert t["reasoning"] == ["Check Airtable first."] and t["text"] == "All done." and t["stop_reason"] == "STOP"
 
 
+def test_gemini_sdk_bills_thinking_as_output(monkeypatch):
+    """Gemini charges thinking at the output rate and reports it apart from the answer. The SDK adapter
+    counts both, like the gateway does, or a turn settles below its receipt."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test")
+    key = next(k for k, p in providers.REGISTRY.items() if p.adapter == "gemini")
+    a = _GeminiAdapter(providers.get(key), build_tools_gemini())
+    part = lambda **kw: SimpleNamespace(**{"function_call": None, "text": None, "thought": None, **kw})
+    def answer(meta):
+        resp = SimpleNamespace(usage_metadata=meta, candidates=[SimpleNamespace(
+            content=SimpleNamespace(parts=[part(text="Thinking.", thought=True), part(text="Done.")]),
+            finish_reason="FinishReason.STOP")])
+        a.client = SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kw: resp))
+        return a.turn(a.start("sys", "brief"))
+    reported = answer(SimpleNamespace(prompt_token_count=10, candidates_token_count=5,
+                                      thoughts_token_count=400, cached_content_token_count=None))
+    assert reported["output_tokens"] == 405
+    # no thoughts field: what the total leaves over after the prompt and the answer is thinking
+    inferred = answer(SimpleNamespace(prompt_token_count=10, candidates_token_count=5,
+                                      total_token_count=415, cached_content_token_count=None))
+    assert inferred["output_tokens"] == 405
+
+
 def test_gemini_gateway_reports_thought_parts_as_reasoning():
     reply = {"candidates": [{"content": {"parts": [{"text": "Plan: search, then patch.", "thought": True},
                                                    {"text": "Finished."}]}, "finishReason": "STOP"}],

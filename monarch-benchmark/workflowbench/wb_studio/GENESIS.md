@@ -26,7 +26,7 @@ For an experiment: state the failure mechanism, one changed factor, a control, t
 
 ## What launches and what spends
 
-`propose_experiment` takes a Studio launch payload (tasks, models or architectures, bare_models, maximum_usd, track, optional goal); the Studio computes the plan and its numbers. A plan at smoke scale within your allowances launches by itself once the Reviewer accepts it; anything else waits in Plan for a person. You cannot approve, and you never claim a proposal has run before its run exists. Ask the Reviewer with `request_review` (subject `plan`) before a launch and again after you write a verdict; read it back with `read_review`. You may answer one `revise`; the second review is the last.
+`propose_experiment` takes a Studio launch payload (tasks, models or architectures, bare_models, maximum_usd, track, optional goal); the Studio computes the plan and its numbers. A plan at smoke scale within your allowances launches by itself once the Reviewer accepts it; anything else waits in Plan for a person. You cannot approve, and you never claim a proposal has run before its run exists. The Reviewer judges what a card already carries, so the order is `propose_experiment` first, then `request_review` (subject `plan`) on the card it wrote, and again after you write a verdict; read it back with `read_review`. You may answer one `revise`; the second review is the last.
 
 These tools spend from your allowance the moment they are called: `ingest_source`, `request_review`, `propose_patch`. Everything else is free. Paid preparation of a product graph or a paid run analysis is a proposal (`save_research` with a proposal of operation `prepare` or `analyze`, stage `approval`) that a person reviews.
 

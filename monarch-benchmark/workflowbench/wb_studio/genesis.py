@@ -209,7 +209,9 @@ class Genesis:
             if old and payload.get('revision')!=old['revision']: raise ValueError('This research card changed. Reload before editing.')
             if old and old.get('job'):
                 changed=('proposal' in payload and payload.get('proposal')!=old.get('proposal'))  # the model's save_research omits the proposal; that is not an edit
-                if payload.get('stage') not in ('review','complete') or changed: raise ValueError('A dispatched proposal cannot be edited')
+                # R1: the refusal names what to send. A save that only forgot the stage used to read as a rejected edit.
+                if payload.get('stage') not in ('review','complete'): raise ValueError('A dispatched proposal cannot be edited; save this card with stage "review" or "complete".')
+                if changed: raise ValueError('A dispatched proposal cannot be edited')
                 status=self.studio.job(old['job'])['status']
                 if status not in ('completed','failed','cancelled','interrupted'):
                     raise ValueError('A dispatched proposal cannot be edited')

@@ -19,9 +19,9 @@ MESSAGE = ('Nightly consolidation for {day}. Use memory_recent to list the recor
            'Then answer with one JSON object and nothing else: '
            '{{"ops": [{{"op": "add", "replace" or "remove", "section": "Known" or "Recent", "text": "the new entry", '
            '"old": "a piece of the entry to change", "new": "its replacement", "record": "kind:id"}}], '
-           '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order through '
-           'memory_add, memory_replace and memory_remove and stops at the first one LAB.md refuses, so merge '
-           'before you add when the file is near its budget, name the record of every entry you write, and put '
+           '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order to a copy of '
+           'LAB.md and stops at the first one it refuses; what results waits on a card for a person to adopt or '
+           'decline, so merge before you add when the file is near its budget, name the record of every entry you write, and put '
            'the most important operation first. List a contradiction when a new source or run disagrees with an '
            'Analyzed card. Move any library source filed under Other to a better topic with library_reclassify '
            'when its text makes the topic clear. Do not propose experiments and do not answer in prose.')

@@ -122,9 +122,10 @@ class Watcher:
             return 'Waiting: ' + reason
         return None
 
-    def warning(self):
-        """A soft warning at 80% of the day's cap or of the envelope, before anything is refused (L4)."""
-        today, cap = self.today_usd(), self.cap_usd
+    def warning(self, today=None):
+        """A soft warning at 80% of the day's cap or of the envelope, before anything is refused (L4).
+        `today` is passed in by `status`, which already read every turn of the day."""
+        today, cap = self.today_usd() if today is None else today, self.cap_usd
         if cap and today >= cap * Decimal('0.8'):
             return f"Today's allowance is {int(today / cap * 100)}% spent (${today:.2f} of ${cap:.2f})"
         envelope = self.genesis.envelope()
@@ -202,7 +203,8 @@ class Watcher:
         working = self._cards('working')
         from wb_studio import genesis_ranking
         queue = genesis_ranking.order(genesis_ranking.with_scores(self.genesis, [c for c in self._cards('queued') if c.get('auto')]))
+        today = self.today_usd()  # every turn of the day is read once here, not once more inside warning()
         return {'paused': bool(state.get('paused')) or bool(self.genesis.autonomy.read()['paused']), 'queue': [c['id'] for c in queue],
-                'working': working[0]['id'] if working else None, 'today_usd': str(self.today_usd()), 'cap_usd': str(self.cap_usd),
-                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'), 'warning': self.warning(),
+                'working': working[0]['id'] if working else None, 'today_usd': str(today), 'cap_usd': str(self.cap_usd),
+                'last_wake': state.get('last_wake'), 'reason': state.get('reason'), 'last_error': state.get('last_error'), 'warning': self.warning(today),
                 'interval_s': getattr(self, 'interval_s', 30)}
