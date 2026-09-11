@@ -630,18 +630,18 @@ def test_no_inf_or_nan(zero_pass_store):
     assert not re.search(r"\bnan\b", page, re.IGNORECASE)
 
 
-def test_sort_script_present_and_optional(four_arm_store):
-    """T030 (research R5): the sorting script by default, absent with
-    sortable=False."""
+def test_only_the_scrollspy_script_is_on_the_page(four_arm_store):
+    """T030 (research R5): the table-of-contents scrollspy and nothing else.
+
+    Column sorting went away with the redesign, so the page ships one script.
+    """
     from wb_report.html import render_page
     from wb_report.report import build_report
 
     rep = build_report(four_arm_store, "run-h", baseline_arm="oracle")
-    # The page carries the reference's table-of-contents scrollspy and nothing
-    # else; column sorting went away with the redesign, and `sortable` is
-    # accepted only so `wb report --no-sort` keeps working.
-    assert "IntersectionObserver" in render_page(rep)
-    assert render_page(rep, sortable=False) == render_page(rep)
+    page = render_page(rep)
+    assert "IntersectionObserver" in page
+    assert page.count("<script") == 1
 
 
 def test_single_competitor_round(phase_store, tmp_path):
@@ -663,20 +663,15 @@ def test_single_competitor_round(phase_store, tmp_path):
     assert "<caption>Failures</caption>" not in page
 
 
-def test_report_cli_no_sort(four_arm_store, tmp_path, monkeypatch, capsys):
-    """T031 (contracts/cli.md): `wb report --no-sort` writes a page with no
-    script; without the flag the script is there."""
+def test_report_cli_writes_the_real_page(four_arm_store, tmp_path, monkeypatch, capsys):
+    """T031 (contracts/cli.md): `wb report` writes the page, not a markdown blob."""
     from wb_orchestrator.cli import main
 
     db = str(four_arm_store.path)
     out = tmp_path / "reports"
     assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle", "--no-sort"]) == 0
-    page = (out / "report-run-h.html").read_text(encoding="utf-8")
-    assert "<table" in page                       # still the real page, not the blob
-
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle"]) == 0
+    assert "<table" in (out / "report-run-h.html").read_text(encoding="utf-8")
 
 
 def test_renderer_cannot_query_the_store():
@@ -1096,7 +1091,6 @@ def test_page_and_markdown_agree(four_arm_store, phase_store):
     from `metrics`, the markdown from `figures` - so this is what catches them
     drifting apart.
     """
-    import re
 
     from wb_report.report import build_report, render_html, render_md
 
@@ -1395,140 +1389,6 @@ def test_questions_asked_deduplicates_by_request(tmp_path):
 
     # no flag and no log: nobody asked anything
     assert _questions_asked(_row("t1", "monarch", 0, True).model_dump()) == 0
-
-
-# -- the executive page -------------------------------------------------------
-
-def test_executive_page_shape(phase_store, tmp_path):
-    """Monarch first everywhere, five sections, and the design system's markup."""
-    from wb_report.report import build_report, render_executive
-
-    page = render_executive(build_report(phase_store, "run-p",
-                                         baseline_arm="alpha"),
-                            tasks_dir=tmp_path)
-    for ident in ("headline", "charts", "tasks", "verdict"):
-        assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
-    assert page.count('class="bars"') == 5           # one chart per metric
-    assert "Success, first try" in page
-    assert "Success after one retry" in page
-    assert "Monarch benchmark" in page
-    # the design system, not our own styling
-    assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
-    assert 'class="part-eyebrow"' in page
-    # the stakeholder page carries no chips, no source lines and no provenance
-    assert 'class="chip"' not in page and 'class="src"' not in page
-    assert 'id="provenance"' not in page
-    # Monarch leads every bar chart
-    for chart in page.split('<div class="bars">')[1:]:
-        first = chart[:chart.index("</div>", chart.index('class="nm"'))]
-        assert "monarch" in first, first[:80]
-
-
-def test_executive_task_rows_are_monarch_only(phase_store, tmp_path):
-    """One full-width row per task with a single Monarch verdict; the other
-    competitors are deliberately absent from this section."""
-    import re
-
-    from wb_report.report import build_report, render_executive
-
-    page = render_executive(build_report(phase_store, "run-p",
-                                         baseline_arm="alpha"),
-                            tasks_dir=tmp_path)
-    assert "taskgrid" not in page                    # no grid: stacked rows
-    rows = re.findall(r'<div class="taskrow">(.*?)</div></div>', page, re.S)
-    assert len(rows) == 2                            # one per task
-    for row in rows:
-        assert "alpha" not in row                    # no other competitor
-        assert row.count('class="badge') == 1        # exactly one verdict
-
-
-def test_executive_verdict_colours(four_arm_store, phase_store, tmp_path):
-    """Monarch at or above the best model is good, below it is crit, and an
-    undefined figure is crit with its reason."""
-    from wb_report.html import _verdict_class
-
-    # success: higher is better
-    assert _verdict_class(0.9, 0.8, lower_is_better=False) == "good"
-    assert _verdict_class(0.7, 0.8, lower_is_better=False) == "crit"
-    assert _verdict_class(0.8, 0.8, lower_is_better=False) == "good"   # "at or above"
-    # cost and time: lower is better
-    assert _verdict_class(0.5, 1.0, lower_is_better=True) == "good"
-    assert _verdict_class(2.0, 1.0, lower_is_better=True) == "crit"
-    # a figure we cannot compute is not a pass
-    assert _verdict_class(None, 1.0, lower_is_better=True) == "crit"
-
-    from wb_report.report import build_report, render_executive
-    page = render_executive(build_report(phase_store, "run-p",
-                                         baseline_arm="alpha"), tasks_dir=tmp_path)
-    assert 'class="big crit"' in page or 'class="big good"' in page
-
-
-def test_report_cli_format_executive(four_arm_store, tmp_path):
-    """`wb report --format executive` writes the stakeholder page beside the
-    markdown; the default still writes the technical one."""
-    from wb_orchestrator.cli import main
-
-    db, out = str(four_arm_store.path), tmp_path / "r"
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle", "--format", "executive"]) == 0
-    exe = out / "report-run-h-executive.html"
-    assert exe.exists()
-    assert 'id="headline"' in exe.read_text(encoding="utf-8")
-
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle"]) == 0
-    tech = out / "report-run-h.html"
-    assert 'id="overview"' in tech.read_text(encoding="utf-8")
-
-    # an unknown format is refused by argparse before anything is written
-    with pytest.raises(SystemExit):
-        main(["--db", db, "--out", str(out), "report", "run-h", "--format", "nope"])
-
-
-def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
-    """Technical and executive are siblings: same tokens, same fonts, same
-    themes, and no external resource other than the font stylesheet."""
-    import re
-
-    from wb_report.report import build_report, render_executive, render_html
-
-    rep = build_report(four_arm_store, "run-h",
-                       baseline_arm="oracle")
-    for page in (render_html(rep), render_executive(rep, tasks_dir=tmp_path)):
-        assert "--paper: #FAF9F5" in page and "--accent: #A66A1E" in page
-        assert '<link rel="stylesheet" href="https://fonts.googleapis.com' in page
-        assert ':root[data-theme="dark"]' in page
-        assert "Bricolage Grotesque" in page and "JetBrains Mono" in page
-        # the font stylesheet is the only external reference on either page
-        others = [u for u in re.findall(r'https?://[^"\')\s]+', page)
-                  if "fonts.googleapis.com" not in u and "fonts.gstatic.com" not in u]
-        assert others == [], others
-
-
-def test_chart_text_and_bars_use_theme_tokens(tmp_path):
-    """4 Sep: unstyled SVG text rendered black on the dark theme; unreadable."""
-    from wb_report.html import _bar_chart, CSS
-    assert "svg.chart text" in CSS and "fill: var(--ink)" in CSS
-    assert 'class="cv"' in _bar_chart([("a", 0.5, 0.1)])
-
-
-def test_value_label_sits_past_the_error_bar():
-    """4 Sep: the label was drawn under the error line and looked struck through."""
-    import re
-    from wb_report.html import _bar_chart
-    svg = _bar_chart([("a", 0.5, 0.3)])
-    band = re.search(r'<rect class="ce" x="([\d.]+)" y="\d+" width="([\d.]+)"', svg)
-    hi = float(band.group(1)) + float(band.group(2))
-    label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
-    assert label_x > hi
-
-
-def test_long_chart_labels_are_shortened_with_the_full_name_in_a_tooltip():
-    from wb_report.html import _bar_chart
-    svg = _bar_chart([("monarch@797a8e5d1+feat/railway-dev-deploy", 0.0, None)])
-    assert "<title>monarch@797a8e5d1+feat/railway-dev-deploy</title>" in svg
-    assert "monarch@797a8e5d1+fe…</text>" in svg
 
 
 # -- first try, after retry, retries -----------------------------------------

@@ -1,7 +1,7 @@
 """Pause must stop every paid activity, not only the watcher (feature 024, FR-003).
 
-The dial was read in four places — `may_launch`, `work_now`, the initiative job and
-the watcher — and never in `Genesis.chat`, which is the single funnel every paid turn
+The dial was read in four places â€” `may_launch`, `work_now`, the initiative job and
+the watcher â€” and never in `Genesis.chat`, which is the single funnel every paid turn
 passes through. So a person could hit Pause because Genesis was doing something wrong,
 go to bed, and the 03:00 consolidation, the 05:00 ranking and the channel sweeps would
 each start a paid turn anyway: roughly three to six dollars a night, indefinitely,
@@ -29,6 +29,8 @@ def genesis(tmp_path, monkeypatch):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(), jobs=Mock(return_value=[]),
                              job=Mock(), events=Mock(return_value=[]), ledger=ledger)
     g = Genesis(studio)
+    # This fixture deliberately exercises its stub route, independently of the partner default.
+    g.config.set({'models': {'chat': 'gemini-3.7-flash', 'reading': 'gemini-3.7-flash'}}, routes=[{'id': 'gemini-3.7-flash', 'available': True}])
     g.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
     g.autonomy.set({'paused': True}, by='human:lucas')
     return g

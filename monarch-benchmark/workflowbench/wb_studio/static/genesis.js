@@ -12,6 +12,45 @@ const stageWord=s=>stageNames[s]||s;
 const PERSON='human:studio';
 const me=()=>genesisData?.me||PERSON;
 
+// Voice and typing refer to the same visible objects. Never scrape page text,
+// password fields, API credentials, or unsaved prompt bodies into model context.
+window.genesisWorkspaceContext = function () {
+ const route=location.hash||'#reports', context={route};
+ if(route==='#studio'||route.startsWith('#studio/')) {
+  if(typeof blueprint!=='undefined'&&blueprint)context.architecture={
+   id:blueprint.id,revision:blueprint.revision,dirty:typeof dirty!=='undefined'&&dirty,
+   selected_nodes:typeof selection!=='undefined'?[...selection].slice(0,20):[]};
+ }
+ if(route.startsWith('#run/')&&typeof job!=='undefined'&&job)context.run={id:job.id,
+  task:typeof selected!=='undefined'?selected?.task:undefined,
+  model:typeof selected!=='undefined'?selected?.model:undefined,
+  event:typeof selectedEvent!=='undefined'?selectedEvent:undefined};
+ if(route.startsWith('#genesis')&&genesisCard)context.card=typeof genesisCard==='string'?genesisCard:genesisCard.id;
+ return context;
+};
+window.genesisVoiceThreadContext = () => ({thread:genesisThread||undefined,
+ parent:genesisParent||undefined,model:$('#genesis-model')?.value||undefined,
+ effort:$('#genesis-effort')?.value||undefined});
+const acceptedVoiceTurns=new Set();
+window.genesisAcceptVoiceTurn = async function(t) {
+ if(!t?.id||acceptedVoiceTurns.has(t.id))return;
+ acceptedVoiceTurns.add(t.id);
+ try {
+  if(!genesisData)genesisData=await api('/api/genesis');
+  if(genesisThread!==t.thread){genesisThread=t.thread;threadTurns=[];$('#genesis-messages').innerHTML='';}
+  genesisParent=t.parent||genesisParent;
+  if(!threadTurns.some(x=>x.id===t.id)){
+   if($('#genesis-messages .genesis-welcome'))$('#genesis-messages').innerHTML='';
+   threadTurns.push(t);$('#genesis-messages').insertAdjacentHTML('beforeend',turnHtml(t));
+  }
+  $('#genesis-thread-title').textContent=(genesisData.threads||[]).find(x=>x.id===genesisThread)?.title||'Voice conversation';
+  applyBuildEvents(t.id,t.events||[]);
+  if(t.status==='running'){streamGenesis(t.id);paintTurn(t,{fresh:false});}
+  else{armFollow();paintTurn(t,{fresh:false});disarmFollow();genesisParent=t.id;}
+ } catch(error){acceptedVoiceTurns.delete(t.id);throw error;}
+};
+
+
 // ---- routes: #genesis, #genesis/board|library|memory|activity, #genesis/t/<thread> ----------
 function genesisRoute(){const parts=location.hash.replace(/^#/,'').split('/');if(parts[0]!=='genesis')return {view:'chat',thread:null};if(parts[1]==='t'&&parts[2])return {view:'chat',thread:decodeURIComponent(parts[2])};return {view:['board','library','memory','activity','digest'].includes(parts[1])?parts[1]:'chat',thread:null};}
 function genesisHash(){return genesisView==='chat'?(genesisThread?'#genesis/t/'+encodeURIComponent(genesisThread):'#genesis'):'#genesis/'+genesisView;}
@@ -70,8 +109,39 @@ async function renderConversation(){
  $('#genesis-messages').innerHTML=threadTurns.length?threadTurns.map(turnHtml).join(''):'<p class="genesis-welcome">Nothing here yet.</p>';
  linkRecTags($('#genesis-messages'));drawFigures($('#genesis-messages'));bindTurnChips();
  $('#genesis-messages').scrollTop=$('#genesis-messages').scrollHeight;
- const running=threadTurns.find(x=>x.status==='running');if(running)streamGenesis(running.id);
- renderTracking();
+ const running=threadTurns.find(x=>x.status==='running'&&x.purpose!=='Genesis mission');if(running)streamGenesis(running.id);
+ renderTracking();scheduleMissionPoll();
+}
+// Observe durable mission workers without taking over the conversational stream.
+// Reconcile only changed turns: the composer, focus and a reader's scroll stay put.
+let missionPolling=false;
+function hasConversationWork(){return !!genesisThread&&(threadTurns.some(t=>t.status==='running')||(genesisData?.cards||[]).some(c=>c.mission?.thread===genesisThread&&c.mission.owner===me()&&['queued','working','waiting'].includes(c.mission.status)));}
+function scheduleMissionPoll(){clearTimeout(genesisPoll);genesisPoll=null;if(hasConversationWork())genesisPoll=setTimeout(pollMissionConversation,2500);}
+async function pollMissionConversation(){
+ if(missionPolling)return;
+ const thread=genesisThread;if(!thread)return;
+ if(document.hidden||genesisPaused){scheduleMissionPoll();return;}
+ missionPolling=true;
+ try{
+  const data=await api('/api/genesis');if(thread!==genesisThread)return;
+  const conversation=await api('/api/genesis/threads/'+encodeURIComponent(thread));if(thread!==genesisThread||genesisPaused)return;
+  const box=$('#genesis-messages'),top=box.scrollTop,nearBottom=box.scrollHeight-top-box.clientHeight<60;
+  const cardsChanged=JSON.stringify(genesisData?.cards)!==JSON.stringify(data.cards);genesisData=data;
+  for(const t of conversation.turns||[]){
+   const index=threadTurns.findIndex(x=>x.id===t.id),old=index<0?null:threadTurns[index];
+   if(t.id===genesisStreamTurn||JSON.stringify(old)===JSON.stringify(t))continue;
+   const element=$$('[data-turn]').find(e=>e.dataset.turn===t.id);
+   if(element?.contains(document.activeElement))continue;
+   if(index<0){threadTurns.push(t);box.querySelector('.genesis-welcome')?.remove();box.insertAdjacentHTML('beforeend',turnHtml(t));}
+   else threadTurns[index]=t;
+   applyBuildEvents(t.id,t.events||[]);paintTurn(t,{fresh:false});
+  }
+  box.scrollTop=nearBottom?box.scrollHeight:top;
+  genesisParent=threadTurns.at(-1)?.id||genesisParent;
+  if(cardsChanged&&!$('#genesis-tracking')?.contains(document.activeElement)&&!$('.genesis-tracking')?.contains(document.activeElement)){renderNavCount(data.cards);renderTracking();}
+  if(!genesisStream)$('#genesis-pause-updates').hidden=!hasConversationWork();
+ }catch(error){$('#genesis-status').textContent='Updates interrupted; retrying';}
+ finally{missionPolling=false;scheduleMissionPoll();}
 }
 function stepList(t){
  // One line per tool call above the answer, from the turn's record; each opens to its full text.
@@ -112,19 +182,21 @@ let genesisPaused=false,genesisPending=null;
 function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
  if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
 $('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
-startFollow();
 // The opening sentence of the answer, which is the part a person waiting for a verdict
 // actually needs. The whole answer is on screen; reading all of it aloud is a lecture.
 function firstSentence(text){const plain=String(text||'').replace(/[#*`>_]/g,' ').replace(/\s+/g,' ').trim();
  const cut=plain.search(/[.!?](\s|$)/);return (cut>0?plain.slice(0,cut+1):plain).slice(0,300);}
-// --- Follow Genesis (feature 024, stage S5) -----------------------------------------
-// Off by default. This checkbox IS the WCAG 3.2.5 conformance mechanism: a change of
+// --- Follow Genesis (feature 024, stage S5; default flipped by feature 025, D3) ------
+// On unless this browser turned it off, so work Genesis does elsewhere is watched rather
+// than linked to. The checkbox IS the WCAG 3.2.5 conformance mechanism: a change of
 // context is allowed when it is "initiated only by user request, OR a mechanism is
-// available to turn off such changes". Per browser in localStorage and never a server
-// setting, or one person's toggle would move the other's screen.
+// available to turn off such changes" — the second limb, and it stays the reader's.
+// Per browser in localStorage and never a server setting, or one person's toggle would
+// move the other's screen. Absent means on and only an explicit '0' is off, so a browser
+// that never touched the checkbox follows and one that opted out stays opted out.
 const FOLLOW_KEY='genesis.follow';
 let followArmed=false,followBroken=false;
-function followOn(){try{return localStorage.getItem(FOLLOW_KEY)==='1';}catch(e){return false;}}
+function followOn(){try{return localStorage.getItem(FOLLOW_KEY)!=='0';}catch(e){return true;}}
 function followBar(){
  const bar=$('#genesis-follow-bar');if(!bar)return;
  const on=followOn();
@@ -139,18 +211,19 @@ function breakFollow(){
 }
 function armFollow(){
  // Break on any gesture, for the rest of the turn. Google Slides is the precedent: the
- // instant you act, following stops — no confirmation, no ceremony.
+ // instant you act, following stops — no confirmation, no ceremony. The listeners stand
+ // for the life of the page (startFollow registers them) and are gated by followArmed:
+ // with {once:true} the wheel guard was spent by the first scroll and never came back,
+ // so "Resume following" resumed with no guard at all.
  if(followArmed)return;
  followArmed=true;followBroken=false;
- for(const kind of ['wheel','keydown','pointerdown','touchstart'])
-  document.addEventListener(kind,breakFollow,{once:true,passive:true});
  followBar();
 }
 function disarmFollow(){followArmed=false;followBroken=false;followBar();}
 function follow(route){
  // Degrade to the link silently when it cannot be watched: moving a hidden tab, or a
  // surface the reader is not on, is a change of context with no witness.
- if(!followOn()||followBroken||document.hidden)return false;
+ if(!followArmed||!followOn()||followBroken||document.hidden)return false;
  if(genesisView!=='chat'&&genesisView!=='board')return false;
  if(!window.goRoute)return false;
  history.pushState(null,'',route);
@@ -172,9 +245,16 @@ function startFollow(){
   box.checked=false;try{localStorage.setItem(FOLLOW_KEY,'0');}catch(e){}
   disarmFollow();
  });
+ for(const kind of ['wheel','keydown','pointerdown','touchstart'])
+  document.addEventListener(kind,breakFollow,{passive:true});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&followArmed)breakFollow();});
  followBar();
 }
+// Called here, not above the block: followBar() reads followArmed and followBroken, and
+// `let` leaves them in the temporal dead zone until this line. It ran earlier only
+// because followOn()'s catch returned false and followBar() bailed on `if(!on)return`,
+// so the default flip turned a swallowed ReferenceError into a broken page.
+startFollow();
 function announceShow(t){
  const shown=stepList(t).filter(s=>s.action==='show'&&s.result!==null);
  if(!shown.length)return;
@@ -183,7 +263,11 @@ function announceShow(t){
  const region=$('#genesis-pointer');
  const line='Genesis pointed at '+r.label+(r.why?': '+r.why:'')+'.';
  if(region.textContent!==line){region.textContent=line;setTimeout(()=>{if(region.textContent===line)region.textContent='';},400);}
- if(r.route)follow(r.route);}
+ // Once per show, not once per frame. paintTurn runs on every flush, and following the
+ // same route again re-runs the destination's own loader — on #studio that threw the
+ // reader back to the library list every animation frame.
+ if(r.route&&followed!==t.id+' '+r.route){followed=t.id+' '+r.route;follow(r.route);}}
+let followed='';
 let paintedSteps={};
 function paintTurn(t,opts){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
  const before=paintedSteps[t.id]||0;
@@ -203,10 +287,27 @@ function paintTurn(t,opts){const el=$$('[data-turn]').find(e=>e.dataset.turn===t
 // per frame, so fifty events in a burst cost one DOM update rather than fifty
 // (feature 024, stage S2). `Last-Event-ID` is the protocol's own catch-up, so a dropped
 // connection resumes rather than replaying.
-let genesisStream=null,genesisQueue=[],genesisFrame=0;
-function closeGenesisStream(){if(genesisStream){genesisStream.close();genesisStream=null;}genesisQueue=[];if(genesisFrame){cancelAnimationFrame(genesisFrame);genesisFrame=0;}}
+let genesisStream=null,genesisStreamTurn=null,genesisQueue=[],genesisFrame=0;
+// Feature 025, FR-044: an architecture Genesis builds appears in the editor as it is
+// built, off the stream this page is already receiving — no second connection, no new
+// event kind. FR-047 is the reason for the seen set: a reconnection resumes with
+// `Last-Event-ID`, but a redelivery must still apply each operation exactly once, and a
+// turn's event ids are its own, so the turn is part of the key.
+const appliedOperations=new Set();
+function applyBuildEvents(turn,events){
+ if(!window.applyArchitectureOperation)return;
+ for(const e of events){
+  if(e.type!=='tool_completed'||e.action!=='edit_architecture')continue;
+  const key=turn+'#'+e.id;
+  if(appliedOperations.has(key))continue;
+  appliedOperations.add(key);
+  let value=null;try{value=JSON.parse(e.detail||e.result||'');}catch(err){continue;}
+  if(value&&value.operation&&!value.error)window.applyArchitectureOperation(value);
+ }
+}
+function closeGenesisStream(){genesisStreamTurn=null;if(genesisStream){genesisStream.close();genesisStream=null;}genesisQueue=[];if(genesisFrame){cancelAnimationFrame(genesisFrame);genesisFrame=0;}}
 function streamGenesis(id){
- closeGenesisStream();
+ closeGenesisStream();genesisStreamTurn=id;scheduleMissionPoll();
  $('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';
  const stop=$('#genesis-stop');stop.hidden=false;$('#genesis-pause-updates').hidden=false;
  stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
@@ -215,31 +316,38 @@ function streamGenesis(id){
  const flush=()=>{genesisFrame=0;if(!genesisQueue.length)return;
   const j=threadTurns.findIndex(x=>x.id===id);if(j<0){genesisQueue=[];return;}
   const t={...threadTurns[j],events:(threadTurns[j].events||[]).concat(genesisQueue)};
-  genesisQueue=[];threadTurns[j]=t;
+  const arrived=genesisQueue;genesisQueue=[];threadTurns[j]=t;
+  applyBuildEvents(id,arrived);
   if(genesisPaused)genesisPending=t;else paintTurn(t,{fresh:true});
   if(trackingTab==='trace')renderTracking();};
+ // What the turn built before this page was looking. Applying is idempotent, so catching
+ // up costs nothing and an editor opened mid-build is not left blank.
+ applyBuildEvents(id,(known&&known.events)||[]);
  armFollow();
  genesisStream=new EventSource('/api/genesis/turns/'+encodeURIComponent(id)+'/events?after='+seen);
  genesisStream.addEventListener('step',e=>{try{genesisQueue.push(JSON.parse(e.data));}catch(err){return;}
   if(!genesisFrame)genesisFrame=requestAnimationFrame(flush);});
  genesisStream.addEventListener('done',async e=>{
-  closeGenesisStream();
+  // Flush before closing: closeGenesisStream() empties the queue, and the settled turn
+  // below keeps the client's own event list, so a step that arrived since the last frame
+  // would be dropped for good. A terminal event must never strand a buffered one.
+  flush();closeGenesisStream();
   let settled=null;try{settled=JSON.parse(e.data);}catch(err){}
   const j=threadTurns.findIndex(x=>x.id===id);
   if(j>=0&&settled)threadTurns[j]={...settled,events:threadTurns[j].events||[]};
   const t=j>=0?threadTurns[j]:null;
   if(t){if(genesisPending){genesisPending=null;}paintTurn(t,{fresh:false});
-   if(window.genesisAnnounce&&t.answer)window.genesisAnnounce(firstSentence(t.answer));}
+   if(window.genesisAnnounce&&t.answer&&!window.genesisLiveVoice?.active())window.genesisAnnounce(firstSentence(t.answer));}
   disarmFollow();setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;
   $('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;
   $('#genesis-status').textContent=(t&&t.status==='completed')?'':'Stopped';
-  genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();
+  genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();scheduleMissionPoll();
   api('/api/budget').then(budget).catch(()=>{});});
  // EventSource retries by itself; say so rather than leaving the reader guessing.
  genesisStream.onerror=()=>{if(genesisStream&&genesisStream.readyState===EventSource.CONNECTING)$('#genesis-status').textContent='Reconnecting';};
 }
 $('#genesis-form').onsubmit=async e=>{e.preventDefault();$('#genesis-error').textContent='';$('#genesis-send').disabled=true;
- try{const t=await api('/api/genesis/chat',{message:$('#genesis-message').value,model:$('#genesis-model').value,effort:$('#genesis-effort').value,parent:genesisParent,thread:genesisThread||undefined,card:genesisScope||undefined,by:PERSON});
+ try{const t=await api('/api/genesis/chat',{message:$('#genesis-message').value,model:$('#genesis-model').value,effort:$('#genesis-effort').value,parent:genesisParent,thread:genesisThread||undefined,card:genesisScope||undefined,workspace:window.genesisWorkspaceContext(),by:PERSON});
   $('#genesis-message').value='';$('#genesis-message').style.height='auto';
   if(!genesisThread){genesisThread=t.thread;genesisData=await api('/api/genesis');renderRail();$('#genesis-thread-title').textContent=(genesisData.threads.find(x=>x.id===genesisThread)||{}).title||'Conversation';settleGenesisHash();}
   if($('#genesis-messages .genesis-welcome'))$('#genesis-messages').innerHTML='';
@@ -254,16 +362,16 @@ function genesisFamily(id){const name=String(id).toLowerCase();return name.inclu
 function genesisModelName(id){const route=genesisData?.models.find(m=>m.id===id);const name=String(route?.name||id).split('/').at(-1),labels={'claude-opus-4-8':'Claude Opus 4.8','claude-opus-5':'Claude Opus 5','gemini-3.7-flash':'Gemini 3.7 Flash','gpt-5.6-sol':'GPT-5.6 Sol','gpt-5.6-terra':'GPT-5.6 Terra','glm-5p3':'GLM 5.3','glm-5.3':'GLM 5.3','kimi-k3':'Kimi K3'};return labels[name]||name;}
 function renderGenesisModels(){
  const seen=new Set(),models=genesisData.models.filter(m=>m.available).filter(m=>{const key=genesisModelName(m.name||m.id)+'|'+(m.provider||'');if(seen.has(key))return false;seen.add(key);return true;});
- const configured=genesisData.config?.effective?.chat?.route||genesisData.config?.effective?.chat;const chosen=models.find(m=>m.id===$('#genesis-model').value)||models.find(m=>m.id===configured)||models[0];
+ const configured=genesisData.config?.models?.chat||genesisData.config?.effective?.chat?.route||genesisData.config?.effective?.chat;const chosen=models.find(m=>m.id===$('#genesis-model').value)||models.find(m=>m.id===configured);
  const providerWord=p=>({fireworks:'Fireworks',anthropic:'Anthropic',openai:'OpenAI',gemini:'Gemini',moonshot:'Moonshot',zai:'Z.ai'})[p]||p||'';
  $('#genesis-model-options').innerHTML=models.length?models.map(m=>'<button type="button" data-genesis-model="'+esc(m.id)+'" data-family="'+genesisFamily(m.name||m.id)+'"><span class="family-mark"></span><span>'+esc(genesisModelName(m.name||m.id))+'</span>'+(m.provider?'<small>'+esc(providerWord(m.provider))+'</small>':'')+'</button>').join(''):'<p class="meta">No model route has a key. Add one under Settings, Providers.</p>';
- $('#genesis-send').disabled=!models.length;if(!models.length)$('#genesis-model-name').textContent='No model';
+ $('#genesis-send').disabled=!chosen;if(!chosen){$('#genesis-model').value='';$('#genesis-model-name').textContent='Default unavailable';$('#genesis-model-picker').dataset.family='other';$('#genesis-effort').innerHTML='';$('#genesis-effort').disabled=true;}
  $$('[data-genesis-model]').forEach(b=>b.onclick=()=>{selectGenesisModel(b.dataset.genesisModel);$('#genesis-model-picker').open=false;$('#genesis-model-picker summary').focus();});
  if(chosen)selectGenesisModel(chosen.id);
 }
 function selectGenesisModel(id){
- const model=genesisData.models.find(m=>m.id===id);if(!model)return;$('#genesis-model').value=id;$('#genesis-model-name').textContent=genesisModelName(model.name||id);$('#genesis-model-picker').dataset.family=genesisFamily(model.name||id);
- const prior=$('#genesis-effort').value,levels=model.efforts||['default'];$('#genesis-effort').innerHTML=levels.map(e=>option(e,({default:'Default',xhigh:'Extra high',max:'Maximum'})[e]||e[0].toUpperCase()+e.slice(1),false)).join('');$('#genesis-effort').value=levels.includes(prior)?prior:levels.includes('medium')?'medium':levels[0];$('#genesis-effort').disabled=levels.length===1;$('#genesis-effort').closest('.thinking-control').hidden=levels.length===1;
+ const model=genesisData.models.find(m=>m.id===id);if(!model?.available)return;$('#genesis-send').disabled=false;$('#genesis-model').value=id;$('#genesis-model-name').textContent=genesisModelName(model.name||id);$('#genesis-model-picker').dataset.family=genesisFamily(model.name||id);
+ const prior=$('#genesis-effort').value||genesisData.config?.effort?.chat||'medium',levels=model.efforts||['default'];$('#genesis-effort').innerHTML=levels.map(e=>option(e,({default:'Default',xhigh:'Extra high',max:'Maximum'})[e]||e[0].toUpperCase()+e.slice(1),false)).join('');$('#genesis-effort').value=levels.includes(prior)?prior:levels.includes('medium')?'medium':levels[0];$('#genesis-effort').disabled=levels.length===1;$('#genesis-effort').closest('.thinking-control').hidden=levels.length===1;
  $$('[data-genesis-model]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.genesisModel===id)));
 }
 document.addEventListener('click',event=>{if(!event.target.closest('#genesis-model-picker'))$('#genesis-model-picker').open=false;});
@@ -316,7 +424,8 @@ function reviewBlock(c){const r=c.review;if(!r||typeof r!=='object')return '';re
 function planBlock(c){const plan=c.plan;if(!plan||!plan.lines)return '';return '<section class="plan-block"><h3>The plan</h3><ol class="plan-lines">'+plan.lines.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ol>'+(c.waiting?'<p class="card-waiting">'+esc(c.waiting)+'</p>':'')+(c.approval?'<p class="meta">Launched by '+esc(String(c.approval.by||'a person').replace('human:',''))+' '+esc((c.approval.at||'').slice(0,16).replace('T',' '))+(c.job?' · run '+esc(String(c.job).slice(0,12)):'')+'</p>':'')+'</section>';}
 function questionBlock(c){if(c.kind!=='question')return '';if(c.answer)return '<section class="question-block"><h3>Answer</h3><p>'+esc(c.answer)+'</p></section>';return '<section class="question-block"><h3>Genesis asks</h3><p>'+esc(c.question||c.body)+'</p><form id="question-form" class="question-form"><input id="question-answer" maxlength="600" value="'+esc(c.default||'')+'" placeholder="Write the answer"><button class="button" type="submit">Send answer</button><p id="question-error" role="alert"></p></form></section>';}
 function bindQuestion(c){const form=$('#question-form');if(!form)return;form.onsubmit=async e=>{e.preventDefault();try{await api('/api/genesis/cards/'+c.id+'/answer',{answer:$('#question-answer').value.trim()||c.default||''});toast('Answered. Genesis resumes the card on its next wake.');await refreshGenesis();showResearchCard(c.id);}catch(err){$('#question-error').textContent=err.message;}};}
-function nextAction(c){const w=c.work||{};let text='';if(c.kind==='question'&&!c.answer)text='Answer';else if(c.stage==='approval'&&c.plan&&!c.job)text='Approve or decline';else if(c.stage==='review'&&c.plan&&c.analysis)text='Read the verdict';else if(c.stage==='review'&&c.plan)text='Verdict pending';else if(w.status==='working')text='Genesis is working';else if(w.status==='waiting')text='Waiting for an answer';return text?'<span class="next-action">'+esc(text)+'</span>':'';}
+function missionAction(c){const m=c.mission;if(!m)return '';return m.status==='waiting'?'Waiting on experiment'+(m.wait_for?' '+m.wait_for:''):m.status==='blocked'?'Blocked: '+(m.summary||'Review the mission checkpoint'):m.status==='stopped'?'Mission stopped':m.status==='completed'?'Mission completed':m.status==='queued'?'Mission queued':m.status==='working'?'Genesis is working':'';}
+function nextAction(c){if(c.mission)return '<span class="next-action">'+esc(missionAction(c))+'</span>';const w=c.work||{};let text='';if(c.kind==='question'&&!c.answer)text='Answer';else if(c.stage==='approval'&&c.plan&&!c.job)text='Approve or decline';else if(c.stage==='review'&&c.plan&&c.analysis)text='Read the verdict';else if(c.stage==='review'&&c.plan)text='Verdict pending';else if(w.status==='working')text='Genesis is working';else if(w.status==='waiting')text='Waiting for an answer';return text?'<span class="next-action">'+esc(text)+'</span>':'';}
 function recLabel(kind,id){const c=genesisData?.cards.find(x=>x.id===id);if(kind==='card'&&c)return c.title.slice(0,50);if(kind==='run'){const j=(state?.jobs||[]).find(x=>x.id===id);return j?j.title.slice(0,50):'run '+id.slice(0,10);}return kind+' '+id.slice(0,12);}
 // [figure:<id>] in a card body becomes the drawing itself. The options were computed by the
 // Studio and the chart kit draws them, so nothing here trusts a number the model wrote.
@@ -347,7 +456,7 @@ function proposalReview(c){
  return '<section class="proposal-review"><h3>'+({run:'Experiment',prepare:'Product graph preparation',analyze:'Run analysis',memory:'Memory consolidation'}[operation]||'Proposal')+'</h3><dl class="facts">'+rows.map(([label,value])=>'<dt>'+esc(label)+'</dt><dd>'+esc(value??'Not specified')+'</dd>').join('')+'</dl><details><summary>Exact configuration</summary><pre>'+esc(JSON.stringify(p,null,2))+'</pre></details>'+decision
   +(waiting?'<div class="decision-row"><button class="button primary" id="proposal-approve" type="button">'+(operation==='memory'?'Adopt the changes':'Approve, up to '+esc(money(p.maximum_usd)))+'</button><button class="button" id="proposal-decline" type="button">Decline</button></div><form id="decline-form" class="decline-form" hidden><label for="decline-reason">Why not, in a sentence (kept on the card)</label><input id="decline-reason" maxlength="600"><div><button class="button" type="submit">Decline the plan</button><button class="text-button" type="button" id="decline-cancel">Keep it</button></div></form><p class="meta">Approval reserves the ceiling in the weekly ledger before the first request'+(c.review?'':'; the Reviewer has to accept the plan first')+'.</p>'+(c.review?.status==='pending'?'<p class="meta">The Reviewer is reading this plan.</p>':(c.review?.verdict==='accept'&&c.review?.digest===c.proposal_digest)?'':'<p><button class="button" id="proposal-review" type="button">Ask the Reviewer</button></p>'):'')+'</section>';
 }
-function workDetail(c){const w=c.work;if(!w||!w.status)return '';const parts=[workWords[w.status]||w.status,w.started_at?'started '+new Date(w.started_at).toLocaleTimeString():'',w.finished_at?'finished '+new Date(w.finished_at).toLocaleTimeString():'',w.reason||''];
+function workDetail(c){if(c.mission){const m=c.mission;return '<section class="research-work"><h3>Genesis</h3><p class="meta">'+esc(missionAction(c))+'</p>'+(m.summary&&m.status!=='blocked'?'<p>'+esc(m.summary)+'</p>':'')+(!['stopped','completed'].includes(m.status)?'<button class="text-button" type="button" id="research-stop">Stop mission</button>':'')+(m.status==='working'?'<div class="genesis-event-log" id="research-work-events"></div>':'')+'</section>';}const w=c.work;if(!w||!w.status)return '';const parts=[workWords[w.status]||w.status,w.started_at?'started '+new Date(w.started_at).toLocaleTimeString():'',w.finished_at?'finished '+new Date(w.finished_at).toLocaleTimeString():'',w.reason||''];
  return '<section class="research-work"><h3>Genesis</h3>'+pgMetaLike(parts)+(w.status==='working'?'<button class="text-button" type="button" id="research-stop">Stop</button><div class="genesis-event-log" id="research-work-events"></div>':w.status==='queued'?' <button class="button small" type="button" id="research-work-now">Work now</button>':'')+'</section>';}
 function pgMetaLike(parts){return '<span class="meta">'+parts.filter(Boolean).map(esc).join('<span class="sep">·</span>')+'</span>';}
 function researchBody(c){const parts=splitAnalysis(c.body);return (c.question?'<p class="research-question">'+esc(c.question)+'</p>':'')+'<div class="research-body">'+genesisText(parts.body)+'</div>'+(parts.analysis?'<section class="research-analysis"><h3>Genesis analysis</h3>'+genesisText(parts.analysis)+'</section>':'')+workDetail(c);}
@@ -522,10 +631,11 @@ function renderAutonomy(a,box){box=box||$('#settings-genesis-dials');if(!box)ret
  +'<dt><label for="autonomy-cards">Cards</label></dt><dd><select id="autonomy-cards">'+opt('act',a.cards,'Act and report')+opt('off',a.cards,'Off')+'</select></dd>'
  +'<dt><label for="autonomy-runs">Runs</label></dt><dd><select id="autonomy-runs">'+opt('smoke',a.runs,'Smoke scale, by itself')+opt('propose',a.runs,'Propose only')+opt('off',a.runs,'Off')+'</select><p class="field-hint">'+esc(a.words.runs)+'. Smoke scale is at most '+a.smoke_attempts+' attempts per competitor; the per-card ceiling is $'+esc(a.card_usd)+', the daily allowance $'+esc(a.daily_usd)+'. Larger plans wait for a person.</p></dd>'
  +'<dt><label for="autonomy-initiative">Initiative</label></dt><dd><select id="autonomy-initiative">'+opt('open',a.initiative,'One card a day, from open threads')+opt('off',a.initiative,'Off')+'</select><p class="field-hint">'+esc(a.words.initiative)+'. It reads the record once a day and files nothing when nothing is open.</p></dd>'
+ +'<dt><label for="autonomy-edit">Editing</label></dt><dd><select id="autonomy-edit">'+opt('act',a.edit,'Build in the open editor')+opt('off',a.edit,'Off')+'</select><p class="field-hint">'+esc(a.words.edit)+'. Steps appear as provisional work and are lost on reload until a save commits them.</p></dd>'
  +'<dt><label for="autonomy-engineer">Engineer</label></dt><dd><select id="autonomy-engineer">'+opt('propose',a.engineer,'One fix a day, proposed')+opt('off',a.engineer,'Off')+'</select><p class="field-hint">'+esc(a.words.engineer)+'. A Codex agent writes the diff in a throwaway worktree; the lab runs the test itself and applies nothing.</p></dd>'
  +'<dt>Switch</dt><dd><button class="button'+(a.paused?' primary':'')+'" type="button" id="autonomy-pause">'+(a.paused?'Paused: turn Genesis back on':'Pause Genesis')+'</button></dd></dl>';
  const set=async payload=>{try{renderAutonomy(await api('/api/genesis/autonomy',payload),box);toast('Autonomy updated');}catch(e){toast(e.message);loadAutonomy(box);}};
- $('#autonomy-cards').onchange=e=>set({cards:e.target.value});$('#autonomy-runs').onchange=e=>set({runs:e.target.value});$('#autonomy-initiative').onchange=e=>set({initiative:e.target.value});$('#autonomy-engineer').onchange=e=>set({engineer:e.target.value});$('#autonomy-pause').onclick=()=>set({paused:!a.paused});}
+ $('#autonomy-cards').onchange=e=>set({cards:e.target.value});$('#autonomy-runs').onchange=e=>set({runs:e.target.value});$('#autonomy-initiative').onchange=e=>set({initiative:e.target.value});$('#autonomy-engineer').onchange=e=>set({engineer:e.target.value});$('#autonomy-edit').onchange=e=>set({edit:e.target.value});$('#autonomy-pause').onclick=()=>set({paused:!a.paused});}
 
 // ---- activity ----------------------------------------------------------------------------------
 const ACTIVITY_WORDS={card:'Card created',stage:'Card moved',work:'Genesis started working',turn:'Turn started','turn-completed':'Turn finished','turn-failed':'Turn failed',plan:'Plan written',launch:'Run launched',waiting:'Plan waiting',question:'Question asked',answer:'Question answered',autonomy:'Autonomy changed',debrief:'Verdict asked for',declined:'Plan declined',skill:'Skill written','skill-removed':'Skill removed','plugin-error':'A plugin failed'};

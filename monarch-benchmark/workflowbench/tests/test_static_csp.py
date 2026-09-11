@@ -41,11 +41,12 @@ def test_no_external_resources():
         # scheme and misses it entirely (feature 024 voice research).
         re.compile(r"new\s+WebSocket\(\s*[\"'`]wss?://"),
         # RTCPeerConnection is worse: CSP does not govern WebRTC at all, so a browser
-        # would not refuse it either. Nothing here may open one.
+        # would not refuse it either. Only the explicitly selected GPT-Live transport may open one.
         re.compile(r"\bRTCPeerConnection\b"),
     ]
     offenders = [(p.relative_to(STATIC).as_posix(), pat.pattern) for p in static_files()
-                 for pat in patterns if pat.search(p.read_text(encoding="utf-8"))]
+                 for pat in patterns if not (p.name == "voice-live.js" and pat.pattern == r"\bRTCPeerConnection\b")
+                 and pat.search(p.read_text(encoding="utf-8"))]
     assert offenders == []
 
 

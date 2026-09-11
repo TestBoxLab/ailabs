@@ -118,7 +118,9 @@ def _one_setup(ident: str) -> str:
     if harness and harness != PLAIN_HARNESS:
         parts.append(HARNESS_NAMES.get(harness) or _titled(harness))
     if effort:
-        parts.append(effort)
+        # A build token travels after an @ as readily as after a separator
+        # (monarch@0cf63a74e+feat/railway-dev-deploy*); a label cannot hold it either.
+        parts.append(_without_build(effort))
     return " · ".join(p for p in parts if p)
 
 
@@ -141,9 +143,10 @@ def display_name(setup_id, given=None) -> str:
 
 
 def fit_name(name: str, width: int = 34) -> str:
-    """A name a figure label can hold, cut on a word boundary."""
+    """A name a figure label can hold, cut on a word boundary, never leaving the
+    separator dangling ("Monarch ·…" said less than "Monarch…")."""
     text = str(name or "")
-    return text if len(text) <= width else text[:width - 1].rsplit(" ", 1)[0] + "…"
+    return text if len(text) <= width else text[:width - 1].rsplit(" ", 1)[0].rstrip(" ·/-") + "…"
 
 
 def _research_dir(studio) -> Path:

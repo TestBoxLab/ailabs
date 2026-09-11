@@ -24,6 +24,9 @@ try:  # the figure kinds are the catalogue's, so a kind added there reaches the 
     FIGURE_KINDS = tuple(_FIGURES)
 except ImportError:  # pragma: no cover - the module lands with the feature
     FIGURE_KINDS = ()
+# The build steps are the graph editor's own, for the same reason: one list, so the tool's
+# enum cannot drift from what the lab will actually apply.
+from wb_studio.blueprints import OPERATIONS as BUILD_OPERATIONS
 N = {'type': 'number'}
 B = {'type': 'boolean'}
 
@@ -79,10 +82,11 @@ SCHEMAS = {
     'compare': ('Paired delta, interval, sign test and solved-task overlap between a run and its Bare baseline, or between two runs.',
                 obj({'run': S, 'against': {**S, 'description': 'Another run id, or "baseline" (default).'}}, ['run'])),
     'failure_buckets': ('The outcome buckets of a run with counts, denominators and one event id to read per bucket.', obj({'run': S}, ['run'])),
-    'report': ('The internal run report as data, without the written narrative.', obj({'run': S}, ['run'])),
+    'report': ('The complete Studio report: computed measures, published Genesis analysis and current authoring status.', obj({'run': S}, ['run'])),
     'task_catalog': ('Tasks with tier, domain, category, hash and the applications they change; filter by task set or catalog fields.',
                      obj({'task_set': S, 'filter': POPULATION['properties']['filter']})),
     'catalog': ('Architectures, product graphs, task sets, models and the creation contracts for save_architecture and save_product_graph.', obj({})),
+    'workspace_context': ('The current shared Studio route, selected run or architecture step, and unsaved-editor state. Browser hints, not proof of saved data.', obj({})),
     'research_state': ('The board as lines: every card with its stage and work state, the last ten turns, the routes, the analyses, the watcher and the dials.', obj({})),
     'record_analysis': ('File a cited analysis of a run so unchanged evidence is not analysed twice; each finding names event ids and is a fact or a hypothesis.',
                         obj({'run': S, 'summary': S,
@@ -98,7 +102,7 @@ SCHEMAS = {
     'propose_experiment': ('Propose a run as a Studio launch payload; the Studio computes the plan. Smoke scale inside your allowances launches after the Reviewer accepts; anything else waits for a person.', LAUNCH),
     'ask_question': ('Ask the lab one question with a suggested default; the card you name waits until a person answers. Finish the turn after asking.',
                      obj({'question': {**S, 'description': 'Up to 600 characters.'}, 'default': S, 'card': {**S, 'description': 'The card that waits for the answer.'}}, ['question'])),
-    'show': ('Point the reader at a place in the Studio. It renders as a link in your turn with one line saying why; it moves nobody\'s screen.',
+    'show': ('Point the reader at a place in the Studio. It renders as a link in your turn with one line saying why; you never move the screen yourself, the reader\'s Follow setting decides.',
              obj({'route': {**S, 'description': "An in-app address: #run/<id>, #report/<id>, #round/<id>, #budget, #genesis/board, #runs, #reports, #runtime, #studio."},
                   'label': {**S, 'description': 'The link text, up to 80 characters.'},
                   'why': {**S, 'description': 'One sentence: why this place, now. Up to 300 characters.'}}, ['route'])),
@@ -159,18 +163,63 @@ SCHEMAS = {
                     'caption': {**S, 'description': 'One sentence saying what the reader should see. Optional.'}},
                    ['kind', 'run'])),
     # --- architectures ----------------------------------------------------------------------
-    'save_architecture': ('Save an architecture draft (see catalog.creation_contracts.save_architecture for the graph shape).',
-                          obj({'name': S, 'track': S, 'revision': I, 'graph': obj({}, extra=True), 'notes': S, 'id': S}, ['name', 'graph'])),
+    'edit_architecture': ('Build an architecture one step at a time, in front of the person: add_node, connect or set_prompt. '
+                          'Each step appears in the open editor as provisional work and saves nothing; save_architecture commits the whole build as one revision.',
+                          obj({'operation': {'type': 'string', 'enum': list(BUILD_OPERATIONS)},
+                               'node': {'description': 'add_node: the step, at least {id, type}. set_prompt: the step id.'},
+                               'text': {**S, 'description': 'set_prompt: the instructions for that step.'},
+                               'from': {**S, 'description': 'connect: the step the work comes from.'},
+                               'to': {**S, 'description': 'connect: the step the work goes to.'},
+                               'id': {**S, 'description': 'The saved architecture to build on. Only the first operation of a turn needs it.'},
+                               'revision': I},
+                              ['operation'])),
+    'save_architecture': ('Commit an architecture draft as one revision. Leave graph out to save what this turn built with edit_architecture; '
+                          'pass one to save a whole graph (see catalog.creation_contracts.save_architecture for its shape).',
+                          obj({'name': S, 'track': S, 'revision': I, 'graph': obj({}, extra=True), 'notes': S, 'id': S}, ['name'])),
     'publish_architecture': ('Publish a saved architecture draft as a version.', obj({'id': S, 'revision': I}, ['id', 'revision'])),
     'save_product_graph': ('Save a product graph draft (see catalog.creation_contracts.save_product_graph).',
                            obj({'name': S, 'revision': I, 'fields': arr(obj({}, extra=True)), 'instructions': S, 'runner': obj({}, extra=True), 'id': S}, ['name'])),
 }
 
+# Report workers use these same typed tools with a role-specific allowlist.
+_REPORT_FINDING = obj({'title': S, 'explanation': S, 'kind': {**S, 'enum': ['fact', 'hypothesis']}, 'event_ids': arr(I)}, ['title', 'explanation', 'kind', 'event_ids'])
+SCHEMAS.update({
+    'author_report': ('Start Genesis report analysis, authoring, separate review and one repair, then publish inside Studio. Paid: the whole cycle reserves maximum_usd before dispatch. Existing work is reused; retry only explicitly after a failure.',
+                      obj({'run': S, 'maximum_usd': S, 'retry': B}, ['run'])),
+    'report_status': ('Current report stage, exact review hashes, child turns and publication receipt.', obj({'run': S}, ['run'])),
+    'report_evidence': ('Frozen report evidence. Use section=patterns (optional domain/setup) for computed chart counts and percentages. Omit attempt for the overview. Otherwise use its integer index; after is an event offset. Oversized attempts return part=packet: pass that part and use after/limit as character offsets until next_after is null. No evidence is truncated.',
+                        obj({'run': S, 'attempt': I, 'part': {**S, 'enum': ['packet']}, 'section': {**S, 'enum': ['patterns']}, 'domain': S, 'setup': S, 'after': I, 'limit': I}, ['run'])),
+    'read_report_state': ('Read frozen before/after world state for an attempt. Omit phase to list retained snapshots; choose phase and trial, then a JSON key path. Dictionaries list keys; lists and strings page with after/limit. Missing state remains unavailable.',
+                          obj({'run': S, 'attempt': I, 'phase': {**S, 'enum': ['before', 'after']}, 'trial': I, 'path': arr(S), 'after': I, 'limit': I}, ['run', 'attempt'])),
+    'read_report_draft': ('Complete draft and a page of the attempt analyses; follow next_after until null before writing or reviewing.',
+                          obj({'run': S, 'after': I, 'limit': I}, ['run'])),
+    'record_report_attempt': ('Analysis subagent only: record one attempt after reading all its event pages. Cite only events from that attempt.',
+                              obj({'run': S, 'index': I, **{k: S for k in ('expected', 'observed', 'explanation', 'mechanism', 'alternatives', 'confidence', 'missing_evidence')}, 'event_ids': arr(I)},
+                                  ['run', 'index', 'expected', 'observed', 'explanation', 'mechanism', 'alternatives', 'confidence', 'missing_evidence', 'event_ids'])),
+    'write_report_draft': ('Author/repair only: save a complete report. Publication waits for a separate review of this exact draft and evidence.',
+                           obj({'run': S, **{k: S for k in ('summary', 'what_went_right', 'what_went_wrong', 'why', 'next_experiment', 'limitations')}, 'findings': arr(_REPORT_FINDING)},
+                               ['run', 'summary', 'what_went_right', 'what_went_wrong', 'why', 'next_experiment', 'limitations', 'findings'])),
+})
+
+SCHEMAS.update({
+    'start_mission': ('Start persistent research work from this conversation. Keeps the objective across bounded worker turns and uses existing budget and approval gates.',
+        obj({'objective': S, 'acceptance': arr(S), 'next_action': S, 'title': S,
+             'max_turns': {**I, 'minimum': 1, 'maximum': 24}}, ['objective', 'acceptance', 'next_action'])),
+    'mission_status': ('Read your mission objective, checkpoint, work state and linked experiment receipts. Omit card for missions in this conversation.', obj({'card': S})),
+    'checkpoint_mission': ('Save mission progress before ending this worker turn. Continue requires next_action; waiting requires a linked experiment card. Save provisional architecture edits first.',
+        obj({'card': S, 'revision': I, 'summary': S,
+             'status': {**S, 'enum': ['continue', 'waiting', 'complete', 'blocked']},
+             'next_action': S, 'wait_for': S}, ['card', 'revision', 'summary', 'status'])),
+    'control_mission': ('Steer, resume, or stop a mission from its owner conversation. Stop requests cancellation of linked work; completion is not assumed.',
+        obj({'card': S, 'revision': I, 'action': {**S, 'enum': ['steer', 'resume', 'stop']},
+             'instruction': S}, ['card', 'revision', 'action'])),
+})
+
 BUILTIN = ('research_state', 'list_runs', 'read_run', 'catalog', 'search_research', 'record_analysis', 'save_research',
            'library_list', 'library_read', 'library_save', 'library_analyze', 'library_use', 'library_reclassify',
            'propose_experiment', 'skill_list', 'skill_read', 'skill_write', 'skill_remove', 'ask_question', 'activity',
            'record_search', 'memory_read', 'memory_add', 'memory_recent', 'note_write',
-           'save_architecture', 'publish_architecture', 'save_product_graph',
+           'edit_architecture', 'save_architecture', 'publish_architecture', 'save_product_graph',
            'code_status', 'code_search', 'code_explain', 'code_read', 'code_changes')
 
 

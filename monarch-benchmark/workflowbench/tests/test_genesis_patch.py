@@ -65,7 +65,7 @@ BUCKETS = {'run': 'run-7', 'summary': 'Half the attempts stop at the graph endpo
 
 
 def with_tools(genesis):
-    genesis.tool = Mock(side_effect=lambda action, payload: {
+    genesis.tool = Mock(side_effect=lambda action, payload, turn=None: {
         'failure_buckets': BUCKETS,
         'read_run': {'job': {'id': 'run-7', 'title': 'Nightly'}, 'events': [{'id': 4, 'task': 'finance.1', 'text': '500 from /graphs/:id'}]},
     }[action])

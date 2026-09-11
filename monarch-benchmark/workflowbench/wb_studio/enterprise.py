@@ -1,28 +1,26 @@
 """Stock Monarch Enterprise as a Studio comparison version (feature 011, checkpoint 3).
 
-The Studio drives the same competitor the CLI rounds use (`wb_arms/monarch.py`:
-create + run through Monarch's own API, the bench's front door for every
-application call, cost read from Langfuse) and watches it through the arm's
-observer hook, so the Activity lane shows the builder's frames and every recipe
-node's state as the engine reports it.
+The Studio drives the same competitor the CLI rounds use (`wb_arms/monarch.py`) and
+watches it through the arm's observer hook, so the Activity lane shows the builder's
+frames and every recipe node's state as the engine reports it.
 
-Three honesty rules, all enforced here rather than in the page:
+Three honesty rules, enforced here rather than in the page:
 
-* Nothing launches before a verification probe has passed against the exact
-  deployment the harness file names: liveness, health with a session, the
-  knowledge base Monarch holds equals the frozen file, Langfuse answers, and
-  the served build can be named from the checkout `monarch_repo` points at.
-  The probe is stored beside the Studio's runs and expires.
-* The version's name carries the build (`monarch@<sha>`, plus `+<branch>` off
-  main, plus `*` when the checkout is dirty). A branch or a patch is a custom
-  build and is labelled so; only a clean `main` may be called stock.
-* Every attempt reserves a ceiling in the shared weekly ledger before Monarch
-  is called and settles with the Langfuse total afterwards; an attempt whose
-  cost could not be read keeps its hold and says so (`billing=unknown`).
+* Nothing launches before a verification probe passes against the exact deployment
+  the harness file names: liveness, health with a session, the knowledge base Monarch
+  holds equals the frozen file, Langfuse answers, and the served build can be named
+  from the checkout `monarch_repo` points at. The probe is stored beside the Studio's
+  runs and expires.
+* The version's name carries the build (`monarch@<sha>`, plus `+<branch>` off main,
+  plus `*` when the checkout is dirty). A branch or a patch is a custom build and is
+  labelled so; only a clean `main` may be called stock.
+* Every attempt reserves a ceiling in the shared weekly ledger before Monarch is
+  called and settles with the Langfuse total afterwards; an attempt whose cost could
+  not be read keeps its hold and says so (`billing=unknown`).
 
-The provider path (Bedrock in the stock product) is not observable from the
-bench: the price table declares what the deployment is billed as, and the
-manifest records that declaration as a declaration, never as a verified fact.
+The provider path (Bedrock in the stock product) is not observable from the bench:
+the price table declares what the deployment is billed as, and the manifest records
+that declaration as a declaration, never as a verified fact.
 """
 from __future__ import annotations
 
@@ -86,13 +84,15 @@ class Setup:
         self.env = environment(studio)
         self.problems: list[str] = []
         self.harness = self.product = self.kb = self.price_table = None
-        self.kb_path = self.config_dir / "products" / f"{PRODUCT}.monarch-kb.yaml"
+        self.product_name = getattr(studio, "enterprise_product", PRODUCT)
+        self.harness_name = getattr(studio, "enterprise_harness", HARNESS)
+        self.kb_path = self.config_dir / "products" / f"{self.product_name}.monarch-kb.yaml"
         self.version: str | None = None
         self.checkout: dict | None = None
         self._load()
 
     def _load(self) -> None:
-        harness_path = self.config_dir / "harnesses" / f"{HARNESS}.yaml"
+        harness_path = self.config_dir / "harnesses" / f"{self.harness_name}.yaml"
         try:
             self.harness = config.load_harness(harness_path)
             if self.harness.kind != "monarch":
@@ -104,7 +104,7 @@ class Setup:
         except (config.ConfigError, OSError, ValueError) as exc:
             self.problems.append(f"Harness file: {exc}")
         try:
-            self.product = config.load_product(self.config_dir / "products" / f"{PRODUCT}.yaml")
+            self.product = config.load_product(self.config_dir / "products" / f"{self.product_name}.yaml")
         except (config.ConfigError, OSError, ValueError) as exc:
             self.problems.append(f"Product file: {exc}")
         if self.product is not None:
@@ -221,6 +221,9 @@ def verify(studio) -> dict:
               "checkout": setup.checkout, "stock": setup.stock, "checks": checks, "ok": False}
     if setup.ok:
         h, env = setup.harness, setup.env
+        from wb_orchestrator.monarch_probe import harness_hash
+        record["harness_sha256"] = harness_hash(h)
+        record["product"] = setup.product.name
         base = expand(h.base_url, env, "base_url")
         record["backend_host"] = urlparse(base).netloc
         record["front_door"] = public_front_door_url(h, env)

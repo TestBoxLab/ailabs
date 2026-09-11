@@ -52,7 +52,7 @@ def _attempt(result, trace, report, index):
     checks = [{"name": check["type"], "title": titles.get(i, check["type"]),
                "passed": check["passed"], "check_index": i}
               for i, check in enumerate(result.get("checks", []))]
-    finish_ids = [e["id"] for e in trace if e["type"] == "attempt_finished"]
+    finish_ids = [e["id"] for e in trace if e["type"] in ("attempt_finished", "result")]
     facts = [{"text": "Recorded termination: " + result["termination"] + ".",
               "event_ids": finish_ids, "check_names": [], "source": "result.termination"}]
     for check in checks:
@@ -71,10 +71,10 @@ def _attempt(result, trace, report, index):
                           "source": "trace.api_fetch"})
     errors = [e for e in trace if e["type"] == "attempt_error" or
               (e["type"] in ("node_finished", "model_finished", "step_finished") and e.get("status") == "error")]
-    first = errors[0] if errors else next((e for e in trace if e["type"] == "attempt_finished" and not result["passed"]), None)
+    first = errors[0] if errors else next((e for e in trace if e["type"] in ("attempt_finished", "result") and not result["passed"]), None)
     earliest = None if first is None else {
         "event_id": first["id"], "type": first["type"],
-        "text": "Recorded failure verdict." if first["type"] == "attempt_finished" else "Recorded error event; its causal connection to the final outcome is unverified.",
+        "text": "Recorded failure verdict." if first["type"] in ("attempt_finished", "result") else "Recorded error event; its causal connection to the final outcome is unverified.",
     }
     unmet = [c["title"] for c in checks if c["passed"] is False and c["name"] != "allowed_changes_only"]
     passed = [c["title"] for c in checks if c["passed"] is True and c["name"] != "allowed_changes_only"]
@@ -116,13 +116,17 @@ def analysis(studio, identity):
     results = job["results"]
     # Separate repeated task/model attempts at journal completion boundaries. A partial
     # later attempt must never lend its errors to an earlier completed result.
-    grouped, pending = defaultdict(list), defaultdict(list)
+    grouped, pending, episodes = defaultdict(list), defaultdict(list), defaultdict(list)
+    identified_pairs = set()
     for event in events:
         key = (event.get("task"), event.get("model"))
+        if event.get("episode_id"):
+            episodes[event["episode_id"]].append(event)
+            identified_pairs.add(key)
         if None in key:
             continue
         pending[key].append(event)
-        if event["type"] == "attempt_finished":
+        if event["type"] in ("attempt_finished", "result"):
             grouped[key].append(pending.pop(key))
     counts = Counter((r["task"], r["model"]) for r in results)
     occurrences, attempts = Counter(), []
@@ -131,7 +135,14 @@ def analysis(studio, identity):
         occurrence = occurrences[key]
         occurrences[key] += 1
         segments = grouped[key]
-        trace = segments[occurrence] if occurrence < len(segments) else pending[key] if counts[key] == 1 and not segments else []
+        episode = result.get("episode_id")
+        if episode and (episode in episodes or key in identified_pairs):
+            # Imported/resumed receipts may repeat or arrive out of order. An
+            # explicit episode identity always takes precedence over chronology.
+            trace = [event for event in episodes[episode]
+                     if event.get("task", key[0]) == key[0] and event.get("model", key[1]) == key[1]]
+        else:
+            trace = segments[occurrence] if occurrence < len(segments) else pending[key] if counts[key] == 1 and not segments else []
         # Job results already retain the evaluator checks and scope changes. Avoid
         # opening Store here: its initialization can migrate/write the results DB.
         report = outcome_report({"id": identity, "results": [result]}, trace, studio.tasks)["attempts"][0]

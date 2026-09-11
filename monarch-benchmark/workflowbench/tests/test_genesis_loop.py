@@ -123,7 +123,7 @@ def test_the_landing_tells_the_model_when_two_requests_remain_and_a_turn_that_ru
 
 
 def test_a_person_stopping_the_turn_records_one_failure(genesis, monkeypatch):
-    def stop_during_tool(name, payload):
+    def stop_during_tool(name, payload, turn=None):
         genesis.stop_turn('t1')
         return {'ok': True}
     monkeypatch.setattr(genesis, 'tool', stop_during_tool)
@@ -199,3 +199,24 @@ def test_sdk_message_objects_do_not_break_the_size_estimate(genesis):
     FakeAdapter.script = [{'tool_calls': [{'id': 'c1', 'name': 'skill_list', 'args': {}}]}, {'text': 'Fine.'}]
     harness.start_turn(genesis, turn_record(genesis))
     assert genesis.read('turns', 't1')['status'] == 'completed'
+
+
+def test_a_stop_while_waiting_for_provider_capacity_releases_the_hold(genesis):
+    """The capacity wait can block for minutes. A turn stopped inside it never claims its
+    reservation, and an unclaimed hold no one settles keeps its ceiling of the week for ever."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def blocked(*args, **kwargs):
+        record = genesis.read('turns', 't1'); record['stop_requested'] = True
+        write_json(genesis.path('turns', 't1'), record)
+        yield
+
+    genesis.studio.runtime.provider = blocked
+    FakeAdapter.script = [{'text': 'never sent'}]
+    harness.start_turn(genesis, turn_record(genesis))
+    ledger = genesis.studio.ledger
+    ledger.reserve.assert_called_once()
+    ledger.claim.assert_not_called()
+    ledger.settle.assert_called_once_with('genesis-t1-1', '0', outcome='cancelled')
+    assert genesis.read('turns', 't1')['status'] == 'failed'

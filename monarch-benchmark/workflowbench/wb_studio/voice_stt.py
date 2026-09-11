@@ -80,7 +80,7 @@ def check(audio: bytes, content_type: str, seconds) -> str:
     return TYPES[kind]
 
 
-def transcribe(studio, audio: bytes, content_type: str, seconds=None, env=None, transport=None) -> dict:
+def transcribe(studio, audio: bytes, content_type: str, seconds=None, env=None, transport=None, by='human:studio') -> dict:
     """One clip to text, reserved before it is sent and settled from what it cost.
 
     `transport` is the seam the tests use; nothing else replaces it.
@@ -100,7 +100,7 @@ def transcribe(studio, audio: bytes, content_type: str, seconds=None, env=None, 
     # paid API is how a weekly ceiling stops being one.
     studio.ledger.reserve(request_id, str(CEILING_USD), scope_id=request_id,
                           scope_limit_usd=CEILING_USD,
-                          metadata={"purpose": "Genesis voice", "model": MODEL, "by": "person",
+                          metadata={"purpose": "Genesis voice", "model": MODEL, "by": by,
                                     "seconds": float(seconds or 0)})
     studio.ledger.claim(request_id)
     try:

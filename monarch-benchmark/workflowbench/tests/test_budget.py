@@ -588,12 +588,12 @@ def test_the_envelope_gate_finds_the_shared_ledger_it_was_not_given(tmp_path, mo
 # money may well have been spent, and the ledger must not forget it. What was missing
 # is the way out. Ten Monarch attempts during a Langfuse outage hold US$ 250 of a
 # US$ 300 week for ever, with no cent proven spent and nothing in the CLI to release
-# it — `wb budget acknowledge` answers for overruns only (found by ailabs-9c, feature
+# it â€” `wb budget acknowledge` answers for overruns only (found by ailabs-9c, feature
 # 024 US4, 11 Sep 2026; `docs/rounds/2026-09-11-recipes.md`).
 #
 # The release is a person's, not a clock's: an expiry at the week boundary would drop a
 # real charge nobody has read yet. So the hold survives rollover exactly as before, and
-# one named person with a reason releases it — the same shape as acknowledging an overrun.
+# one named person with a reason releases it â€” the same shape as acknowledging an overrun.
 
 def _stale_hold(path, amount='250'):
     """One attempt that ran and whose cost the provider never reported."""
@@ -605,3 +605,104 @@ def _stale_hold(path, amount='250'):
     return ledger
 
 
+def test_a_released_hold_stops_blocking_the_weeks_after_it(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    assert ledger.status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')   # the defect
+    ledger.release_hold('outage-1', by='human:lucas',
+                        reason='Langfuse outage; the attempt failed and no cost was ever reported.',
+                        now=NEXT_MONDAY)
+    after = ledger.status(now=NEXT_MONDAY)
+    assert after.available_usd == Decimal('300')
+    assert after.carried_held_usd == Decimal('0') and after.held_usd == Decimal('0')
+    ledger.reserve('next-week', '300', scope_id='ep-2', now=NEXT_MONDAY)
+
+
+def test_status_shows_unknown_holds_as_their_own_line(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    blocked = ledger.status(now=NEXT_MONDAY)
+    # Not spending: nothing is proven paid, and the ids say what to look at.
+    assert blocked.actual_usd == Decimal('0')
+    assert blocked.unknown_ids == ('outage-1',) and blocked.released_usd == Decimal('0')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    freed = ledger.status(now=NEXT_MONDAY)
+    assert freed.unknown_ids == () and freed.released_usd == Decimal('250')
+
+
+def test_a_released_hold_keeps_its_unknown_cost_on_the_record(tmp_path):
+    from wb_orchestrator import reconcile
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    row = next(r for r in BudgetLedger(path).reservations() if r.reservation_id == 'outage-1')
+    assert row.actual_usd is None and row.maximum_usd == Decimal('250')
+    note = row.metadata['hold_released']
+    assert note['by'] == 'human:lucas' and 'Langfuse' in note['reason'] and note['at']
+    # `wb budget reconcile` still finds it against the provider's own export.
+    monarch = reconcile.ledger_totals(ledger, '2026-09-07')['monarch']
+    assert monarch['unsettled'] == 1 and monarch['held'] == Decimal('250')
+
+
+def test_a_cost_that_arrives_after_the_release_is_still_charged(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    ledger.settle('outage-1', '31.50', now=NEXT_MONDAY)
+    state = ledger.status(now=NEXT_MONDAY)
+    assert state.actual_usd == Decimal('31.50') and state.released_usd == Decimal('0')
+    assert state.available_usd == Decimal('268.50')
+
+
+def test_a_released_hold_can_never_be_dispatched(tmp_path):
+    path = tmp_path / 'budget.sqlite'
+    ledger = BudgetLedger(path)
+    ledger.reserve('pending', '25', scope_id='ep-3', now=MONDAY)
+    ledger.release_hold('pending', by='human:lucas', reason='The run died before it started.', now=MONDAY)
+    assert ledger.status(now=MONDAY).held_usd == Decimal('0')
+    with pytest.raises(ReservationConflict, match='released'):
+        ledger.claim('pending', now=MONDAY)
+
+
+def test_releasing_a_hold_needs_a_person_a_reason_and_an_unsettled_hold(tmp_path):
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    for by, reason in (('', 'r'), ('human:lucas', ''), ('', '')):
+        with pytest.raises(ValueError):
+            ledger.release_hold('outage-1', by=by, reason=reason, now=NEXT_MONDAY)
+    with pytest.raises(ValueError, match='no reservation'):
+        ledger.release_hold('nope', by='human:lucas', reason='x', now=NEXT_MONDAY)
+    ledger.reserve('paid', '10', scope_id='ep-9', now=MONDAY)
+    ledger.settle('paid', '4', now=MONDAY)
+    with pytest.raises(ValueError, match='settled'):
+        ledger.release_hold('paid', by='human:lucas', reason='x', now=NEXT_MONDAY)
+    assert ledger.status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    with pytest.raises(ValueError, match='already released'):
+        ledger.release_hold('outage-1', by='human:carlos', reason='again', now=NEXT_MONDAY)
+
+
+def test_metadata_that_cannot_be_read_never_releases_capacity(tmp_path):
+    import sqlite3
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE budget_reservations SET metadata_json='not json' WHERE reservation_id='outage-1'")
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')
+
+
+def test_the_command_releases_one_hold_and_reports_the_week(tmp_path, capsys):
+    from wb_orchestrator.cli import main
+    path = tmp_path / 'budget.sqlite'
+    _stale_hold(path)
+    assert main(['--ledger', str(path), 'budget', 'release', 'outage-1',
+                 '--because', 'Langfuse outage; no cost was ever reported.', '--by', 'human:lucas']) == 0
+    out = capsys.readouterr().out
+    assert 'released outage-1' in out and 'human:lucas' in out and '250' in out
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('0')
+
+
+def test_the_command_refuses_without_a_person(tmp_path, monkeypatch, capsys):
+    from wb_orchestrator.cli import main
+    monkeypatch.delenv('WB_OPERATOR', raising=False)
+    path = tmp_path / 'budget.sqlite'
+    _stale_hold(path)
+    assert main(['--ledger', str(path), 'budget', 'release', 'outage-1', '--because', 'x']) == 2
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')

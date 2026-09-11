@@ -1,7 +1,11 @@
-"""HTTP front door for one episode (BUILD-SPEC §2.2 Option B; verified 2 Sep
-2026: the Monarch executor dispatches plain HTTP, never MCP). Stdlib only.
+"""HTTP front door for one attempt's world (BUILD-SPEC §2.2 Option B; verified
+2 Sep 2026: the Monarch executor dispatches plain HTTP, never MCP). Stdlib only.
 
-Two surfaces over the same Episode:
+Two surfaces over the same world. "World" rather than "episode" since feature 026:
+any object satisfying `wb_world/adapter.py` is served here, and it asks the world
+only three things about its published surface -- which services, what document, what
+URL a REST path maps to -- so an AutomationBench world and a world made of tools go
+through the same door.
 
   Tool surface (kept for harnesses that speak the 3-tool contract):
     POST /fetch   {method, url, params?, body?} -> api_fetch result
@@ -13,7 +17,7 @@ Two surfaces over the same Episode:
     ANY  /<service>/<real path>?query   JSON body -> api_fetch(baseUrl + path)
          AB error envelopes {"error": {"code": N}} become HTTP status N.
 
-One shim per episode. WB_SHIM_PUBLIC_URL overrides the advertised server URL
+One shim per attempt. WB_SHIM_PUBLIC_URL overrides the advertised server URL
 when Monarch runs in Docker (e.g. http://host.docker.internal:PORT).
 """
 from __future__ import annotations
@@ -28,8 +32,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from wb_world.episode import Episode
-from wb_world.openapi import build_spec, load_schemas
 
 
 # How much of a request and a response body one log line keeps.
@@ -57,14 +59,16 @@ class _Server(ThreadingHTTPServer):
 
 
 class EpisodeHTTPShim:
-    def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None,
+    def __init__(self, episode, port: int = 0, public_url: str | None = None,
                  host: str = "127.0.0.1", access_log: str | Path | None = None):
+        # `episode` is any world satisfying the adapter contract; the name is kept
+        # because every caller and every test already uses it.
         self.episode = episode
         # One JSON line per request, so a failed step can say what actually
         # arrived instead of only what the engine reported. None = off.
         self.access_log = Path(access_log) if access_log else None
         self._log_lock = threading.Lock()
-        self.schemas = load_schemas()
+        self.interfaces = episode.interfaces()
         self.httpd = _Server((host, port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://{host}:{self.port}"
@@ -125,13 +129,13 @@ class EpisodeHTTPShim:
                 sp = urlsplit(self.path)
                 if sp.path == "/openapi/index.json":
                     self._reply(200, {svc: {"url": f"{outer.public_url}/openapi/{svc}.json"}
-                                      for svc in outer.schemas})
+                                      for svc in outer.interfaces.services()})
                 elif sp.path.startswith("/openapi/") and sp.path.endswith(".json"):
                     svc = sp.path[len("/openapi/"):-len(".json")]
-                    if svc not in outer.schemas:
+                    if svc not in outer.interfaces.services():
                         self._reply(404, {"error": f"unknown service {svc}"})
                         return
-                    self._reply(200, build_spec(svc, outer.schemas[svc], outer.public_url))
+                    self._reply(200, outer.interfaces.spec(svc, outer.public_url))
                 else:
                     self._rest("GET")
 
@@ -167,12 +171,29 @@ class EpisodeHTTPShim:
                 sp = urlsplit(self.path)
                 parts = sp.path.lstrip("/").split("/", 1)
                 svc = parts[0]
-                if svc not in outer.schemas:
+                if svc not in outer.interfaces.services():
                     self._reply(404, {"error": f"unknown service {svc!r}"})
                     return
                 rest = parts[1] if len(parts) > 1 else ""
-                base = outer.schemas[svc].get("baseUrl", "").rstrip("/")
-                url = f"{base}/{rest}"
+                url = outer.interfaces.rest_url(svc, rest)
+                # A world may expose administrative operations on the same surface as
+                # its real work -- seeding, resetting, arbitrary queries. One of those
+                # in the competitor's hands writes the expected result directly or
+                # erases the evidence, so the door refuses them for every world rather
+                # than trusting each adapter to remember (feature 026, FR-034).
+                #
+                # Matched against the path within the service, which is how a world's
+                # own document names its operations. Matching `rest_url` instead reads
+                # naturally and silently never fires: that value carries the service
+                # segment in front, so `/gym-itsm-mcp/api/sql-runner` does not start
+                # with `/api/sql-runner` and every request sailed through to the
+                # adapter -- which happened to refuse it, leaving this door shut in
+                # name only.
+                admin = getattr(outer.interfaces, "admin_paths", ())
+                if any(("/" + rest.lstrip("/")).startswith(a) for a in admin):
+                    self._reply(403, {"error": f"{url} is an administrative operation of "
+                                               f"the product under test, not part of the task"})
+                    return
                 # Single-valued query params, like every AB router expects.
                 params = {k: v[-1] for k, v in parse_qs(sp.query, keep_blank_values=True).items()}
                 raw = self._body()

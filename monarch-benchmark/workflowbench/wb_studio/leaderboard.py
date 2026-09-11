@@ -53,7 +53,9 @@ def evaluation_contract(job, hashes=None) -> dict:
     settings = job.get('settings') or {}
     if hashes is None:
         hashes = {task: (job.get('task_hashes') or {}).get(task) for task in settings.get('tasks') or []}
-    return {'task_hashes': hashes, 'track': settings.get('track', 'agentic-request'),
+    from wb_world.source import product_of
+    product = product_of(job)
+    return {**({'product': product} if product else {}), 'task_hashes': hashes, 'track': settings.get('track', 'agentic-request'),
             'judge': (job.get('component_manifest') or {}).get('judge') or 'historical-unpinned',
             'assistance': settings.get('assistance', 'unattended'),
             'world': job.get('world_manifest', 'historical-unpinned'),
@@ -159,7 +161,7 @@ def task_shares(rows):
     """Per-task pass share over evaluated repetitions, and the largest repetition count."""
     per = {}
     for r in rows:
-        if not str(r.get('termination', '')).startswith('infra:'):
+        if not str(r.get('termination', '')).startswith('infra:') and 'grading=ungraded' not in (r.get('flags') or []):
             per.setdefault(r['task'], []).append(bool(r.get('passed')))
     return {t: sum(v) / len(v) for t, v in per.items()}, max((len(v) for v in per.values()), default=0)
 

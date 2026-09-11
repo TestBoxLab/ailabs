@@ -24,7 +24,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from wb_stats.stats import (_is_infra, arm_summary, mean_sem, paired_wl,
+from wb_stats.stats import (_is_infra, _is_ungraded, arm_summary, mean_sem, paired_wl,
                             pass_hat_k)
 
 # A phase named `model:<name>` records what one language model cost inside an
@@ -323,7 +323,7 @@ def competitor_metrics(rows: list[dict], k: int) -> dict[str, Any]:
     # they are counted so the page can say how many, and the cost, token and
     # time columns still cover every attempt that was actually made.
     na_count = sum(1 for r in rows if is_not_applicable(r))
-    scored = [r for r in rows if not is_not_applicable(r)]
+    scored = [r for r in rows if not is_not_applicable(r) and not _is_ungraded(r)]
     ok = [r for r in scored if not _is_infra(r)]
     passed = sum(1 for r in ok if r["passed"])
     # infrastructure is counted over every attempt: a not-applicable one is
@@ -342,6 +342,7 @@ def competitor_metrics(rows: list[dict], k: int) -> dict[str, Any]:
         "attempts": len(rows),
         "passed": passed,
         "infra": infra,
+        "ungraded": sum(_is_ungraded(r) for r in rows),
         "agent_errors": sum(1 for r in rows if r.get("termination") == "agent_error"),
         "timeouts": sum(1 for r in rows if r.get("termination") == "timeout"),
         "infra_rate": _div(infra, len(rows)),
@@ -430,6 +431,7 @@ def comparison(a: dict, b: dict, rows_arm: list[dict], rows_base: list[dict],
         "wins": wl["wins"], "losses": wl["losses"],
         "both": wl["both_pass"], "neither": wl["neither_pass"],
         "pairs": wl["pairs"], "dropped_infra": wl["dropped_infra"],
+        "dropped_ungraded": wl["dropped_ungraded"],
         "mcnemar": wl["mcnemar"],
         "verdict": skipped or verdict(wl["pairs"], wl["mcnemar"]["p"],
                                       wl["wins"], wl["losses"]),

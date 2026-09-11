@@ -196,3 +196,14 @@ Diffs that touch server code, which need a second process to preview, are out of
 first slice; static changes are the majority case and need no second process. The four
 research mechanisms named above are deferred with their sources. Public release of
 anything rendered remains separately authorized.
+
+## Live workspace expansion
+
+The [live workspace plan](../../../research/genesis-live-workspace-plan-2026-09-11.md)
+adds the rich streaming and visible alteration direction requested by Lucas on
+11 September. It preserves the current Studio token system and extends the existing
+event stream and graph editor. Feature 025 story 6 defines the product acceptance
+criteria. Implement the event foundation and workflow demonstration before attaching
+voice; then extend the same surfaces to research, experiments and checked interface
+previews. Application-data editing and source-code preview keep their distinct
+authorization and persistence boundaries.

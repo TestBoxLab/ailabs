@@ -10,19 +10,20 @@
 // with the signal, and disappears on key-up. The minutes Genesis spends on tool calls
 // get the step list; one shape may not mean two things.
 //
-// Nothing here reaches the network. Recognition runs on the device or not at all:
+// Prefer on-device recognition. Otherwise Studio transcribes a bounded clip:
 // Chrome's default sends every utterance to Google with no contract and no retention
 // statement, and this screen carries provider keys and unreleased results. There is no
-// fallback to remote recognition — if on-device is unavailable the button says so and
+// fallback to Google recognition. The authenticated Studio fallback is disclosed and
 // the composer still takes typing.
 (() => {
   const $ = s => document.querySelector(s);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const LANGS = ['pt-BR', 'en-US'];
+  const LANGS = ['en-US'];
   const OFF_KEY = 'genesis.voice.off';
 
   let stream = null, ctx = null, analyser = null, frame = 0, recogniser = null;
   let level = 0, started = 0, tick = 0, reduced = false;
+  let held = false, generation = 0, captureTimer = 0;
 
   const orb = () => $('#mic-orb');
   const button = () => $('#genesis-mic');
@@ -32,6 +33,10 @@
   // lexical scope, so the bare identifier reaches it. One token, not a second copy.
   function studioToken() {
     try { return (typeof state !== 'undefined' && state && state.token) || ''; } catch (e) { return ''; }
+  }
+
+  function personKey() {
+    try { return localStorage.getItem('ailabs-person-key') || ''; } catch { return ''; }
   }
 
   function disabled() { try { return localStorage.getItem(OFF_KEY) === '1'; } catch (e) { return false; } }
@@ -122,7 +127,7 @@
   // Only when the browser will not do it on the device. Same origin, so `connect-src
   // 'self'` is untouched and no key is ever in the page: the Studio calls the provider
   // with the one it already holds, and reserves it in the weekly ledger (stage S6).
-  let recorder = null, chunks = [], clipStarted = 0;
+  let recorder = null;
 
   function recordToStudio(mediaStream) {
     if (!window.MediaRecorder) return null;
@@ -130,7 +135,9 @@
     for (const t of ['audio/webm', 'audio/ogg', 'audio/mp4'])
       if (MediaRecorder.isTypeSupported(t)) { kind = t; break; }
     if (!kind) return null;
-    chunks = [];
+    let chunks = [];
+    const clipStarted = Date.now();
+    const identity = personKey(), token = studioToken();
     const r = new MediaRecorder(mediaStream, { mimeType: kind });
     r.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     r.onstop = async () => {
@@ -143,17 +150,17 @@
         const res = await fetch('/api/voice/stt', {
           method: 'POST', body: clip,
           headers: { 'Content-Type': kind, 'X-Clip-Seconds': String(Math.round(seconds)),
-                     'X-Studio-Token': studioToken() } });
+                     'X-Studio-Token': token, 'X-Person-Key': identity }, signal: AbortSignal.timeout(30000) });
         const found = await res.json();
         if (!res.ok) { say(found.error || 'The transcription was refused.'); return; }
         const box = $('#genesis-message');
+        if (!box || personKey() !== identity) return;
         box.value = (box.value ? box.value.replace(/\s+$/, '') + ' ' : '') + (found.text || '');
         box.dispatchEvent(new Event('input', { bubbles: true }));
         // Never auto-sent: the transcript is a draft, and this is the text-parity anchor.
         say(found.text ? 'Transcribed · $' + found.cost_usd : 'Nothing was heard.');
       } catch (e) { say('The transcription could not be reached.'); }
     };
-    clipStarted = Date.now();
     r.start();
     return r;
   }
@@ -161,14 +168,20 @@
   // --- the gesture --------------------------------------------------------------------
   async function down(e) {
     if (e && e.preventDefault) e.preventDefault();
-    if (stream || disabled()) return;
+    if (held || stream || disabled() || window.genesisLiveVoice?.active()) return;
+    held = true;
+    const mine = ++generation;
     const node = orb();
     if (node) node.hidden = false;
     say('Waiting for permission');
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
+      const acquired = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: false, channelCount: 1 } });
+      if (!held || mine !== generation) { acquired.getTracks().forEach(t => t.stop()); return; }
+      stream = acquired;
     } catch (err) {
+      if (mine !== generation) return;
+      held = false;
       stream = null;
       if (node) node.hidden = true;
       say(err && err.name === 'NotAllowedError'
@@ -178,23 +191,34 @@
       return;
     }
     button().setAttribute('aria-pressed', 'true');
+    captureTimer = setTimeout(up,60000);
     started = Date.now(); level = 0;
+    try {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.6;
     ctx.createMediaStreamSource(stream).connect(analyser);
     frame = requestAnimationFrame(read);
-    recogniser = await localAvailable() ? listen() : null;
+    const local = await localAvailable();
+    if (!held || mine !== generation || !stream) return;
+    recogniser = local ? listen() : null;
     if (!recogniser) {
       recorder = recordToStudio(stream);
-      say(recorder ? 'Listening · this machine will transcribe it'
+      say(recorder ? 'Listening · Studio will transcribe this clip'
                    : 'Listening · not transcribing on this browser');
+    }
+    } catch {
+      up();
+      say('Dictation could not start. Check the microphone or type your message.');
     }
   }
 
   function up() {
-    if (!stream) return;
+    held = false; generation++;
+    clearTimeout(captureTimer);
+    const waiting = orb(); if (waiting) waiting.hidden = true;
+    if (!stream) { say(''); return; }
     if (frame) { cancelAnimationFrame(frame); frame = 0; }
     const ending = stream;
     stream = null;
@@ -230,8 +254,10 @@
       if (e.code === 'Space' && e.ctrlKey && e.shiftKey && !e.repeat) down(e);
     });
     document.addEventListener('keyup', e => { if (e.code === 'Space' && e.ctrlKey && e.shiftKey) up(); });
+    window.addEventListener('blur', up);
+    window.addEventListener('pagehide', up);
     localAvailable().then(ok => {
-      if (!ok) b.title = 'Speech is not transcribed on this browser; the microphone still records nothing off this machine.';
+      if (!ok) b.title = 'Hold to dictate a draft. Studio transcribes the clip, up to 60 seconds.';
     });
   }
 
@@ -285,7 +311,7 @@
     const region = $('#genesis-spoken');
     const said = String(text || '').trim();
     if (!said) return false;
-    if (!speakingOn() || !window.speechSynthesis || !onScreen(said)) {
+    if (window.genesisLiveVoice?.active() || !speakingOn() || !window.speechSynthesis || !onScreen(said)) {
       // Not spoken: the live region carries it instead. Never both.
       if (region && region.textContent !== said) {
         region.textContent = said;
@@ -350,6 +376,7 @@
 
   window.genesisAnnounce = announce;
   window.genesisStopSpeaking = stopSpeaking;
+  window.genesisStopDictation = up;
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { start(); startSpeech(); });
   else { start(); startSpeech(); }

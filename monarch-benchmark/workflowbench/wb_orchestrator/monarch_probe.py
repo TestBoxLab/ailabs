@@ -16,6 +16,10 @@ PROBE_TTL = timedelta(hours=2)
 
 def probe_path(studio_or_site: Any) -> Path:
     base = getattr(studio_or_site, "directory", studio_or_site)
+    harness = getattr(studio_or_site, "enterprise_harness", "monarch")
+    if harness != "monarch":
+        import hashlib
+        return Path(base) / ("enterprise-probe-" + hashlib.sha256(harness.encode()).hexdigest()[:16] + ".json")
     return Path(base) / PROBE_FILE
 
 
@@ -27,3 +31,10 @@ def load_probe(studio_or_site: Any) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def harness_hash(harness) -> str:
+    """Verification binds public configuration and credential variable names, never values."""
+    from dataclasses import asdict
+    import hashlib
+    return hashlib.sha256(json.dumps(asdict(harness), sort_keys=True, default=str).encode()).hexdigest()

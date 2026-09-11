@@ -62,3 +62,10 @@ Three points the validation turned up, resolved in the spec rather than left ope
 
 **Not yet validated by this checklist**: whether the acceptance scenarios are achievable
 within feature 024's allowances. That is a planning question, addressed in `plan.md`.
+
+**Live workspace expansion — 2026-09-11.** Story 6, FR-044–FR-054 and SC-016–SC-020
+add the requested rich streaming and visible artifact-editing behavior. Technical
+design and primary-source inspiration live in the linked research plan. These additions
+have been checked for document links and identifier uniqueness, not validated by
+implementation, rendered UI checks or live experiments. Earlier checklist completion
+does not establish readiness of the new behavior.

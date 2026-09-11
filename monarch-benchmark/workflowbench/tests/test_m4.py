@@ -1,4 +1,4 @@
-"""M4/M2 tests: stats, report builder, telemetry collector."""
+"""M4 tests: stats and the report builder."""
 from __future__ import annotations
 
 import math
@@ -6,9 +6,8 @@ import math
 import pytest
 
 from runner.schema import EpisodeRow, TokenUsage
-from wb_report.report import GateError, build_report, render_md, write_report
+from wb_report.report import build_report, render_md, write_report
 from wb_results.store import Store
-from wb_orchestrator.telemetry import TelemetryWriter, collect, read_events
 from wb_stats.stats import cluster_bootstrap, mcnemar, mean_sem, paired_wl, pass_hat_k
 
 
@@ -53,6 +52,22 @@ def test_paired_wl_and_infra_drop():
     r = paired_wl([x.model_dump() for x in a], [x.model_dump() for x in b])
     assert (r["wins"], r["losses"], r["both_pass"], r["neither_pass"]) == (1, 1, 1, 0)
     assert r["dropped_infra"] == 1 and r["pairs"] == 3
+    assert r["dropped_ungraded"] == 0
+
+
+def test_an_ungraded_pair_drops_without_being_called_infra():
+    """Both drop the pair, and they say different things: infra is our machine
+    failing, ungraded is a checker that could not answer. A round whose grading
+    broke must not read as a round whose infrastructure did."""
+    a = [_row("t1", "A", 0, True), _row("t2", "A", 0, False),
+         _row("t3", "A", 0, True, termination="infra:rate_limit")]
+    b = [_row("t1", "B", 0, False), _row("t2", "B", 0, False), _row("t3", "B", 0, True)]
+    rows_a = [x.model_dump() for x in a]
+    rows_a[1]["flags"] = ["grading=ungraded"]   # the checker could not answer t2
+    r = paired_wl(rows_a, [x.model_dump() for x in b])
+    assert r["dropped_ungraded"] == 1
+    assert r["dropped_infra"] == 1
+    assert r["pairs"] == 1, "both kinds leave the denominator"
 
 
 def test_cluster_bootstrap_deterministic():
@@ -133,36 +148,6 @@ def test_a_round_of_one_non_monarch_competitor_renders(tmp_path):
     rep = build_report(store, "run-b")
     assert rep["arms"] == ["kimi-k3/api"]
     assert "kimi-k3/api" in render_md(rep)
-
-
-# -- telemetry ----------------------------------------------------------------
-
-def test_telemetry_collect(tmp_path):
-    w = TelemetryWriter(tmp_path / "events.jsonl", "ep1")
-    w.emit("authoring", "turn_start", "2026-08-31T10:00:00Z")
-    w.emit("authoring", "turn_end", "2026-08-31T10:00:10Z",
-           tokens={"input": 500, "output": 50}, cost=0.002)
-    w.emit("authoring", "workflow_saved", "2026-08-31T10:00:11Z")
-    w.emit("execution", "engine_run_start", "2026-08-31T10:00:12Z")
-    w.emit("execution", "step_dispatch", "2026-08-31T10:00:13Z")
-    w.emit("execution", "gate_decision", "2026-08-31T10:00:14Z",
-           decision="refused", reason="scope: gmail.write not granted")
-    w.emit("execution", "step_dispatch", "2026-08-31T10:00:15Z")
-    w.emit("execution", "retry", "2026-08-31T10:00:16Z")
-    w.emit("execution", "engine_run_end", "2026-08-31T10:00:20Z")
-
-    c = collect(read_events(tmp_path / "events.jsonl"))
-    assert c["phases"]["authoring"].turns == 1
-    assert c["phases"]["authoring"].tokens_input == 500
-    assert c["phases"]["authoring"].cost_usd == pytest.approx(0.002)
-    assert c["phases"]["authoring"].wall_clock_s == pytest.approx(10.0)
-    assert c["phases"]["execution"].tool_calls == 2
-    assert c["phases"]["execution"].wall_clock_s == pytest.approx(8.0)
-    assert len(c["gate_refusals"]) == 1
-    assert "scope" in c["gate_refusals"][0]["reason"]
-    assert c["retries"] == 1
-    assert c["workflow_outcome"] == "workflow_saved"
-    assert c["unknown_events"] == []
 
 
 # -- source line: price table + missing cost (T045) ---------------------------

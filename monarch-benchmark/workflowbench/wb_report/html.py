@@ -299,6 +299,11 @@ svg.chart .cb { fill: var(--accent); }
 svg.chart .ce { fill: var(--accent); opacity: 0.28; }
 figure.diagram figcaption { font-size: 13px; color: var(--muted); padding: 10px 18px 14px; border-top: 1px solid var(--line-soft); }
 
+.prov, .source-grading { overflow-wrap: anywhere; }
+.source-grading { margin-block: 1rem; }
+.source-grading summary { cursor: pointer; }
+.source-grading summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
 .callout {
   border: 1px solid var(--line); border-left: 3px solid var(--blue);
   background: var(--blue-wash); border-radius: 8px; padding: 14px 18px;
@@ -462,8 +467,8 @@ def _comparison_table(report: dict) -> str:
                 "no paired comparison to make.</p>")
     headers = ["competitor", "vs baseline", "strict pass diff (pp)", "pass rate ratio",
                "cost / passed ratio",
-               "W", "L", "both", "neither", "pairs", "infra-dropped", "McNemar p",
-               "verdict"]
+               "W", "L", "both", "neither", "pairs", "infra-dropped", "ungraded-dropped",
+               "McNemar p", "verdict"]
     rows = []
     for c in report["comparisons"]:
         diff = c["strict_pass_diff_pp"]
@@ -479,7 +484,7 @@ def _comparison_table(report: dict) -> str:
                _fmt(c["pass_rate_ratio"], "ratio"),
                _fmt(c["cost_per_passed_ratio"], "ratio")]
         row += [_fmt(c["wins"]), _fmt(c["losses"]), _fmt(c["both"]), _fmt(c["neither"]),
-                _fmt(c["pairs"]), _fmt(c["dropped_infra"]),
+                _fmt(c["pairs"]), _fmt(c["dropped_infra"]), _fmt(c.get("dropped_ungraded", 0)),
                 f"{c['mcnemar']['p']:.3f}", c["verdict"]]
         rows.append(row)
     return _table(headers, rows, _source_line_for(report, "comparisons"),
@@ -583,15 +588,14 @@ _TECH_TOC = [("overview", "Overview"), ("success", "Success"), ("cost", "Cost"),
              ("failures", "Failures"), ("provenance", "Provenance")]
 
 
-def render_page(report: dict[str, Any], sortable: bool = True) -> str:
+def render_page(report: dict[str, Any]) -> str:
     """The per-round technical page, in Monarch's design system.
 
     Seven sections, in the order a reader asks the questions: what was compared,
     did it work, what did it cost, how long did it take, what did Monarch
     actually do, what went wrong, and where do these numbers come from. Each is
     built from the already-gated `arms` list; the renderer never reaches the
-    store. `sortable` is accepted for the CLI's --no-sort and is a no-op here:
-    the reference's pages do not sort, and the tables are short enough to read.
+    store. The tables do not sort: they are short enough to read.
     """
     p = report["provenance"]
     has_monarch = bool(report.get("monarch_attempts"))
@@ -630,8 +634,23 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
                        "Every attempt that did not pass, with its reason.",
                        _failures_table(report) + _src(_source_line_for(report, "failures"))))
     parts.append(_part("provenance", f"Part {n + 1:02d} - Repeatability", "Provenance",
-                       "What produced these numbers.", _provenance_body(report)))
+                       "What produced these numbers.", _provenance_body(report) + _grading_details(report)))
     return _shell(f"WorkflowBench {report['run_id']}", toc, hero, "".join(parts))
+
+
+def _grading_details(report: dict) -> str:
+    """Source verdicts stay beside the independently checked collateral result."""
+    blocks = []
+    for episode, item in report.get("grading_evidence", {}).items():
+        if not item.get("details"):
+            continue
+        detail = item["details"]
+        status = "ungraded" if detail.get("ungraded") else "passed" if item["passed"] else "failed"
+        blocks.append(f'<details class="source-grading"><summary>{_esc(item["task_id"])} · {_esc(item["arm"])} · {status}</summary>'
+                      f'<p>Completion: {_esc(item["termination"])}. Grading: {_esc(item["kind"])}.</p>'
+                      f'<p class="source">Evidence: {_esc(item["uri"])}</p>'
+                      f'<pre style="white-space:pre-wrap;overflow-wrap:anywhere">{_esc(json.dumps(detail, ensure_ascii=False, indent=2))}</pre></details>')
+    return '<h3>Grading evidence</h3>' + ''.join(blocks) if blocks else ''
 
 
 def _aggregate_table(summary: dict) -> str:
@@ -667,13 +686,13 @@ def _stratification_table(summary: dict) -> str:
                   "", "Stratification check: does the tier mix match a random draw?")
 
 
-def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
+def render_summary_page(summary: dict[str, Any]) -> str:
     """Two to six rounds on one page, in the same design system.
 
     It reuses the per-round success, cost and time tables, so a number here and
     a number on a round's own page cannot disagree. No paired figure, no McNemar
     and no ratio spanning rounds is rendered - the dictionary has no field for
-    one. `sortable` is accepted for the CLI and is a no-op.
+    one.
     """
     rounds = summary["rounds"]
     toc = _toc_links([(f"round-{i}", r["run_id"]) for i, r in enumerate(rounds, 1)]
@@ -1088,6 +1107,7 @@ def _overview_section(report: dict) -> str:
     lines.append("competitors: " + ", ".join(_esc(a) for a in report["arms"]))
     if p.get("plan"):
         lines.append(f"plan {_esc(p['plan'])} on {_esc(p.get('product') or 'n/a')}")
+    lines.extend(_esc(note) for note in report.get("caveats", []))
     body = f'<p class="over">{"<br>".join(lines)}</p>'
     return body
 

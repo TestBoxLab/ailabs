@@ -108,14 +108,78 @@ function restore(text) { const value = JSON.parse(text); blueprint.graph = value
 function undo() { if (!editHistory.undo.length) return hint('Nothing to undo'); editHistory.redo.push(snapshot()); restore(editHistory.undo.pop()); typing.key = null; updateHistoryButtons(); hint('Undone'); }
 function redo() { if (!editHistory.redo.length) return hint('Nothing to redo'); editHistory.undo.push(snapshot()); restore(editHistory.redo.pop()); typing.key = null; updateHistoryButtons(); hint('Redone'); }
 function updateHistoryButtons() { $('#builder-undo').disabled = !editHistory.undo.length; $('#builder-redo').disabled = !editHistory.redo.length; }
+// Declared above its readers, not beside the code that fills it: markDirty and renderNodes
+// both read `provisional`, and `let` leaves it in the temporal dead zone until its line.
+let provisional = new Set(), heldOperations = [], pendingOperations = [];
 function markDirty() {
   dirty = true;
-  $('#builder-state').textContent = 'Unsaved edits';
+  $('#builder-state').textContent = provisional.size ? 'Unsaved edits · ' + provisional.size + ' provisional' : 'Unsaved edits';
   $('#builder-state').className = 'builder-state dirty arch-only';
   try { localStorage.setItem('ailabs-architecture-draft', JSON.stringify(blueprint)); } catch {}
-  scheduleValidate(); updateRunButton();
+  tellStudioEditor(true); scheduleValidate(); updateRunButton();
 }
-function markSaved(text) { dirty = false; $('#builder-state').textContent = text; $('#builder-state').className = 'builder-state arch-only'; try { localStorage.removeItem('ailabs-architecture-draft'); } catch {} updateRunButton(); }
+function markSaved(text) { dirty = false; provisional = new Set(); $('#builder-state').textContent = text; $('#builder-state').className = 'builder-state arch-only'; try { localStorage.removeItem('ailabs-architecture-draft'); } catch {} tellStudioEditor(false); updateRunButton(); }
+// A person's unsaved edits outrank a model's commit, and the server is the only place
+// that can know both (feature 025, FR-049). Transitions and a slow renewal, not a
+// keystroke: markDirty runs on every character typed.
+let toldEditorAt = 0;
+function tellStudioEditor(isDirty) {
+  const now = Date.now();
+  if (isDirty && now - toldEditorAt < 60000) return;
+  toldEditorAt = isDirty ? now : 0;
+  api('/api/studio/editor', {id: blueprint.id, dirty: isDirty}).catch(() => {});
+}
+
+// ---- Genesis builds here (feature 025, FR-044 to FR-048, FR-055) --------------------
+// An operation arrives on the turn stream and lands in this editor as provisional work:
+// the same draft a person edits by hand, marked so provisional work and a saved revision
+// can never be read for one another (FR-045). Nothing here saves. A save — the person's
+// button, or Genesis's own save tool — commits the whole build as one revision.
+function promptFieldIsBusy(op) {
+  // FR-048: the one field a re-render cannot protect is the one this operation writes to.
+  // Everything else survives, because renderInspector(true) restores value and cursor.
+  const active = document.activeElement;
+  return op.operation === 'set_prompt' && active && active.id === 'node-instructions'
+    && selection.size === 1 && selection.has(op.node);
+}
+function releaseHeldOperations() { const waiting = heldOperations; heldOperations = []; for (const op of waiting) applyOperation(op); }
+window.applyArchitectureOperation = function (value) {
+  const op = value && value.operation;
+  if (!op) return;
+  // Before the editor has finished mounting there is no graph to apply to yet — the
+  // library renders its empty state while the drafts are still loading. Hold the
+  // operations rather than dropping them, or an editor opened a moment too late shows
+  // nothing and the reader is told a build happened that they cannot see.
+  if (!opened) { if (pendingOperations.length < 200) pendingOperations.push(value); return; }
+  if (value.id && blueprint.id && value.id !== blueprint.id) return; // a different architecture than the one on screen
+  if (promptFieldIsBusy(op)) {
+    heldOperations.push(value);
+    hint('Genesis has an edit for this prompt. It applies when you leave the field.');
+    document.activeElement.addEventListener('blur', releaseHeldOperations, {once: true});
+    return;
+  }
+  applyOperation(value);
+};
+function applyOperation(value) {
+  const op = value.operation, nodes = blueprint.graph.nodes, edges = blueprint.graph.edges;
+  commit();                                        // one undo entry per operation, so Undo discards it (FR-055)
+  if (op.operation === 'add_node') {
+    if (!op.node || !op.node.id || byId(op.node.id)) return;
+    nodes.push(structuredClone(op.node)); provisional.add(op.node.id);
+  } else if (op.operation === 'connect') {
+    if (!byId(op.from) || !byId(op.to) || edges.some(e => e.from === op.from && e.to === op.to)) return;
+    edges.push({from: op.from, to: op.to}); provisional.add(op.to);
+  } else if (op.operation === 'set_prompt') {
+    const n = byId(op.node); if (!n) return;
+    n.config = {...(n.config || {}), instructions: op.text}; provisional.add(op.node);
+  } else return;
+  markDirty(); render(); renderInspector(true);
+  // The lab applied the same operation to its own copy and said what it got. Counts that
+  // disagree mean this editor and the build have parted, and a save would commit a graph
+  // nobody saw — say so rather than letting that happen quietly.
+  if (value.nodes !== nodes.length || value.edges !== edges.length)
+    hint('This editor is out of step with what Genesis built. Reload it before saving.');
+}
 
 // ------------------------------------------------------------------ validation
 function scheduleValidate() { clearTimeout(validateTimer); validateTimer = setTimeout(validateNow, 300); }
@@ -208,7 +272,7 @@ function nodeTools(n) {
 function renderNodes() {
   const nodes = blueprint.graph.nodes;
   const focused = document.activeElement?.closest?.('#builder-nodes [data-node]')?.dataset.node;
-  $('#builder-nodes').innerHTML = nodes.map(n => '<div class="bp-node type-' + esc(n.type) + (selection.has(n.id) ? ' selected' : '') + (live[n.id] ? ' live-' + esc(live[n.id]) : '') + (nodeProblems(n.id).length ? ' invalid' : '') + '" data-node="' + esc(n.id) + '" tabindex="0" role="button" aria-label="' + esc(n.label) + ', ' + esc(STEP_TYPES[n.type].name) + (nodeProblems(n.id).length ? ', ' + nodeProblems(n.id).length + ' problems' : '') + '">'
+  $('#builder-nodes').innerHTML = nodes.map(n => '<div class="bp-node type-' + esc(n.type) + (selection.has(n.id) ? ' selected' : '') + (live[n.id] ? ' live-' + esc(live[n.id]) : '') + (provisional.has(n.id) ? ' provisional' : '') + (nodeProblems(n.id).length ? ' invalid' : '') + '" data-node="' + esc(n.id) + '" tabindex="0" role="button" aria-label="' + esc(n.label) + ', ' + esc(STEP_TYPES[n.type].name) + (provisional.has(n.id) ? ', provisional, not saved' : '') + (nodeProblems(n.id).length ? ', ' + nodeProblems(n.id).length + ' problems' : '') + '">'
     + (!['input', 'product-graph'].includes(n.type) ? '<button type="button" class="bp-port in" data-in="' + esc(n.id) + '" aria-label="Connect into ' + esc(n.label) + '" title="Drag to a step that should feed this one" tabindex="-1"></button>' : '')
     + '<div class="bp-head">' + stepIcon(n.type) + '<div class="bp-title"><strong>' + esc(n.label) + '</strong><small>' + esc(STEP_TYPES[n.type].name) + '</small></div>' + nodeBadge(n) + '</div>'
     + nodeBody(n) + nodeTools(n)
@@ -968,6 +1032,7 @@ $('#open-setup').onclick = async () => {
       if (cached) { markDirty(); hint('Restored the unsaved draft from this browser'); }
       opened = true;
     } else { renderVersions(); renderNodes(); fitView(); }
+    if (pendingOperations.length) { const waiting = pendingOperations; pendingOperations = []; for (const v of waiting) window.applyArchitectureOperation(v); }
     if (typeof job !== 'undefined' && job) builderLive(job, events);
   } catch (e) { console.error(e); toast('The editor could not load. Return to runs and try again. '+e.message); }
   finally {$('#open-setup').disabled=false;$('#blueprint-new').disabled=false;}

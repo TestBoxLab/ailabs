@@ -140,12 +140,11 @@ def failure_buckets_tool(genesis, payload) -> dict:
 
 
 def report_tool(genesis, payload) -> dict:
-    """The run report as data (`report_data.run_report`), without the model narrative:
-    the grade, verdict, code findings, figures, failures, tasks, caveats and method."""
+    """The same complete report the person reads, including authored analysis and progress."""
     from wb_studio.report_data import run_report
     job = _job(genesis, payload)
     found = run_report(genesis.studio, job['id'])
-    data = {k: v for k, v in found.items() if k not in ('narrative', 'model_findings')}
+    data = found
     runs = [job['id']] + ([found['baseline_source']['run']] if found.get('baseline_source') else [])
     return _tagged(data, runs, internal=True)
 

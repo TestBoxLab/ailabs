@@ -68,7 +68,8 @@ def test_recipe_authoring_is_refused_until_m5_even_with_yes(tmp_path, monkeypatc
     assert approvals.MONARCH_REASON in capsys.readouterr().err
 
 
-def test_budget_status_uses_durable_ledger_and_discloses_the_capabilities(tmp_path, capsys):
+def test_budget_status_uses_durable_ledger_and_discloses_the_capabilities(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(approvals, "configured_harnesses", lambda: [])
     from wb_orchestrator.budget import BudgetLedger
     ledger = tmp_path / "budget.sqlite3"
     BudgetLedger(ledger).reserve("held", "75", scope_id="exp-1")

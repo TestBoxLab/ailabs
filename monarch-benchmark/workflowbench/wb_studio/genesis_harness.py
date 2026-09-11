@@ -82,8 +82,9 @@ def request_bounds(provider, input_tokens, remaining):
     The output cap is what the remainder can pay for after the input, at most OUTPUT_CAP; Gemini's
     thinking gets what is left after that, up to its allowance, so a cheap step is never refused
     for thinking it cannot afford (R11). A request that cannot afford OUTPUT_FLOOR is refused in words."""
-    rate_in = Decimal(str(max(provider.price_in, provider.price_cache_write or 0)))
-    price_out = Decimal(str(provider.price_out))
+    input_rate, _, write_rate, output_rate = providers.context_rates(provider, input_tokens)
+    rate_in = Decimal(str(max(input_rate, write_rate)))
+    price_out = Decimal(str(output_rate))
     remaining = Decimal(remaining)
     input_cost = _money(Decimal(input_tokens) * rate_in / 1_000_000)
     room = OUTPUT_CAP + THINKING_ALLOWANCE.get(provider.adapter, 0) if price_out <= 0 else int((remaining - input_cost) * 1_000_000 / price_out)
@@ -151,11 +152,38 @@ def prompt_text(genesis, turn):
     return system + '\n\n' + brief
 
 
-def run_tool(genesis, name, args):
+def mission_receipt(action, result):
+    """Small server-produced facts remain readable when a tool's full trace is paged."""
+    if not isinstance(result, dict) or result.get('error'):
+        return None
+    if action in ('read_run','measures','failure_buckets'):
+        run=(result.get('job') or {}).get('id') if action=='read_run' else result.get('run')
+        if isinstance(run,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,80}',run):
+            return {'ok':True,'run':run}
+    if action=='edit_architecture' and result.get('saved') is False and isinstance(result.get('operation'),dict):
+        return {'ok':True,'provisional':True}
+    if action=='save_architecture' and isinstance(result.get('id'),str) and type(result.get('revision')) is int:
+        return {'ok':True,'architecture':result['id'],'revision':result['revision']}
+    return None
+
+
+def run_tool(genesis, name, args, turn=None):
     """One lab action for the model. A refusal comes back as a sentence it can act on (R1); anything
     else is a lab fault, named without its internals and written to the activity record."""
     try:
-        return genesis.tool(name, args or {})
+        from wb_studio.genesis_reports import allowed_tools
+        current = genesis.read('turns', turn) if turn else None
+        permitted = allowed_tools(current)
+        if permitted is not None and name not in permitted:
+            return {'error': 'This report worker may only read its assigned evidence and write its assigned report artifact.'}
+        if current and current.get('purpose') == 'Genesis mission':
+            card=genesis.read('cards',current['card'])
+            mission=card.get('mission') or {}
+            if (mission.get('status') in ('stopped','completed') or
+                    mission.get('generation') != current.get('mission_generation') or
+                    (card.get('work') or {}).get('turn') != current['id']):
+                return {'error': 'This mission worker was stopped or superseded. End this turn.'}
+        return genesis.tool(name, args or {}, turn)
     except KeyError as exc:
         return {'error': 'Missing or wrong field ' + str(exc) + ' for ' + name + '.'}
     except (ValueError, FileNotFoundError) as exc:
@@ -201,7 +229,8 @@ def start_turn(genesis, turn):
     if context is not None:
         context.turn = identity  # tools called from this thread know their turn (S2)
     spent = Decimal('0'); last_reason = None; request_id = None; dispatched = settled = False
-    defs = tool_defs(); tools = shaped(defs, provider.adapter)
+    from wb_studio.genesis_reports import allowed_tools
+    defs = tool_defs(allowed_tools(turn)); tools = shaped(defs, provider.adapter)
     pending = []
 
     def on_text(text):
@@ -213,7 +242,20 @@ def start_turn(genesis, turn):
         if pending:
             genesis.event(identity, 'text_delta', text=''.join(pending)); pending.clear()
 
+    def stopped():
+        if stopper.stopped.is_set() or bool(genesis.read('turns', identity).get('stop_requested')):
+            return True
+        if turn.get('purpose')=='Genesis mission':
+            card=genesis.read('cards',turn['card'])
+            mission=card.get('mission') or {}
+            return (mission.get('status') in ('stopped','completed') or
+                    mission.get('generation')!=turn.get('mission_generation') or
+                    (card.get('work') or {}).get('turn')!=identity)
+        return False
+
     try:
+        if stopped():
+            raise Stopped()
         adapter = ADAPTERS[provider.adapter](provider, tools, REQUEST_TIMEOUT)
         effort = resolve_effort(provider, turn.get('effort') or 'default')
         if effort is not None and hasattr(adapter, 'effort'):
@@ -226,11 +268,11 @@ def start_turn(genesis, turn):
         genesis.event(identity, 'harness_started', harness=HARNESS, model=provider.model_id, tools=len(defs))
         deadline = time.monotonic() + TURN_SECONDS
         for number in range(1, REQUEST_LIMIT + 1):
-            if stopper.stopped.is_set():
+            if stopped():
                 raise Stopped()
             if time.monotonic() > deadline:
                 raise GenesisRefused(f'Genesis ran past {TURN_SECONDS // 60} minutes in one turn')
-            dispatched = settled = False
+            request_id = None; dispatched = settled = False
             # SDK objects (Gemini) serialise through model_dump. An image is billed by tile, not by
             # the length of its base64, so it is counted once instead of by its characters — left in,
             # a single screenshot would reserve the whole turn's allowance and refuse itself.
@@ -241,10 +283,13 @@ def start_turn(genesis, turn):
             adapter.max_output = max_output
             if provider.adapter == 'gemini':
                 adapter.thinking_budget = thinking
-            request_id = scope + '-' + str(number)
-            studio.ledger.reserve(request_id, ceiling, scope_id=scope, scope_limit_usd=maximum,
+            reservation = scope + '-' + str(number)
+            studio.ledger.reserve(reservation, ceiling, scope_id=scope, scope_limit_usd=maximum,
                                   metadata={'purpose': 'Genesis', 'provider': provider.key, 'model': provider.model_id, 'harness': HARNESS})
+            request_id = reservation   # only a hold that exists is ours to answer for
             with studio.runtime.provider(provider.family or provider.adapter, timeout=REQUEST_TIMEOUT, tokens=input_tokens + max_output + thinking):
+                if stopped():
+                    raise Stopped()
                 studio.ledger.claim(request_id); dispatched = True
                 genesis.event(identity, 'model_started', request=number, model=provider.model_id, max_output=max_output, ceiling_usd=str(ceiling))
                 try:
@@ -270,22 +315,31 @@ def start_turn(genesis, turn):
                     genesis.event(identity, 'text_delta', text=text)  # an adapter that does not stream
                 if not text.strip() or result.get('stop_reason') not in NORMAL_STOPS:
                     raise GenesisRefused('The model stopped without a complete answer' + (' (stop reason: ' + str(result['stop_reason']) + ')' if result.get('stop_reason') else ''))
-                if stopper.stopped.is_set():
+                if stopped():
                     raise Stopped()
                 genesis.event(identity, 'completed', message='Genesis finished this turn.')
                 break
             landing = _landing(REQUEST_LIMIT - number)
             for call in calls:
+                if stopped():
+                    raise Stopped()
                 if call.get('parse_error'):
                     value = {'error': 'The tool call arguments were not a JSON object: ' + str(call['parse_error'])}
                     genesis.event(identity, 'tool_started', action=call.get('name'), payload='')
                 else:
                     genesis.event(identity, 'tool_started', action=call['name'], payload=summary(call.get('args') or {}))
-                    value = run_tool(genesis, call['name'], call.get('args') or {})
+                    value = run_tool(genesis, call['name'], call.get('args') or {}, identity)
+                voice = {}
+                receipt=mission_receipt(call.get('name'),value)
+                if receipt is not None:
+                    voice['receipt']=receipt
+                if turn.get('input_mode') == 'voice':
+                    from wb_studio.genesis_voice import voice_facts
+                    voice['voice_facts'] = voice_facts(call.get('name'), value)
                 text = json.dumps(value, ensure_ascii=False, default=str)
                 if len(text) > RESULT_CHARS:
                     text = text[:RESULT_CHARS] + ' ...[cut by the lab at ' + f'{RESULT_CHARS:,}' + ' characters; ask for a smaller page]'
-                genesis.event(identity, 'tool_completed', action=call.get('name'), result=summary(text), detail=summary(text, DETAIL_CHARS))
+                genesis.event(identity, 'tool_completed', action=call.get('name'), result=summary(text), detail=summary(text, DETAIL_CHARS), **voice)
                 adapter.append_tool_result(messages, call, text + landing)
                 landing = ''
         else:
@@ -298,10 +352,9 @@ def start_turn(genesis, turn):
             except Exception:
                 pass  # citation bookkeeping never fails a finished turn
     except Stopped:
-        pass
+        if genesis.read('turns', identity).get('status') == 'running':
+            genesis.event(identity, 'failed', message='Stopped by a person')
     except Exception as exc:
-        if dispatched and not settled:
-            studio.ledger.settle(request_id, None, outcome='error')
         flush()
         if isinstance(exc, BudgetExceeded):
             last_reason = f"The ledger refused the request ({exc}): ${maximum - spent:.2f} left of the turn's ${maximum:.2f}."
@@ -315,8 +368,14 @@ def start_turn(genesis, turn):
         genesis.event(identity, 'request_error', message='Request stopped. Any uncertain charge remains reserved.', error_type=type(exc).__name__, reason=last_reason)
         _save_partial(genesis, turn, last_reason)
         if not stopper.stopped.is_set():
-            genesis.event(identity, 'failed', message='Genesis could not complete this turn. No experiment was launched.', error_type=type(exc).__name__, reason=last_reason)
+            genesis.event(identity, 'failed', message='Genesis could not complete this turn. Inspect the recorded actions and linked experiments before retrying.', error_type=type(exc).__name__, reason=last_reason)
     finally:
+        if request_id and not settled:
+            # A request that was never claimed sent nothing, so it cost nothing; left unsettled it
+            # would hold its ceiling of the week for ever, since `finish_run` releases only
+            # unallocated capacity and only a named person can release an unclaimed hold. A
+            # dispatched request keeps its whole maximum held: its billing is unknown, not zero.
+            studio.ledger.settle(request_id, None if dispatched else '0', outcome='error' if dispatched else 'cancelled')
         if context is not None:
             context.turn = None
         genesis.active.pop(identity, None)

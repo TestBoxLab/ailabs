@@ -22,6 +22,14 @@ pricing. A successor price configuration and approver defaults are verified
 offline; the original result and unknown-cost holds remain intact. Full-suite
 and focused follow-up outcomes are recorded in that same section.
 
+
+11 September Genesis voice continuation: [~] local GPT-Live-1 WebRTC connection,
+server delegation, shared conversation/workspace context, cancellation and voice
+controls implemented. Offline evidence and remaining scope are recorded in
+[feature 025](../specs/025-genesis-voice-live-build/implementation-2026-09-11.md).
+[!] Live audio validation awaits existing billing reconciliation; no paid session,
+push or deployment was performed. The complete feature remains in progress.
+
 ---
 
 ## 1. Test methodology
@@ -365,3 +373,39 @@ satisfying it:
   zero tells a reader the round was cheap while the ledger is still holding the money.
 
 Frente C is closed for the simulated product. Nothing here changes §1.
+
+
+## 11 September 2026 — Genesis report authoring (feature 027)
+
+Lucas requested a concise decision-focused opening with full analysis, stronger
+explanations of Monarch's winning/losing behavior, explicit error buckets and
+percentage slices. Genesis now owns a local report workflow: complete analysis
+in bounded native subagent turns, authored synthesis, separate review, one repair
+and re-review, then internal Studio publication. Role tools, source coverage,
+exact review hashes, spending admission and interrupted-work recovery are enforced.
+Code supplies chart counts/denominators and exact attempt drilldowns; writing
+procedures adapt Humanizer and statistical-reporting guidance.
+
+Local validation: 176 focused offline checks passed, including a 106-attempt
+native-loop fixture with provider doubles; run/round browser checks passed at
+desktop/narrow widths and both themes. Live model writing quality and completion
+cost remain unmeasured. The existing automatic ceiling is unchanged; insufficient
+startup allocations are refused before spending. No deployment or paid model
+call was made for this implementation. Evidence: specs/027-genesis-report-authoring/validation.md.
+
+
+## 11 September 2026 — Live workflows and performance (feature 028)
+
+Lucas requested streamed node workflows, visible outputs and stronger per-model
+metrics, then an Impeccable UI/UX review and polish. Activity now has persistent
+model lanes, structured previews, finite delivery animation, active-task navigation
+and inspectable evidence. Shared live/permanent metrics cover successful and failed
+completion time, median/p90, cost per success, reliability, tool activity, phase
+timing and unintended-change coverage. Unknowns remain explicit.
+
+Impeccable independent reviews informed a workflow-first responsive layout,
+44px main controls, clearer preview labels, status announcements and stable focus.
+87 focused Python checks, projection checks and the full offline browser scenario
+passed. Desktop, phone and dark screenshots were inspected. No paid execution,
+deployment, frozen task change or historical regrading occurred. Evidence and
+limits: specs/028-live-workflow-metrics/implementation.md.

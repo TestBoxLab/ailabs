@@ -158,12 +158,19 @@ window.Charts = (() => {
     for (const group of Object.values(points.reduce((acc, p) => { if (p.link) (acc[p.link] = acc[p.link] || []).push(p); return acc; }, {}))) {
       if (group.length > 1) el('path', { d: group.sort((a, b) => a.x - b.x).map((p, i) => (i ? 'L' : 'M') + x(p.x) + ',' + y(p.y)).join(' '), class: 'link' }, f.plot);
     }
+    // Labels dodge each other: setups that cost about the same and pass about as
+    // often land on the same spot, and stacked names read as neither.
+    const taken = [];
     for (const p of points) {
       const g = interactive(el('g', { class: 'point ' + seriesClass(p) }, f.plot), p);
       if (p.low !== undefined && p.low !== null) el('line', { x1: x(p.x), x2: x(p.x), y1: y(p.low), y2: y(p.high), class: 'whisker' }, g);
       el('rect', { x: x(p.x) - 5, y: y(p.y) - 5, width: 10, height: 10, class: 'mark' }, g);
-      const flip = x(p.x) > f.width * .7;
-      el('text', { x: x(p.x) + (flip ? -9 : 9), y: y(p.y) - 8, 'text-anchor': flip ? 'end' : 'start', class: 'point-label' }, g, p.label);
+      const px = x(p.x), py = y(p.y), flip = px > f.width * .7;
+      const width = String(p.label || '').length * 7.2, x0 = flip ? px - 9 - width : px + 9;
+      const free = ly => !taken.some(t => x0 < t.x1 && t.x0 < x0 + width && Math.abs(t.y - ly) < 13);
+      const ly = [-8, -22, 14, -36, 28].map(d => py + d).find(free) ?? py - 8;
+      taken.push({ x0, x1: x0 + width, y: ly });
+      el('text', { x: px + (flip ? -9 : 9), y: ly, 'text-anchor': flip ? 'end' : 'start', class: 'point-label' }, g, p.label);
     }
     if (!points.length) el('text', { x: f.width / 2, y: f.height / 2, 'text-anchor': 'middle', class: 'empty-mark' }, f.plot, options.empty || 'No costed attempts');
     return f.figure;

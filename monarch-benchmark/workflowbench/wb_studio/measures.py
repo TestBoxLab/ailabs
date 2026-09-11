@@ -100,15 +100,20 @@ def by_setup(results):
     return dict(groups)
 
 
+def is_ungraded(result):
+    return bool(result.get("ungraded")) or "grading=ungraded" in (result.get("flags") or [])
+
+
 def evaluated(rows):
-    return [r for r in rows if not is_infrastructure(r)]
+    return [r for r in rows if not is_infrastructure(r) and not is_ungraded(r)]
 
 
 def pass_rate(rows) -> dict:
     valid = evaluated(rows)
     passed = sum(bool(r.get("passed")) for r in valid)
     low, high = wilson(passed, len(valid))
-    return {"passed": passed, "attempts": len(valid), "infrastructure": len(rows) - len(valid),
+    return {"passed": passed, "attempts": len(valid), "infrastructure": sum(is_infrastructure(r) for r in rows),
+            "ungraded": sum(is_ungraded(r) for r in rows),
             "rate": passed / len(valid) if valid else None, "low": low, "high": high}
 
 
@@ -460,7 +465,17 @@ def curve(rows, comparator_rows, max_n: int | None = None) -> dict:
 
 
 def time(rows) -> dict:
-    seconds = sorted(float(r.get("seconds") or 0) for r in evaluated(rows))
+    seconds = []
+    for row in evaluated(rows):
+        if isinstance(row.get("seconds"), bool):
+            continue
+        try:
+            value = float(row.get("seconds"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            seconds.append(value)
+    seconds.sort()
     if not seconds:
         return {"attempts": 0, "median": None, "p90": None, "max": None, "values": []}
     def quantile(q):

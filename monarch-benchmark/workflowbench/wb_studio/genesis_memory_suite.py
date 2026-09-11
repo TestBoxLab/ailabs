@@ -1,28 +1,27 @@
-"""A memory that proves itself (feature 022, design section 10, points 1, 2, 3, 7 and 10).
+"""A memory that proves itself (feature 022, design section 10, points 1, 2, 3, 7, 10).
 
 Five things, none of which calls a model by itself:
 
-1. **Touches from tools.** A record read through a tool counts as a citation, not only a tag in
-   the final answer, so probation and decay measure use. `ON_TURN` reads the turn's tool events
-   and touches what they name. The mapping, from the events the broker records:
-   `read_run {id}` to `[rec:run:<id>]`; every hit of `record_search` to its own tag (the search
-   result carries it); `library_read {id}` to `[rec:library:<id>]`; `save_research` to
-   `[rec:card:<id>]` of the card it wrote. Nothing else is a touch.
+1. **Touches from tools.** A record read through a tool counts as a citation, not
+   only a tag in the final answer, so probation and decay measure use. `ON_TURN`
+   maps the turn's tool events: `read_run {id}` -> `[rec:run:<id>]`; every hit of
+   `record_search` -> its own tag; `library_read {id}` -> `[rec:library:<id>]`;
+   `save_research` -> `[rec:card:<id>]`. Nothing else is a touch.
 2. **Consolidation as data.** The nightly turn answers with operations, not prose:
    `{"ops": [{"op": "add"|"replace"|"remove", "section"?, "text"?, "old"?, "new"?,
-   "record": "kind:id"}], "contradictions": ["..."]}`. The code validates them and applies them
-   in order through `memory.add`, `memory.replace` and `memory.remove`, stopping at the first
-   refusal (the budget or the injection scan), and writes what applied and what was refused to
-   the activity record as `consolidated`. The contradictions go onto the day's brief card.
-3. **Nightly self-check.** `check_known` re-reads three random Known entries against their
-   records; an entry whose record is gone is removed with the history op `self-check`. A `human`
-   tag always holds, and so does a `run` tag: a run lives in the Studio's job store, not in
-   Genesis's, so its absence is not proof the entry is wrong.
-4. **Track record.** `track` computes `TRACK.md` from the cards, the turns and the activity
-   record — hypotheses and their outcomes, plans launched and their settled cost, and the Brier
-   score of Genesis's priors — and `PROMPT` injects it after the core memory every turn.
-5. **What was forgotten.** `what_changed` reads last night's promotions, drops, stale marks and
-   removals out of the memory history, with the reason for each.
+   "record": "kind:id"}], "contradictions": [...]}`. They are validated and applied
+   in order, stopping at the first refusal (budget or injection scan); what applied
+   and what was refused goes to the activity record as `consolidated`, and the
+   contradictions onto the day's brief card.
+3. **Nightly self-check.** `check_known` re-reads three random Known entries against
+   their records; one whose record is gone is removed with history op `self-check`.
+   A `human` tag always holds, and so does a `run` tag -- a run lives in the Studio's
+   job store, so its absence is not proof the entry is wrong.
+4. **Track record.** `track` computes `TRACK.md` from cards, turns and the activity
+   record (hypotheses and outcomes, plans launched and their settled cost, the Brier
+   score of Genesis's priors); `PROMPT` injects it after the core memory every turn.
+5. **What was forgotten.** `what_changed` reads last night's promotions, drops, stale
+   marks and removals out of the memory history, with the reason for each.
 """
 from __future__ import annotations
 

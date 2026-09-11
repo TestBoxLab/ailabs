@@ -198,9 +198,14 @@ class Studio:
         self.lock = threading.RLock()
         self._event_counts: dict[str, tuple[int, int]] = {}
         self.cancelled = {}
+        # What a browser has open with unsaved edits, so a model's commit cannot land on
+        # top of a person's typing (feature 025, FR-049). In memory on purpose: it is a
+        # fact about right now, and a Studio that restarts has no open editors.
+        self.editors: dict[str, dict] = {}
         self.token = secrets.token_urlsafe(32)
         from wb_studio.genesis import Genesis
         self.genesis = Genesis(self)
+        self.voice = None  # Created lazily; ordinary Studio startup never opens a voice connection.
         from wb_studio.scheduler import Scheduler
         self.scheduler = Scheduler(self, self.directory / "genesis" / "schedule.json")
         self.scheduler.discover()
@@ -705,42 +710,33 @@ class Studio:
         return LiveArm(self, job["id"], arm["id"], task_id, cancel, maximum)
 
     def schedule_narrative(self, identity):
-        """Every finished run gets its interpretation without a manual step, paid
-        from the weekly ledger under the per-run ceiling. When it cannot run, the
-        reason is recorded so the report says "Analysis pending" and why."""
-        from wb_studio.paid import credential_status
+        """Start Genesis's complete report cycle within the existing automatic ceiling."""
+        from wb_studio.genesis_reports import start, status
         folder = self.directory / identity
         pending = folder / "analysis.pending.json"
+        if status(self.genesis, {'run': identity})['stage'] != 'none':
+            return  # completed, in flight or stopped: never replay paid work implicitly
+        # Preserve historical interpretations; author_report can explicitly create
+        # the first reviewed report for such a run when requested.
         if (folder / "analysis.json").exists():
             return
         job = self.job(identity)
         arms = job["settings"].get("arms") or [{"id": m, "kind": "runner"} for m in job["settings"]["models"]]
         ceiling = self.analysis_ceiling
-        # `askable` says whether a person could still ask for the reading by hand.
-        # Turning the automatic pass off is a choice about spending, not a wall:
-        # `review` pays from the run's own ceiling, so the button stays.
         if all(a.get("kind") == "scripted" or a["id"] in ("oracle", "sloppy", "null") for a in arms):
             return write_json(pending, {"reason": "Scripted checks only; there is nothing to interpret.", "ceiling_usd": str(ceiling), "askable": False})
         if ceiling <= 0:
-            return write_json(pending, {"reason": "The automatic reading is off for this workspace (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling), "askable": True})
-        if self.gateway_factory is None and not credential_status()["configured"]:
-            return write_json(pending, {"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": str(ceiling), "askable": False})
-        available = Decimal(str(self.budget().get("available", "0")))
-        if available < ceiling:
-            short = ceiling - available
-            return write_json(pending, {"reason": f"The weekly ledger cannot cover the ${ceiling:.2f} analysis ceiling; ${short:.2f} short.",
-                                        "shortfall_usd": str(short), "ceiling_usd": str(ceiling), "askable": False})
-        write_json(pending, {"reason": "The analysis was dispatched and has not returned yet.", "ceiling_usd": str(ceiling), "askable": False})
-        threading.Thread(target=self._narrative, args=(identity, ceiling), daemon=True).start()
+            return write_json(pending, {"reason": "Automatic report authoring is off (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling), "askable": True})
+        try:
+            result = start(self.genesis, {'run': identity, 'maximum_usd': str(ceiling)})
+            write_json(pending, {"reason": result.get('reason'), "ceiling_usd": str(ceiling), "askable": False})
+        except (ValueError, OSError) as exc:
+            write_json(pending, {"reason": str(exc), "ceiling_usd": str(ceiling), "askable": "no recorded attempts" not in str(exc)})
 
     def _narrative(self, identity, ceiling):
-        from wb_studio.analysis import review
-        folder = self.directory / identity
-        try:
-            review(self, identity, maximum_usd=ceiling)
-            (folder / "analysis.pending.json").unlink(missing_ok=True)
-        except ValueError as exc:
-            write_json(folder / "analysis.pending.json", {"reason": str(exc), "ceiling_usd": str(ceiling)})
+        """Compatibility entry point; new readings use Genesis's reviewed workflow."""
+        from wb_studio.genesis_reports import start
+        return start(self.genesis, {'run': identity, 'maximum_usd': str(ceiling)})
 
     def execute(self, identity):
         if self.coordinator is not None:
@@ -948,6 +944,13 @@ def handler(studio):
                 not write or secrets.compare_digest(self.headers.get("X-Studio-Token") or "", studio.token)
                 or self.person() is not None)
 
+        def voice_service(self):
+            with studio.lock:
+                if studio.voice is None:
+                    from wb_studio.genesis_voice import VoiceSessions
+                    studio.voice = VoiceSessions(studio.genesis)
+                return studio.voice
+
         def person(self):
             """The person named by the X-Person-Key header, or None (feature 022, lane B)."""
             try:
@@ -1087,6 +1090,16 @@ def handler(studio):
                 return self.send_json({"error": "Origin refused"}, 403)
             url = urlsplit(self.path)
             try:
+                if url.path == '/api/genesis/voice':
+                    return self.send_json(self.voice_service().availability())
+                voice_match = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)', url.path)
+                if voice_match:
+                    person = self.person()
+                    ok, why = studio.genesis.access.may_write(person)
+                    if not ok:
+                        return self.send_json({'error': why}, 403)
+                    who = 'human:' + person['name'] if person else 'human:studio'
+                    return self.send_json(self.voice_service().status(voice_match[1], who))
                 diagnostics_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/diagnostics", url.path)
                 if diagnostics_match:
                     from wb_studio.failure_analysis import analysis
@@ -1345,6 +1358,8 @@ def handler(studio):
                 self.send_static(url.path)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
             except (ValueError, FileNotFoundError) as exc:
                 # The message stays generic for the browser; the server log keeps the cause.
                 print(f"studio GET {url.path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -1413,6 +1428,12 @@ def handler(studio):
                 # audio bytes. Same origin, so `connect-src 'self'` is untouched and no
                 # API key or ephemeral token is ever in the page (feature 024, stage S6).
                 from wb_studio import voice_stt
+                person = self.person()
+                ok, why = studio.genesis.access.may_write(person)
+                if not ok:
+                    return self.send_json({'error': why}, 403)
+                if studio.genesis.autonomy.read()['paused']:
+                    return self.send_json({'error': 'Genesis is paused. Resume it before transcribing.'}, 400)
                 length = int(self.headers.get('Content-Length') or 0)
                 if not 0 < length <= voice_stt.MAX_BYTES:
                     return self.send_json({'error': 'Send one audio clip, up to '
@@ -1421,7 +1442,8 @@ def handler(studio):
                 try:
                     found = voice_stt.transcribe(studio, audio,
                                                  self.headers.get('Content-Type') or '',
-                                                 self.headers.get('X-Clip-Seconds'))
+                                                 self.headers.get('X-Clip-Seconds'),
+                                                 by='human:' + person['name'] if person else 'human:studio')
                 except voice_stt.Refused as exc:
                     return self.send_json({'error': str(exc)}, 400)
                 except Exception as exc:
@@ -1457,6 +1479,18 @@ def handler(studio):
                         if 'envelope_usd' in payload: allowances.set_limit(studio,'genesis',payload['envelope_usd'])
                         out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out)
                         return self.send_json({**out,'allowance':allowances.state(studio,'genesis')})
+                if self.path == '/api/genesis/voice/sessions':
+                    caller = self.person()
+                    who = 'human:' + caller['name'] if caller else 'human:studio'
+                    return self.send_json(self.voice_service().start(payload, who), 201)
+                voice_action = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)/(close|context)', self.path)
+                if voice_action:
+                    caller = self.person()
+                    who = 'human:' + caller['name'] if caller else 'human:studio'
+                    service = self.voice_service()
+                    if voice_action[2] == 'close':
+                        return self.send_json(service.close(voice_action[1], who))
+                    return self.send_json(service.context(voice_action[1], payload, who))
                 if self.path == '/api/genesis/chat': return self.send_json(studio.genesis.chat(payload),201)
                 schedule_run=re.fullmatch(r'/api/genesis/schedule/([a-z0-9-]+)/run',self.path)
                 if schedule_run: return self.send_json(studio.scheduler.run(schedule_run[1]))
@@ -1514,6 +1548,13 @@ def handler(studio):
                 if self.path == "/api/blueprints/publish":
                     from wb_studio.blueprints import publish
                     return self.send_json(publish(studio, payload), 201)
+                if self.path == "/api/studio/editor":
+                    # The open editor says whether it is holding unsaved edits. Only Genesis
+                    # reads it, and only to refuse its own commit; it grants nothing.
+                    with studio.lock:
+                        studio.editors["architecture"] = {"id": payload.get("id"), "dirty": bool(payload.get("dirty")),
+                                                          "at": time.time()}
+                    return self.send_json({"recorded": True})
                 if self.path == "/api/product-graphs/draft":
                     from wb_studio.product_graphs import save_draft as save_graph_draft
                     return self.send_json(save_graph_draft(studio, payload), 201)
@@ -1556,9 +1597,9 @@ def handler(studio):
                     return self.send_json(save_setup(studio, payload), 201)
                 analyze = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/analyze", self.path)
                 if analyze:
-                    from wb_studio.analysis import review
-                    # Asking by hand is asking again: a reading that failed is re-dispatched.
-                    return self.send_json(review(studio, analyze[1], retry=True))
+                    from wb_studio.genesis_reports import start
+                    return self.send_json(start(studio.genesis, {'run': analyze[1], 'retry': True,
+                        'maximum_usd': payload.get('maximum_usd', str(studio.analysis_ceiling))}))
                 if self.path == "/api/bare-coverage":
                     from wb_studio.bare_coverage import coverage
                     return self.send_json(coverage(studio, payload))
@@ -1568,6 +1609,8 @@ def handler(studio):
                 if match:
                     return self.send_json(getattr(studio, match[2])(match[1]))
                 return self.send_json({"error": "Not found"}, 404)
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
             except BudgetExceeded as exc:
                 self.send_json({"error": str(exc)}, 409)
             except (ValueError, TypeError, KeyError, FileNotFoundError, ApprovalError) as exc:

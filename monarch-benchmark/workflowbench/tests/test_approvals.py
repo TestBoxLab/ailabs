@@ -260,7 +260,7 @@ def test_resume_of_a_paid_run_needs_the_operator_and_keeps_the_ledger(site, tmp_
 # -- capability checks: what may launch today -------------------------------------------
 
 def test_the_capability_matrix_names_the_pending_milestones():
-    assert approvals.capabilities() == {"api": None, "monarch": approvals.MONARCH_REASON,
+    assert approvals.capabilities(harnesses=[]) == {"api": None, "monarch": approvals.MONARCH_REASON,
                                         "native": approvals.NATIVE_REASON}
     assert approvals.MONARCH_REASON == "Monarch instance not verified: milestone M5"
     assert approvals.NATIVE_REASON == "native runtime not verified: milestone M7"

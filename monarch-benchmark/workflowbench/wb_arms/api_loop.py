@@ -173,16 +173,22 @@ def images_of(images) -> list[tuple[str, str]]:
     return out
 
 
+def _require_key(provider: Provider) -> str:
+    """The provider's key, or refuse the attempt before any transport is built."""
+    key = providers.api_key(provider)
+    if not key:
+        raise InfraError("infra:harness_crash", f"{provider.key_env} not set",
+                         retryable=False)
+    return key
+
+
 class _OpenAIAdapter:
     """Chat-completions transport for glm/kimi/fireworks (and the test mock)."""
 
     def __init__(self, provider: Provider, tools: list[dict], timeout: float = 120.0):
         import openai
         self._openai = openai
-        key = providers.api_key(provider)
-        if not key:
-            raise InfraError("infra:harness_crash", f"{provider.key_env} not set",
-                             retryable=False)
+        key = _require_key(provider)
         self.provider = provider
         self.tools = tools
         self.client = openai.OpenAI(api_key=key, base_url=provider.base_url,
@@ -286,10 +292,7 @@ class _GeminiAdapter:
     def __init__(self, provider: Provider, tools: list[dict], timeout: float = 120.0):
         from google import genai
         from google.genai import types, errors
-        key = providers.api_key(provider)
-        if not key:
-            raise InfraError("infra:harness_crash", f"{provider.key_env} not set",
-                             retryable=False)
+        key = _require_key(provider)
         self.provider = provider
         self.types, self.errors = types, errors
         self.client = genai.Client(api_key=key,
@@ -373,10 +376,7 @@ class _OpenAIResponsesAdapter:
     def __init__(self, provider: Provider, tools: list[dict], timeout: float = 120.0):
         import openai
         self._openai = openai
-        key = providers.api_key(provider)
-        if not key:
-            raise InfraError("infra:harness_crash", f"{provider.key_env} not set",
-                             retryable=False)
+        key = _require_key(provider)
         self.provider = provider
         self.tools = tools
         self.client = openai.OpenAI(api_key=key, base_url=provider.base_url,
@@ -456,10 +456,7 @@ class _AnthropicAdapter:
     def __init__(self, provider: Provider, tools: list[dict], timeout: float = 120.0):
         import anthropic
         self._anthropic = anthropic
-        key = providers.api_key(provider)
-        if not key:
-            raise InfraError("infra:harness_crash", f"{provider.key_env} not set",
-                             retryable=False)
+        key = _require_key(provider)
         self.provider = provider
         self.tools = tools
         self.client = anthropic.Anthropic(api_key=key, timeout=timeout, max_retries=0)

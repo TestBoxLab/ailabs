@@ -22,8 +22,10 @@ from wb_studio.runtime_registry import display_name, fit_name
     ("sloppy", "Near-miss control"),
     # Reasoning effort travels after an @.
     ("claude-opus-5@high", "Claude Opus 5 · high"),
-    # The build token a figure label cannot hold.
+    # The build token a figure label cannot hold, after a separator or after an @.
     ("monarch · 0cf63a74e+feat/railway-dev-deploy* reasoning", "Monarch · reasoning"),
+    ("monarch@0cf63a74e+feat/railway-dev-deploy* reasoning", "Monarch · reasoning"),
+    ("monarch@0cf63a74e+feat/railway-dev-deploy*", "Monarch"),
     ("monarch · 9b79557 stock", "Monarch · stock"),
     # An id nobody has catalogued still reads as a name, never as a slug.
     ("some-new-model/api", "Some New Model"),
@@ -45,6 +47,8 @@ def test_an_empty_identifier_is_returned_untouched():
 def test_a_figure_label_is_cut_on_a_word_boundary():
     assert fit_name("Kimi K3 (Fireworks) · high reasoning", 34) == "Kimi K3 (Fireworks) · high…"
     assert fit_name("Claude Opus 5", 34) == "Claude Opus 5"
+    # A cut that lands on the separator drops it: "Monarch ·…" says less than "Monarch…".
+    assert fit_name("Monarch · 0cf63a74e+feat/railway-dev-deploy*", 20) == "Monarch…"
 
 
 def test_the_report_figure_label_uses_the_same_resolver():

@@ -232,6 +232,28 @@ def build_spec(service: str, schema: dict[str, Any], server_url: str) -> dict[st
     })
 
 
+class SchemaInterfaces:
+    """The AutomationBench world's published surface, for the front door.
+
+    The three questions the shim asks any world: which services exist, what is the
+    document for one of them, and what URL does a REST path map to inside the world.
+    A world whose surface is tools rather than REST resources answers the same three
+    through `wb_world.adapter.ToolInterfaces` (feature 026).
+    """
+
+    def __init__(self, schemas: dict[str, dict[str, Any]] | None = None):
+        self.schemas = schemas if schemas is not None else load_schemas()
+
+    def services(self) -> list[str]:
+        return list(self.schemas)
+
+    def spec(self, service: str, public_url: str) -> dict[str, Any]:
+        return build_spec(service, self.schemas[service], public_url)
+
+    def rest_url(self, service: str, rest: str) -> str:
+        return f"{self.schemas[service].get('baseUrl', '').rstrip('/')}/{rest}"
+
+
 def build_all(server_url: str, schema_dir: Path = SCHEMAS_DIR) -> dict[str, dict[str, Any]]:
     return {svc: build_spec(svc, s, server_url) for svc, s in load_schemas(schema_dir).items()}
 

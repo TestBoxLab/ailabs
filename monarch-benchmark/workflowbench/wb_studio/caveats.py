@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from wb_world.source import comparison_notes, product_of
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,11 +40,14 @@ def efforts_by_setup(job) -> dict:
 
 def for_run(job, m, narrative=None, reused=None) -> list[str]:
     """Sentences about one run: what the numbers rest on and what they leave out."""
-    out = [FORK_NOTE.format(version=fork_version())]
+    out = comparison_notes(product_of(job)) or [FORK_NOTE.format(version=fork_version())]
     setups = m.get("setups", {})
     names = {sid: s.get("name", sid) for sid, s in setups.items()}
     if m.get("unrecorded_attempts"):
         out.append(f"{m['unrecorded_attempts']} of {m['planned_attempts']} planned attempts have no recorded outcome; percentages use recorded attempts only.")
+    ungraded = sum(s["pass"].get("ungraded", 0) for s in setups.values())
+    if ungraded:
+        out.append(f"{ungraded} attempts are ungraded because a checker could not produce a verdict; they are excluded from pass rates and their cost is retained.")
     infra = sum(s["pass"]["infrastructure"] for s in setups.values())
     if infra:
         out.append(f"{infra} attempt{'s' if infra != 1 else ''} stopped with an execution issue and {'are' if infra != 1 else 'is'} excluded from pass rates.")
@@ -79,7 +83,7 @@ def for_run(job, m, narrative=None, reused=None) -> list[str]:
 
 
 def for_round(cohort) -> list[str]:
-    out = [FORK_NOTE.format(version=fork_version())]
+    out = comparison_notes(product_of(cohort)) or [FORK_NOTE.format(version=fork_version())]
     runs = cohort.get("runs", [])
     if len(runs) > 1:
         out.append(f"Figures combine {len(runs)} runs on the same frozen task set; setups that ran more than once are pooled.")

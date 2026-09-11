@@ -210,7 +210,9 @@ def outcome_report(job, events, tasks, database=None):
                         "event_ids": [e["id"] for e in trace], "limitations": "This account describes evidence. A reasoning-model review is a separate interpretation, not a replacement verdict."})
         from wb_studio.narrative import story
         reports[-1]["story"] = story(result, trace, reports[-1], assertions)
-    return {"version": 1, "run": job["id"], "attempts": reports}
+    from wb_studio.performance import performance_report
+    return {"version": 1, "run": job["id"], "attempts": reports,
+            "performance": performance_report(job, events)}
 
 
 def _singular(name):

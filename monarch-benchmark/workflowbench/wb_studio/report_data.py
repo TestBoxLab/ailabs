@@ -20,6 +20,7 @@ from wb_studio import caveats, measures
 from wb_studio.leaderboard import contract_note, evaluation_contract, exclusion_reason, full_benchmark_run
 from wb_studio.reports import CATEGORIES
 from wb_world.episode import contract_hash
+from wb_world.source import product_of
 
 GRADES = ("Improvement", "Regression", "Tradeoff", "Tie", "Undecided", "Not comparable")
 FINISHED = ("completed", "failed", "cancelled", "interrupted")
@@ -141,6 +142,8 @@ def historical_baseline(studio, job, subject_id):
             continue
         other = studio.job(listed["id"])
         other_settings = other.get("settings") or {}
+        if product_of(other) != product_of(job):
+            continue
         if other_settings.get("track", "agentic-request") != settings.get("track", "agentic-request"):
             continue
         bare = measures.baseline_id(other)
@@ -385,6 +388,26 @@ def task_rows(job, tasks):
 
 
 def narrative_status(folder) -> dict:
+    publication = folder / "report-publication.json"
+    if publication.exists():
+        try:
+            data = json.loads(publication.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("status") == "completed":
+                return {**data, "model": "Genesis"}
+        except ValueError:
+            pass
+        return {"status": "failed", "model": "Genesis", "reason": "The published report could not be read."}
+    work = folder / "report-work.json"
+    if work.exists():
+        try:
+            data = json.loads(work.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                failed = data.get("stage") in ("failed", "interrupted", "cancelled", "published")
+                return {"status": "failed" if failed else "pending", "model": "Genesis",
+                        "reason": data.get("reason") or "Genesis is preparing this report.",
+                        "askable": failed, "stage": data.get("stage")}
+        except ValueError:
+            return {"status": "failed", "model": "Genesis", "reason": "The report work record could not be read."}
     done = folder / "analysis.json"
     if done.exists():
         try:
@@ -506,8 +529,11 @@ def gap_list(items, audience: str = "lab", exported: bool = False) -> dict:
 
 
 def run_report(studio, identity) -> dict:
+    from wb_studio.performance import performance_report
     from wb_studio.failure_analysis import analysis as failure_analysis
     from wb_studio.narrative import run_story
+    from wb_studio.report_patterns import patterns
+    from wb_studio import genesis_reports
     job = studio.job(identity)
     events = studio.events(identity)
     task_hashes = job.get("task_hashes") or {}
@@ -568,6 +594,9 @@ def run_report(studio, identity) -> dict:
         "verdict": verdict_text(subject, baseline, g, len(live_tasks), reused) if subject else "This run has no evaluated attempts.",
         "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
                      if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
+        "authored": genesis_reports.published(studio, identity),
+        "report_work": (genesis_reports.status(studio.genesis, {"run": identity}) if getattr(studio, "genesis", None) else {"stage": "none", "run": identity}),
+        "patterns": patterns(fa_attempts, {sid: m["setups"].get(sid, {}).get("name", sid) for sid in shown}, identity),
         "model_findings": model_findings(narrative, aliases_back),
         "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "askable", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
         "story": run_story(fa_attempts, {sid: m["setups"][sid]["name"] for sid in shown if sid in m["setups"]}),
@@ -579,6 +608,7 @@ def run_report(studio, identity) -> dict:
         "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
         "failures": {"summary": fa["summary"], "buckets": fa["buckets"], "attempts": fa_attempts, "limitations": fa["limitations"]},
         "tasks": tasks, "matrix": matrix_cells(job, shown, studio.tasks),
+        "performance": performance_report(job, events),
         "caveats": caveats.for_run(job, m, narrative, reused=reused),
         "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "live_task_count": len(live_tasks), "task_hashes": job.get("task_hashes") or {},
                    "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "track": settings.get("track", "agentic-request"),
@@ -620,19 +650,26 @@ def pooled_job(studio, cohort) -> dict:
     """One synthetic job whose results pool every run in the cohort, so the
     measures see repetitions across runs as repetitions."""
     arms, seen, results, events = [], set(), [], []
+    products = []
     for entry in cohort["runs"]:
         job = studio.job(entry["id"])
+        products.append(product_of(job))
+        if any(p != products[0] for p in products):
+            raise ValueError("Cannot pool different benchmark products")
         for arm in (job.get("settings") or {}).get("arms") or [{"id": m, "name": m, "kind": "runner"} for m in (job.get("settings") or {}).get("models") or []]:
             if arm["id"] not in seen:
                 seen.add(arm["id"])
                 arms.append(arm)
         results.extend(job.get("results") or [])
         events.extend(studio.events(entry["id"]))
-    return {"id": cohort["id"], "settings": {"tasks": cohort["tasks"], "models": [a["id"] for a in arms], "arms": arms, "track": cohort["track"]},
+    return {"id": cohort["id"], "settings": {"tasks": cohort["tasks"], "models": [a["id"] for a in arms], "arms": arms, "track": cohort["track"], **({"product":products[0]} if products and products[0] else {})},
             "task_hashes": cohort["task_hashes"], "results": results, "events": events}
 
 
 def round_report(studio, cohort_id) -> dict:
+    from wb_studio.failure_analysis import analysis as failure_analysis
+    from wb_studio.report_patterns import patterns
+    from wb_studio import genesis_reports
     cohort = cohorts(studio).get(cohort_id)
     if cohort is None:
         raise ValueError("Unknown task set")
@@ -666,7 +703,7 @@ def round_report(studio, cohort_id) -> dict:
     rows = []
     for s in standings:
         rank = ranks[s["id"]]
-        rows.append({"rank": rank, "rank_high": max(rank, spread[s["id"]]), "id": s["id"], "name": s["name"], "is_baseline": s["is_baseline"], "pass": s["pass"], "pass_k": s["pass_k"], "cost": s["cost"],
+        rows.append({"rank": rank, "rank_high": max(rank, spread[s["id"]]), "id": s["id"], "name": short_name(s["name"]), "is_baseline": s["is_baseline"], "pass": s["pass"], "pass_k": s["pass_k"], "cost": s["cost"],
                      "paired": s["paired"], "grade": grade(s, baseline) if not s["is_baseline"] else None, "runs": sorted({r["id"] for r in cohort["runs"]}),
                      "interval": intervals[s["id"]], "rank_basis": "interval"})
     # Every setup that ran, not only the ones named "monarch". The filter meant a round
@@ -680,19 +717,39 @@ def round_report(studio, cohort_id) -> dict:
         for sid, s in rm["setups"].items():
             if sid in shown and s["pass"]["attempts"]:
                 trend.append({"series": s["name"], "x": (entry["created_at"] or "")[:10], "run": entry["id"], "y": s["pass"]["rate"], "low": s["pass"]["low"], "high": s["pass"]["high"]})
+    # The lines read as names, unless two setups of this round resolve to the same one —
+    # two builds of Monarch drawn as one line would be a series the round never ran.
+    labels = {name: short_name(name) for name in {p["series"] for p in trend}}
+    if len(set(labels.values())) == len(labels):
+        for point in trend:
+            point["series"] = labels[point["series"]]
     trend_title = trend_title_for(sorted({p["series"] for p in trend}))
+    pattern_attempts, run_analyses = [], []
+    for entry in cohort["runs"]:
+        run_id = entry["id"]
+        source_job = studio.job(run_id)
+        hashes = source_job.get("task_hashes") or {}
+        for attempt in failure_analysis(studio, run_id)["attempts"]:
+            pattern_attempts.append({**attempt, "run": run_id,
+                                     "liveness": task_liveness(attempt.get("task"), hashes.get(attempt.get("task")), studio.tasks)})
+        run_analyses.append({"run": run_id, "title": entry.get("title"),
+                             "authored": genesis_reports.published(studio, run_id),
+                             "report_work": (genesis_reports.status(studio.genesis, {"run": run_id}) if getattr(studio, "genesis", None) else {"stage": "none", "run": run_id})})
     return {"version": 1, "cohort": cohort_id, "task_set": cohort["task_set"], "task_count": cohort["task_count"], "track": cohort["track"],
             "full_benchmark": cohort["full_benchmark"], "runs": cohort["runs"], "latest": cohort.get("latest"), "first": cohort.get("first"),
             "baseline": baseline_id, "standings": rows, "hero": hero_rows(m, shown),
+            "patterns": patterns(pattern_attempts, {sid: m["setups"].get(sid, {}).get("name", sid) for sid in shown}),
+            "run_analyses": run_analyses,
             "lab_setups": lab_setups(shown, m["setups"]),
             "pairings": pairings({sid: groups[sid] for sid in shown if sid in groups}),
             "excluded": [{"id": r["id"], "title": r.get("title"), "reason": exclusion_reason(studio.job(r["id"]))} for r in cohort["runs"] if not r["full_benchmark"]],
             "paired": paired_table(job, m, shown, baseline_id), "matrix": matrix_cells(job, shown, studio.tasks), "tasks": task_rows(job, studio.tasks),
-            "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown], "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
+            "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
+            "setups": {sid: {**m["setups"][sid], "short_name": short_name(m["setups"][sid]["name"])} for sid in shown if sid in m["setups"]}, "order": shown,
             "trend": trend, "trend_title": trend_title, "repetitions": m["repetitions"],
             # The round's argument: accuracy with its uncertainty above, then what it
             # costs to configure once and run again (FR-029, FR-030).
-            "curve": break_even_block(groups, shown, baseline_id, {s["id"]: s["name"] for s in standings}),
+            "curve": break_even_block(groups, shown, baseline_id, {s["id"]: short_name(s["name"]) for s in standings}),
             "caveats": caveats.for_round({**cohort, "baseline": baseline_id}),
             "note": cohort.get("note"),
             "method": {"task_set": cohort["task_set"], "task_count": cohort["task_count"], "task_hashes": cohort["task_hashes"], "runs": [r["id"] for r in cohort["runs"]],

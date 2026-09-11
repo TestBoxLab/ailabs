@@ -1,14 +1,12 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from grader.grade import grade
 from grader.invariant import check_invariant
 from grader.noop import validate_task
 from ingester.graph_ingest import build_graph
 from runner.arms import NullArm, OracleArm, SloppyArm
-from runner.pilot import run_pilot
 from wb_world.episode import Episode
 from wb_world.snapshot import diff_snapshots
 
@@ -86,15 +84,3 @@ def test_graph_ingest_counts():
     a = next(x for x in g["actions"] if x["id"] == "salesforce.sobjects.contact.update")
     assert a["url"].endswith("/services/data/v61.0/sobjects/Contact/{id}")
     assert a["method"] == "PATCH"
-
-
-def test_pilot_end_to_end(tmp_path):
-    tasks = [load(p) for p in TASKS[:3]]
-    s = run_pilot(tasks, tmp_path, k=2)
-    assert s["arms"]["oracle/scripted"]["strict_pass_rate"] == 1.0
-    assert s["arms"]["null/no-action"]["strict_pass_rate"] == 0.0
-    assert s["arms"]["sloppy/collateral"]["strict_pass_rate"] == 0.0
-    assert s["arms"]["sloppy/collateral"]["invariant_fail_count"] == 6
-    assert s["noop_vacuous_tasks"] == []
-    lines = (tmp_path / "episodes.jsonl").read_text().strip().split("\n")
-    assert len(lines) == 3 * 3 * 2

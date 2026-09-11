@@ -4,18 +4,25 @@ Feature 024, stage S1. Genesis often changes something a long way from the conve
 — it files a card, reads a run, notices the week's allowance is nearly spent — and today
 the only way to say so is a sentence the reader has to act on by hand.
 
-**The server never navigates anything.** WCAG's glossary puts a change of viewport on
-the change-of-context list, and 3.2.5 permits one "only by user request, or a mechanism
-is available to turn off such changes". A real `<a href="#run/x">` in the turn stream is
-a user request by definition, and it also gives middle-click-to-a-new-tab, copy link,
-the back button, and an address that can be sent to someone else. Moving the screen
-without being asked buys nothing over that and owes a whole conformance mechanism.
+**The server never navigates anything; the reader's own setting may.** WCAG's glossary
+puts a change of viewport on the change-of-context list, and 3.2.5 permits one "only by
+user request, or a mechanism is available to turn off such changes". A real
+`<a href="#run/x">` in the turn stream is a user request by definition, and it also gives
+middle-click-to-a-new-tab, copy link, the back button, and an address that can be sent to
+someone else. The link is the whole of what this tool produces.
+
+Follow Genesis (`static/genesis.js`) is the other half, and it belongs to the reader
+rather than to this tool. With it on — the default since feature 025, decision D3 — the
+client scrolls to the route a `show` names, but only while a turn is running, only on the
+surface the reader is already looking at, never into a hidden tab, and any wheel, key,
+pointer or touch gesture stops it for the rest of the turn. Focus never moves. Turned off,
+a `show` is a link and nothing else; that checkbox is the 3.2.5 mechanism.
 
 So this tool validates a route, records the act as a tool call like every other lab
 action — `tool_started` / `tool_completed`, into the turn record, the Trace pane and
-`genesis/activity.jsonl` — and returns a receipt. "Why did my screen move?" never needs
-asking, because it did not; and "why is Genesis pointing me here?" has an answer on the
-page.
+`genesis/activity.jsonl` — and returns a receipt. "Why is Genesis pointing me here?" has
+an answer on the page, and "why did my screen move?" has one in the status bar that says
+Following Genesis, next to the control that stops it.
 
 The validation is the security half. The route is written by a model, travels to the
 client and is put in an `href`. Anything that is not a known in-app hash is refused.
@@ -30,7 +37,7 @@ import re
 EXACT = ('#reports', '#runs', '#budget', '#runtime', '#studio', '#launch', '#leaderboard',
          '#genesis', '#genesis/board', '#genesis/library', '#genesis/memory',
          '#genesis/activity', '#genesis/digest', '#genesis/settings')
-PREFIXES = ('#run/', '#report/', '#round/', '#genesis/t/')
+PREFIXES = ('#run/', '#report/', '#round/', '#genesis/t/', '#studio/')
 # Identifiers the Studio itself mints: hex ids, task names, setup ids, event anchors.
 # Deliberately narrow — no quotes, no angle brackets, no colon, so a route can never
 # break out of an attribute or carry a scheme.
@@ -42,10 +49,12 @@ MAX = 200
 
 PROTOCOL = (
     "show(route, label, why): point the reader at a place in the Studio. It renders as a "
-    "link in your turn, next to one line saying why. It does NOT move anyone's screen — "
-    "the person clicks it, or does not. Use it when what you did lives somewhere else: a "
-    "run you read, a card you filed, the budget page when the allowance is short. Routes: "
-    + ", ".join(EXACT[:6]) + ", #run/<id>, #report/<id>, #round/<id>. One show per turn is "
+    "link in your turn, next to one line saying why. You never move the screen yourself: "
+    "the reader's own Follow setting decides whether the page goes there, and any gesture "
+    "of theirs stops it. Use it when what you did lives somewhere else: a "
+    "run you read, a card you filed, the budget page when the allowance is short, the "
+    "architecture you are building. Routes: "
+    + ", ".join(EXACT[:6]) + ", #run/<id>, #report/<id>, #round/<id>, #studio/<architecture id>. One show per turn is "
     "usually enough; a turn that ends in three links has not decided anything."
 )
 
@@ -82,11 +91,15 @@ def _label_for(route: str) -> str:
 
 
 def show(genesis, payload: dict) -> dict:
-    """The receipt. The client turns it into a link; nothing here touches the screen."""
+    """The receipt. The client turns it into a link; nothing here touches the screen.
+
+    It used to carry `"moved": False`. Nothing read it, and it told the model the one
+    thing the server cannot know: whether the reader's Follow setting took them there.
+    """
     route = check_route(payload.get("route"))
     label = str(payload.get("label") or "").strip()[:80] or _label_for(route)
     why = str(payload.get("why") or "").strip()[:300]
-    return {"route": route, "label": label, "why": why, "moved": False}
+    return {"route": route, "label": label, "why": why}
 
 
 TOOLS = {"show": show}

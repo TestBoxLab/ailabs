@@ -28,6 +28,8 @@ def genesis(tmp_path, monkeypatch):
     # Feature 024 FR-002 turns every dial off by default; these tests are about
     # what Genesis does once a person has turned it on.
     genesis = Genesis(studio)
+    # This fixture deliberately exercises its stub route, independently of the partner default.
+    genesis.config.set({'models': {'chat': 'glm-5.3', 'reading': 'glm-5.3'}}, routes=[{'id': 'glm-5.3', 'available': True}])
     genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
     return genesis
 

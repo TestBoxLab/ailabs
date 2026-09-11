@@ -22,7 +22,7 @@ MODULES = ('wb_studio.genesis_hypotheses', 'wb_studio.genesis_tools', 'wb_studio
            'wb_studio.genesis_reviewer', 'wb_studio.genesis_ranking', 'wb_studio.genesis_memory_suite',
            'wb_studio.genesis_people', 'wb_studio.genesis_channels', 'wb_studio.genesis_patch',
            'wb_studio.genesis_engineer', 'wb_studio.genesis_critic', 'wb_studio.figures',
-           'wb_studio.genesis_show')
+           'wb_studio.genesis_show', 'wb_studio.genesis_build', 'wb_studio.genesis_reports', 'wb_studio.genesis_workspace', 'wb_studio.genesis_missions')
 
 
 def modules() -> list:

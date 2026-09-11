@@ -34,6 +34,26 @@ Per constitution §III, this feature changes the methodology's **inputs and inte
 surface** — a spoken interface, a checking pass, a memory format, a preview — and does
 not reopen any rule in `PLAN.md` §1.
 
+## Live workspace expansion
+
+Lucas's 11 September direction adds rich streaming, meaningful loading states and visible
+artifact alteration while preserving Studio's current style. The detailed
+[live workspace plan and web inspiration](../../research/genesis-live-workspace-plan-2026-09-11.md)
+extends this specification. Story 6 and FR-044–FR-059 cover application-data editing;
+story 3 continues to govern checked changes to the Studio's own source. Neither makes
+a draft edit equivalent to a paid run, deployment or product-under-test modification.
+
+Ten decisions taken by Lucas on 11 September, after reading that plan against the code,
+are recorded as D1–D10 in its Decisions section and are settled inputs here, not options.
+The ones that bind this specification: the edited object is the architecture blueprint
+`static/graph.js` already edits (D2); Follow ships on by default, reversing the
+feature 024 stage S5 default (D3); Genesis builds through incremental operations that
+stream to the open editor and are committed by one existing `save_architecture` (D6, D7);
+each operation is validated server-side (D8); a field the person has focus in is
+soft-locked and a commit is refused while the editor is dirty (D4, D5); and artifact
+editing gets its own autonomy dial, shipping on (D9, D10).
+
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A number that was not measured cannot be said (Priority: P1)
@@ -253,6 +273,54 @@ measured hit rate.
 
 ---
 
+### User Story 6 - Genesis builds and changes the working artifact visibly (Priority: P2)
+
+Lucas asks Genesis, by text or voice, to create a development workflow, connect its
+steps and insert their prompts. The existing workspace shows the structure and content
+as they become available, distinguishes drafts from saved changes, and leaves an
+inspectable artifact. The same interaction extends to research, experiment plans,
+measured reports and the checked interface previews in story 3.
+
+**Why this priority**: Genesis's work must be understandable and steerable while it
+happens. A final chat response alone does not show what changed or whether it was saved.
+
+**Independent Test**: Use a marked development fixture to create, connect, fill and save
+a workflow while observing the page; reload and confirm that the same saved artifact
+appears. Repeat with an interruption, a conflicting manual edit and a validation failure.
+
+**Acceptance Scenarios**:
+
+1. **Given** an authorized draft-edit request, **When** Genesis creates nodes, connections
+   and prompts, **Then** each appears in the actual artifact as a distinct provisional
+   state, and only the commit produces a saved revision.
+2. **Given** an unfinished prompt or invalid connection, **When** it is displayed,
+   **Then** it is labeled as a draft or problem and cannot be mistaken for an executable,
+   validated result.
+3. **Given** a connection interruption, **When** updates resume, **Then** each operation
+   is applied exactly once, and the graph shown matches the graph an uninterrupted
+   delivery would have produced.
+4. **Given** a person with focus in a prompt field, **When** an operation targets that
+   same field, **Then** their text is preserved, the operation waits, and it is applied
+   when they leave the field.
+5. **Given** a person holding unsaved edits to a draft, **When** Genesis attempts to
+   commit that draft, **Then** the commit is refused with that reason and kept on a card,
+   and their unsaved edits remain valid against the revision they were made on.
+6. **Given** an uncommitted build, **When** the page is reloaded, **Then** the provisional
+   work is gone, the turn's record still shows what was done, and nothing reports a save
+   that did not happen.
+7. **Given** background work, **When** the person makes any gesture, **Then** the camera
+   stops following for the rest of that turn, progress remains available, and focus is
+   never taken.
+8. **Given** a failed or cancelled operation, **When** it stops, **Then** completed
+   changes remain accurately identified and unfinished work has a clear recovery path.
+9. **Given** reduced motion or keyboard-only interaction, **When** the same work occurs,
+   **Then** all states, content and controls remain available without animation or dragging.
+10. **Given** an ordinary draft save, **When** it completes, **Then** no paid execution,
+    product-under-test change or publication follows implicitly.
+
+---
+
+
 ### Edge Cases
 
 - The spoken model produces a number before any work has returned: the number is not
@@ -357,7 +425,9 @@ measured hit rate.
   recorded action, without editing files by hand.
 - **FR-033**: Genesis MUST be able to bring a named view onto the screen during a
   conversation; doing so MUST change no state and MUST take no action on the person's
-  behalf.
+  behalf beyond moving the view. Whether the view moves is the reader's own setting,
+  which ships on and is turnable off (FR-050); the tool itself MUST only produce a link,
+  and MUST never move focus.
 
 **Remembering (User Story 4)**
 
@@ -384,6 +454,54 @@ measured hit rate.
 - **FR-043**: A stated track record MUST be subject to FR-003, and MUST say so rather than
   report a rate when too few expectations have been scored.
 
+### Live workspace and rich progress
+
+- **FR-044**: Genesis's authorized artifact edits MUST appear in the existing workspace
+  as structure and content become available, including nodes, connections and prompt fields.
+- **FR-045**: The interface MUST distinguish provisional content, saved changes,
+  validation results and execution results; none may imply another.
+- **FR-046**: Work MUST expose meaningful queued, active, waiting, reconnecting, failed,
+  cancelling and terminal states, with known progress counts only when supported.
+- **FR-047**: Reconnecting or receiving repeated updates MUST apply every operation
+  exactly once, including operations immediately preceding completion.
+- **FR-048**: An operation targeting the field the person currently has focus in MUST NOT
+  overwrite it; it MUST wait and be applied when focus leaves the field.
+- **FR-049**: While the open editor holds unsaved edits to a draft, a commit to that draft
+  MUST be refused with that reason and kept on a card; the person's unsaved edits MUST
+  remain valid against the revision they were made on.
+- **FR-050**: Conversation and artifacts MUST share explicit selection context. Following
+  MUST move the view only, never focus; MUST stop on any gesture for the remainder of the
+  turn; MUST be turnable off; and MUST degrade to a link when the target is not visible.
+- **FR-051**: Live surfaces MUST preserve the incumbent visual style and support narrow
+  screens, keyboard interaction, reduced motion and meaningful accessible status updates.
+- **FR-052**: Every enabled alteration capability MUST identify its target, pending and
+  completion states, recovery behavior and evidence; an unsupported rich view MUST fall
+  back to a clear receipt and object link.
+- **FR-053**: Pausing visual updates, interrupting speech, cancelling work, breaking
+  following and undoing an edit MUST remain distinct controls with accurate outcomes.
+- **FR-054**: Rich presentation MUST NOT widen any existing authorization, spending,
+  publication, frozen-data or product-under-test boundary.
+- **FR-055**: The person MUST be able to inspect the affected object, discard provisional
+  work before the commit, and undo after it as a recorded revision, without erasing
+  history or implying external rollback.
+- **FR-056**: Genesis MUST build through incremental operations — at minimum adding a
+  node, connecting two nodes, and setting a prompt field — delivered on the existing turn
+  stream and applied by the open editor as provisional state. An operation MUST NOT be a
+  durable write, and a single existing architecture save MUST commit the build as one
+  revision. Uncommitted work MAY be lost on reload, and its loss MUST NOT be reported as
+  a save.
+- **FR-057**: Each operation MUST be validated by the lab's own existing blueprint
+  validation before it is presented as valid; a validation failure MUST be shown against
+  the node or connection that caused it without discarding the rest of the build.
+- **FR-058**: Artifact editing MUST be governed by its own autonomy dial, separate from
+  reading, cards, runs and the engineer loop, and MUST obey the existing pause. The dial
+  ships on; no other dial's meaning changes.
+- **FR-059**: A tool description given to Genesis MUST state what the tool actually does
+  to the person's screen. The `show` tool's description MUST be corrected before following
+  is enabled by default, and the recorded rationale for the following default MUST match
+  the shipped default.
+
+
 ### Key Entities
 
 - **Recorded value**: One measurement a round produced — a per-condition average, a
@@ -404,6 +522,12 @@ measured hit rate.
   happened, and a verdict of held, did not hold, or undecided.
 - **Track record**: The rate computed from scored expectations, with the records it rests
   on and the count behind it.
+- **Operation**: One described change to an artifact — a node added, two nodes connected,
+  a prompt field set — carried on the turn's stream, applied by the open editor as
+  provisional state, and validated on its own. It is not a write and has no revision.
+- **Commit**: The single existing save that turns a build's provisional state into one
+  saved revision. The only durable point in a build, and the only thing that can be
+  refused for a stale or dirty draft.
 
 ## Success Criteria *(mandatory)*
 
@@ -441,6 +565,23 @@ measured hit rate.
   rate computed from the underlying records.
 - **SC-015**: The lab's site makes no outside connection other than the spoken provider's,
   verified by the test that asserts the permitted set.
+
+- **SC-016**: A development blueprint can be visibly created, connected, filled with
+  prompts and saved from one request; reloading yields the same saved revision.
+- **SC-017**: Replays containing interruptions, duplicates and completion immediately
+  after an operation yield the same final artifact as uninterrupted delivery.
+- **SC-018**: A prompt being typed into is never overwritten by a Genesis operation, and
+  a commit attempted against an editor holding unsaved edits is refused rather than
+  applied — both verified by attempting them, not by inspection.
+- **SC-019**: Every enabled alteration capability has observable pending, success and
+  failure states with an inspectable target and evidence record.
+- **SC-020**: The workflow scenario remains operable with keyboard-only input, reduced
+  motion and a narrow viewport; background updates preserve reading position and focus.
+- **SC-021**: A gesture during a followed turn stops the camera and it stays stopped for
+  the rest of that turn, verified by attempting it in both themes.
+- **SC-022**: No number of operations produces more than one saved revision per commit,
+  and a reload before the commit leaves no partially saved blueprint behind.
+
 
 ## Assumptions
 
@@ -501,3 +642,8 @@ design of record and must be settled before planning.
 - Public release, Slack posting or publication of anything produced in a conversation.
 - A second memory system, a second measurement stack, or a second Genesis. Voice is a
   surface on the existing one.
+- Live editing of any artifact other than the architecture blueprint (D2). The generated
+  workflow artifact and Monarch recipes keep their own contracts and are not edited by
+  the operations this feature adds.
+- Server-side pending state for an uncommitted build (D7). A build lives in one browser
+  until it is committed.

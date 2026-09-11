@@ -33,6 +33,9 @@ def genesis(tmp_path, monkeypatch):
                              ledger=BudgetLedger(tmp_path / 'budget.sqlite3'), budget=Mock(return_value={}))
     studio.job = Mock(side_effect=lambda i: dict(JOB) if i == JOB['id'] else (_ for _ in ()).throw(FileNotFoundError(i)))
     made = Genesis(studio)
+    # The spec turn takes the reading route, which resolves to the partner exactly and never
+    # substitutes; this file is about the engineer job, so pin it to the stub route.
+    made.config.set({'models': {'chat': ROUTE[0]['id'], 'reading': ROUTE[0]['id']}}, routes=ROUTE)
     studio.genesis = made
     return made
 
@@ -55,7 +58,7 @@ def test_the_engineer_dial_starts_off_and_gates_the_job(genesis):
 
 def test_a_run_whose_failures_are_all_setup_is_checked_off_without_a_turn(genesis, monkeypatch):
     on(genesis)
-    monkeypatch.setattr(genesis, 'tool', lambda action, payload: {'buckets': [BUCKETS['buckets'][0]], 'denominators': {}})
+    monkeypatch.setattr(genesis, 'tool', lambda action, payload, turn=None: {'buckets': [BUCKETS['buckets'][0]], 'denominators': {}})
     monkeypatch.setattr(genesis, 'chat', Mock(side_effect=AssertionError('a turn was started')))
     summary = engineer.engineer(genesis.studio)
     assert summary['run'] is None and 'No run is waiting' in summary['reason']
@@ -65,7 +68,7 @@ def test_a_run_whose_failures_are_all_setup_is_checked_off_without_a_turn(genesi
 
 def test_an_open_card_on_the_same_bucket_stops_a_second_spec(genesis, monkeypatch):
     on(genesis)
-    monkeypatch.setattr(genesis, 'tool', lambda action, payload: BUCKETS if action == 'failure_buckets' else {'events': []})
+    monkeypatch.setattr(genesis, 'tool', lambda action, payload, turn=None: BUCKETS if action == 'failure_buckets' else {'events': []})
     genesis.card({'title': 'Fix: something', 'kind': 'fix', 'stage': 'review'})
     card = genesis.listing('cards')[0]
     from wb_results.evidence import write_json
@@ -84,7 +87,7 @@ def test_a_regraded_run_is_looked_at_again(genesis):
 
 def test_the_job_asks_for_one_spec_on_the_bucket_that_points_at_code(genesis, monkeypatch):
     on(genesis)
-    monkeypatch.setattr(genesis, 'tool', lambda action, payload: BUCKETS if action == 'failure_buckets' else {'events': []})
+    monkeypatch.setattr(genesis, 'tool', lambda action, payload, turn=None: BUCKETS if action == 'failure_buckets' else {'events': []})
     monkeypatch.setattr(genesis, 'chat', Mock(return_value={'id': 't1'}))
     summary = engineer.engineer(genesis.studio)
     assert summary['run'] == 'run-9' and summary['bucket'] == 'wrong-field'   # not the 9-attempt setup bucket

@@ -236,6 +236,31 @@ def cmd_budget_acknowledge(args) -> int:
     return 0
 
 
+def cmd_budget_release(args) -> int:
+    """A named person releases one hold whose cost the provider never reported.
+
+    The unknown stays on the record and reconciles against the provider's own export;
+    what it stops doing is occupying capacity in this week and every week after it
+    (feature 024 US4; found by ailabs-9c, 11 Sep 2026).
+    """
+    from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
+    path = args.ledger
+    operator = args.by or os.environ.get("WB_OPERATOR") or ""
+    try:
+        ledger = BudgetLedger(path)
+        row = ledger.release_hold(args.reservation_id, by=operator, reason=args.because)
+    except (BudgetConfigurationError, ValueError) as exc:
+        print(f"budget: {exc}", file=sys.stderr)
+        return 2
+    note = row.metadata["hold_released"]
+    print(f"released {row.reservation_id}: ${row.maximum_usd} no longer held; its cost is still unknown")
+    print(f"  by {note['by']} at {note['at']}: {note['reason']}")
+    status = ledger.status()
+    print(f"  week of {status.week_start}: ${status.available_usd} available; "
+          + (f"holds still unknown: {', '.join(status.unknown_ids)}" if status.unknown_ids else "no unknown holds left"))
+    return 0
+
+
 def cmd_budget_status(args) -> int:
     from wb_orchestrator import reconcile
     from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
@@ -252,13 +277,15 @@ def cmd_budget_status(args) -> int:
         "ledger": str(Path(path).resolve()), "week_start": status.week_start,
         "timezone": "America/Sao_Paulo",
         **{name + "_usd": str(getattr(status, name + "_usd"))
-           for name in ("weekly_limit", "actual", "held", "carried_held", "committed", "available")},
+           for name in ("weekly_limit", "actual", "held", "carried_held", "released", "committed", "available")},
         "blocked": status.blocked, "overrun_ids": status.overrun_ids,
+        "unknown_hold_ids": status.unknown_ids,
         "historical_billing_verified": weeks.get(status.week_start, {}).get("historical_billing_verified", False),
         "reconciliation": weeks,
         "paid_launch_enabled": {kind: reason is None for kind, reason in capabilities.items()},
+        "capability_scope": "At least one configured harness of this kind is verified. Each launch still checks its exact competitor, operator, configuration and budget.",
         "paid_launch_reasons": {kind: reason for kind, reason in capabilities.items() if reason},
-        "note": "Only recorded liabilities are shown. Weekly actual_usd conservatively occupies capacity across dispatch-to-settlement weeks; it is not invoice attribution. historical_billing_verified is per week, set by `wb budget reconcile` from the providers' own usage exports."
+        "note": "Only recorded liabilities are shown. held_usd is capacity occupied by unknown_hold_ids — attempts whose cost no provider has reported — not money spent; released_usd is what a person released with `wb budget release`, still unknown and still reconciled. Weekly actual_usd conservatively occupies capacity across dispatch-to-settlement weeks; it is not invoice attribution. historical_billing_verified is per week, set by `wb budget reconcile` from the providers' own usage exports."
     }, indent=2))
     return 0
 
@@ -600,8 +627,13 @@ def cmd_grade(args) -> int:
     if run is None:
         print(f"unknown run {args.run_id}", file=sys.stderr)
         return 1
-    suite_dir = args.suite or json.loads(run["config_json"])["suite_dir"]
-    res = regrade(store, args.run_id, suite_dir)
+    config = json.loads(run["config_json"])
+    suite_dir = args.suite or config["suite_dir"]
+    # The product's own world supplies the source half of the verdict. A run
+    # recorded before feature 026 names no world, which is the world it ran on.
+    from wb_world import registry
+    res = regrade(store, args.run_id, suite_dir,
+                  world=registry.resolve((config.get("product") or {}).get("world")))
     print(f"regraded {res['regraded']} episodes, {res['changed']} verdicts changed")
     for k in ("contract_drift", "task_missing", "artifacts_missing", "evidence_invalid"):
         if res[k]:
@@ -615,8 +647,7 @@ def cmd_report(args) -> int:
     store = _store(args)
     try:
         paths = write_report(store, args.run_id, args.out,
-                             baseline_arm=args.baseline, sortable=not args.no_sort,
-                             fmt=args.format)
+                             baseline_arm=args.baseline, fmt=args.format)
     except (GateError, KeyError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -649,8 +680,7 @@ def cmd_summary(args) -> int:
         if not out:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             out = Path(args.out) / f"summary-{stamp}.html"
-        path = write_summary(store, run_ids, out,
-                             baseline=args.baseline, sortable=not args.no_sort)
+        path = write_summary(store, run_ids, out, baseline=args.baseline)
     except (GateError, KeyError, ValueError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -660,6 +690,23 @@ def cmd_summary(args) -> int:
 
 def cmd_corpus(args) -> int:
     from wb_orchestrator import corpus as corpus_mod
+    if args.corpus_cmd in ("import-eog", "import-appworld", "import-tau2"):
+        try:
+            rules = json.loads(Path(args.reviewed_rules).read_text(encoding="utf-8")) if args.reviewed_rules else None
+            if args.corpus_cmd == "import-eog":
+                from wb_worlds.enterprise_ops.importer import import_eog
+                result = import_eog(args.domains.split(","), args.out, mode=args.mode, limit=args.limit, reviewed_rules=rules)
+            elif args.corpus_cmd == "import-appworld":
+                from wb_worlds.appworld.importer import import_tasks
+                result = {"tasks":[task["task"] for task in import_tasks(args.split, args.out, args.limit, reviewed_rules=rules)]}
+            else:
+                from wb_worlds.tau2.importer import import_tau2
+                result = import_tau2(args.domains.split(","), args.out, split=args.split, limit=args.limit, rules=rules)
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+        except (ValueError, OSError, RuntimeError) as exc:
+            print(f"{args.corpus_cmd}: {exc}", file=sys.stderr)
+            return 2
     if args.corpus_cmd == "import-ab":
         product = config.load_product(config.resolve_name_or_path(args.product, "product"))
         if args.dest and args.out:
@@ -896,7 +943,8 @@ def cmd_monarch_setup(args) -> int:
                                  config.resolve_name_or_path(args.harness, "harness"),
                                  args.out, os.environ, sys.stdout,
                                  conform=not args.no_conform,
-                                 knowledge=args.knowledge, knowledge_map=args.map)
+                                 knowledge=args.knowledge, knowledge_map=args.map,
+                                 tasks=getattr(args, "tasks", None))
     except ConfigError as e:
         print(e, file=sys.stderr)
         return 2
@@ -907,6 +955,8 @@ def cmd_monarch_verify(args) -> int:
     from wb_studio import enterprise
     from wb_studio.app import Studio
     studio = Studio(tasks=[])
+    studio.enterprise_product = getattr(args, "product", "simulated-apps")
+    studio.enterprise_harness = getattr(args, "harness", "monarch")
     record = enterprise.verify(studio)
     for check in record["checks"]:
         print(f"[{'OK ' if check['ok'] else 'NO '}] {check['name']}: {check['detail']}")
@@ -1027,6 +1077,13 @@ def main(argv: list[str] | None = None) -> int:
     ba.add_argument("--reason", required=True, help="why this overrun is understood; kept with the reservation")
     ba.add_argument("--by", default=None, help="the person acknowledging; default: WB_OPERATOR")
     ba.set_defaults(fn=cmd_budget_acknowledge)
+    brl = bsub.add_parser("release",
+                          help="release one hold whose cost no provider ever reported; the unknown stays on the record")
+    brl.add_argument("reservation_id")
+    brl.add_argument("--because", required=True,
+                     help="why this hold can be released; kept with the reservation")
+    brl.add_argument("--by", default=None, help="the person releasing it; default: WB_OPERATOR")
+    brl.set_defaults(fn=cmd_budget_release)
     be = bsub.add_parser("envelope", help="sets and shows the weekly research envelope")
     be.add_argument("envelope_action", nargs="?", choices=("status",), default=None,
                     help="status (optional)")
@@ -1110,8 +1167,6 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("report")
     p.add_argument("run_id")
     p.add_argument("--baseline", default=None, help="baseline arm for paired stats")
-    p.add_argument("--no-sort", action="store_true",
-                   help="accepted for compatibility; the page has no sorting script")
     p.add_argument("--format", default="html", choices=("html", "executive"),
                    help="html: the seven-section technical page (default); "
                         "executive: the stakeholder page, Monarch first")
@@ -1124,12 +1179,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", default=None, help="baseline where a round names none")
     p.add_argument("--out", dest="summary_out", default=None,
                    help="output file; default out/summary-<timestamp>.html")
-    p.add_argument("--no-sort", action="store_true",
-                   help="omit the column-sorting script")
     p.set_defaults(fn=cmd_summary)
 
     p = sub.add_parser("corpus")
     csub = p.add_subparsers(dest="corpus_cmd", required=True)
+    for name in ("import-eog", "import-appworld", "import-tau2"):
+        external = csub.add_parser(name, help="Import pinned source tasks without altering upstream checks")
+        external.add_argument("--out", required=True)
+        external.add_argument("--limit", type=int)
+        external.add_argument("--reviewed-rules", help="JSON reviewed task-specific permitted-change rules")
+        if name != "import-appworld":
+            external.add_argument("--domains", required=True)
+        if name == "import-eog":
+            external.add_argument("--mode", default="oracle")
+        else:
+            external.add_argument("--split", default="dev" if name == "import-appworld" else "base")
     ci = csub.add_parser("import-ab")
     ci.add_argument("--domains", required=True,
                     help="comma list, e.g. simple,sales,hr; or 'all' for every known domain")
@@ -1213,6 +1277,8 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
     ms.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
     ms.add_argument("--out", default="out/monarch-seeds", help="where the seed folders are written")
+    ms.add_argument("--tasks", default=None,
+                    help="frozen task directory; required for external source products")
     ms.add_argument("--no-conform", action="store_true",
                     help="import without checking that every action is true against "
                          "the simulated apps (see `wb monarch conform`)")
@@ -1226,6 +1292,8 @@ def main(argv: list[str] | None = None) -> int:
     mv = msub.add_parser("verify", help="check the Monarch instance (backend, session, knowledge base, "
                                         "Langfuse) and record it; a passing record admits Monarch competitors "
                                         "for two hours")
+    mv.add_argument("--product", default="simulated-apps", help="name in config/products or a path")
+    mv.add_argument("--harness", default="monarch", help="name in config/harnesses or a path")
     mv.set_defaults(fn=cmd_monarch_verify)
     mk = msub.add_parser("knowledge",
                          help="write the lab seeds: the stock seeds with action descriptions "

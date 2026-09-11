@@ -509,6 +509,9 @@ class MonarchArm:
         client = self._client(deadline)
         self._sweep(client)
         goal = ep.task["prompt"][1]["content"]
+        from wb_world.episode import is_external
+        if is_external(ep.task):
+            goal = ep.task["prompt"][0]["content"] + "\n\n" + goal
         # bench_episode_id is recorded so a human can find the attempt's traces.
         ids: dict = {"bench_episode_id": self._bench_id}
         res.turn_log.append({"monarch": ids})

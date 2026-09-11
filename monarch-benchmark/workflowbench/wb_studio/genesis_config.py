@@ -1,10 +1,9 @@
 """Genesis configuration (feature 022): which model each step of Genesis's work uses.
 
 One JSON file, `genesis/config.json`, written only from the interface by a person and
-read by the code that starts a turn. A step with no model named, or naming a route that
-is not available, falls back to the cheapest available route by list price, never to the
-first route in file order. The steps are the vocabulary of the configuration page; a
-module that adds a step adds it here.
+read by the code that starts a turn. Conversation and mission reading default to
+Astra medium and never silently switch models when unavailable. Other steps retain
+their specialist routing defaults. A module that adds a step adds it here.
 """
 from __future__ import annotations
 
@@ -14,10 +13,13 @@ from pathlib import Path
 
 # Every step of Genesis's work that spends a model turn, in the order the page shows them.
 STEPS = ('chat', 'reading', 'review', 'ranking', 'consolidation', 'sweep', 'extraction', 'embedding', 'patch',
-         'implement', 'critic')
+         'implement', 'critic', 'report_analysis', 'report_author')
 # Steps that judge or write take the strongest available route by list price until an admin names
-# one (Lucas, 10 Sep 2026); every other step takes the cheapest.
-DEFAULT_STRONG = ('review', 'patch', 'implement', 'critic')
+# one (Lucas, 10 Sep 2026); the partner uses Astra and other steps take the cheapest.
+DEFAULT_STRONG = ('review', 'patch', 'implement', 'critic', 'report_analysis', 'report_author')
+DEFAULT_PARTNER = ('chat', 'reading')
+DEFAULT_MODEL = 'gpt-6-astra'
+DEFAULT_EFFORT = 'medium'
 EFFORTS = ('minimal', 'low', 'medium', 'high')  # thinking level per step; unset means the provider's own default
 
 
@@ -86,11 +88,22 @@ class Config:
                                  encoding='utf8', newline='\n')
         return self.read()
 
-    def effort_for(self, step: str) -> str | None:
-        """The thinking level a step asks for, or None for the provider's own default."""
+    def effort_for(self, step: str, route: str | None = None) -> str | None:
+        """The thinking level a step asks for, or None for the provider's own default.
+
+        Named a route, a level that route's API has no word for is dropped rather than sent: this
+        level is set once for a step, not for one route, and a chat-completions API carries no
+        reasoning-effort parameter at all, so the partner's 'medium' refused every turn on such a
+        route. An effort a person names for one request is refused, in `resolve_effort`."""
         if step not in STEPS:
             raise ValueError('Unknown step ' + str(step))
-        return self.read()['effort'].get(step)
+        level = self.read()['effort'].get(step) or (DEFAULT_EFFORT if step in DEFAULT_PARTNER else None)
+        if route is not None:
+            from wb_arms import providers
+            from wb_studio.gateways import EFFORTS as ACCEPTED
+            if level not in ACCEPTED[providers.get(route).adapter]:
+                return None
+        return level
 
     @staticmethod
     def _routes():
@@ -98,11 +111,14 @@ class Config:
         return model_routes()
 
     def route_for(self, step: str, routes=None) -> dict | None:
-        """The route a step uses now: the configured one when it is available, else the cheapest available."""
+        """Resolve the partner exactly; preserve existing specialist routing for other steps."""
         if step not in STEPS:
             raise ValueError('Unknown step ' + str(step))
         routes = list(routes if routes is not None else self._routes())
         wanted = self.read()['models'].get(step)
+        if step in DEFAULT_PARTNER:
+            wanted = wanted or DEFAULT_MODEL
+            return next((r for r in routes if r['id'] == wanted and r.get('available')), None)
         chosen = next((r for r in routes if r['id'] == wanted and r.get('available')), None) if wanted else None
         return chosen or (strongest(routes) if step in DEFAULT_STRONG else cheapest(routes))
 

@@ -54,7 +54,9 @@ def ledger_lines(studio, now=None):
                           'allowance':allowance(meta,scope),
                           'created_at':r.created_at,'closed_at':r.settled_at,'maximum_usd':_cents(r.maximum_usd),
                           'actual_usd':None if r.actual_usd is None else _cents(r.actual_usd),'requests':1,'settled':int(r.actual_usd is not None),
-                          'state':'settled' if r.settled_at else 'open','run':None})
+                          # A hold a person released holds nothing; reading it as Reserved for
+                          # ever is what `wb budget release` exists to end (feature 024 US4).
+                          'state':'settled' if r.settled_at else 'released' if meta.get('hold_released') else 'open','run':None})
     lines.sort(key=lambda l:l['created_at'],reverse=True)
     return {'week_start':week,'lines':lines,'budget':studio.budget()}
 

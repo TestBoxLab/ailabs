@@ -146,9 +146,12 @@ def test_failure_buckets_keep_counts_denominators_and_one_evidence_event(tmp_pat
     assert found['limitations']
 
 
-def test_report_is_the_internal_report_as_data_without_the_narrative(genesis):
+def test_report_contains_the_same_narrative_and_authoring_state_as_studio(genesis):
     found = T.TOOLS['report'](genesis, {'run': 'run-1'})
-    assert 'narrative' not in found and 'model_findings' not in found
+    assert found['narrative']['status'] == 'pending'
+    assert found['authored'] is None
+    assert found['report_work']['stage'] == 'none'
+    assert found['model_findings'] == []
     assert found['grade']['grade'] and found['verdict'] and found['baseline'] == BARE
     assert found['setups'][SETUP]['pass']['passed'] == 5
     assert found['method']['task_count'] == 6 and found['caveats']

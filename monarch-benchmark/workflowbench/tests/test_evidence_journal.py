@@ -210,7 +210,9 @@ def test_manifest_provenance_hashes_current_sources_and_records_dependency_versi
     import hashlib
     import importlib.metadata
     import platform
-    sources = ("grader/grade.py", "grader/invariant.py", "wb_world/episode.py")
+    sources = ("grader/grade.py", "grader/invariant.py", "wb_world/episode.py",
+               "wb_orchestrator/external_runtime.py", "wb_worlds/enterprise_ops/adapter.py",
+               "wb_worlds/tau2/adapter.py")
     for relative in sources:
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +220,8 @@ def test_manifest_provenance_hashes_current_sources_and_records_dependency_versi
     monkeypatch.setattr(evidence, "SOURCE_ROOT", tmp_path)
     before = evidence.provenance()
     (tmp_path / "grader/grade.py").write_text("uncommitted repair", encoding="utf-8")
+    (tmp_path / "wb_worlds/enterprise_ops/adapter.py").write_text("source checker repair", encoding="utf-8")
+    (tmp_path / "wb_orchestrator/external_runtime.py").write_text("runtime repair", encoding="utf-8")
     after = evidence.provenance()
     assert after["python_version"] == platform.python_version()
     assert after["automation_bench_version"] == importlib.metadata.version("automation-bench")
@@ -225,6 +229,11 @@ def test_manifest_provenance_hashes_current_sources_and_records_dependency_versi
     assert after["source_sha256"]["grader/grade.py"] == hashlib.sha256(b"uncommitted repair").hexdigest()
     assert before["source_sha256"]["grader/grade.py"] != after["source_sha256"]["grader/grade.py"]
     assert set(after["source_sha256"]) == set(sources)
+    for relative, body in (("wb_worlds/enterprise_ops/adapter.py", b"source checker repair"),
+                           ("wb_orchestrator/external_runtime.py", b"runtime repair")):
+        assert after["source_sha256"][relative] == hashlib.sha256(body).hexdigest()
+        assert after["source_sha256"][relative] != before["source_sha256"][relative]
+    assert after["source_sha256"]["wb_worlds/tau2/adapter.py"] == before["source_sha256"]["wb_worlds/tau2/adapter.py"]
 
 
 def test_write_json_waits_out_a_windows_reader(tmp_path, monkeypatch):

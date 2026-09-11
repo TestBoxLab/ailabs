@@ -135,6 +135,8 @@ class Genesis:
             if card['stage']=='running' and not card.get('job'):
                 card.update(stage='review',error='The server restarted during this operation. Inspect retained evidence before proposing a new attempt.')
                 write_json(self.path('cards',card['id']),card)
+        from wb_studio.report_recovery import recover
+        recover(self)
 
     def path(self, kind, identity):
         if kind not in ('cards','turns','threads') or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',str(identity)): raise ValueError('Unknown Genesis record')
@@ -155,10 +157,18 @@ class Genesis:
             card['outcome']=hypothesis_outcome(card,job)
         analyzed=[]
         for job in self.studio.jobs():
-            file=self.studio.directory/job['id']/'analysis.json'
-            if file.exists():
-                data=json.loads(file.read_text(encoding='utf8'))
-                analyzed.append({'run':job['id'],'title':job['title'],'status':data.get('status','completed')})
+            folder=self.studio.directory/job['id']
+            if (folder/'report-work.json').exists() or (folder/'report-publication.json').exists():
+                from wb_studio.report_data import narrative_status
+                data=narrative_status(folder)
+                analyzed.append({'run':job['id'],'title':job['title'],'status':data.get('status','pending'),
+                                 'stage':data.get('stage','published' if data.get('status')=='completed' else None),
+                                 'reason':data.get('reason'),'source':'#report/'+job['id']})
+            else:
+                file=folder/'analysis.json'
+                if file.exists():
+                    data=json.loads(file.read_text(encoding='utf8'))
+                    analyzed.append({'run':job['id'],'title':job['title'],'status':data.get('status','completed')})
         analyzed += [{'run':a['run'],'title':a.get('summary') or a['run'],'status':a['status']} for a in [json.loads(p.read_text(encoding='utf8')) for p in (self.root/'analyses').glob('*.json')]]
         routes=model_routes()
         return {'cards':cards,'turns':self.listing('turns')[-30:],'threads':self.threads(),'models':routes,'analyzed':analyzed,'stages':STATES,'watcher':self.watcher.status(),'autonomy':self.autonomy.read(),'config':{**self.config.read(),'effective':self.config.effective(routes)}}
@@ -169,6 +179,11 @@ class Genesis:
         act=self.autonomy.read()['cards']=='act'
         for card in self.listing('cards'):
             if card['stage']!='running' or not card.get('job'): continue
+            parent={}
+            if card.get('parent'):
+                try: parent=self.read('cards',card['parent'])
+                except (ValueError,FileNotFoundError): parent={}
+                if (parent.get('mission') or {}).get('status')=='stopped': continue
             try: status=self.studio.job(card['job'])['status']
             except FileNotFoundError: continue
             if status in ('queued','running','cancelling'): continue
@@ -176,11 +191,11 @@ class Genesis:
                 card=self.read('cards',card['id'])
                 if card['stage']!='running': continue
                 card['stage']='review'
-                if card.get('plan') and act:
+                if card.get('plan') and act and not parent.get('mission'):
                     card['question']="The run finished. Read the grader's results with read_run and measures and write the verdict on this card: supported, not supported or inconclusive, every sentence tagged [rec:...], exploratory notes in a separate block."
                     card['work']={'status':'queued','queued_at':stamp()};card['auto']=True
                 write_json(self.path('cards',card['id']),card)
-            if card.get('plan') and act: self.autonomy.record('debrief',card=card['id'],job=card.get('job'),status=status)
+            if card.get('plan') and act and not parent.get('mission'): self.autonomy.record('debrief',card=card['id'],job=card.get('job'),status=status)
             out.append(card['id'])
         return out
     def _index(self,rows):
@@ -238,6 +253,10 @@ class Genesis:
                 if forbidden: raise ValueError('Proposal cannot set approval or server-owned identities')
                 if proposal.get('goal') is not None: check_goal(proposal['goal'])
             kept=old or {}
+            if kept.get('mission'):
+                if proposal is not None:
+                    raise ValueError('Create a separate experiment card for this mission.')
+                stage=kept['stage']
             record={'id':identity,'title':title,'body':str(payload.get('body',''))[:20000],
                     'stage':stage,'kind':payload.get('kind',kept.get('kind','hypothesis')),'revision':kept.get('revision',0)+1,
                     'created_at':kept.get('created_at',stamp()),'updated_at':stamp(),
@@ -248,6 +267,8 @@ class Genesis:
                           plan=payload.get('plan',kept.get('plan')),default=payload.get('default',kept.get('default')),blocks=payload.get('blocks',kept.get('blocks')),answer=payload.get('answer',kept.get('answer')),waiting=payload.get('waiting',kept.get('waiting')),brief=payload.get('brief',kept.get('brief')),
                           hypothesis=payload.get('hypothesis',kept.get('hypothesis')),settlement=payload.get('settlement',kept.get('settlement')),settlements=payload.get('settlements',kept.get('settlements')),review=payload.get('review',kept.get('review')),
                           patch=payload.get('patch',kept.get('patch')),audience=payload.get('audience',kept.get('audience')))  # feature 022 records, kept whole
+            if kept.get('mission'):
+                record.update({key: kept.get(key) for key in ('mission','kind','stage','work','auto','parent')})
             # A queued card is a card the watcher will take: queued and not auto cannot both be true.
             if (record.get('work') or {}).get('status')=='queued' and record.get('kind') not in ('question','brief'): record['auto']=True
             body=record['body'];record['analysis']=payload.get('analysis') or (body.split(ANALYSIS_HEADING,1)[1].strip() if ANALYSIS_HEADING in body else kept.get('analysis'))
@@ -295,6 +316,8 @@ class Genesis:
     def work(self,card):
         """One free-work turn on a dropped card, reserved through chat at the per-card ceiling."""
         from wb_studio.genesis_harness import model_routes
+        if card.get('mission'):
+            return self._work_mission(card)
         route=self.config.route_for('reading',routes=model_routes())
         if not route: raise ValueError('No model route is available')
         ids=', '.join(str(e.get('kind',''))+' '+str(e.get('id') or e.get('run') or '') for e in card.get('evidence',[])) or 'none'
@@ -317,12 +340,38 @@ class Genesis:
             card['work']={'status':'working','turn':identity,'started_at':stamp(),'revision':card['revision']}
             write_json(self.path('cards',card['id']),card)
         self.autonomy.record('work',card=card['id'],turn=identity)
-        try: return self.chat({'id':identity,'message':message,'model':route['id'],'maximum_usd':os.environ.get('STUDIO_GENESIS_CARD_USD','2.00'),'purpose':'Genesis watcher','card':card['id']})
+        try: return self.chat({'id':identity,'message':message,'model':route['id'],'maximum_usd':os.environ.get('STUDIO_GENESIS_CARD_USD','2.00'),'purpose':'Genesis watcher','card':card['id'],'effort':self.config.effort_for('reading',route['id']) or 'default'})
         except Exception as exc:
             with self.lock:
                 card=self.read('cards',card['id']);card['work'].update(status='failed',finished_at=stamp(),reason='The turn could not start ('+type(exc).__name__+'): '+str(exc)[:200])
                 write_json(self.path('cards',card['id']),card)
             raise
+    def _work_mission(self, card):
+        """Admit the worker atomically with its lease; stop cannot cross admission."""
+        from wb_studio import genesis_missions
+        identity=uuid.uuid4().hex
+        with self.lock:
+            if any((c.get('work') or {}).get('status')=='working' for c in self.listing('cards')):
+                raise ValueError('Genesis is already working on a card; it takes this one next')
+            card=self.read('cards',card['id'])
+            try:
+                payload=genesis_missions.worker_payload(self,card)
+                card=self.read('cards',card['id'])
+                card['work']={'status':'working','turn':identity,'started_at':stamp(),'revision':card['revision']}
+                write_json(self.path('cards',card['id']),card)
+                self.autonomy.record('work',card=card['id'],turn=identity)
+                return self.chat({**payload,'id':identity,'card':card['id'],
+                                  'maximum_usd':os.environ.get('STUDIO_GENESIS_CARD_USD','2.00')})
+            except Exception as exc:
+                card=self.read('cards',card['id'])
+                if card['mission'].get('status') not in ('stopped','completed'):
+                    reason='The mission could not start ('+type(exc).__name__+'): '+str(exc)[:200]
+                    card['work']={'status':'failed','finished_at':stamp(),'reason':reason}
+                    card['mission'].update(status='blocked',summary=reason)
+                    card['auto']=False
+                    write_json(self.path('cards',card['id']),card)
+                raise
+
     def finish_card(self,turn):
         """Called when a watcher turn ends: done, or failed with the turn's message."""
         with self.lock:
@@ -340,6 +389,9 @@ class Genesis:
     def stop_work(self,identity):
         with self.lock:
             card=self.read('cards',identity)
+            if card.get('mission'):
+                from wb_studio.genesis_missions import trusted_control
+                return trusted_control(self,card,'stop')
             work=card.get('work') or {}
             if work.get('status') not in ('queued','working'): return card
             work.update(status='stopped',finished_at=stamp());card['work']=work
@@ -373,8 +425,11 @@ class Genesis:
         return self.work(card)
     def stop_turn(self,identity):
         """A person stops a running turn; the turn is recorded as failed with the reason."""
-        turn=self.read('turns',identity)
-        if turn.get('status')!='running': return turn
+        with self.lock:
+            turn=self.read('turns',identity)
+            if turn.get('status')!='running': return turn
+            turn['stop_requested']=True
+            write_json(self.path('turns',identity),turn)
         process=self.active.get(identity)
         if process is not None and process.poll() is None: process.kill()
         self.event(identity,'failed',message='Stopped by a person')
@@ -412,6 +467,11 @@ class Genesis:
     def _dispatch(self,card,by):
         """One path for every launch. Studio validates all frozen versions and reserves the weekly envelope; the request id makes repeated approvals idempotent."""
         identity=card['id']
+        if card.get('parent'):
+            try: parent=self.read('cards',card['parent'])
+            except FileNotFoundError: parent={}  # historical hypothesis links may predate this store
+            if (parent.get('mission') or {}).get('status') in ('stopped','completed'):
+                raise ValueError('The parent mission is stopped or completed; this proposal cannot launch.')
         request={**card['proposal'],'request_id':'genesis-'+identity+'-'+str(card['revision'])}
         job=self.studio.create(request)
         card.update(stage='running',job=job['id'],waiting=None,approval={'digest':card['proposal_digest'],'at':stamp(),'revision':card['revision'],'by':by})
@@ -448,8 +508,17 @@ class Genesis:
         if proposal.get('goal') is not None: check_goal(proposal['goal'])
         plan=plan_lines(self.studio,proposal)
         existing=self.read('cards',payload['card']) if payload.get('card') else None
+        if existing and existing.get('mission'):
+            raise ValueError('Create a separate experiment card; omit card to link a new proposal to this mission.')
         if existing and (existing.get('job') or existing['stage']=='running'): raise ValueError('This card already has a run.')
         base={'id':existing['id'],'revision':existing['revision'],'title':existing['title'],'body':existing['body'],'kind':existing.get('kind','hypothesis'),'evidence':existing.get('evidence',[]),'parent':existing.get('parent'),'question':existing.get('question')} if existing else {'title':str(payload.get('title') or 'Experiment')[:140],'body':str(payload.get('body','')),'kind':'hypothesis','evidence':payload.get('evidence',[])}
+        current_id=getattr(self.context,'turn',None)
+        if not existing and current_id:
+            current=self.read('turns',current_id)
+            if current.get('card'):
+                parent=self.read('cards',current['card'])
+                if parent.get('mission'):
+                    base['parent']=parent['id']
         record=self.card({**base,'stage':'approval','proposal':proposal,'plan':plan,'auto':False,'by':'genesis'})
         self.autonomy.record('plan',card=record['id'],lines=plan['lines'],maximum_usd=plan['maximum_usd'],attempts=plan['attempts'])
         return self.launch_if_allowed(record['id'])
@@ -494,9 +563,9 @@ class Genesis:
                 result=product_graphs.prepare(self.studio,p['graph'],maximum_usd=str(p['maximum_usd']),revision=p['graph_revision'])
                 artifact={'kind':'product_graph','id':result['id'],'version':result['version'],'sha256':result['sha256']}
             else:
-                from wb_studio.analysis import review
-                result=review(self.studio,p['run'],maximum_usd=p['maximum_usd'])
-                artifact={'kind':'analysis','run':p['run'],'status':result.get('status')}
+                from wb_studio.genesis_reports import start
+                result=start(self,{'run':p['run'],'maximum_usd':p['maximum_usd']})
+                artifact={'kind':'report','run':p['run'],'status':result.get('stage'),'workflow':result.get('id')}
             card.update(stage='review',artifact=artifact)
         except Exception as exc:
             card.update(stage='review',error='Preparation stopped ('+type(exc).__name__+'). Inspect its retained evidence before proposing another attempt.')
@@ -524,7 +593,7 @@ class Genesis:
             from wb_studio.genesis_plugins import on_turn
             on_turn(self,turn)  # feature 022: plugins react to a finished turn; they never fail it
         return event
-    def chat(self,payload):
+    def chat(self,payload, *, reserved=False):
         from wb_studio.genesis_harness import start_turn, model_routes
         text=str(payload.get('message','')).strip()
         limit=220000 if str(payload.get('purpose') or '').startswith('Genesis extraction') else 16000  # a whole source fits an extraction turn
@@ -533,9 +602,10 @@ class Genesis:
         model=next((r for r in routes if r['id']==payload.get('model')),None) if payload.get('model') else self.config.route_for('chat',routes=routes)
         if not model or not model['available']: raise ValueError('Choose an available Genesis model route')
         from wb_arms import providers
-        from wb_studio.gateways import resolve_effort
+        from wb_studio.gateways import EFFORTS, resolve_effort
         provider=providers.get(model['id'])
-        effort=payload.get('effort','medium' if provider.adapter!='openai' else 'default')
+        levels=EFFORTS[provider.adapter]  # what this route's API accepts; empty for chat completions
+        effort=payload.get('effort') or (self.config.effort_for('chat',model['id']) if str(payload.get('purpose') or 'Genesis conversation')=='Genesis conversation' else None) or ('medium' if 'medium' in levels else 'default')
         effort=resolve_effort(provider,effort) or 'default'
         maximum=str(payload.get('maximum_usd','2'))
         identity=payload.get('id') or uuid.uuid4().hex
@@ -548,12 +618,27 @@ class Genesis:
         # attended and can lift the dial in the same breath, so only unattended work stops.
         if purpose!='Genesis conversation' and self.autonomy.read()['paused']:
             raise ValueError('Genesis is paused; a person has to turn it back on before '+purpose+' can spend.')
-        ok,reason=self.allowance_allows(maximum)  # R4: the allowance is a gate, checked once per turn before its reservation
-        if not ok: raise ValueError(reason)
-        thread=self.thread_for(payload,text) if purpose=='Genesis conversation' else None
+        if reserved:
+            # Internal keyword, never taken from HTTP/model payloads. The report
+            # cycle already checked its allowance and reserved every stage.
+            from wb_studio.genesis_reports import _state, _entry, role
+            report_role=role({'purpose':purpose})
+            report_state=_state(self,purpose.split(':')[1]) if report_role else None
+            entry=_entry(report_state,report_role) if report_state and report_state.get('stage')==report_role else {}
+            if entry.get('id')!=identity or entry.get('maximum_usd')!=maximum or entry.get('model')!=model['id']:
+                raise ValueError('The report turn does not match its reserved work.')
+        else:
+            ok,reason=self.allowance_allows(maximum)
+            if not ok: raise ValueError(reason)
+        thread=self.thread_for(payload,text) if purpose=='Genesis conversation' or (purpose=='Genesis mission' and payload.get('thread')) else None
         self.studio.ledger.reserve_run('genesis-'+identity,maximum,metadata={'purpose':purpose,'model':model['id'],'by':'person' if purpose=='Genesis conversation' else 'genesis'})
         images=[str(p) for p in (payload.get('images') or [])][:8]  # feature 023: screenshots the turn looks at; paths, never pasted into the message
         turn={'id':identity,'status':'running','model':model['id'],'effort':effort,'message':text,'answer':'','created_at':stamp(),'events':[],'maximum_usd':maximum,'parent':payload.get('parent'),'card':payload.get('card'),'purpose':purpose,'images':images,'thread':thread['id'] if thread else None,'by':payload.get('by') or ('human:studio' if purpose=='Genesis conversation' else 'genesis')}
+        from wb_studio.genesis_workspace import normalize
+        turn['workspace'] = normalize(payload.get('workspace'))
+        if purpose=='Genesis mission':
+            turn['mission_generation']=payload.get('mission_generation')
+        turn['input_mode'] = 'voice' if payload.get('input_mode') == 'voice' else 'text'
         write_json(self.path('turns',identity),turn)
         if thread:
             with self.lock:
@@ -598,8 +683,11 @@ class Genesis:
             except ValueError: continue
             rows.append({'revision':old.get('revision'),'stage':old.get('stage'),'title':old.get('title'),'updated_at':old.get('updated_at'),'work':(old.get('work') or {}).get('status')})
         return rows
-    def tool(self,action,payload):
+    def tool(self,action,payload,turn=None):
         # Model-facing capabilities intentionally exclude approval and paid launch.
+        # `turn` is the turn being run, and only the build tools need it: an architecture
+        # built a step at a time is read back from that turn's own events, never from
+        # state on this object, which two turns at once would share (feature 025).
         from wb_studio import blueprints, code_index, product_graphs
         if action=='research_state':
             state=self.state()  # compact for the model: cards and turns as lines, never every event and every result row
@@ -623,7 +711,9 @@ class Genesis:
             if payload.get('after') is not None: events=[e for e in events if e['id']>int(payload['after'])]
             limit=max(1,min(500,int(payload.get('limit',100))))
             page=events[:limit]
-            return {'job':job,'events':page,'next_after':page[-1]['id'] if len(events)>limit else None,'remaining_events':max(0,len(events)-limit), 'analysis':json.loads(analysis.read_text(encoding='utf8')) if analysis.exists() else None,'genesis_analyses':[json.loads(p.read_text(encoding='utf8')) for p in (self.root/'analyses').glob('*.json') if json.loads(p.read_text(encoding='utf8')).get('run')==job['id']]}
+            from wb_studio.genesis_reports import published, status as report_status
+            return {'authored':published(self.studio, job['id']), 'report_work':report_status(self, {'run':job['id']}),
+                    'job':job,'events':page,'next_after':page[-1]['id'] if len(events)>limit else None,'remaining_events':max(0,len(events)-limit), 'analysis':json.loads(analysis.read_text(encoding='utf8')) if analysis.exists() else None,'genesis_analyses':[json.loads(p.read_text(encoding='utf8')) for p in (self.root/'analyses').glob('*.json') if json.loads(p.read_text(encoding='utf8')).get('run')==job['id']]}
         if action=='catalog':
             from wb_studio.task_sets import task_sets
             from wb_studio.app import ROOT
@@ -684,8 +774,13 @@ class Genesis:
             try: return MEMORY_ACTIONS[action](self.memory,payload)
             except MemoryFull as exc: return {'error':str(exc)+' The nightly consolidation makes room; do not retry now.'}
             except (ValueError,FileNotFoundError) as exc: return {'error':str(exc)}
-        if action=='save_architecture': return blueprints.save_draft(self.studio,payload)
-        if action=='publish_architecture': return blueprints.publish(self.studio,payload)
+        if action in ('edit_architecture','save_architecture'):
+            from wb_studio import genesis_build
+            return (genesis_build.edit if action=='edit_architecture' else genesis_build.commit)(self,turn,payload)
+        if action=='publish_architecture':
+            from wb_studio import genesis_build
+            genesis_build.refuse_while_editing(self.studio,payload.get('id'))
+            return blueprints.publish(self.studio,payload)
         if action=='save_product_graph': return product_graphs.save_draft(self.studio,payload)
         if action in code_index.TOOLS: return code_index.TOOLS[action](self.studio,payload)  # read-only, internal audience
         from wb_studio.genesis_plugins import dispatch

@@ -19,7 +19,7 @@ from wb_report.metrics import (NOT_APPLICABLE_REASON, comparison,
 from wb_results.store import Store
 from wb_results.evidence import EvidenceIntegrityError, verify_manifest
 from wb_results.regrade_evidence import validate_current
-from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
+from wb_stats.stats import _is_infra, _is_ungraded, arm_summary, paired_wl, pass_hat_k
 from wb_stats.stats import sem as stats_sem
 
 class GateError(Exception):
@@ -42,13 +42,15 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
     """One task-and-competitor cell of the matrix (contracts section 3).
     Infrastructure attempts are named and excluded from the denominator, so
     `0/0 (infra 2)` is a legitimate cell, not a bug."""
-    ok = [r for r in rows if not _is_infra(r)]
+    ok = [r for r in rows if not _is_infra(r) and not _is_ungraded(r)]
     failing = [r for r in sorted(rows, key=lambda r: r["trial"]) if not r["passed"]]
     category, detail, trial = "passed", None, None
     if failing:
         first = failing[0]
         trial = first["trial"]      # which repetition the reason was taken from
-        if _is_infra(first):
+        if _is_ungraded(first):
+            category, detail = "ungraded", first.get("error")
+        elif _is_infra(first):
             category, detail = "infra", first.get("termination")
         elif first.get("unexpected_changes"):
             category = "unexpected change"
@@ -67,7 +69,9 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
     on_retry = bool(ordered) and not ordered[0]["passed"] and any(
         r["passed"] for r in ordered[1:])
     return {"passed": sum(1 for r in ok if r["passed"]), "attempted": len(ok),
-            "infra": len(rows) - len(ok), "category": category, "detail": detail,
+            "infra": sum(_is_infra(r) for r in rows),
+            **({"ungraded": sum(_is_ungraded(r) for r in rows)} if any(_is_ungraded(r) for r in rows) else {}),
+            "category": category, "detail": detail,
             "trial": trial, "on_retry": on_retry}
 
 
@@ -138,6 +142,9 @@ def build_report(store: Store, run_id: str, baseline_arm: str | None = None,
     if run is None:
         raise KeyError(f"unknown run {run_id!r}")
     config = json.loads(run["config_json"])
+    from wb_world.source import comparison_notes, product_of
+    product = product_of(config)
+    plan = config.get("plan") if isinstance(config.get("plan"), dict) else {}
     arms = sorted(store.episodes(run=run_id)["source"]["arm"] or [])
 
     k = k or config.get("k") or 1
@@ -157,6 +164,14 @@ def build_report(store: Store, run_id: str, baseline_arm: str | None = None,
                 selected = validate_current(row, artifacts)
             except EvidenceIntegrityError as error:
                 raise GateError(f"invalid grading evidence for episode {row['episode_id']}: {error}") from error
+            if product.get("source") and selected.get("uri"):
+                stored = json.loads(Path(selected["uri"]).read_text(encoding="utf-8"))
+                grading = stored.get("grading", stored) if selected["kind"] == "regrade" else stored
+                selected = {**selected, "task_id": row["task_id"], "arm": arm,
+                            "termination": row["termination"], "passed": row["passed"],
+                            "details": {key: grading.get(key) for key in (
+                                "assertions_passed", "positive_source", "positive", "invariant",
+                                "source_collateral", "disagreement", "ungraded", "error")}}
             grading_evidence[row["episode_id"]] = selected
         suites = {r["suite"] for r in res["rows"]}
         if len(suites) > 1 or (suites and suites != {run["suite"]}):
@@ -200,6 +215,7 @@ def build_report(store: Store, run_id: str, baseline_arm: str | None = None,
                    "wins": wl["wins"], "losses": wl["losses"],
                    "both_pass": wl["both_pass"], "neither_pass": wl["neither_pass"],
                    "dropped_infra": wl["dropped_infra"],
+                   "dropped_ungraded": wl["dropped_ungraded"],
                    "mcnemar": wl["mcnemar"],
                    "source": {"suite": run["suite"], "suite_version": run["suite"].split("@")[-1],
                               "denominator": wl["pairs"], "arm": [arm, baseline],
@@ -222,6 +238,13 @@ def build_report(store: Store, run_id: str, baseline_arm: str | None = None,
                      "total": sum(len(per_arm_rows[a]) for a in arms)},
             "metrics": metrics, "comparisons": comparisons,
             "grading_evidence": grading_evidence,
+            "product": product, "caveats": comparison_notes(product) + (
+                ["This round evaluates one-off business requests. Monarch creates and executes a workflow internally; "
+                 "the native agent fulfills the same request. Workflow reuse is not measured."]
+                if product.get("source") and config.get("track", plan.get("track")) == "agentic-request" else []) + (
+                ["This two-task smoke checks integration and grading. It does not estimate general performance "
+                 "or isolate the effect of Monarch's architecture from its models and harness."]
+                if product.get("source") and len(tasks) <= 2 else []),
             "totals": round_totals(metrics),
             # one entry per Monarch attempt, per Monarch competitor; empty when
             # none ran, and the page omits the section entirely
@@ -288,6 +311,7 @@ def render_md(report: dict[str, Any]) -> str:
              f"config `{report['config_hash']}` · k={report['k']}"]
     if report.get("stop_reason"):
         lines.append(f"\nstopped: {report['stop_reason']}")
+    lines.extend("\n" + note for note in report.get("caveats", []))
     lines.append("\n## Per-arm results\n")
     hdr = ("| arm | strict pass ± SEM | first try | after retry | retries "
            "| pass^k | infra rate | cache hit |")
@@ -336,18 +360,28 @@ def render_md(report: dict[str, Any]) -> str:
             lines.append(
                 f"- `{f['arm']}` vs `{f['baseline']}`: **{f['wins']}W / {f['losses']}L** "
                 f"(both {f['both_pass']}, neither {f['neither_pass']}, "
-                f"infra-dropped {f['dropped_infra']}) · McNemar b={m['b']} c={m['c']} "
+                f"infra-dropped {f['dropped_infra']}"
+                # Only when there are any, so every line already written keeps its shape.
+                + (f", ungraded-dropped {f['dropped_ungraded']}" if f.get("dropped_ungraded") else "")
+                + f") · McNemar b={m['b']} c={m['c']} "
                 f"p={m['p']}")
             lines.append(f"  `{_source_line(f['source'])}{suffix}`")
+    source_details = {episode: item for episode, item in report.get("grading_evidence", {}).items()
+                      if item.get("details")}
+    if source_details:
+        lines.append("\n## Grading evidence\n")
+        for episode, item in source_details.items():
+            lines.extend([f"\n### {item['task_id']} — {item['arm']}\n",
+                          f"Strict pass: {item['passed']}. Completion: {item['termination']}. "
+                          f"Evidence: {item['uri']}.", "\n```json",
+                          json.dumps(item["details"], ensure_ascii=False, indent=2), "```"])
     return "\n".join(lines) + "\n"
 
 
-def render_html(report: dict[str, Any], sortable: bool = True) -> str:
-    """The page of contracts/report.md, no longer the escaped markdown blob.
-    The signature is unchanged bar `sortable`, which `wb report --no-sort` sets.
-    """
+def render_html(report: dict[str, Any]) -> str:
+    """The page of contracts/report.md, no longer the escaped markdown blob."""
     from wb_report.html import render_page
-    return render_page(report, sortable=sortable)
+    return render_page(report)
 
 
 def render_executive(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
@@ -357,7 +391,7 @@ def render_executive(report: dict[str, Any], tasks_dir: str | Path = "tasks") ->
 
 
 def write_report(store: Store, run_id: str, out_dir: str | Path,
-                 sortable: bool = True, fmt: str = "html",
+                 fmt: str = "html",
                  tasks_dir: str | Path = "tasks", **kw) -> dict[str, str]:
     """Write the markdown report and one HTML page.
 
@@ -368,6 +402,9 @@ def write_report(store: Store, run_id: str, out_dir: str | Path,
     """
     rep = build_report(store, run_id, **kw)
     out = Path(out_dir)
+    if rep.get("product", {}).get("world") == "appworld":
+        from wb_worlds.appworld.importer import outside_repository
+        out = outside_repository(out)
     out.mkdir(parents=True, exist_ok=True)
     md = out / f"report-{run_id}.md"
     md.write_text(render_md(rep), encoding="utf-8")
@@ -376,7 +413,7 @@ def write_report(store: Store, run_id: str, out_dir: str | Path,
         htm.write_text(render_executive(rep, tasks_dir=tasks_dir), encoding="utf-8")
     else:
         htm = out / f"report-{run_id}.html"
-        htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
+        htm.write_text(render_html(rep), encoding="utf-8")
     return {"md": str(md), "html": str(htm)}
 
 # The one sentence the summary page always carries (contracts section 9). A
@@ -412,6 +449,9 @@ def build_summary(store: Store, run_ids: list[str],
     # Rounds on different worlds (suite ids) are not the same measurement: the
     # aggregate below is a mean over rounds, and a mean over two worlds would
     # be a number about nothing (unblock plan M1, 8 Sep 2026).
+    products = {r["source"].get("product") for r in rounds}
+    if len(products) > 1:
+        raise GateError("cannot pool different products: " + ", ".join(sorted(str(p) for p in products)))
     suites = sorted({r["suite"] for r in rounds})
     if len(suites) > 1:
         raise GateError("refusing to pool rounds of different suites into one summary: "
@@ -488,18 +528,18 @@ def resolve_plans(store: Store, plans: list[str]) -> list[tuple[str, str, str]]:
     return picked
 
 
-def render_summary_html(summary: dict[str, Any], sortable: bool = True) -> str:
+def render_summary_html(summary: dict[str, Any]) -> str:
     """The summary page. Like render_html, it delegates to the renderer that
     cannot reach the store."""
     from wb_report.html import render_summary_page
-    return render_summary_page(summary, sortable=sortable)
+    return render_summary_page(summary)
 
 
 def write_summary(store: Store, run_ids: list[str], out: str | Path,
-                  baseline: str | None = None, sortable: bool = True) -> str:
+                  baseline: str | None = None) -> str:
     from wb_report.html import render_summary_page
     summary = build_summary(store, run_ids, baseline=baseline)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_summary_page(summary, sortable=sortable), encoding="utf-8")
+    path.write_text(render_summary_page(summary), encoding="utf-8")
     return str(path)

@@ -210,6 +210,8 @@ class Watcher:
     def wake(self):
         """One pass: create trigger cards, then work the oldest queued card if nothing is working and the gates allow."""
         self._write(last_wake=datetime.now(timezone.utc).isoformat(), last_error=None)
+        from wb_studio.genesis_missions import reconcile
+        reconcile(self.genesis)
         self.genesis.debrief()  # R2: a finished planned run re-queues its card here, not on a page load
         self.triggers()
         if self.genesis.autonomy.read()['paused']:

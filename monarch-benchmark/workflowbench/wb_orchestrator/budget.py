@@ -115,6 +115,16 @@ def _json_keys(value: Any) -> None:
             _json_keys(item)
 
 
+def _released(row: Any) -> bool:
+    """Has a named person released this unsettled hold? Unreadable metadata never has."""
+    if row['actual_microusd'] is not None:
+        return False
+    try:
+        return bool(json.loads(row['metadata_json']).get('hold_released'))
+    except (ValueError, TypeError):
+        return False
+
+
 def _identity(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f'{name} must be a nonempty string')
@@ -173,6 +183,8 @@ class BudgetStatus:
     held_microusd: int
     carried_held_microusd: int
     overrun_ids: tuple[str, ...]
+    unknown_ids: tuple[str, ...] = ()
+    released_microusd: int = 0
 
     @property
     def committed_microusd(self) -> int:
@@ -201,6 +213,10 @@ class BudgetStatus:
     @property
     def carried_held_usd(self) -> Decimal:
         return _usd(self.carried_held_microusd)
+
+    @property
+    def released_usd(self) -> Decimal:
+        return _usd(self.released_microusd)
 
     @property
     def committed_usd(self) -> Decimal:
@@ -296,10 +312,13 @@ class BudgetLedger:
             end, _ = self._time(datetime.fromisoformat(row['settled_at']))
             if start <= week <= end:
                 actual += row['actual_microusd']
-        # All unknown liabilities count, including prior weeks. Python sums avoid
-        # SQLite SUM overflow when an unusually large verified overrun is recorded.
-        held = sum(row['maximum_microusd'] for row in rows if row['actual_microusd'] is None)
-        carried = sum(row['maximum_microusd'] for row in rows if row['actual_microusd'] is None and row['week_start'] < week)
+        # All unknown liabilities count, including prior weeks — until a named person
+        # releases one. Python sums avoid SQLite SUM overflow when an unusually large
+        # verified overrun is recorded.
+        unknown = [row for row in rows if row['actual_microusd'] is None and not _released(row)]
+        held = sum(row['maximum_microusd'] for row in unknown)
+        carried = sum(row['maximum_microusd'] for row in unknown if row['week_start'] < week)
+        released = sum(row['maximum_microusd'] for row in rows if _released(row))
         for envelope in connection.execute('SELECT * FROM budget_run_reservations WHERE closed_at IS NULL'):
             unused = max(0, envelope['maximum_microusd'] - self._run_used(connection, envelope['scope_id']))
             held += unused
@@ -315,7 +334,8 @@ class BudgetLedger:
             except (ValueError, TypeError):
                 return True   # metadata we cannot read is not an acknowledgement
         overruns = tuple(sorted(row['reservation_id'] for row in rows if unanswered(row)))
-        return BudgetStatus(week, self.weekly_limit_microusd, actual, held, carried, overruns)
+        return BudgetStatus(week, self.weekly_limit_microusd, actual, held, carried, overruns,
+                            tuple(sorted(row['reservation_id'] for row in unknown)), released)
 
     def status(self, *, now: datetime | None = None) -> BudgetStatus:
         week, _ = self._time(now)
@@ -327,12 +347,23 @@ class BudgetLedger:
         week, _ = self._time(instant)
         return week
 
-    def reservations(self, *, scope_id: str | None = None) -> list[Reservation]:
-        """Every reservation, oldest first; a read-only view for dispatch checks and reconciliation."""
+    def reservations(self, *, scope_id: str | None = None, run_id: str | None = None) -> list[Reservation]:
+        """Read request liabilities, optionally including a run's legacy episode requests."""
         query, args = 'SELECT * FROM budget_reservations', ()
+        if scope_id is not None and run_id is not None:
+            raise ValueError('Choose scope_id or run_id, not both')
         if scope_id is not None:
             _identity(scope_id, 'scope_id')
             query, args = query + ' WHERE scope_id=?', (scope_id,)
+        elif run_id is not None:
+            _identity(run_id, 'run_id')
+            # Older runs scoped each request to its episode and encoded the run
+            # in the request ID. Match the literal slash boundary, never LIKE:
+            # run1 must not collect run10, and IDs may contain SQL wildcards.
+            prefix = run_id + '/'
+            query += """ WHERE scope_id=? OR substr(reservation_id, 1, ?)=?
+                OR reservation_id IN (SELECT reservation_id FROM budget_run_requests WHERE run_id=?)"""
+            args = (run_id, len(prefix), prefix, run_id)
         with self._transaction() as connection:
             rows = connection.execute(query + ' ORDER BY created_at, reservation_id', args).fetchall()
         return [Reservation(**dict(row)) for row in rows]
@@ -521,6 +552,9 @@ class BudgetLedger:
                 raise ReservationConflict('settled reservation cannot be dispatched')
             if row['dispatched_at'] is not None:
                 raise ReservationConflict('reservation was already dispatched or dispatch is unknown')
+            # Its capacity was released; dispatching it now would spend money nothing holds.
+            if _released(row):
+                raise ReservationConflict('released reservation cannot be dispatched')
             if datetime.fromisoformat(timestamp) < datetime.fromisoformat(row['created_at']):
                 raise ValueError('dispatch cannot be before reservation')
             envelope = connection.execute("""SELECT run.closed_at FROM budget_run_reservations run
@@ -601,6 +635,49 @@ class BudgetLedger:
             connection.execute('UPDATE budget_reservations SET metadata_json=? WHERE reservation_id=?',
                                (json.dumps(metadata, sort_keys=True), reservation_id))
             row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            return Reservation(**dict(row))
+
+    def release_hold(self, reservation_id: str, *, by: str, reason: str,
+                     now: datetime | None = None) -> Reservation:
+        """A named person releases one hold whose cost the provider never reported.
+
+        An attempt whose billing cannot be read settles with no actual and keeps its whole
+        maximum held, this week and every week after it. That is right while the cost is
+        merely late — the money may have been spent — but there was no way out. Ten Monarch
+        attempts during a Langfuse outage hold US$ 250 of a US$ 300 week for ever, with no
+        cent proven spent; `acknowledge_overrun` answers for overruns only.
+
+        No clock does this. An expiry at the week boundary would quietly drop a charge
+        nobody has read yet, and the ledger would report a week it cannot stand behind.
+        A person decides, with who, when and why written beside the reservation.
+
+        Nothing about the money changes. The reservation stays unsettled and unknown, so
+        `wb budget reconcile` still counts it against the provider's own export, and a
+        total that arrives later still settles and charges its weeks. What changes is that
+        the unknown stops occupying capacity — and that this reservation can never dispatch
+        again, since nothing holds it any more.
+        """
+        _identity(reservation_id, 'reservation_id')
+        who, why = str(by or '').strip(), str(reason or '').strip()
+        if not who:
+            raise ValueError('releasing a hold names the person doing it')
+        if not why:
+            raise ValueError('releasing a hold states why, for the record')
+        _, timestamp = self._time(now)
+        with self._transaction() as connection:
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f'no reservation {reservation_id!r} in the ledger')
+            if row['actual_microusd'] is not None:
+                raise ValueError(f'reservation {reservation_id!r} is settled, not held; its cost is known')
+            if _released(row):
+                raise ValueError(f'reservation {reservation_id!r} was already released')
+            metadata = json.loads(row['metadata_json'])
+            metadata['hold_released'] = {'by': who, 'reason': why[:500], 'at': timestamp}
+            connection.execute('UPDATE budget_reservations SET metadata_json=? WHERE reservation_id=?',
+                               (json.dumps(metadata, sort_keys=True), reservation_id))
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            langfuse_export.record(connection, dict(row), outcome='hold_released')
             return Reservation(**dict(row))
 
     def record_summary(self, identity: str, summary: dict) -> None:

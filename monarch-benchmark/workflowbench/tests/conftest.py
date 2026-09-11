@@ -22,23 +22,6 @@ def _clear_provider_keys(names):
         os.environ.pop(name, None)
 
 
-@pytest.fixture
-def stored_run():
-    """The lab's only multi-task run, as the evidence US2 reproduces against.
-
-    Feature 024 User Story 2 fixes eight things a round asserts that its own stored
-    record does not support. Each fix is written against this job rather than a
-    fabricated one, so the test fails for the reason the reader would have seen.
-    Skipped, with the reason, where the directory is absent (a fresh clone).
-    """
-    from wb_studio.app import ROOT
-    directory = ROOT / "out" / "studio" / "6022e89fbb974c7483716f85a5e3c4fe"
-    if not (directory / "job.json").exists():
-        pytest.skip("the stored ten-task run is not in this checkout (out/ is gitignored)")
-    import json
-    return json.loads((directory / "job.json").read_text(encoding="utf-8"))
-
-
 @pytest.fixture(autouse=True)
 def a_named_operator(monkeypatch):
     """Every paid launch names the person who asked for it (decision D5, feature 024 FR-007).

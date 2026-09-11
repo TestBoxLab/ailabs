@@ -47,7 +47,14 @@ def test_a_round_without_monarch_still_has_a_trend():
     r = report_over(run("a", "2026-09-01T00:00:00+00:00", {"glm-5.3": 1.0, "Bare glm-5.3": 0.5}),
                     run("b", "2026-09-02T00:00:00+00:00", {"glm-5.3": 0.5, "Bare glm-5.3": 0.5}))
     assert r["trend"], "a round of non-Monarch setups produced no over-time figure at all"
-    assert {p["series"] for p in r["trend"]} == {"glm-5.3", "Bare glm-5.3"}
+    assert {p["series"] for p in r["trend"]} == {"GLM 5.3 (Z.ai)", "Bare glm-5.3"}
+
+
+def test_two_builds_of_one_setup_stay_two_lines():
+    """Resolved names would collapse them into a line the round never ran."""
+    r = report_over(run("a", "2026-09-01T00:00:00+00:00", {"monarch · 0cf63a74e stock": 1.0, "monarch · 9b79557 stock": 0.5}),
+                    run("b", "2026-09-02T00:00:00+00:00", {"monarch · 0cf63a74e stock": 0.5, "monarch · 9b79557 stock": 0.5}))
+    assert {p["series"] for p in r["trend"]} == {"monarch · 0cf63a74e stock", "monarch · 9b79557 stock"}
 
 
 def test_the_title_names_what_is_in_the_data():

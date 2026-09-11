@@ -17,7 +17,8 @@ def revised_grader(monkeypatch, artifacts, *, passed=False):
     grading["assertions_passed"] = passed
     for check in grading["assertion_results"]:
         check["passed"] = passed
-    monkeypatch.setattr("wb_orchestrator.orchestrator.grade", lambda *args: copy.deepcopy(grading))
+    monkeypatch.setattr("wb_orchestrator.orchestrator.grade",
+                        lambda *args, **kw: copy.deepcopy(grading))
 
 
 def current(store, row):
@@ -148,7 +149,7 @@ def test_input_change_during_grading_never_publishes_or_counts_a_changed_verdict
     artifacts = store.artifacts(row["episode_id"])
     grading = json.loads(Path(artifacts["grading"]).read_text())
     grading["passed"] = grading["assertions_passed"] = False
-    def changed_input(*args):
+    def changed_input(*args, **kw):
         Path(artifacts["snapshot1"]).write_text("{}", encoding="utf-8")
         return grading
     monkeypatch.setattr("wb_orchestrator.orchestrator.grade", changed_input)

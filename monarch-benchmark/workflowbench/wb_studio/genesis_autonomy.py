@@ -27,8 +27,15 @@ ENGINEER_LEVELS = ('propose', 'off')  # there is no level at which a fix applies
 # configured, and such a workspace must do nothing paid: a fresh Studio with provider
 # keys used to begin working cards within thirty seconds and could dispatch a run whose
 # operator was `genesis:smoke` and whose approver was a model turn (feature 024, FR-002).
-DEFAULTS = {'cards': 'off', 'runs': 'off', 'initiative': 'off', 'engineer': 'off', 'paused': False}
+# `edit` is the one dial that ships on (feature 025, FR-058), and it is not an exception to
+# the rule above: building an architecture spends nothing of its own, writes nothing outside
+# the turn until a person's own save tool runs, and cannot publish. Off, Genesis cannot touch
+# an architecture at all — which is stricter than what shipped before this dial existed.
+DEFAULTS = {'cards': 'off', 'runs': 'off', 'initiative': 'off', 'engineer': 'off', 'edit': 'act', 'paused': False}
+EDIT_LEVELS = ('act', 'off')
 WORDS = {
+    'edit': {'act': 'Genesis builds architectures in the open editor; every save and publish stays a separate act',
+             'off': 'Genesis cannot change an architecture'},
     'cards': {'act': 'Genesis creates, moves and writes cards and reports it', 'off': 'Genesis only reads; a person moves every card'},
     'runs': {'smoke': f'Genesis launches plans of at most {SMOKE_SCALE_ATTEMPTS} attempts per competitor within its allowances',
              'propose': 'Every plan waits for a person, whatever its size', 'off': 'Genesis never proposes a run'},
@@ -88,6 +95,10 @@ class Autonomy:
             if payload['engineer'] not in ENGINEER_LEVELS:
                 raise ValueError('Engineer is propose or off.')
             changes['engineer'] = payload['engineer']
+        if 'edit' in payload:
+            if payload['edit'] not in EDIT_LEVELS:
+                raise ValueError('Editing is act or off.')
+            changes['edit'] = payload['edit']
         if 'paused' in payload:
             changes['paused'] = bool(payload['paused'])
         with self.lock:
