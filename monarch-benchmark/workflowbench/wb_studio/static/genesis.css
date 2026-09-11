@@ -36,6 +36,36 @@
 .turn-steps li.live .step-action{color:var(--signal)}
 .step-body{padding:0 0 var(--space-3) 16px}.step-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--text-1);background:var(--surface);padding:var(--space-2);max-height:260px;overflow:auto}
 .genesis-answer{font-size:var(--text-3);line-height:1.6}.genesis-answer p{margin:0 0 var(--space-3)}.genesis-answer h4{margin:var(--space-4) 0 var(--space-2)}.genesis-answer pre{background:var(--surface);padding:var(--space-3);overflow:auto;font-size:var(--text-1)}.genesis-answer table{margin:var(--space-3) 0;font-size:var(--text-2)}.genesis-answer ul,.genesis-answer ol{padding-left:22px}
+/* Hold to talk. The mark is a measurement: its scale is the microphone's own signal,
+   so it fails visibly at a muted mic instead of pulsing confidently at a dead one
+   (feature 024, stage S3).
+
+   Square, because --radius is 0 everywhere and this is `.status:before` grown to 72px
+   and given a live reading — continuous with the vocabulary rather than an exception to
+   it. The hairline gate is full scale, so the fill has something to be read against.
+
+   Scale, never opacity or colour: a flash under WCAG 2.3.1 is a pair of opposing
+   relative-luminance changes, and scaling a solid block on a constant ground changes
+   luminance only where the edge sweeps. Never --signal — red is the current place here,
+   and the saturated hue carries the stricter threshold. */
+.mic-row{display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-2)}
+#genesis-mic{white-space:nowrap;flex:none}
+#mic-state{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mic-gate{width:72px;height:72px;border:1px solid var(--line-strong);flex:none;display:grid;place-items:center}
+.mic-fill{width:72px;height:72px;background:var(--ink);transform-origin:center;transform:scale(calc(.45 + var(--mic-level,0) * .55))}
+.mic-steps{display:none;gap:3px}
+.mic-step{width:8px;height:20px;background:var(--line);display:block}
+.mic-step.on{background:var(--ink)}
+@media(prefers-reduced-motion:no-preference){
+ .mic-fill{transition:transform 90ms linear}
+}
+/* Not a frozen orb: a frozen one conveys nothing and removes the only live evidence the
+   microphone works. Five discrete fills are a change of content, not motion. */
+@media(prefers-reduced-motion:reduce){
+ .mic-fill{display:none}
+ .mic-steps{display:flex}
+}
+
 /* A step that just arrived. The flash marks the DATA landing, never the view being
    re-rendered, and it is deliberately not --signal: red means the current place in this
    system, and a saturated hue carries the stricter flash threshold under WCAG 2.3.1.
