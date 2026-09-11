@@ -25,7 +25,6 @@ import os
 import re
 import socket
 import subprocess
-import tempfile
 from decimal import Decimal
 from pathlib import Path
 

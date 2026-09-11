@@ -34,7 +34,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -47,7 +47,7 @@ from wb_orchestrator.monarch_setup import Stop, expand, public_front_door_url
 from wb_results.evidence import write_json
 from wb_world.episode import EvidenceWriteError
 
-from wb_orchestrator.monarch_probe import PROBE_FILE, PROBE_TTL, load_probe, probe_path
+from wb_orchestrator.monarch_probe import PROBE_TTL, load_probe, probe_path
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = "default-monarch-enterprise"

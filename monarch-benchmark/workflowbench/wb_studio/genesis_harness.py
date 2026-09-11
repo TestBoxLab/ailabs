@@ -16,7 +16,6 @@ the seams the rest of the Studio and the tests use; they keep their names.
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 import time

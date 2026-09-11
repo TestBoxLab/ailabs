@@ -153,7 +153,7 @@ def paragraph(record: dict | None) -> str:
 # -- Graphify ---------------------------------------------------------------------
 
 def _graphify(repo, out: Path, commit: str, previous: dict) -> dict:
-    report, graph = out / "GRAPH_REPORT.md", out / "graph.json"
+    report = out / "GRAPH_REPORT.md"
     have = report.exists()
     status = {"available": False, "report": str(report) if have else None,
               "built_from": previous.get("built_from") if have else None}

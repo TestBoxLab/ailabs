@@ -634,18 +634,6 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
     return _shell(f"WorkflowBench {report['run_id']}", toc, hero, "".join(parts))
 
 
-def _round_source_line(rnd: dict) -> str:
-    """One round's source line on the summary page, with its stop reason where
-    it has one: a round cut short by the cost ceiling is a real partial result,
-    and labelling it beats hiding it (research R9)."""
-    p = rnd["source"]
-    line = (f"src: {p['suite']} - v{p['suite_version']} - n={rnd['size']['total']} - "
-            f"{rnd['run_id']}{rnd['source_suffix']}")
-    if rnd.get("stop_reason"):
-        line += f" - stopped: {rnd['stop_reason']}"
-    return line
-
-
 def _aggregate_table(summary: dict) -> str:
     """One row per competitor: the mean of the rounds it ran, how many those
     were, and a column per tier where the rounds carry one.
@@ -766,24 +754,6 @@ def _part(ident: str, eyebrow: str, title: str, sub: str, body: str) -> str:
 def _toc_links(items) -> str:
     return "".join(f'<a href="#{i}"><span class="n">{n:02d}</span>{_esc(t)}</a>'
                    for n, (i, t) in enumerate(items, 1))
-
-
-def _mtable(headers, rows, numeric_from=1, titles=None) -> str:
-    """The reference's `.tablewrap > table`. `titles` maps a header to the full
-    name it abbreviates, so a shortened column keeps its identity on hover."""
-    head = "".join(
-        f'<th title="{_esc((titles or {}).get(h, h))}">{_esc(h)}</th>' for h in headers)
-    body = []
-    for row in rows:
-        cells = []
-        for i, cell in enumerate(row):
-            text, title = cell if isinstance(cell, tuple) else (cell, None)
-            attr = f' title="{_esc(title)}"' if title else ""
-            klass = ' class="num"' if i >= numeric_from else ""
-            cells.append(f"<td{klass}{attr}>{_esc(text)}</td>")
-        body.append("<tr>" + "".join(cells) + "</tr>")
-    return (f'<div class="tablewrap"><table><tr>{head}</tr>'
-            + "".join(body) + "</table></div>")
 
 
 def _src(text: str) -> str:
@@ -1217,21 +1187,8 @@ def _cost_section_table(report: dict) -> str:
 def _cost_section(report: dict) -> str:
     """Section 3: what it cost, per competitor and - for Monarch - per phase and
     per model of its team."""
-    dollars = True
-    metrics = report["metrics"]
-    base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
-                None)
-    if dollars:
-        series = _series(metrics, lambda m: (m["arm"], m["cost_per_passed"], None))
-        chart = _bar_chart(series, kind="money")
-        guide = ("What the round paid for. Cost per passed attempt is the one "
-                 "that compares competitors fairly; the bar shows it.")
-    else:
-        series = [(m["arm"], (m["cost_total"] / base) if base else None, None)
-                  for m in metrics]
-        chart = _bar_chart(series, kind="ratio")
-        guide = "What the round paid for, as a ratio against the baseline."
-    return chart + _cost_section_table(report)
+    series = _series(report["metrics"], lambda m: (m["arm"], m["cost_per_passed"], None))
+    return _bar_chart(series, kind="money") + _cost_section_table(report)
 
 
 def _time_section_table(report: dict) -> str:

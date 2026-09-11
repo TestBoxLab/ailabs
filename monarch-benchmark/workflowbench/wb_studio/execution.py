@@ -169,7 +169,6 @@ class ArchitectureArm:
         ep._observe = observe
         total = ArmResult()
         outputs, final = {}, ""
-        by_id = {s["id"]: s for s in self.plan["steps"]}
         for step in self.plan["steps"]:
             kind = step["type"]
             if kind == "input":

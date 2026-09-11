@@ -169,15 +169,6 @@ def with_baseline(job, hist) -> dict:
             "results": list(job.get("results") or []) + hist["results"]}
 
 
-def chance_sentence(p_value: float) -> str:
-    """The sign test in words a reader without statistics can weigh."""
-    if p_value < 0.01:
-        return "A gap this size would come up by chance less than once in 100 times."
-    if p_value >= 0.5:
-        return "A gap this size comes up by chance as often as not, so it says little on its own."
-    return f"A gap this size would come up by chance about {round(p_value * 100)} times in 100."
-
-
 def rate_phrase(p) -> str:
     """Count, rate and interval in one clause: "6 of 10 tasks (60%, 95% CI 31 to 83)"."""
     return f"{count_phrase(p['passed'], p['attempts'])} tasks ({pct(p['rate'])}%, 95% CI {pct(p['low'])} to {pct(p['high'])})"
