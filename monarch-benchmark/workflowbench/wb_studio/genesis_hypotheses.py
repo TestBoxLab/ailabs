@@ -19,6 +19,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from wb_studio import measures
+
 MEASURES = ('pass_rate', 'pass_k', 'cost_per_pass', 'violations', 'false_completion', 'turns')
 DIRECTIONS = ('a_higher', 'a_lower')
 KINDS = ('architecture', 'bare', 'monarch')
@@ -535,9 +537,20 @@ def smallest_plan(studio, record) -> dict:
             if record['measure'] in ('pass_rate', 'pass_k') and value is not None:
                 share = float(value)
                 break
+    # Size for the test that settles this hypothesis. `settle` decides it with
+    # measures.paired -> measures.sign_test, which pairs by task and drops ties, so what
+    # matters is how many tasks the two setups disagree on. This used to compute
+    # n = ceil(4·p·(1−p)/d²) with a floor of ten — the size for two INDEPENDENT
+    # proportions — and ten tasks is below anything the sign test can conclude, so the
+    # lab's sizing function recommended experiments its own settling function could never
+    # decide (feature 024, FR-021).
+    #
+    # The declared minimum effect is the share of tasks a real difference is expected to
+    # flip, which is the expected discordant-pair rate, so the size follows from it.
     d = record['minimum_effect'] - 1 if record['measure'] in RATIO_MEASURES else record['minimum_effect']
-    count = max(10, math.ceil(4 * share * (1 - share) / (d * d))) if d > 0 else len(tasks)
-    count = min(max(10, count), len(tasks))
+    floor = measures.minimum_discordant_pairs()
+    count = min(math.ceil(floor / d), len(tasks)) if d > 0 else len(tasks)
+    power = measures.settleable(count, repetitions=1, flip_rate=d if d > 0 else None)
     a, b = record['comparison']['a'], record['comparison']['b']
     architectures = [s['id'] for s in (a, b) if s['kind'] in ('architecture', 'monarch')]
     models = [s['model'] for s in (a, b) if s['kind'] in ('architecture', 'monarch') and s.get('model')]
@@ -569,9 +582,17 @@ def smallest_plan(studio, record) -> dict:
     proposal['maximum_usd'] = str(max(ceiling, Decimal('0.01')))
     out = {'proposal': proposal, 'tasks': count, 'population': len(tasks), 'competitors': competitors,
            'pass_rate_assumed': share, 'tokens_per_attempt': tokens, 'price_basis': price_basis,
-           'notes': notes, 'covered': len(covered),
-           'basis': 'n = ceil(4·p·(1−p)/d²) with p = ' + format(share, '.3g') + ' and d = ' + format(d, '.3g')
-                    + '; the ceiling is ' + str(count) + ' tasks × ' + str(competitors) + ' competitors at the rate card.'}
+           'notes': notes, 'covered': len(covered), 'power': power,
+           'basis': 'Sized for the paired sign test that settles it: a declared minimum effect of '
+                    + format(d, '.3g') + ' flips about that share of the tasks, and ' + str(floor)
+                    + ' discordant pairs are the fewest that can reach p<0.05, so ' + str(count)
+                    + ' tasks. The ceiling is ' + str(count) + ' tasks × ' + str(competitors)
+                    + ' competitors at the rate card.'}
+    if not power['ok']:
+        # Refuse rather than trim. Capping at the population is how an experiment that
+        # could never conclude reached a launch.
+        out['not_launchable'] = power['reason']
+        return out
     try:
         from wb_studio.genesis_autonomy import plan_lines
         out['lines'] = plan_lines(studio, proposal)

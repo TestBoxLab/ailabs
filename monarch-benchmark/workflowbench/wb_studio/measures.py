@@ -231,6 +231,66 @@ def sign_test(wins: int, losses: int):
     return min(1.0, 2 * tail)
 
 
+# A paired comparison is settled by `sign_test`, which drops ties, so its power depends
+# on the number of tasks the two setups actually disagree on. `DEFAULT_FLIP_RATE` is the
+# share of a task set a real improvement is assumed to change: conservative, stated in
+# every refusal, and overridable by a caller with evidence.
+DEFAULT_FLIP_RATE = 0.35
+
+
+def wins_needed(pairs: int):
+    """The fewest wins out of `pairs` discordant pairs that reach p < 0.05, or None.
+
+    None means the sign test cannot conclude at this size however the run turns out —
+    not even a clean sweep. That is true below six pairs, which is why a ten-task set
+    cannot settle a hypothesis: an improvement that flips three or four tasks produces
+    three or four discordant pairs (feature 024, FR-021).
+    """
+    for wins in range(int(pairs), -1, -1):
+        p = sign_test(wins, int(pairs) - wins)
+        if p is None or p >= 0.05:
+            return wins + 1 if wins + 1 <= pairs else None
+    return None
+
+
+def minimum_discordant_pairs() -> int:
+    """The fewest discordant pairs at which the sign test can reach p < 0.05 at all."""
+    n = 1
+    while n < 100:
+        if wins_needed(n) is not None:
+            return n
+        n += 1
+    raise RuntimeError("the sign test reached no significance below 100 pairs")
+
+
+def settleable(tasks: int, repetitions: int = 1, flip_rate: float = None) -> dict:
+    """Whether an experiment of this size can produce a verdict, and what would be enough.
+
+    Checked before any money is reserved. Repetitions do not add discordant pairs — the
+    pairing is per task, which is the whole point of clustering — so they raise
+    confidence in each task's share, never the number of tasks that can disagree. Only
+    the task count moves this.
+    """
+    rate = DEFAULT_FLIP_RATE if flip_rate is None else float(flip_rate)
+    tasks, repetitions = int(tasks), max(1, int(repetitions))
+    expected = int(tasks * rate)
+    floor = minimum_discordant_pairs()
+    needed = wins_needed(expected)
+    sufficient = math.ceil(floor / rate) if rate > 0 else None
+    if needed is None:
+        return {"ok": False, "tasks": tasks, "repetitions": repetitions, "flip_rate": rate,
+                "expected_pairs": expected, "wins_needed": None, "sufficient_tasks": sufficient,
+                "reason": (f"{tasks} tasks at {repetitions} repetition{'s' if repetitions != 1 else ''} "
+                           f"can reach about {expected} discordant pairs, assuming a flip rate of {rate}. "
+                           f"{floor} are needed before any win count reaches p<0.05, so this hypothesis "
+                           f"cannot be settled at this size however it turns out. "
+                           f"Use at least {sufficient} tasks.")}
+    return {"ok": True, "tasks": tasks, "repetitions": repetitions, "flip_rate": rate,
+            "expected_pairs": expected, "wins_needed": needed, "sufficient_tasks": sufficient,
+            "reason": (f"{tasks} tasks at a flip rate of {rate} give about {expected} discordant pairs; "
+                       f"{needed} of them must be wins to reach p<0.05.")}
+
+
 def paired(rows, baseline_rows, task_hashes=None, baseline_hashes=None) -> dict:
     """Per-task pass difference against a baseline on identical task sets.
     A task counts once per side: passed if any evaluated repetition passed

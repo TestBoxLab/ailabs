@@ -207,12 +207,27 @@ def test_the_certainty_word_comes_from_the_reports_closed_set():
 
 # --- the smallest plan ------------------------------------------------------------------
 
-@pytest.mark.parametrize('minimum,expected', [(0.5, 10), (0.25, 16), (0.1, 20)])
-def test_the_task_count_follows_the_formula_and_never_exceeds_the_population(minimum, expected, tmp_path):
+@pytest.mark.parametrize('minimum,expected', [(0.5, 12), (0.75, 8), (1.0, 6)])
+def test_the_task_count_is_sized_for_the_sign_test_that_settles_it(minimum, expected, tmp_path):
+    """Feature 024 FR-021: this asserted n = ceil(4·p·(1−1p)/d²) floored at 10, the size
+    for two INDEPENDENT proportions — while `settle` decides the same hypothesis with a
+    paired sign test that drops ties. Six discordant pairs are the fewest that can reach
+    p<0.05, and a declared minimum effect is the share of tasks expected to flip, so the
+    size is ceil(6/d)."""
     plan = H.smallest_plan(studio_for(tmp_path=tmp_path), record(minimum_effect=minimum))
     assert plan['tasks'] == expected == len(plan['proposal']['tasks'])
     assert plan['tasks'] <= plan['population'] == len(TASKS)
-    assert plan['tasks'] == min(max(10, math.ceil(4 * 0.25 / minimum ** 2)), len(TASKS))
+    assert plan['power']['ok'] and plan['power']['expected_pairs'] >= 6
+
+
+@pytest.mark.parametrize('minimum', [0.25, 0.1])
+def test_a_population_too_small_for_the_effect_is_refused(minimum, tmp_path):
+    """Twenty tasks cannot show a 25% difference: five discordant pairs, and six is the
+    floor. It used to cap silently at the population and call that a plan."""
+    plan = H.smallest_plan(studio_for(tmp_path=tmp_path), record(minimum_effect=minimum))
+    assert plan['power']['ok'] is False
+    assert 'cannot be settled' in plan['not_launchable']
+    assert str(plan['power']['sufficient_tasks']) in plan['not_launchable']
 
 
 def test_the_plan_is_a_launch_payload_with_a_ceiling_and_says_why_it_cannot_run(tmp_path):
@@ -222,14 +237,19 @@ def test_the_plan_is_a_launch_payload_with_a_ceiling_and_says_why_it_cannot_run(
     assert proposal['goal'] == {'version': A['id'], 'parent_version': B['id'], 'minimum_gain': 0.2}
     assert float(proposal['maximum_usd']) > 0
     assert plan['tokens_per_attempt']['attempts'] == 0 and '60,000' in plan['tokens_per_attempt']['basis']
-    assert plan['lines'] is None and 'refuse' in plan['not_launchable']
     assert any('Bare' in note for note in plan['notes'])
+    # A 20% effect over 20 tasks reaches four discordant pairs, below the floor of six,
+    # so the plan now refuses on power before it ever reaches the Studio's own refusal.
+    assert plan['power']['ok'] is False and 'cannot be settled' in plan['not_launchable']
 
 
 def test_the_plan_uses_a_covered_pass_rate_instead_of_one_half(tmp_path):
     studio = studio_for([job('run-1', rows(A['id'], 6) + rows(B['id'], 0))], tmp_path)
-    plan = H.smallest_plan(studio, record(minimum_effect=0.25))
-    assert plan['pass_rate_assumed'] == 0.0 and plan['tasks'] == 10  # 4·0·1/d² is under the floor
+    plan = H.smallest_plan(studio, record(minimum_effect=0.5))
+    assert plan['pass_rate_assumed'] == 0.0
+    # The observed pass rate still informs the cost estimate; it no longer drives the
+    # size, because the sign test's power comes from how many tasks disagree, not from p.
+    assert plan['tasks'] == 12 and plan['power']['ok']
     assert plan['tokens_per_attempt']['attempts'] > 0
 
 
