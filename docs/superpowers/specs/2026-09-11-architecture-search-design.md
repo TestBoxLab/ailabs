@@ -303,3 +303,73 @@ depends on all of them.
    Monarch's checkout and can name what is not yet at frontier. Those are claims about
    code, not experimental results, and they must not be rendered as peers of a confirmed
    win.
+
+---
+
+## Appendix: the voice work, S0 to S6 (11 September 2026)
+
+Lucas asked for "a pulsing circle that listens and answers in voice in app and navigates
+through the browser as to take the user to what its changing, it shows the changes live
+streaming". Six researchers read the speech APIs, voice agent design, agent-driven
+navigation, live-change rendering, the privacy and money position, and the accessibility
+obligations. The design that came out is recorded in `.tmp/genesis-voice.md`; what was
+built is below.
+
+**The orb became honest the moment there was real audio.** The earlier pass refused it
+because a pulse on an agent doing typed tool calls claims "I can hear you" about work
+happening off-screen. With a microphone the pulse is a *measurement*: it is driven by the
+signal's own RMS envelope, so it fails visibly at a muted mic. It is a capture indicator
+and never an activity one — the minutes Genesis spends on tool calls keep the step list.
+
+| | Delivered | Commit |
+|---|---|---|
+| S0 | Five infinite animations removed; **Pause updates**; four new checks in the CSP test | `9635bb8` |
+| S1 | `show` as a link, never a move | `42cb031` |
+| S2 | SSE replaces the 650 ms poll; flash on arrival | `b89b7e1` |
+| S3 | Hold to talk; amplitude-driven mark; on-device recognition or nothing | `72588d2` |
+| S4 | Answers aloud, local voices only, off by default | `db8ebc9` |
+| S5 | Follow Genesis, off by default, broken by any gesture | `a3dc93c` |
+| S6 | `POST /api/voice/stt`, reserved and settled in the weekly ledger | `954676a` |
+
+### The finding that shaped all of it
+
+**The CSP test cannot see the privacy risk, and neither can the browser's own
+machinery.** `webkitSpeechRecognition` is a built-in, so `processLocally: false` ships
+every utterance to Google over a channel that raises no `securitypolicyviolation`, shows
+nothing in the network tab, and leaves the check green. This screen carries provider API
+keys and unreleased benchmark results.
+
+So there is no fallback to remote recognition anywhere in the code. On-device or the
+typed box; and when a browser cannot, S6 sends the clip to *our own origin* and the
+Studio calls the provider with the key it already holds, reserved in the ledger. A
+`network` speech error is reported to the reader as "Refused: that would have sent the
+audio off this machine."
+
+### Three rules worth keeping
+
+- **Motion is declared inside `@media (prefers-reduced-motion: no-preference)`**, never as
+  a `reduce` override. The blanket rule at the end of `ui.css` cannot stop a transform
+  written from JavaScript, so an amplitude-driven indicator would have reached a
+  reduced-motion reader at full swing while the sheet appeared to cover it. The check
+  added in S0 now enforces the opt-in form.
+- **Under `reduce` the orb is replaced, not frozen** — five discrete blocks at 2 Hz. A
+  frozen orb conveys nothing and removes the only live evidence the microphone works.
+  This is the path that got exercised in verification: the headless browser reports
+  `reduce`.
+- **`announce` never speaks a string that is not already on the page.** Such a string
+  still reaches the live region, because that is text and not audio. That one rule keeps
+  the whole WCAG 1.2 media family out of scope, and it is enforced in the function rather
+  than asked for in review.
+
+### Refused, with reasons
+
+Always-on listening and wake words (two people share that room and one takes calls;
+push-to-talk has no pre-roll buffer by construction). Realtime speech-to-speech (its
+product is sub-second latency; a Genesis turn is minutes of slow tool calls, and a held
+session bills audio input across all of it — about US$9.30 an hour against a US$6.00
+daily allowance). Gemini Live from the browser (it needs a `wss://` origin, which costs
+the same-origin invariant, and its free tier states submitted content may be reviewed).
+Local Whisper in WebAssembly (`'wasm-unsafe-eval'` plus hundreds of megabytes of weights,
+or a fetch-and-cache step, which is a build step by another name). A spotlight overlay (a
+modal dialog in a costume). A synthetic cursor (theatre that tells a screen reader
+nothing). Speaker identification or diarization. An API key in the page.
