@@ -200,6 +200,60 @@ def test_per_execution_keeps_a_task_unknown_without_blinding_the_others():
     assert measures.is_unknown(out["cost_usd"])     # the cohort figure cannot be summed
 
 
+def test_break_even_is_the_least_n_where_the_product_costs_less():
+    """FR-029. Configure once and run N times against a harness paying every time."""
+    # configure 1.00, execute 0.10 against 0.50 a request:
+    # n=2 -> 1.20 vs 1.00 (behind), n=3 -> 1.30 vs 1.50 (ahead).
+    out = measures.break_even(configure_usd=1.00, execute_usd=0.10,
+                              per_request_usd=0.50, max_n=10)
+    assert out["crossing"] == 3
+    assert out["product"][2] == pytest.approx(1.30)
+    assert out["comparator"][2] == pytest.approx(1.50)
+    assert len(out["product"]) == len(out["comparator"]) == 10
+
+
+def test_break_even_refuses_to_extrapolate_past_what_was_observed():
+    """FR-030. The crossing is a measurement, not a projection."""
+    # It would cross at n=11, but only ten executions were observed.
+    near = measures.break_even(configure_usd=4.00, execute_usd=0.10,
+                               per_request_usd=0.50, max_n=10)
+    assert near["crossing"] is None
+    assert near["reason"] == "none-in-range"
+    assert "10 executions" in near["note"] and "does not extrapolate" in near["note"]
+    # Executing is dearer than a whole request, so no n can ever cross. That is a
+    # different fact from "not within range" and the figure must not confuse them.
+    never = measures.break_even(configure_usd=1.00, execute_usd=0.60,
+                                per_request_usd=0.50, max_n=1000)
+    assert never["crossing"] is None and never["reason"] == "never"
+
+
+def test_break_even_keeps_unknown_and_no_passes_out_of_the_arithmetic():
+    assert measures.is_unknown(measures.break_even(
+        configure_usd=measures.UNKNOWN, execute_usd=0.1, per_request_usd=0.5, max_n=5)["crossing"])
+    # Nothing to configure is not free to configure: a per-request competitor has
+    # no configure step at all, and its curve starts at the origin.
+    bare = measures.break_even(configure_usd=measures.NOT_APPLICABLE, execute_usd=0.5,
+                               per_request_usd=0.5, max_n=3)
+    assert bare["product"][0] == pytest.approx(0.5) and bare["crossing"] is None
+
+
+def test_the_curve_reads_two_cohorts_per_successful_task():
+    """FR-028 + FR-029: a cheap competitor that fails is not cheap."""
+    product = [result("t1", "monarch", True, cost=0.30, phases=split(0.20, 0.10)),
+               result("t2", "monarch", True, cost=0.30, phases=split(0.20, 0.10))]
+    # The comparator passes one task in two, so its cost per pass is double its
+    # cost per attempt — which is the whole point of pricing per success.
+    comparator = [result("t1", "bare", True, cost=0.25, phases=split(None, None, total=0.25)),
+                  result("t2", "bare", False, cost=0.25, phases=split(None, None, total=0.25))]
+    out = measures.curve(product, comparator, max_n=6)
+    assert out["basis"] == "cost per successful task"
+    assert out["configure_usd"] == pytest.approx(0.20)   # 0.40 over 2 passes
+    assert out["execute_usd"] == pytest.approx(0.10)     # 0.20 over 2 passes
+    assert out["per_request_usd"] == pytest.approx(0.50)  # 0.50 over 1 pass
+    assert out["crossing"] == 1                          # 0.30 < 0.50 immediately
+    assert out["source"].startswith("2 attempts")
+
+
 def test_turns_count_model_finished_events_per_attempt():
     events = [{"type": "model_finished", "task": "t1", "model": "a"}, {"type": "model_finished", "task": "t1", "model": "a"},
               {"type": "node_finished", "task": "t1", "model": "a"}]

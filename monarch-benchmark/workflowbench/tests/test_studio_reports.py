@@ -259,3 +259,96 @@ def test_provisional_sentence_surfaced_in_round_report_when_judge_unpinned(studi
 
     reports_js = (ROOT / "wb_studio" / "static" / "reports.js").read_text(encoding="utf-8")
     assert "r.note" in reports_js
+
+
+# --- the gap list: one evidence base, three renderings (FR-031, FR-032, FR-034) ---
+
+def gap(id, kind, confirmed=False, statement="The engine re-plans after every step."):
+    return report_data.gap_item(id=id, statement=statement, evidence_kind=kind,
+                                confirmed=confirmed, evidence=[{"kind": "run", "id": "run-1"}])
+
+
+def test_a_code_reading_is_never_a_peer_of_a_confirmed_result():
+    """FR-032. One is measured; the other is somebody reading source. Listing them
+    together invites a reader to weigh them the same, which is the whole defect."""
+    items = [gap("g1", "confirmed-result", confirmed=True), gap("g2", "code-reading")]
+    out = report_data.gap_list(items, audience="engine-team")
+    assert [i["id"] for i in out["confirmed"]] == ["g1"]
+    assert [i["id"] for i in out["indications"]] == ["g2"]
+    # There is no flat list to render by accident.
+    assert "items" not in out
+    assert out["indications"][0]["internal_only"] is True
+    assert out["confirmed"][0]["internal_only"] is False
+
+
+def test_an_unconfirmed_result_is_an_indication_not_a_finding():
+    """FR-032. `confirmed` is true only after a held-out confirmation."""
+    out = report_data.gap_list([gap("g1", "confirmed-result", confirmed=False)], audience="lab")
+    assert out["confirmed"] == [] and [i["id"] for i in out["indications"]] == ["g1"]
+    assert "held-out" in out["indications"][0]["caveat"]
+
+
+def test_the_three_renderings_come_from_one_base_and_none_contradicts_another():
+    """FR-031, SC-011. Different words for different readers, never different facts."""
+    items = [gap("g1", "confirmed-result", confirmed=True), gap("g2", "code-reading")]
+    views = {a: report_data.gap_list(items, audience=a)
+             for a in ("engine-team", "lab", "executive")}
+    # Every rendering agrees about what is confirmed and what is only indicated.
+    assert {a: [i["id"] for i in v["confirmed"]] for a, v in views.items()} == {
+        "engine-team": ["g1"], "lab": ["g1"], "executive": ["g1"]}
+    # ...and about the evidence under each item, which is the one base.
+    for view in views.values():
+        assert view["confirmed"][0]["evidence"] == [{"kind": "run", "id": "run-1"}]
+    # Only the wording moves.
+    assert len({views[a]["confirmed"][0]["text"] for a in views}) == 3
+    assert views["engine-team"]["audience"] == "engine-team"
+
+
+def test_an_export_drops_code_readings_and_says_how_many():
+    """Facts from Monarch's code do not leave the lab, and their absence is stated."""
+    items = [gap("g1", "confirmed-result", confirmed=True), gap("g2", "code-reading")]
+    out = report_data.gap_list(items, audience="executive", exported=True)
+    assert out["indications"] == [] and out["withheld"] == 1
+    assert "1 item" in out["withheld_note"] and "code" in out["withheld_note"]
+
+
+def test_a_gap_item_refuses_an_evidence_kind_it_does_not_know():
+    with pytest.raises(ValueError, match="evidence_kind"):
+        report_data.gap_item(id="g", statement="s", evidence_kind="vibes")
+
+
+def test_a_round_with_nothing_reusable_says_so_instead_of_drawing_an_empty_curve(studio):
+    """FR-029. The scripted checks configure nothing, so there is no break-even to plot."""
+    finished_run(studio)
+    cohort = next(iter(report_data.cohorts(studio).values()))
+    report = report_data.round_report(studio, cohort["id"])
+    assert report["curve"]["available"] is False
+    assert "run it again" in report["curve"]["reason"] or "again" in report["curve"]["reason"]
+    assert "curves" not in report["curve"]
+
+
+def test_the_curve_is_drawn_only_for_a_competitor_that_configures_something_once():
+    """A bare model pays per request by construction; giving it a configure step would
+    invent the very asymmetry the figure exists to measure."""
+    def row(task, model, passed, cost, phases=None):
+        out = {"task": task, "model": model, "passed": passed, "termination": "completed",
+               "cost_usd": cost, "seconds": 1.0, "tool_calls": 1, "checks": [], "flags": [],
+               "unexpected_changes": [], "tokens": {}, "output": ""}
+        if phases:
+            out["phases"] = phases
+        return out
+    built = {"run": {"cost_usd": 0.30, "wall_clock_s": 3.0},
+             "authoring": {"cost_usd": 0.20, "wall_clock_s": 2.0},
+             "execution": {"cost_usd": 0.10, "wall_clock_s": 1.0}}
+    groups = {
+        "monarch": [row("t1", "monarch", True, 0.30, built), row("t2", "monarch", True, 0.30, built)],
+        "bare": [row("t1", "bare", True, 0.50, {"run": {"cost_usd": 0.50, "wall_clock_s": 3.0}}),
+                 row("t2", "bare", True, 0.50, {"run": {"cost_usd": 0.50, "wall_clock_s": 3.0}})],
+    }
+    out = report_data.break_even_block(groups, ["monarch", "bare"], "bare",
+                                       {"monarch": "Monarch", "bare": "Bare Gemini"})
+    assert out["available"] is True and len(out["curves"]) == 1
+    curve = out["curves"][0]
+    assert curve["id"] == "monarch" and curve["crossing"] == 1
+    assert curve["configure_usd"] == pytest.approx(0.20)
+    assert "Monarch" in curve["title"] and curve["comparator_name"] == "Bare Gemini"

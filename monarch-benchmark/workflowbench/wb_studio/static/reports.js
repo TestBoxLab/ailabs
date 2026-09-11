@@ -368,10 +368,11 @@ function renderRoundReport(r) {
   article.innerHTML = '<header class="report-head"><h1>' + esc(roundTitle(r)) + '</h1>' + meta([(r.full_benchmark ? 'Benchmark round' : 'Round'), 'task set ' + r.task_set, r.task_count + (r.task_count === 1 ? ' task' : ' tasks'), trackWords(r.track), r.runs.length + (r.runs.length === 1 ? ' run' : ' runs'), when]) +
     (r.note ? '<p class="report-note">' + esc(r.note) + '</p>' : '') +
     reportActions(r, 'round') + '</header>' +
-    contents([['standings', 'Standings'], ['hero', 'Pass rate'], ...(r.trend.length > 1 ? [['trend', 'Over time']] : []), ['paired', 'By category'], ['failures', 'Task matrix'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
+    contents([['standings', 'Standings'], ['hero', 'Pass rate'], ...(r.trend.length > 1 ? [['trend', 'Over time']] : []), ['curve', 'What it costs to run again'], ['paired', 'By category'], ['failures', 'Task matrix'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
     section('standings', 'Standings', standingsTable(r) + pairingsTable(r) + '' + excludedTable(r)) +
     section('hero', 'Pass rate', '<div data-slot="hero"></div>') +
     (r.trend.length > 1 ? section('trend', 'Over time', '<div data-slot="trend"></div>') : '') +
+    section('curve', 'What it costs to run again', '<div data-slot="curve"></div>') +
     section('paired', 'By category', pairedTable(r)) +
     section('failures', 'Task matrix', '<div data-slot="matrix"></div>') +
     section('caveats', 'What to keep in mind', '<ul class="caveats">' + r.caveats.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>') +
@@ -385,11 +386,41 @@ function renderRoundReport(r) {
     // the cohort held (feature 024, FR-015).
     $('[data-slot="trend"]', article).replaceWith(Charts.trend({ title: r.trend_title || 'Pass rate by run', series: Object.entries(series).map(([label, points]) => ({ label, family: setupFamily(label), points })), source: 'Each point is one run; whiskers show the 95% interval.' }));
   }
+  drawCurve(article, r);
   const matrix = Charts.matrix({ tasks: r.tasks, setups: r.order.map(id => ({ id, name: setupName(r, id), baseline: id === r.baseline, family: setupFamily(setupName(r, id)) })), cells: r.matrix });
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(matrix);
   const msrc = document.createElement('p'); msrc.className = 'chart-source'; msrc.textContent = sourceText(r, 'one cell per task and setup, pooled over ' + (r.runs || []).length + ' runs'); scroll.appendChild(msrc);
   $('[data-slot="matrix"]', article).replaceWith(scroll);
   bindReportActions(article, r);
+}
+
+// The break-even curve (FR-029). A workflow is configured once and run many times; a
+// harness pays for every request. Where the two lines cross is what the product is for.
+// The server decides whether a crossing exists, whether it is merely outside the
+// observed range, or whether the lines can never meet — this only draws what it is told,
+// and never extrapolates past the executions actually recorded.
+function drawCurve(article, r) {
+  const slot = $('[data-slot="curve"]', article);
+  if (!slot) return;
+  const curve = r.curve || {};
+  if (!curve.available) {
+    const p = document.createElement('p');
+    p.className = 'meta';
+    p.textContent = curve.reason || 'Nothing in this round builds a workflow it can run again.';
+    slot.replaceWith(p);
+    return;
+  }
+  const wrap = document.createElement('div');
+  for (const c of curve.curves || []) {
+    wrap.appendChild(Charts.breakEven({
+      title: c.title,
+      product: c.product, comparator: c.comparator, crossing: c.crossing,
+      productLabel: c.name, comparatorLabel: c.comparator_name,
+      source: c.source + '; costs are per successful task.',
+      note: c.note,
+    }));
+  }
+  slot.replaceWith(wrap);
 }
 
 function bindReportActions(article, r) {

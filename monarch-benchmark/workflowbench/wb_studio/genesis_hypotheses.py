@@ -770,3 +770,58 @@ def may_confirm(genesis, lineage: str) -> tuple:
                        'slate yet. The held-out slate confirms a variant that already won; it does '
                        'not look for one.')
     return True, None
+
+
+def proposal(genesis, lineage: str) -> dict:
+    """FR-034. What a held-out confirmation produces: a written specification.
+
+    Decision 7 of 11 September — the editor is the destination, not a model. If a
+    composed architecture beats the baseline on the frozen set, that composition *is*
+    the proposal, and the deliverable for the engine team is a description of it with
+    the measurement that earned it.
+
+    Deliberately not an executable artefact. The engine team decides what to build;
+    the lab's job is to say what won, on what, by how much, and with what confidence.
+
+    Only a `supported` outcome on the **held-out** slate qualifies. Development is
+    where the search happens and is contaminated by construction: every variant that
+    reached it was chosen because earlier variants did well there. A proposal built on
+    development evidence is a proposal built on the search's own scorecard.
+    """
+    records = lineage_records(genesis, lineage)
+    held = [c for c in records
+            if (c.get('hypothesis') or {}).get('slate') == HELD_OUT
+            and (c.get('settlement') or {}).get('outcome')]
+    if not held:
+        return {'proposal': None, 'lineage': lineage,
+                'reason': 'Lineage ' + str(lineage) + ' has not reached the held-out slate, '
+                          'so there is nothing to propose. A development result is where the '
+                          'search happens, not a confirmation of it.'}
+    card = held[-1]
+    settlement, record = card['settlement'], card['hypothesis']
+    outcome = settlement.get('outcome')
+    if outcome != 'supported':
+        return {'proposal': None, 'lineage': lineage,
+                'reason': 'The held-out attempt for lineage ' + str(lineage) + ' settled as '
+                          + str(outcome) + ', so there is nothing to propose. A lineage reaches '
+                          'that slate once, whatever it returned.'}
+    comparison = record.get('comparison') or {}
+    variant = (comparison.get('a') or {}).get('id')
+    baseline = (comparison.get('b') or {}).get('id')
+    paired = settlement.get('paired') or {}
+    wins, pairs = paired.get('wins'), paired.get('pairs')
+    rationale = (
+        str(variant) + ' beat ' + str(baseline) + ' on ' + str(wins) + ' of ' + str(pairs)
+        + ' tasks where they disagreed, on the held-out slate that lineage had not seen, '
+        + 'at ' + str(record.get('repetitions')) + ' repetitions. The effect was '
+        + str(settlement.get('effect')) + ' on ' + str(record.get('measure'))
+        + ' against a stated minimum of ' + str(record.get('minimum_effect')) + '. '
+        + 'The claim under test was: ' + str(record.get('claim')))
+    return {'proposal': card['id'], 'kind': 'written-specification', 'lineage': lineage,
+            'variant': variant, 'baseline': baseline,
+            'slate': HELD_OUT, 'repetitions': record.get('repetitions'),
+            'measure': record.get('measure'), 'direction': record.get('direction'),
+            'minimum_effect': record.get('minimum_effect'),
+            'paired_result': paired, 'certainty': settlement.get('certainty'),
+            'evidence': list(settlement.get('tags') or []),
+            'rationale': rationale, 'claim': record.get('claim')}

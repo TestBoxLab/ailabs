@@ -270,3 +270,50 @@ def test_smallest_plan_refuses_when_exceeding_per_experiment_ceiling(tmp_path):
     assert plan['not_launchable'] == expected_refusal
 
 
+
+
+# --- the proposal: what a held-out confirmation produces (FR-034) ---
+
+def _lineage_genesis(cards):
+    return SimpleNamespace(listing=lambda kind: cards if kind == 'cards' else [])
+
+
+def _confirmed_card(slate='held-out', outcome='supported', identity='c2'):
+    return {
+        'id': identity, 'created_at': '2026-09-11T10:00:00Z', 'lineage': 'L1',
+        'hypothesis': {'claim': 'Naming the record owner raises pass rate.',
+                       'slate': slate, 'lineage': 'L1', 'repetitions': 3,
+                       'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                                      'b': {'kind': 'architecture', 'id': 'v1'}},
+                       'measure': 'pass_rate', 'direction': 'a_higher',
+                       'minimum_effect': 0.2},
+        'settlement': {'outcome': outcome, 'effect': 0.3, 'certainty': 'probably',
+                       'paired': {'wins': 8, 'losses': 1, 'pairs': 9, 'p_value': 0.02},
+                       'tags': ['[rec:run:run-9]']},
+    }
+
+
+def test_a_proposal_comes_only_from_a_supported_held_out_confirmation():
+    from wb_studio.genesis_hypotheses import proposal
+    ok = proposal(_lineage_genesis([_confirmed_card()]), 'L1')
+    assert ok['variant'] == 'v2' and ok['baseline'] == 'v1'
+    assert ok['slate'] == 'held-out' and ok['repetitions'] == 3
+    assert ok['paired_result']['p_value'] == 0.02
+    assert '[rec:run:run-9]' in ok['evidence']
+    # A written specification, not something anybody can execute.
+    assert ok['kind'] == 'written-specification'
+    assert 'v2' in ok['rationale'] and '8' in ok['rationale']
+
+
+def test_a_development_result_alone_is_not_a_proposal():
+    """FR-034. Development is where the search happens; it is contaminated by design."""
+    from wb_studio.genesis_hypotheses import proposal
+    out = proposal(_lineage_genesis([_confirmed_card(slate='development')]), 'L1')
+    assert out['proposal'] is None
+    assert 'held-out' in out['reason']
+
+
+def test_a_held_out_result_that_did_not_hold_is_not_a_proposal():
+    from wb_studio.genesis_hypotheses import proposal
+    out = proposal(_lineage_genesis([_confirmed_card(outcome='not_supported')]), 'L1')
+    assert out['proposal'] is None and 'not_supported' in out['reason']

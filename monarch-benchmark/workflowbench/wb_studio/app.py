@@ -1217,9 +1217,18 @@ def handler(studio):
                     return self.send_json(report_index(studio))
                 report_match = re.fullmatch(r'/api/reports/(run|round)/([a-zA-Z0-9_-]+)', url.path)
                 if report_match:
-                    from wb_studio.report_data import round_report, run_report
+                    from wb_studio.report_data import AUDIENCES, round_report, run_report
                     build = run_report if report_match[1] == 'run' else round_report
-                    return self.send_json(build(studio, report_match[2]))
+                    out = build(studio, report_match[2])
+                    # `audience` is the gap list's WORDING and nothing else (FR-031). It is
+                    # not the audiences gate Lucas removed on 11 September: every reader
+                    # still sees the same page, the same setups and the same numbers. An
+                    # unknown value falls back rather than erroring, because a report that
+                    # refuses to render over a query string is worse than one that reads
+                    # in the default voice.
+                    audience = (parse_qs(url.query).get('audience') or ['lab'])[0]
+                    out['audience'] = audience if audience in AUDIENCES else 'lab'
+                    return self.send_json(out)
                 if url.path == '/api/genesis':
                     person=self.person()
                     return self.send_json({**studio.genesis.state(),'me':('human:'+person['name']) if person else 'human:studio'})

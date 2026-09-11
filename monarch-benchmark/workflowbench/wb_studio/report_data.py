@@ -408,6 +408,103 @@ def task_set_id(job) -> str:
     return hashlib.sha256(json.dumps(sorted(hashes.items()), separators=(",", ":")).encode()).hexdigest()[:12]
 
 
+def break_even_block(groups, shown, baseline_id, names) -> dict:
+    """FR-029. The curve, for every setup that builds something reusable.
+
+    Only a competitor with an `authoring` phase has an artefact to reuse; a bare model
+    pays per request by construction, and plotting it as though it configured something
+    once would invent the very asymmetry the figure exists to measure. A round with no
+    such competitor gets the sentence, not an empty chart.
+    """
+    if not baseline_id or baseline_id not in groups:
+        return {"available": False, "reason": "This round has no baseline to compare against."}
+    comparator = groups[baseline_id]
+    curves = []
+    for sid in shown:
+        if sid == baseline_id or sid not in groups:
+            continue
+        rows = groups[sid]
+        if not any("authoring" in (r.get("phases") or {}) for r in rows):
+            continue          # nothing is configured once here, so there is no curve
+        out = measures.curve(rows, comparator)
+        out.update({"id": sid, "name": names.get(sid, sid),
+                    "title": f"What {names.get(sid, sid)} costs against running the workflow again",
+                    "comparator_name": names.get(baseline_id, baseline_id)})
+        curves.append(out)
+    if not curves:
+        return {"available": False, "reason":
+                "No competitor in this round builds a workflow it can run again, so there "
+                "is nothing to plot a break-even against. The curve compares configuring "
+                "once and executing N times with paying for every request."}
+    return {"available": True, "curves": curves, "comparator": baseline_id}
+
+
+EVIDENCE_KINDS = ("confirmed-result", "code-reading")
+AUDIENCES = ("engine-team", "lab", "executive")
+
+
+def gap_item(id: str, statement: str, evidence_kind: str, evidence=(), confirmed: bool = False) -> dict:
+    """One gap between the product and the frontier, with what it rests on.
+
+    `evidence_kind` is the load-bearing field. A `confirmed-result` was measured; a
+    `code-reading` is somebody reading Monarch's source. They are never rendered as
+    peers, because a reader shown one list weighs them the same — and a code reading
+    is also internal-only, per the standing rule that facts from Monarch's code do
+    not leave the lab.
+    """
+    if evidence_kind not in EVIDENCE_KINDS:
+        raise ValueError(f"evidence_kind must be one of {', '.join(EVIDENCE_KINDS)}, not {evidence_kind!r}")
+    return {"id": id, "statement": statement, "evidence_kind": evidence_kind,
+            "evidence": list(evidence), "confirmed": bool(confirmed),
+            "internal_only": evidence_kind == "code-reading"}
+
+
+def _rendering(item: dict, audience: str) -> str:
+    """The same fact, in the words that reader needs. Never a different fact."""
+    statement = item["statement"].rstrip(".")
+    if audience == "engine-team":
+        return statement + "." if item["confirmed"] else statement + " — not yet confirmed."
+    if audience == "lab":
+        return ("Confirmed: " if item["confirmed"] else "To confirm: ") + statement + "."
+    # An executive reads the distance to the frontier, not the defect.
+    return (statement + ", and the measurement holds on the held-out set."
+            if item["confirmed"] else statement + ", on evidence that is not yet settled.")
+
+
+def gap_list(items, audience: str = "lab", exported: bool = False) -> dict:
+    """FR-031, FR-032. One evidence base, three renderings, two tiers that never merge.
+
+    There is deliberately no flat `items` key: a caller cannot render the two tiers as
+    peers by reaching for the obvious field. `confirmed` is true only after a held-out
+    confirmation, so an unconfirmed measured result is an indication like a code
+    reading is — same tier, different caveat.
+
+    `exported` drops code readings and says how many went, because a silent omission
+    reads as "there were none".
+    """
+    if audience not in AUDIENCES:
+        raise ValueError(f"audience must be one of {', '.join(AUDIENCES)}, not {audience!r}")
+    confirmed, indications, withheld = [], [], 0
+    for item in items:
+        shown = dict(item, text=_rendering(item, audience), audience=audience)
+        if item["confirmed"] and item["evidence_kind"] == "confirmed-result":
+            confirmed.append(shown)
+            continue
+        if exported and item["internal_only"]:
+            withheld += 1
+            continue
+        shown["caveat"] = ("Read from Monarch's code; never measured."
+                           if item["evidence_kind"] == "code-reading"
+                           else "Measured, but not confirmed on the held-out set.")
+        indications.append(shown)
+    note = ""
+    if withheld:
+        note = (f"{withheld} item{'s' if withheld > 1 else ''} read from Monarch's code "
+                "are not shown here; facts from the code stay in the lab.")
+    return {"audience": audience, "confirmed": confirmed, "indications": indications,
+            "withheld": withheld, "withheld_note": note}
+
+
 def run_report(studio, identity) -> dict:
     from wb_studio.failure_analysis import analysis as failure_analysis
     from wb_studio.narrative import run_story
@@ -593,6 +690,9 @@ def round_report(studio, cohort_id) -> dict:
             "paired": paired_table(job, m, shown, baseline_id), "matrix": matrix_cells(job, shown, studio.tasks), "tasks": task_rows(job, studio.tasks),
             "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown], "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
             "trend": trend, "trend_title": trend_title, "repetitions": m["repetitions"],
+            # The round's argument: accuracy with its uncertainty above, then what it
+            # costs to configure once and run again (FR-029, FR-030).
+            "curve": break_even_block(groups, shown, baseline_id, {s["id"]: s["name"] for s in standings}),
             "caveats": caveats.for_round({**cohort, "baseline": baseline_id}),
             "note": cohort.get("note"),
             "method": {"task_set": cohort["task_set"], "task_count": cohort["task_count"], "task_hashes": cohort["task_hashes"], "runs": [r["id"] for r in cohort["runs"]],

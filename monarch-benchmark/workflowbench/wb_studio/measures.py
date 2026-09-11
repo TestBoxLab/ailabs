@@ -386,6 +386,79 @@ def cost_per_pass(rows):
     return round(out["total"] / passed, 6)
 
 
+def break_even(configure_usd, execute_usd, per_request_usd, max_n: int) -> dict:
+    """FR-029, FR-030. Where a reusable workflow overtakes paying per request.
+
+        product:    configure + n x execute
+        comparator: n x per_request
+
+    The crossing point is the least integer n at which the product's cumulative cost
+    falls below the comparator's, **within the range of n actually observed**. No
+    product in the evaluation landscape plots this, because their subjects have no
+    reusable artefact; Monarch does, and the crossing is its whole value proposition.
+
+    Three outcomes, deliberately distinct. A crossing is a measurement. `none-in-range`
+    means the lines have not met inside the evidence — they may meet later, and the
+    figure says so in words rather than drawing a projection. `never` means executing
+    costs at least as much as a whole request, so no n can ever cross; presenting that
+    as "not yet" would be a claim the data refutes.
+    """
+    if is_unknown(configure_usd) or is_unknown(execute_usd) or is_unknown(per_request_usd):
+        return {"product": [], "comparator": [], "crossing": UNKNOWN, "reason": "unknown",
+                "max_n": max_n, "note": "A cost on one side could not be read."}
+    # A per-request competitor has no configure step; its curve starts at the origin.
+    setup = 0.0 if is_not_applicable(configure_usd) else float(configure_usd)
+    execute, per_request = float(execute_usd), float(per_request_usd)
+    product = [round(setup + n * execute, 6) for n in range(1, max_n + 1)]
+    comparator = [round(n * per_request, 6) for n in range(1, max_n + 1)]
+    crossing = next((n for n in range(1, max_n + 1)
+                     if product[n - 1] < comparator[n - 1]), None)
+    if crossing is not None:
+        reason, note = "crossed", f"Ahead from execution {crossing}."
+    elif execute >= per_request:
+        # Every extra run widens the gap; the lines diverge and never meet.
+        reason = "never"
+        note = ("One execution costs at least as much as one request, so the lines "
+                "never meet however many times the workflow is run.")
+    else:
+        reason = "none-in-range"
+        note = (f"Not ahead within the {max_n} executions observed. The figure does "
+                "not extrapolate past them.")
+    return {"product": product, "comparator": comparator, "crossing": crossing,
+            "reason": reason, "max_n": max_n, "note": note}
+
+
+def curve(rows, comparator_rows, max_n: int | None = None) -> dict:
+    """The break-even curve of one cohort against another, priced per successful task.
+
+    FR-028: costs are per *pass*, so a competitor that is cheap because it fails is
+    not cheap. Both sides are read from stored results by the same rules as every
+    other measure, and the figure carries its source line.
+    """
+    phases = cost_by_phase(rows)
+    passes = sum(bool(r.get("passed")) for r in evaluated(rows))
+    per_request = cost_per_pass(comparator_rows)
+
+    def share(name):
+        if not passes:
+            return NO_PASSES
+        if phases["total"] is None:
+            return UNKNOWN
+        if name not in phases["phases"]:
+            return NOT_APPLICABLE
+        return round(phases["phases"][name] / passes, 6)
+
+    configure, execute = share("authoring"), share("execution")
+    executions = max_n or max(1, len(evaluated(rows)))
+    out = break_even(configure, execute, per_request, executions)
+    out.update({"configure_usd": configure, "execute_usd": execute,
+                "per_request_usd": per_request, "passes": passes,
+                "basis": "cost per successful task",
+                "source": f"{len(evaluated(rows))} attempts, {passes} passed, against "
+                          f"{len(evaluated(comparator_rows))} attempts of the comparator"})
+    return out
+
+
 def time(rows) -> dict:
     seconds = sorted(float(r.get("seconds") or 0) for r in evaluated(rows))
     if not seconds:
