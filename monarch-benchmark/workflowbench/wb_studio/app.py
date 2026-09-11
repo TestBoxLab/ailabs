@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_UP
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -26,9 +26,9 @@ from runner.arms import OracleArm, SloppyArm
 from wb_arms.api_loop import ArmResult
 from wb_arms.runtime_manifest import sha256_json
 from wb_orchestrator.approvals import ApprovalError, admit_launch
-from wb_orchestrator.budget import BudgetLedger, BudgetExceeded
+from wb_orchestrator.budget import BudgetLedger, BudgetExceeded, default_ledger_path
 from wb_orchestrator.config import derive_langfuse_keys
-from wb_orchestrator.monarch_setup import front_door_path, front_door_secret
+from wb_orchestrator.monarch_setup import front_door_secret
 from wb_studio.genesis_autonomy import background_wanted
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
@@ -181,11 +181,9 @@ class Studio:
         self.directory = Path(directory or ((data_dir() / "studio") if data_dir() else ROOT / "out" / "studio"))
         self.directory.mkdir(parents=True, exist_ok=True)
         self.tasks = {task["task"]: task for task in (tasks if tasks is not None else [load_task_file(p) for p in sorted((ROOT / "corpus").rglob("*.json"))])}
-        ledger_path = REPO / "research" / "budget.sqlite3"
-        if data_dir():
-            ledger_path = data_dir() / "research" / "budget.sqlite3"
-        if os.environ.get("STUDIO_LEDGER_PATH"):
-            ledger_path = Path(os.environ["STUDIO_LEDGER_PATH"]).expanduser()
+        # The shared rule lives in wb_orchestrator.budget so every process that reserves
+        # in this ledger — the CLI, the Studio, Genesis's envelope — agrees where it is.
+        ledger_path = default_ledger_path(REPO)
         self.ledger = BudgetLedger(self.directory / "budget.sqlite3" if gateway_factory is not None else ledger_path)
         store_path = REPO / "wb.sqlite3"
         if data_dir():
@@ -943,7 +941,8 @@ def handler(studio):
             host = self.headers.get("Host", "").lower()
             origin = self.headers.get("Origin")
             return host in allowed and (not origin or origin in ("http://" + host, "https://" + host)) and (
-                not write or self.headers.get("X-Studio-Token") == studio.token or self.person() is not None)
+                not write or secrets.compare_digest(self.headers.get("X-Studio-Token") or "", studio.token)
+                or self.person() is not None)
 
         def person(self):
             """The person named by the X-Person-Key header, or None (feature 022, lane B)."""
@@ -1307,8 +1306,10 @@ def handler(studio):
                 if url.path == '/api/genesis/channels': return self.send_json(studio.genesis.access.channels())
                 if url.path == '/api/genesis/digest':
                     from wb_studio import genesis_channels
-                    from datetime import date
-                    week=parse_qs(url.query).get('week',[None])[0] or date.today().strftime('%G-W%V')
+                    from wb_studio.library import now_sao_paulo
+                    # The lab's week is the São Paulo week. The server's own date named
+                    # next week's empty digest for the three hours a UTC host runs ahead.
+                    week=parse_qs(url.query).get('week',[None])[0] or now_sao_paulo().strftime('%G-W%V')
                     if not re.fullmatch(r'\d{4}-W\d{2}',week): raise ValueError('Name the week as YYYY-Www, like 2026-W37.')
                     return self.send_json(genesis_channels.digest(studio.genesis,week))
                 patch_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/patch',url.path)
@@ -1394,6 +1395,25 @@ def handler(studio):
                 return self.challenge()
             if not self.trusted(write=True):
                 return self.send_json({"error": "Origin or session refused"}, 403)
+            if self.path == '/api/voice/stt':
+                # Before the generic read: every other POST here is JSON, and this one is
+                # audio bytes. Same origin, so `connect-src 'self'` is untouched and no
+                # API key or ephemeral token is ever in the page (feature 024, stage S6).
+                from wb_studio import voice_stt
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= voice_stt.MAX_BYTES:
+                    return self.send_json({'error': 'Send one audio clip, up to '
+                                           + str(voice_stt.MAX_BYTES // 1024) + ' KB.'}, 400)
+                audio = self.rfile.read(length)
+                try:
+                    found = voice_stt.transcribe(studio, audio,
+                                                 self.headers.get('Content-Type') or '',
+                                                 self.headers.get('X-Clip-Seconds'))
+                except voice_stt.Refused as exc:
+                    return self.send_json({'error': str(exc)}, 400)
+                except Exception as exc:
+                    return self.send_json({'error': str(exc), 'error_type': type(exc).__name__}, 502)
+                return self.send_json(found)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 131072:

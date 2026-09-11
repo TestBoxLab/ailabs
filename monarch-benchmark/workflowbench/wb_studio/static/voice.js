@@ -28,6 +28,12 @@
   const button = () => $('#genesis-mic');
   const say = text => { const el = $('#mic-state'); if (el && el.textContent !== text) el.textContent = text; };
 
+  // `let state` in app.js does not attach to window, but classic scripts share the global
+  // lexical scope, so the bare identifier reaches it. One token, not a second copy.
+  function studioToken() {
+    try { return (typeof state !== 'undefined' && state && state.token) || ''; } catch (e) { return ''; }
+  }
+
   function disabled() { try { return localStorage.getItem(OFF_KEY) === '1'; } catch (e) { return false; } }
 
   // --- the reading -------------------------------------------------------------------
@@ -112,6 +118,46 @@
     return r;
   }
 
+  // --- the fallback: the Studio transcribes, not the browser ---------------------------
+  // Only when the browser will not do it on the device. Same origin, so `connect-src
+  // 'self'` is untouched and no key is ever in the page: the Studio calls the provider
+  // with the one it already holds, and reserves it in the weekly ledger (stage S6).
+  let recorder = null, chunks = [], clipStarted = 0;
+
+  function recordToStudio(mediaStream) {
+    if (!window.MediaRecorder) return null;
+    let kind = '';
+    for (const t of ['audio/webm', 'audio/ogg', 'audio/mp4'])
+      if (MediaRecorder.isTypeSupported(t)) { kind = t; break; }
+    if (!kind) return null;
+    chunks = [];
+    const r = new MediaRecorder(mediaStream, { mimeType: kind });
+    r.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    r.onstop = async () => {
+      const seconds = (Date.now() - clipStarted) / 1000;
+      const clip = new Blob(chunks, { type: kind });
+      chunks = [];
+      if (!clip.size || seconds < 0.3) { say(''); return; }
+      say('Transcribing…');
+      try {
+        const res = await fetch('/api/voice/stt', {
+          method: 'POST', body: clip,
+          headers: { 'Content-Type': kind, 'X-Clip-Seconds': String(Math.round(seconds)),
+                     'X-Studio-Token': studioToken() } });
+        const found = await res.json();
+        if (!res.ok) { say(found.error || 'The transcription was refused.'); return; }
+        const box = $('#genesis-message');
+        box.value = (box.value ? box.value.replace(/\s+$/, '') + ' ' : '') + (found.text || '');
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+        // Never auto-sent: the transcript is a draft, and this is the text-parity anchor.
+        say(found.text ? 'Transcribed · $' + found.cost_usd : 'Nothing was heard.');
+      } catch (e) { say('The transcription could not be reached.'); }
+    };
+    clipStarted = Date.now();
+    r.start();
+    return r;
+  }
+
   // --- the gesture --------------------------------------------------------------------
   async function down(e) {
     if (e && e.preventDefault) e.preventDefault();
@@ -140,23 +186,32 @@
     ctx.createMediaStreamSource(stream).connect(analyser);
     frame = requestAnimationFrame(read);
     recogniser = await localAvailable() ? listen() : null;
-    if (!recogniser) say('Listening · not transcribing on this browser');
+    if (!recogniser) {
+      recorder = recordToStudio(stream);
+      say(recorder ? 'Listening · this machine will transcribe it'
+                   : 'Listening · not transcribing on this browser');
+    }
   }
 
   function up() {
     if (!stream) return;
     if (frame) { cancelAnimationFrame(frame); frame = 0; }
-    // stop(), never enabled=false: the browser and OS recording indicators only go out
-    // when the track actually ends.
-    stream.getTracks().forEach(t => t.stop());
+    const ending = stream;
     stream = null;
     if (ctx) { ctx.close().catch(() => {}); ctx = null; }
     analyser = null;
     if (recogniser) { try { recogniser.stop(); } catch (e) {} recogniser = null; }
+    // Stop the recorder BEFORE the tracks end, or the last chunk never arrives. Its
+    // onstop writes the status line, so do not clear it below.
+    const wasRecording = !!recorder;
+    if (recorder) { try { if (recorder.state !== 'inactive') recorder.stop(); } catch (e) {} recorder = null; }
     const node = orb();
     if (node) { node.hidden = true; node.style.removeProperty('--mic-level'); delete node.dataset.level; }
+    // stop(), never enabled=false: the browser and OS recording indicators only go out
+    // when the track actually ends. After the recorder, so its last chunk arrives.
+    ending.getTracks().forEach(t => t.stop());
     button().setAttribute('aria-pressed', 'false');
-    say('');
+    if (!wasRecording) say('');
     $('#genesis-message').focus();
   }
 
