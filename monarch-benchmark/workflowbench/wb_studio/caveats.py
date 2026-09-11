@@ -87,4 +87,6 @@ def for_round(cohort) -> list[str]:
         out.append("This task set is not the frozen benchmark of 50 tasks, so these standings do not count for the leaderboard.")
     if not cohort.get("baseline"):
         out.append("No Bare baseline ran on this task set, so paired deltas and grades are not available.")
+    if cohort.get("note"):
+        out.append(cohort["note"])
     return out

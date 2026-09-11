@@ -594,6 +594,7 @@ def round_report(studio, cohort_id) -> dict:
             "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown], "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
             "trend": trend, "trend_title": trend_title, "repetitions": m["repetitions"],
             "caveats": caveats.for_round({**cohort, "baseline": baseline_id}),
+            "note": cohort.get("note"),
             "method": {"task_set": cohort["task_set"], "task_count": cohort["task_count"], "task_hashes": cohort["task_hashes"], "runs": [r["id"] for r in cohort["runs"]],
                        "repetitions": m["repetitions"], "fork": caveats.fork_version(), "benchmark": cohort.get("benchmark")}}
 

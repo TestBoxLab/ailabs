@@ -33,6 +33,25 @@ VENDORED_RECORD = "VENDORED-FROM.txt"      # written by scripts/vendor_automatio
 _REVISION_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
+def structural_difficulty(task: dict[str, Any]) -> int:
+    """services seeded + expected changes + tools needed (data-model.md §2).
+
+    Seeded means the task's data says something about the service. Under the
+    repaired world every scored task lists all 48 apps' empty defaults, so
+    counting keys would give every one of them 48 and the measure would say
+    nothing (unblock plan M1, 8 Sep 2026); an empty default is not a seed.
+    """
+    info = task.get("info", {})
+    services = seeded_services(info.get("initial_state", {}))
+    return (len(services)
+            + len(info.get("expected_changes", []))
+            + len(info.get("zapier_tools", [])))
+
+
+score_task = structural_difficulty
+
+
+
 def known_domains() -> list[str]:
     """The baseline domain plus the vendor's own public list, in a fixed order.
 

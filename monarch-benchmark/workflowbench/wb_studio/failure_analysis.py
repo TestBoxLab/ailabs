@@ -1,29 +1,23 @@
 """Read-only, deterministic outcome diagnostics; never a causal model review."""
 from collections import Counter, defaultdict
 
-from wb_studio.narrative import run_story
+from wb_studio.narrative import MODES, run_story
 from wb_studio.reports import outcome_report
 
 
-BUCKETS = {
-    "infrastructure": "Infrastructure interruption",
-    "budget_limit": "Recorded budget limit",
-    "timeout": "Recorded timeout or cancellation",
-    "unintended_changes": "Changes outside permitted scope",
-    "requirement_unmet": "Recorded requirements unmet",
-    "unclassified": "Insufficient evidence to classify",
-}
+BUCKETS = dict(MODES)
 # The same buckets in the two or three words a chart axis can hold.
 SHORT_LABELS = {
+    "missing_action": "Missing action",
+    "wrong_result": "Wrong result",
+    "forbidden_action": "Forbidden action",
+    "scope_violation": "Out of scope",
+    "tool_error": "Tool error",
+    "stopped_short": "Stopped short",
+    "ran_out": "Ran out",
     "infrastructure": "Infrastructure",
-    "budget_limit": "Budget",
-    "timeout": "Timeout",
-    "unintended_changes": "Out of scope",
-    "requirement_unmet": "Requirement unmet",
     "unclassified": "Unclassified",
 }
-BUDGET_TERMINATIONS = {"infra:attempt_cap", "infra:weekly_budget"}
-TIMEOUT_TERMINATIONS = {"timeout", "infra:timeout"}
 LIMITATION = (
     "Buckets describe recorded outcomes, not proven causes. The earliest cited error is an "
     "observation, not the first causal mistake. Missing trace events do not prove missing actions."
@@ -43,19 +37,12 @@ def _percentages(counts, denominator):
 
 
 def _bucket(result, report):
-    termination = result["termination"]
-    if result["passed"]:
+    if result.get("passed"):
         return "success"
-    if termination in BUDGET_TERMINATIONS:
-        return "budget_limit"
-    if termination in TIMEOUT_TERMINATIONS:
-        return "timeout"
-    if report["infrastructure"]:
-        return "infrastructure"
-    if report["scope_respected"] is False or report["unexpected_changes"]:
-        return "unintended_changes"
-    if any(check["passed"] is False for check in report["requirements"]):
-        return "requirement_unmet"
+    story = report.get("story") or {}
+    mode = story.get("mode")
+    if mode in MODES:
+        return mode
     return "unclassified"
 
 
@@ -95,19 +82,23 @@ def _attempt(result, trace, report, index):
         headline = "Task passed its recorded evaluator checks"
         narrative = "Satisfied: " + "; ".join(passed) + "." if passed else "The recorded overall verdict passed; no individual requirement checks were retained."
     else:
-        headline = BUCKETS[bucket]
-        narrative = {
-            "infrastructure": "Execution ended with " + result["termination"] + "; this attempt is not a valid model-quality measurement.",
-            "budget_limit": "Execution stopped at the recorded " + result["termination"] + " admission limit.",
-            "timeout": "Execution recorded " + result["termination"] + ". The record does not by itself distinguish deadline exhaustion from cancellation.",
-            "unintended_changes": "The evaluator recorded changes outside permitted scope.",
-            "requirement_unmet": "Unmet: " + "; ".join(unmet) + ".",
-            "unclassified": "The overall verdict failed, but retained checks and termination do not support a more specific outcome category.",
-        }[bucket]
-        if bucket == "unintended_changes" and report["change_summaries"]:
-            narrative += " " + " ".join(report["change_summaries"])
-        if unmet and bucket not in ("requirement_unmet", "infrastructure", "budget_limit", "timeout"):
-            narrative += " Unmet: " + "; ".join(unmet) + "."
+        headline = BUCKETS.get(bucket, "Failed")
+        story = report.get("story") or {}
+        story_verdict = story.get("verdict")
+        if bucket == "infrastructure":
+            narrative = "Execution ended with " + str(result.get("termination", "")) + "; this attempt is not a valid model-quality measurement."
+        elif bucket == "ran_out":
+            narrative = story_verdict or ("Execution stopped at the recorded limit: " + str(result.get("termination", "")) + ".")
+        elif bucket == "scope_violation":
+            narrative = story_verdict or "The evaluator recorded changes outside permitted scope."
+            if report.get("change_summaries"):
+                narrative += " " + " ".join(report["change_summaries"])
+            if unmet:
+                narrative += " Unmet: " + "; ".join(unmet) + "."
+        elif bucket in ("missing_action", "wrong_result", "forbidden_action", "stopped_short", "tool_error"):
+            narrative = story_verdict or ("Unmet: " + "; ".join(unmet) + "." if unmet else BUCKETS[bucket])
+        else:
+            narrative = "The overall verdict failed, but retained checks and termination do not support a more specific outcome category."
     if result.get("error"):
         facts.append({"text": "Recorded error message: " + str(result["error"]), "event_ids": finish_ids,
                       "check_names": [], "source": "result.error"})

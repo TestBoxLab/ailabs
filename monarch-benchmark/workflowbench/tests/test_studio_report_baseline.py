@@ -15,11 +15,12 @@ def arm(identity, kind, runner, **extra):
     return {"id": identity, "name": extra.pop("name", identity), "kind": kind, "runner": runner, **extra}
 
 
-def write_run(studio, identity, arms, results, *, title=None, finished_at="2026-09-08T12:00:00+00:00", tasks=None, track="agentic-request"):
+def write_run(studio, identity, arms, results, *, title=None, finished_at="2026-09-08T12:00:00+00:00", tasks=None, track="agentic-request", component_manifest=None):
     tasks = tasks or list(studio.tasks)
     job = {"id": identity, "title": title or identity, "status": "completed", "created_at": finished_at, "finished_at": finished_at,
            "settings": {"tasks": tasks, "models": [a["id"] for a in arms], "arms": arms, "track": track, "concurrency": 1, "maximum_usd": "1.00"},
-           "task_hashes": {t: contract_hash(studio.tasks[t]) for t in tasks}, "results": results, "completed": len(results), "total": len(results)}
+           "task_hashes": {t: contract_hash(studio.tasks[t]) for t in tasks}, "results": results, "completed": len(results), "total": len(results),
+           "component_manifest": component_manifest}
     (studio.directory / identity).mkdir(parents=True, exist_ok=True)
     write_json(studio.directory / identity / "job.json", job)
     (studio.directory / identity / "events.jsonl").write_text("", encoding="utf-8")
@@ -130,6 +131,22 @@ def test_superseded_attempts_excluded_from_headline_figures(stored_run):
     count_findings = [f for f in report["findings"] if f["kind"] == "count"]
     if count_findings:
         assert "1 of 6 tasks" in count_findings[0]["text"]
+
+
+def test_runs_with_no_pinned_judge_are_not_pooled_with_pinned_ones(studio):
+    tasks = list(studio.tasks)
+    bare = arm("without-monarch", "native", {"model": MODEL, "effort": "default"}, version="without-monarch", name="Bare Gemini 3.7 Flash")
+    write_run(studio, "run-pinned", [bare], rows("without-monarch", {tasks[0]: True, tasks[1]: False}), title="Pinned run", component_manifest={"judge": "sha256:judge-pin-1"})
+    write_run(studio, "run-unpinned", [bare], rows("without-monarch", {tasks[0]: True, tasks[1]: True}), title="Unpinned run", component_manifest=None)
+
+    groups = report_data.cohorts(studio)
+    # The runs must NOT be pooled into one cohort because one has a pinned judge and the other does not
+    assert len(groups) == 2
+    cohort_pinned = next(c for c in groups.values() if any(r["id"] == "run-pinned" for r in c["runs"]))
+    cohort_unpinned = next(c for c in groups.values() if any(r["id"] == "run-unpinned" for r in c["runs"]))
+    assert cohort_pinned["id"] != cohort_unpinned["id"]
+    assert cohort_pinned["contract"]["judge"] == "sha256:judge-pin-1"
+    assert cohort_unpinned["contract"]["judge"] == "historical-unpinned"
 
 
 

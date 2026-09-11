@@ -35,7 +35,7 @@ def test_requirements_and_scope_keep_exact_checks_changes_and_event_citations():
                                                      "before": ["INBOX"], "after": ["TRASH"]}])],
                         [event(1, "node_finished", status="error"), event(2, "attempt_finished")])
     attempt = analysis(studio, "run-1")["attempts"][0]
-    assert attempt["bucket"] == "unintended_changes"
+    assert attempt["bucket"] == "scope_violation"
     assert "INBOX" in attempt["narrative"] and "TRASH" in attempt["narrative"]
     assert "Unmet: Phone should be 123" in attempt["narrative"]
     assert attempt["checks"] == [
@@ -51,11 +51,11 @@ def test_requirements_and_scope_keep_exact_checks_changes_and_event_citations():
 @pytest.mark.parametrize("termination,bucket,infrastructure", [
     ("infra:harness_crash", "infrastructure", True),
     ("infra:rate_limit", "infrastructure", True),
-    ("infra:weekly_budget", "budget_limit", True),
-    ("infra:attempt_cap", "budget_limit", True),
-    ("timeout", "timeout", False),
-    ("infra:timeout", "timeout", True),
-    ("completed", "requirement_unmet", False),
+    ("infra:weekly_budget", "ran_out", True),
+    ("infra:attempt_cap", "ran_out", True),
+    ("timeout", "ran_out", False),
+    ("infra:timeout", "ran_out", True),
+    ("completed", "stopped_short", False),
 ])
 def test_explicit_termination_precedes_checks_without_relabeling_infrastructure(termination, bucket, infrastructure):
     report = analysis(studio_for([result(termination=termination)]), "run-1")
@@ -140,3 +140,16 @@ def test_overall_failure_with_all_visible_checks_passed_is_unclassified():
     assert attempt["bucket"] == "unclassified"
     assert attempt["checks"][0]["passed"] is True
     assert "retained checks and termination do not support" in attempt["narrative"]
+
+
+def test_bar_chart_and_per_attempt_folds_agree_on_all_failed_attempts(stored_run):
+    studio, job = stored_run
+    report = analysis(studio, stored_run.run_id)
+    failed = [a for a in report["attempts"] if not a["passed"]]
+    assert len(failed) == 8
+    for a in failed:
+        assert a["bucket"] == a["story"]["mode"]
+    bucket_counts = {b["id"]: b["count"] for b in report["buckets"] if b["count"]}
+    story_counts = {k: sum(1 for a in failed if a["story"]["mode"] == k) for k in set(a["story"]["mode"] for a in failed)}
+    assert bucket_counts == story_counts
+

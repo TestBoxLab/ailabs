@@ -439,10 +439,10 @@ def load_plan(path) -> Plan:
     c = _read(path, "plan")
     # `audience` is accepted and ignored, like `approved_by`: there is one report,
     # so an older plan file that still names an audience loads unchanged.
-    c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
+    c.keys(("name", "tasks", "mode", "timeout_s", "concurrency", "competitors",
             "baseline", "cost_ceiling_usd"),
            ("approved_by", "audience", "description", "retry_on_fail", "track",
-            "attempt_cap_usd"))
+            "attempt_cap_usd", "repetitions"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -458,7 +458,7 @@ def load_plan(path) -> Plan:
         name=c.data["name"],
         tasks=c.get("tasks", str),
         mode=c.get("mode", str, enum=MODES),
-        repetitions=c.get("repetitions", int, minimum=1),
+        repetitions=c.get("repetitions", int, minimum=1, default=1),
         timeout_s=float(c.get("timeout_s", num, minimum=0, strict=True)),
         concurrency=c.get("concurrency", int, minimum=1),
         competitors=competitors,

@@ -69,3 +69,15 @@ def test_a_report_never_prints_the_internal_token_of_an_unnamed_setup():
 def test_the_run_list_names_every_setup_of_a_run_that_carries_no_arms():
     listed = with_setup_names({"settings": {"models": ["oracle", "claude-opus-5@high"]}})
     assert [a["name"] for a in listed["settings"]["arms"]] == ["Scripted reference", "Claude Opus 5 · high"]
+
+
+def test_hero_bar_names_model_and_version_not_low_reasoning(stored_run):
+    from wb_studio import report_data
+    studio, job = stored_run
+    report = report_data.run_report(studio, stored_run.run_id)
+    hero = report.get("hero") or []
+    assert hero, "Expected at least one hero row"
+    label = hero[0]["label"]
+    assert "low reasoning" not in label
+    assert "Gemini 3.7 Flash" in label
+    assert "v1" in label

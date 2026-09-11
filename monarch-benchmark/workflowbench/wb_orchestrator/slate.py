@@ -19,7 +19,10 @@ sits in another frozen set. Nothing is written before every id has passed.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import importlib.metadata
+import json
+import random
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -332,3 +335,284 @@ def summary(r: SlateResult) -> str:
         text += (f"; {len(r.frozen_overlap)} of them also sit in another frozen set, "
                  f"allowed by --allow-frozen-overlap and recorded in the manifest")
     return text + "."
+
+
+# --- the stratified split (FR-017, FR-018, FR-033) -----------------------------
+
+SPLIT_MEASURE = (
+    'services seeded (initial_state keys except "meta") + expected changes '
+    "(info.expected_changes) + tools needed (info.zapier_tools), computed from the task "
+    "file; tiers are the terciles of the whole corpus, ties on a cut point falling in "
+    "the lower tier."
+)
+MEASURE_KIND = "structural-proxy"
+MEASURE_VERSION = "1"
+
+
+def slate_sha(tasks: Iterable[Row]) -> str:
+    pairs = sorted((r.task_id, r.contract_sha256) for r in tasks)
+    blob = json.dumps(pairs, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+@dataclass
+class SplitResult:
+    dev_out: Path
+    heldout_out: Path
+    manifest: Path
+    development: list[Row]
+    held_out: list[Row]
+    balance: dict[str, dict[str, dict[str, int]]]
+    cuts: dict[str, int]
+    seed: int
+    per_slate: int
+    because: str
+    total: int
+    usable: int
+    folders: list[tiers.Folder]
+    dev_sha: str
+    heldout_sha: str
+    written: list[Path] = field(default_factory=list)
+
+
+def format_split_summary(res: SplitResult) -> str:
+    lines = []
+    lines.append(f"drawn from {res.usable} usable tasks across {len(res.folders)} domains")
+    for slate_name in ("development", "held-out"):
+        slate_rows = res.development if slate_name == "development" else res.held_out
+        tiers_dict = res.balance[slate_name]["tiers"]
+        simple_n = tiers_dict.get("simple", 0)
+        medium_n = tiers_dict.get("medium", 0)
+        complex_n = tiers_dict.get("complex", 0)
+        lines.append(
+            f"{slate_name:<12} {len(slate_rows)} tasks   simple {simple_n}  medium {medium_n}  complex {complex_n}"
+        )
+
+    dev_dom = res.balance["development"]["domains"]
+    held_dom = res.balance["held-out"]["domains"]
+    all_doms = sorted(set(dev_dom.keys()) | set(held_dom.keys()))
+    dom_strs = [f"{d} {dev_dom.get(d, 0)}/{held_dom.get(d, 0)}" for d in all_doms]
+    lines.append(f"domains balanced: {'  '.join(dom_strs)}")
+    lines.append(
+        f"frozen: {res.dev_out.as_posix()} (sha {res.dev_sha[:4]}…), {res.heldout_out.as_posix()} (sha {res.heldout_sha[:4]}…)"
+    )
+    lines.append(f"manifest: {res.manifest.as_posix()}")
+    return "\n".join(lines)
+
+
+def _write_split(dev_path: Path, dev_rows: list[Row], heldout_path: Path, heldout_rows: list[Row],
+                 manifest_path: Path, manifest_text: str) -> list[Path]:
+    """Write both slates and the manifest, or write nothing at all.
+
+    A half-written held-out slate could never be redrawn: `split` refuses on any
+    *.json already in that folder, so a copy that failed partway — a full disk, a
+    permission — would retire the name for good with no way back but renaming the
+    folder by hand. Everything this call wrote comes off again if any of it fails.
+    """
+    written: list[Path] = []
+    try:
+        for folder, rows in ((dev_path, dev_rows), (heldout_path, heldout_rows)):
+            folder.mkdir(parents=True, exist_ok=True)
+            for r in rows:
+                target = folder / r.path.name
+                shutil.copyfile(r.path, target)
+                written.append(target)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(manifest_text, newline="\n")
+        written.append(manifest_path)
+    except BaseException:
+        for path in reversed(written):
+            path.unlink(missing_ok=True)
+        raise
+    return written
+
+
+def split(dirs: Iterable[str | Path], size: int, seed: int,
+          dev_out: str | Path, heldout_out: str | Path,
+          manifest: str | Path, because: str) -> SplitResult:
+    """Draw development and held-out slates stratified by difficulty tier and domain."""
+    dev_path = Path(dev_out)
+    heldout_path = Path(heldout_out)
+    manifest_path = Path(manifest)
+    dirs = [Path(d) for d in dirs]
+
+    # Refuse redrawing a frozen held-out slate (FR-018)
+    if heldout_path.is_dir() and any(heldout_path.glob("*.json")):
+        raise Refusal(
+            f"refused: {heldout_path.as_posix()} is a frozen held-out slate. A held-out slate is never redrawn.\n"
+            f"Draw a new one under a different name and retire this one with a recorded reason."
+        )
+
+    pool = tiers.load_corpus(dirs)
+    if len(pool.entries) < 2 * size:
+        raise ValueError(f"usable corpus has {len(pool.entries)} tasks, fewer than the {2 * size} "
+                         f"needed for two slates of {size}; nothing written")
+
+    cuts = tiers.tier_cuts(e.score for e in pool.entries)
+    entries = [tiers.Entry(e.task_id, e.domain, e.score, e.contract_sha256, e.path,
+                           tiers.tier_of(e.score, cuts)) for e in pool.entries]
+
+    domains = sorted(set(e.domain for e in entries))
+    tier_order = tiers.TIER_ORDER
+
+    # Group entries by cell (tier, domain)
+    cells: dict[tuple[str, str], list[tiers.Entry]] = {}
+    for e in entries:
+        cells.setdefault((e.tier, e.domain), []).append(e)
+
+    # Deterministic shuffling with seed
+    rng = random.Random(seed)
+    for key in sorted(cells):
+        cells[key].sort(key=lambda x: x.task_id)
+        rng.shuffle(cells[key])
+
+    # Quotas for total drawn (2 * size)
+    tier_quota = {t: 2 * (size // 3 + (1 if i < size % 3 else 0)) for i, t in enumerate(tier_order)}
+    domain_quota = {d: 2 * (size // len(domains) + (1 if j < size % len(domains) else 0))
+                    for j, d in enumerate(domains)}
+
+    selected_by_cell: dict[tuple[str, str], list[tiers.Entry]] = {k: [] for k in cells}
+    tier_counts = {t: 0 for t in tier_order}
+    domain_counts = {d: 0 for d in domains}
+
+    # Pass 1: pick tasks satisfying both tier and domain quota
+    sorted_domains = list(domains)
+    domain_idx = 0
+    for t in tier_order:
+        needed = tier_quota[t]
+        while tier_counts[t] < needed:
+            picked = False
+            for _ in range(len(sorted_domains)):
+                d = sorted_domains[domain_idx % len(sorted_domains)]
+                domain_idx += 1
+                if cells.get((t, d)) and tier_counts[t] < needed and domain_counts[d] < domain_quota[d]:
+                    e = cells[(t, d)].pop(0)
+                    selected_by_cell[(t, d)].append(e)
+                    tier_counts[t] += 1
+                    domain_counts[d] += 1
+                    picked = True
+                    if tier_counts[t] == needed:
+                        break
+            if not picked:
+                break
+
+    # Pass 2: if any tier quota is not met (e.g. some domains had few tasks), fill tier quota
+    for t in tier_order:
+        needed = tier_quota[t]
+        while tier_counts[t] < needed:
+            picked = False
+            avail_domains = sorted([d for d in domains if cells.get((t, d))], key=lambda d: domain_counts[d])
+            for d in avail_domains:
+                if cells.get((t, d)) and tier_counts[t] < needed:
+                    e = cells[(t, d)].pop(0)
+                    selected_by_cell[(t, d)].append(e)
+                    tier_counts[t] += 1
+                    domain_counts[d] += 1
+                    picked = True
+                    if tier_counts[t] == needed:
+                        break
+            if not picked:
+                raise ValueError(f"tier {t} has {tier_counts[t]} usable tasks, fewer than the {needed} needed")
+
+    # Partition selected tasks in each cell between development and held-out:
+    dev_entries: list[tiers.Entry] = []
+    heldout_entries: list[tiers.Entry] = []
+    remainder_slate = "development"
+
+    for t in tier_order:
+        for d in sorted_domains:
+            cell_tasks = selected_by_cell.get((t, d), [])
+            even = 2 * (len(cell_tasks) // 2)
+            for i in range(0, even, 2):
+                dev_entries.append(cell_tasks[i])
+                heldout_entries.append(cell_tasks[i + 1])
+            if len(cell_tasks) % 2 == 1:
+                rem_task = cell_tasks[-1]
+                if remainder_slate == "development":
+                    dev_entries.append(rem_task)
+                    remainder_slate = "held-out"
+                else:
+                    heldout_entries.append(rem_task)
+                    remainder_slate = "development"
+
+    def make_row(e: tiers.Entry) -> Row:
+        return Row(e.task_id, e.domain, e.score, e.tier, e.contract_sha256, e.path)
+
+    dev_rows = sorted([make_row(e) for e in dev_entries], key=lambda r: r.task_id)
+    heldout_rows = sorted([make_row(e) for e in heldout_entries], key=lambda r: r.task_id)
+
+    balance = {
+        "development": {
+            "tiers": {t: sum(r.tier == t for r in dev_rows) for t in tier_order},
+            "domains": {d: sum(r.domain == d for r in dev_rows) for d in domains},
+        },
+        "held-out": {
+            "tiers": {t: sum(r.tier == t for r in heldout_rows) for t in tier_order},
+            "domains": {d: sum(r.domain == d for r in heldout_rows) for d in domains},
+        },
+    }
+
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    task_manifest_rows = []
+    for r in dev_rows:
+        task_manifest_rows.append({
+            "id": r.task_id,
+            "slate": "development",
+            "tier": r.tier,
+            "domain": r.domain,
+            "score": r.score,
+            "contract_sha256": r.contract_sha256,
+        })
+    for r in heldout_rows:
+        task_manifest_rows.append({
+            "id": r.task_id,
+            "slate": "held-out",
+            "tier": r.tier,
+            "domain": r.domain,
+            "score": r.score,
+            "contract_sha256": r.contract_sha256,
+        })
+    task_manifest_rows.sort(key=lambda x: x["id"])
+
+    manifest_dict = {
+        "measure": SPLIT_MEASURE,
+        "measure_kind": MEASURE_KIND,
+        "measure_version": MEASURE_VERSION,
+        "generated_at": now,
+        "seed": seed,
+        "per_slate": size,
+        "because": because,
+        "cuts": cuts,
+        "corpus": [{"dir": f.path.as_posix(), "domain": f.domain,
+                    "tasks": f.tasks, "usable": f.usable} for f in pool.folders],
+        "balance": balance,
+        "tasks": task_manifest_rows,
+    }
+
+    written = _write_split(dev_path, dev_rows, heldout_path, heldout_rows, manifest_path,
+                           yaml.safe_dump(manifest_dict, sort_keys=False, allow_unicode=True,
+                                          default_flow_style=False))
+
+    dev_sha = slate_sha(dev_rows)
+    heldout_sha = slate_sha(heldout_rows)
+
+    return SplitResult(
+        dev_out=dev_path,
+        heldout_out=heldout_path,
+        manifest=manifest_path,
+        development=dev_rows,
+        held_out=heldout_rows,
+        balance=balance,
+        cuts=cuts,
+        seed=seed,
+        per_slate=size,
+        because=because,
+        total=pool.total,
+        usable=len(pool.entries),
+        folders=pool.folders,
+        dev_sha=dev_sha,
+        heldout_sha=heldout_sha,
+        written=written,
+    )
+

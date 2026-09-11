@@ -192,3 +192,68 @@ def test_the_background_work_starts_only_when_a_dial_is_on(tmp_path):
     autonomy = Autonomy(tmp_path)
     autonomy.set({'cards': 'act'}, by='human:lucas')
     assert background_wanted(autonomy) is True
+
+
+def test_exhausted_envelope_stops_the_loop_and_scheduled_day_spends_zero(tmp_path, monkeypatch):
+    """FR-035: An exhausted research envelope stops the loop without drawing on the weekly ceiling.
+    A full scheduled day spends zero.
+    """
+    from datetime import datetime, timezone
+    from wb_studio.genesis import Genesis
+    from wb_studio.genesis_access import Envelope
+    from wb_studio.genesis_autonomy import background_wanted
+    from wb_studio.scheduler import Scheduler
+
+    # Ledger refuses any attempt to reserve funds on an exhausted envelope
+    ledger = Mock()
+    ledger.reserve_run.side_effect = AssertionError('Reserved funds when research envelope was exhausted')
+    ledger.status.return_value = SimpleNamespace(blocked=False, available_usd=Decimal('280.00'), week_start='2026-09-07')
+
+    studio = SimpleNamespace(
+        directory=tmp_path,
+        jobs=Mock(return_value=[]),
+        job=Mock(),
+        events=Mock(return_value=[]),
+        ledger=ledger,
+        create=Mock(),
+    )
+    studio.genesis = Genesis(studio)
+    # Enable dials for autonomous work
+    studio.genesis.autonomy.set({'cards': 'act', 'runs': 'smoke', 'initiative': 'open'}, by='human:lucas')
+
+    # Set an envelope, but exhaust it (0 available)
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='50.00', per_experiment_ceiling_usd='15.00', by='Lucas', now=datetime(2026, 9, 7, 3, tzinfo=timezone.utc))
+    monkeypatch.setattr(Envelope, 'available_usd', lambda *a, **kw: Decimal('0.00'))
+    studio.envelope = env
+    studio.genesis.envelope = env
+
+    # 1. Background worker does not want to run
+    assert background_wanted(studio.genesis.autonomy) is False
+
+    # 2. may_launch refuses any proposed plan
+    plan = {'attempts_per_competitor': 2, 'maximum_usd': '1.00'}
+    allowed, reason = studio.genesis.autonomy.may_launch(plan, Decimal('0'), Decimal('2'), Decimal('6'))
+    assert allowed is False
+    assert 'envelope is exhausted' in reason
+    assert 'weekly ceiling' in reason
+
+    # 3. Full scheduled day (00:00 to 23:00): all jobs skipped, zero spend
+    scheduler = Scheduler(studio, tmp_path / 'schedule.json')
+    ran = []
+    scheduler.daily('nightly', 0, lambda s: ran.append('nightly'))
+    scheduler.daily('initiative', 7, lambda s: ran.append('initiative'))
+    scheduler.daily('ranking', 12, lambda s: ran.append('ranking'))
+
+    total_skipped = 0
+    for hour in range(24):
+        dt = datetime(2026, 9, 7, hour, 30, tzinfo=timezone.utc)
+        entries = scheduler.run_due(dt)
+        for entry in entries:
+            assert entry['status'] == 'skipped'
+            assert 'stopped' in entry['reason']
+            total_skipped += 1
+
+    assert ran == []
+    assert total_skipped > 0
+    assert ledger.reserve_run.call_count == 0

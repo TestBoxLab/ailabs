@@ -240,3 +240,22 @@ def test_trend_over_cohort_with_no_monarch_is_not_titled_monarch_pass_rate_by_ru
     reports_js = (ROOT / "wb_studio" / "static" / "reports.js").read_text(encoding="utf-8")
     assert "title: 'Monarch pass rate by run'" not in reports_js
     assert "family: 'monarch'" not in reports_js
+
+
+def test_provisional_sentence_surfaced_in_round_report_when_judge_unpinned(studio):
+    first = finished_run(studio, "round-a", title="First")
+    second = finished_run(studio, "round-b", title="Second")
+    for run_id in (first["id"], second["id"]):
+        folder = studio.directory / run_id
+        job_data = json.loads((folder / "job.json").read_text(encoding="utf-8"))
+        job_data["component_manifest"] = {}
+        (folder / "job.json").write_text(json.dumps(job_data), encoding="utf-8")
+
+    cohort = next(iter(report_data.cohorts(studio).values()))
+    report = report_data.round_report(studio, cohort["id"])
+    provisional_sentence = "Historical records lack a pinned judge; rankings are provisional."
+    assert any(provisional_sentence in c for c in report["caveats"])
+    assert provisional_sentence in report.get("note", "")
+
+    reports_js = (ROOT / "wb_studio" / "static" / "reports.js").read_text(encoding="utf-8")
+    assert "r.note" in reports_js

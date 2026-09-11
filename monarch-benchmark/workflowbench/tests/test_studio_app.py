@@ -453,3 +453,14 @@ def test_a_benchmark_studio_does_not_list_the_scripted_fixture_runs():
             {"id": "real", "settings": {"models": ["glm-5.3-fireworks"]}}]
     assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=None), runs)] == ["real"]
     assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=lambda *a: None), runs)] == ["fixture", "real"]
+
+
+def test_launch_carries_explicit_repetitions_into_settings(studio):
+    # Default without explicit repetitions is 1
+    job_default = studio.create(payload(studio), start=False)
+    assert job_default["settings"]["repetitions"] == 1
+
+    # Explicit repetitions carried into settings
+    job_rep = studio.create(payload(studio, request_id="comparison-rep", repetitions=3), start=False)
+    assert job_rep["settings"]["repetitions"] == 3
+

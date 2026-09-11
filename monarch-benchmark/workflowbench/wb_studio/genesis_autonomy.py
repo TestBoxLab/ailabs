@@ -101,7 +101,7 @@ class Autonomy:
         return self.read()
 
     # ---- the gate for a launch -----------------------------------------------------
-    def may_launch(self, plan: dict, today_usd: Decimal, card_usd: Decimal, daily_usd: Decimal) -> tuple[bool, str | None]:
+    def may_launch(self, plan: dict, today_usd: Decimal, card_usd: Decimal, daily_usd: Decimal, envelope_usd: Decimal | None = None) -> tuple[bool, str | None]:
         """Whether Genesis may launch this plan itself, and the plain reason when it may not.
 
         `plan` carries attempts_per_competitor and maximum_usd as the Studio computed them.
@@ -123,6 +123,29 @@ class Autonomy:
             return False, f'The ceiling ${maximum:.2f} is above the per-card allowance ${card_usd:.2f}; a person approves it.'
         if today_usd + maximum > daily_usd:
             return False, f"Today's allowance ${daily_usd:.2f} cannot cover ${maximum:.2f} more; it waits for tomorrow or a person."
+
+        # Research envelope check (FR-035)
+        from wb_studio.genesis_access import Envelope
+        env_file = self.root / 'envelope.json'
+        if envelope_usd is not None:
+            if envelope_usd <= Decimal('0.00'):
+                return False, 'The research envelope is exhausted; a person sets a new envelope. It will not draw on the lab\'s weekly ceiling.'
+            if maximum > envelope_usd:
+                return False, f"The ceiling ${maximum:.2f} is above the research envelope remainder ${envelope_usd:.2f}; short by ${maximum - envelope_usd:.2f}. It will not draw on the lab's weekly ceiling."
+        elif env_file.exists():
+            env = Envelope(self.root)
+            avail = env.available_usd()
+            status = env.status()
+            per_exp = Decimal(status['per_experiment_ceiling_usd'])
+            if avail <= Decimal('0.00'):
+                return False, 'The research envelope is exhausted; a person sets a new envelope. It will not draw on the lab\'s weekly ceiling.'
+            if status['is_set'] and per_exp > 0 and maximum > per_exp:
+                shortfall = maximum - per_exp
+                return False, f'The ceiling ${maximum:.2f} is above the per-experiment ceiling ${per_exp:.2f}; short by ${shortfall:.2f}.'
+            if maximum > avail:
+                shortfall = maximum - avail
+                return False, f"The research envelope cannot cover ${maximum:.2f} (${avail:.2f} left this week); short by ${shortfall:.2f}. It will not draw on the lab's weekly ceiling."
+
         return True, None
 
     # ---- the activity record -------------------------------------------------------
@@ -200,8 +223,13 @@ def background_wanted(autonomy) -> bool:
     All dials off means a workspace nobody has configured. Starting the background
     threads there costs money for work no one asked for, so the owner starts them only
     when a person has turned something on (feature 024, FR-002).
+    Exhaustion of the research envelope stops the loop (feature 024, FR-035).
     """
     dials = autonomy.read()
     if dials.get('paused'):
+        return False
+    from wb_studio.genesis_access import Envelope
+    env = Envelope(autonomy.root)
+    if env.path.exists() and env.available_usd() <= Decimal('0.00'):
         return False
     return any(dials.get(key, 'off') != 'off' for key in ('cards', 'runs', 'initiative', 'engineer'))

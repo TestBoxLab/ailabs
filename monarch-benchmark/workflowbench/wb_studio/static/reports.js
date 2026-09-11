@@ -366,6 +366,7 @@ function renderRoundReport(r) {
   const article = $('#report-article');
   const when = r.first && r.latest && fmtDate(r.first) !== fmtDate(r.latest) ? fmtDate(r.first) + ' to ' + fmtDate(r.latest) : fmtDate(r.latest);
   article.innerHTML = '<header class="report-head"><h1>' + esc(roundTitle(r)) + '</h1>' + meta([(r.full_benchmark ? 'Benchmark round' : 'Round'), 'task set ' + r.task_set, r.task_count + (r.task_count === 1 ? ' task' : ' tasks'), trackWords(r.track), r.runs.length + (r.runs.length === 1 ? ' run' : ' runs'), when]) +
+    (r.note ? '<p class="report-note">' + esc(r.note) + '</p>' : '') +
     reportActions(r, 'round') + '</header>' +
     contents([['standings', 'Standings'], ['hero', 'Pass rate'], ...(r.trend.length > 1 ? [['trend', 'Over time']] : []), ['paired', 'By category'], ['failures', 'Task matrix'], ['caveats', 'What to keep in mind'], ['method', 'How it was measured']]) +
     section('standings', 'Standings', standingsTable(r) + pairingsTable(r) + '' + excludedTable(r)) +

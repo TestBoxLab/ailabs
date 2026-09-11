@@ -287,3 +287,31 @@ def test_agent_error_turn_limit_attempts_produce_no_completion_claim(stored_run)
         assert claim["count"] == 0, f"Attempt {r['task']} produced a completion claim: {r.get('output')}"
     assert measures.false_completion(agent_error_rows)["count"] == 0
 
+
+def test_no_displayed_95_interval_is_ever_zero_width():
+    from wb_studio.leaderboard import uncertainty
+    # Sample with no variance between tasks: every task passed with repetitions
+    rows_all_passed = [
+        result("t1", "a", True), result("t1", "a", True),
+        result("t2", "a", True), result("t2", "a", True),
+        result("t3", "a", True), result("t3", "a", True),
+    ]
+    u_passed = uncertainty(rows_all_passed)
+    assert u_passed["low"] is not None and u_passed["high"] is not None
+    assert u_passed["high"] > u_passed["low"], f"Interval should not be zero-width: {u_passed}"
+
+    # Sample with no variance between tasks: every task failed with repetitions
+    rows_all_failed = [
+        result("t1", "a", False), result("t1", "a", False),
+        result("t2", "a", False), result("t2", "a", False),
+        result("t3", "a", False), result("t3", "a", False),
+    ]
+    u_failed = uncertainty(rows_all_failed)
+    assert u_failed["low"] is not None and u_failed["high"] is not None
+    assert u_failed["high"] > u_failed["low"], f"Interval should not be zero-width: {u_failed}"
+
+    # Single repetition
+    rows_single_rep = [result("t1", "a", True), result("t2", "a", True), result("t3", "a", True)]
+    u_single = uncertainty(rows_single_rep)
+    assert u_single["high"] > u_single["low"]
+

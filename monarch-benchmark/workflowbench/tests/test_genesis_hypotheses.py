@@ -140,3 +140,133 @@ def test_task_values_false_completion_restricts_to_competitor_produced_output():
     assert values.get("t1") == 0.0
     assert values.get("t2") == 1.0
     assert "t3" not in values
+
+
+def test_variant_test_defaults_to_development_slate():
+    from wb_studio.genesis_hypotheses import check_hypothesis
+    record = {
+        'claim': 'Naming the record owner raises pass rate.',
+        'population': {'filter': {'domain': 'finance'}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    checked = check_hypothesis(record)
+    assert checked['slate'] == 'development'
+
+
+def test_variant_test_accepts_held_out_slate_and_refuses_unknown():
+    from wb_studio.genesis_hypotheses import check_hypothesis
+    record = {
+        'claim': 'Naming the record owner raises pass rate.',
+        'population': {'filter': {'domain': 'finance'}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+        'slate': 'held-out',
+    }
+    assert check_hypothesis(record)['slate'] == 'held-out'
+
+    with pytest.raises(ValueError, match='development or held-out'):
+        check_hypothesis({**record, 'slate': 'validation'})
+
+
+def test_smallest_plan_refuses_size_when_sign_test_cannot_reach_significance(tmp_path):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(10)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=Mock(), create=Mock())
+    record = {
+        'claim': 'V2 beats V1.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(10)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is False
+    assert 'cannot be settled' in plan['not_launchable']
+
+
+def test_smallest_plan_refuses_when_exceeding_envelope_remainder(tmp_path, monkeypatch):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    from wb_studio.genesis_access import Envelope
+    from decimal import Decimal
+
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(100)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=None, create=Mock())
+    # Envelope has $3.00 left
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='50.00', per_experiment_ceiling_usd='40.00', by='Lucas')
+    monkeypatch.setattr(env, 'status', lambda ledger=None: {
+        'week_start': '2026-09-07', 'amount_usd': '50.00', 'per_experiment_ceiling_usd': '40.00',
+        'held_usd': '47.00', 'settled_usd': '0.00', 'available_usd': Decimal('3.00'),
+        'left_usd': '3.00', 'is_set': True, 'set_by': 'human:lucas', 'set_at': '2026-09-11T00:00:00Z',
+    })
+    studio.envelope = env
+
+    record = {
+        'claim': 'V2 beats V1 on development slate.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(50)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2', 'model': 'gemini-3.7-flash'},
+                       'b': {'kind': 'architecture', 'id': 'v1', 'model': 'gemini-3.7-flash'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is True
+    max_usd = Decimal(plan['proposal']['maximum_usd'])
+    assert max_usd > Decimal('3.00')
+    shortfall = max_usd - Decimal('3.00')
+    expected_refusal = (
+        f"refused: this experiment reserves up to ${max_usd:.2f}; "
+        f"the research envelope has $3.00 left this week. "
+        f"Short by ${shortfall:.2f}. It will not draw on the lab's weekly ceiling."
+    )
+    assert plan['not_launchable'] == expected_refusal
+
+
+def test_smallest_plan_refuses_when_exceeding_per_experiment_ceiling(tmp_path):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    from wb_studio.genesis_access import Envelope
+    from decimal import Decimal
+
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(100)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=None, create=Mock())
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='200.00', per_experiment_ceiling_usd='0.05', by='Lucas')
+    studio.envelope = env
+
+    record = {
+        'claim': 'V2 beats V1 on development slate.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(50)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2', 'model': 'gemini-3.7-flash'},
+                       'b': {'kind': 'architecture', 'id': 'v1', 'model': 'gemini-3.7-flash'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is True
+    max_usd = Decimal(plan['proposal']['maximum_usd'])
+    assert max_usd > Decimal('0.05')
+    shortfall = max_usd - Decimal('0.05')
+    expected_refusal = (
+        f"refused: this experiment reserves up to ${max_usd:.2f}; "
+        f"the per-experiment ceiling is $0.05. Short by ${shortfall:.2f}."
+    )
+    assert plan['not_launchable'] == expected_refusal
+
+

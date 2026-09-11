@@ -174,10 +174,10 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
     # One failure mode, in the order a reader would rule them out.
     if result.get("passed"):
         mode = "passed"
-    elif infra or (termination.startswith("infra:") and termination not in RAN_OUT):
-        mode = "infrastructure"
     elif termination in RAN_OUT or "turn limit" in str(result.get("error", "")).lower():
         mode = "ran_out"
+    elif infra or termination.startswith("infra:"):
+        mode = "infrastructure"
     elif errors and (last_action := next((a for t in reversed(timeline) for a in reversed(t["actions"])), None)) and last_action["status"] == "error":
         mode = "tool_error"
     elif any(negative(r) for r in unmet):
