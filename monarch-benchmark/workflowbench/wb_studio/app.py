@@ -71,6 +71,23 @@ def setup_names(job) -> dict:
     return {i: display_name(i, arms.get(i)) for i in identifiers}
 
 
+def with_setup_names(job) -> dict:
+    """A run as the pages list it: one arm per competitor, each under its
+    readable name. The stored record keeps its own identifiers."""
+    names, settings = setup_names(job), job.get("settings") or {}
+    arms = settings.get("arms") or [{"id": i, "kind": "runner"} for i in settings.get("models") or []]
+    return {**job, "settings": {**settings, "arms": [{**a, "name": names.get(a["id"], a["id"])} for a in arms]}}
+
+
+def listed_jobs(studio, jobs) -> list:
+    """The runs the history lists. A benchmark Studio refuses to launch the
+    scripted checks (see create), so it does not list old fixture runs either.
+    The fixture Studio keeps them: they are all it has."""
+    from wb_studio.genesis_watcher import scripted_only
+    kept = jobs if studio.gateway_factory is not None else [j for j in jobs if not scripted_only(j)]
+    return [with_setup_names(j) for j in kept]
+
+
 def front_door_target(env, rest: str) -> str:
     """Where the front door relays an application call.
 
@@ -934,7 +951,7 @@ def handler(studio):
                 if url.path == "/api/jobs":
                     if studio.coordinator is not None:
                         studio.coordinator.reap()
-                    return self.send_json({"items": studio.jobs()})
+                    return self.send_json({"items": listed_jobs(studio, studio.jobs())})
                 if url.path == "/api/jobs/counts":
                     from wb_studio.measures import run_counts
                     # ponytail: reads every run's events on each call; cache per job if the listing grows slow
@@ -996,12 +1013,12 @@ def handler(studio):
                     return self.send_json({"token": studio.token, "models": [m for m in studio.models() if m["id"] not in ("oracle", "sloppy")], "budget": studio.budget(),
                                            "capabilities": capability_matrix(studio),
                                            "tasks": [public_task(t) | {"difficulty": ratings[t["task"]]} for t in studio.tasks.values()],
-                                           "jobs": studio.jobs(), "setups": [json.loads(p.read_text(encoding="utf-8")) for p in (studio.directory / "setups").glob("*.json")] })
+                                           "jobs": listed_jobs(studio, jobs), "setups": [json.loads(p.read_text(encoding="utf-8")) for p in (studio.directory / "setups").glob("*.json")] })
                 match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)(/events|/report)?", url.path)
                 if match:
                     identity = match[1]
                     if not match[2]:
-                        return self.send_json(studio.job(identity))
+                        return self.send_json(with_setup_names(studio.job(identity)))
                     if match[2] == "/report":
                         from wb_studio.report_data import narrative_status
                         report_job = studio.job(identity)

@@ -423,3 +423,14 @@ def test_an_unexpected_defect_answers_500_as_json(studio, monkeypatch):
         assert "RuntimeError" in json.loads(body)["error"] and "corrupt" not in body
         status, _, body = request(port, "POST", "/api/jobs", "{}", {"X-Studio-Token": studio.token, "Origin": f"http://127.0.0.1:{port}"})
         assert status in (400, 500) and json.loads(body)["error"]
+
+
+def test_a_benchmark_studio_does_not_list_the_scripted_fixture_runs():
+    """It refuses to launch the scripted checks, so it does not list old ones
+    either. The fixture Studio, whose runs are all scripted, keeps them."""
+    from types import SimpleNamespace
+    from wb_studio.app import listed_jobs
+    runs = [{"id": "fixture", "settings": {"models": ["oracle", "sloppy"]}},
+            {"id": "real", "settings": {"models": ["glm-5.3-fireworks"]}}]
+    assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=None), runs)] == ["real"]
+    assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=lambda *a: None), runs)] == ["fixture", "real"]

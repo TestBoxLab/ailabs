@@ -1,7 +1,8 @@
 """One readable name per competitor, wherever the run was launched from."""
 import pytest
 
-from wb_studio.app import setup_names
+from wb_studio import measures
+from wb_studio.app import setup_names, with_setup_names
 from wb_studio.report_data import short_name
 from wb_studio.runtime_registry import display_name, fit_name
 
@@ -58,3 +59,13 @@ def test_the_run_page_gets_a_name_for_every_competitor():
     assert setup_names(job) == {"kimi-k3-fireworks/api": "Kimi K3 (Fireworks)",
                                 "blueprint.x": "Enrichment v3",
                                 "oracle": "Scripted reference"}
+
+
+def test_a_report_never_prints_the_internal_token_of_an_unnamed_setup():
+    job = {"settings": {"models": ["oracle"], "arms": [{"id": "arch-v1", "name": "Informed worker / v1"}]}}
+    assert measures.setup_names(job) == {"arch-v1": "Informed worker / v1", "oracle": "Scripted reference"}
+
+
+def test_the_run_list_names_every_setup_of_a_run_that_carries_no_arms():
+    listed = with_setup_names({"settings": {"models": ["oracle", "claude-opus-5@high"]}})
+    assert [a["name"] for a in listed["settings"]["arms"]] == ["Scripted reference", "Claude Opus 5 · high"]

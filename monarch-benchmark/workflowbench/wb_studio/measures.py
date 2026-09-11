@@ -221,10 +221,14 @@ def baseline_id(job):
 
 
 def setup_names(job) -> dict:
+    """The name a report prints for each competitor. An id nobody named is
+    resolved the same way the rest of the Studio resolves it, so an internal
+    token (`oracle`) never reaches a page."""
+    from wb_studio.runtime_registry import display_name
     settings = job.get("settings") or {}
-    names = {arm["id"]: arm.get("name") or arm["id"] for arm in settings.get("arms") or []}
+    names = {arm["id"]: arm.get("name") or display_name(arm["id"]) for arm in settings.get("arms") or []}
     for model in settings.get("models") or []:
-        names.setdefault(model, model)
+        names.setdefault(model, display_name(model))
     return names
 
 
