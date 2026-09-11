@@ -45,22 +45,31 @@ IMPORT = re.compile(
     r"|import[ \t]+(wb_\w+(?:\.\w+)*))",
     re.M,
 )
+# A dotted module name inside a string literal: importlib's argument.
+STRING_MODULE = re.compile(r"""["'](wb_\w+(?:\.\w+)+)["']""")
 
 
-def tracked_modules() -> set[str]:
-    """Dotted names git tracks, each file plus every package that contains one."""
-    out = subprocess.run(["git", "ls-files", "--", "*.py"], cwd=ROOT,
-                         capture_output=True, text=True, check=True).stdout.split()
+def tracked_modules() -> tuple[set[str], set[str]]:
+    """Dotted names git tracks, and which of them are packages rather than files.
+
+    The split matters for the string form below: `wb_studio.genesis_engineer` has
+    a package for a parent and is a module reference, while
+    `wb_studio.report_data.run_report` has a module for a parent and is an
+    attribute path that no importlib call will ever be handed.
+    """
     modules: set[str] = set()
-    for path in out:
+    packages: set[str] = set()
+    for path in source_files():
         parts = Path(path).with_suffix("").parts
         if not parts or not PACKAGE.match(parts[0]):
             continue                     # tests/, scripts/, anything not a wb_ package
         if parts[-1] == "__init__":
             parts = parts[:-1]
-        for i in range(1, len(parts) + 1):
-            modules.add(".".join(parts[:i]))
-    return modules
+            packages.add(".".join(parts))
+        modules.add(".".join(parts))
+        for i in range(1, len(parts)):
+            packages.add(".".join(parts[:i]))
+    return modules | packages, packages
 
 
 def source_files() -> list[str]:
@@ -119,20 +128,56 @@ def defines(package: str, name: str) -> bool:
     return False
 
 
+def named_in_strings(files: list[str], modules: set[str],
+                     packages: set[str]) -> list[tuple[str, int, str]]:
+    """Modules named as string literals and imported through importlib.
+
+    `scheduler.MODULES` and `genesis_plugins.MODULES` are tuples of dotted names
+    resolved at runtime. A scan for `import` statements cannot see them, and
+    `discover()` catches ImportError and moves on - so a checkout missing one of
+    those files loses a daily job silently, with nothing anywhere saying so.
+    That is failing open, which is worse than the import error it replaces.
+    """
+    bad = []
+    for path in files:
+        file = ROOT / path
+        # Tests name modules that do not exist on purpose - `wb_studio.not_there`
+        # is how the skip path is proved. Only shipped code has to resolve.
+        if not file.is_file() or path.startswith("tests/"):
+            continue
+        text = file.read_text(encoding="utf-8", errors="replace")
+        for match in STRING_MODULE.finditer(text):
+            dotted = match.group(1)
+            if dotted in modules:
+                continue
+            if dotted.rsplit(".", 1)[0] not in packages:
+                continue                 # an attribute path, not a module
+            bad.append((path, text.count("\n", 0, match.start()) + 1, dotted))
+    return bad
+
+
 def main() -> int:
-    modules = tracked_modules()
+    modules, packages = tracked_modules()
     files = source_files()
     bad = unresolved(modules, files)
-    if not bad:
+    named = named_in_strings(files, modules, packages)
+    if not bad and not named:
         print(f"check_imports: {len(files)} tracked files, every wb_* import resolves.")
         return 0
-    print("check_imports: imports that name a module git does not track.\n")
+    if bad:
+        print("check_imports: imports that name a module git does not track.\n")
     for path, line, module in sorted(bad):
         print(f"  {path}:{line}: {module}")
+    if named:
+        print("\ncheck_imports: modules named as strings for importlib, not tracked.")
+        print("These fail open - the job is skipped and nothing reports it.\n")
+        for path, line, module in sorted(named):
+            print(f"  {path}:{line}: {module}")
     # Run locally, these usually are not committed yet - which is the point, and
     # the message has to be true at the moment someone reads it.
-    print("\nEach of these raises on a clean checkout once committed.")
-    print("`git add` the missing module in the same commit, or take the import out.")
+    print("\nOnce committed, an import above raises on a clean checkout and a")
+    print("string above is skipped in silence. `git add` the missing module in")
+    print("the same commit, or take the reference out.")
     return 1
 
 
