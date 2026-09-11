@@ -117,6 +117,7 @@ class Memory:
         (self.root / 'cards').mkdir(parents=True, exist_ok=True)
         self.lab, self.monarch = self.root / 'LAB.md', self.root.parent / 'code-index' / 'MONARCH.md'  # written by the code index, read here
         self.soul = self.root / 'SOUL.md'  # written by a person from the interface, never by Genesis
+        self.next_path = self.root / 'LAB.next.md'  # what the night proposes; a person adopts or discards it (A1)
         if not self.soul.exists():
             self.soul.write_text(SOUL_DEFAULT, encoding='utf8', newline='\n')
         self.history, self.access_path, self.db = self.root / 'history.jsonl', self.root / 'access.json', self.root / 'record.sqlite3'
@@ -167,7 +168,10 @@ class Memory:
             raise ValueError('The entry was refused. ' + reason)
         if ENTRY.match(text):
             return text
-        return text + ' ' + _record(record) + ' ' + _day(now)
+        tag = _record(record)
+        while text.endswith(tag):  # the model often writes the tag itself; it is not written twice
+            text = text[:-len(tag)].rstrip()
+        return text + ' ' + tag + ' ' + _day(now)
 
     def _find(self, sections, needle):
         needle = str(needle or '').strip()
@@ -266,15 +270,16 @@ class Memory:
 
     def read(self, card=None):
         lab, soul = self._text(self.lab), self._text(self.soul)
-        out = {'soul': soul, 'lab': lab, 'monarch': self._text(self.monarch) or None, 'card': card, 'notes': None,
+        out = {'soul': soul, 'lab': lab, 'monarch': self._text(self.monarch) or None, 'next': self._text(self.next_path) or None, 'card': card, 'notes': None,
                'budgets': {'SOUL.md': {'size': len(soul), 'budget': SOUL_BUDGET}, 'LAB.md': {'size': len(lab), 'budget': LAB_BUDGET}, 'notes': {'size': 0, 'budget': NOTE_BUDGET}}}
         if card:
             out['notes'] = self.note_read(card)
             out['budgets']['notes']['size'] = len(out['notes'])
         return out
 
-    def prompt_block(self, card=None):
-        """The core files as they enter a prompt; empty when nothing has been written yet."""
+    def prompt_block(self, card=None, soul=True):
+        """The core files as they enter a prompt; empty when nothing has been written yet. `soul=False`
+        leaves SOUL.md out, for a caller that puts it first itself (the harness)."""
         parts = []
         lab, monarch = self._text(self.lab), self._text(self.monarch)
         if lab.strip():
@@ -287,11 +292,17 @@ class Memory:
             notes = ''
         if notes.strip():
             parts.append('Notes for card ' + card + ':\n' + notes.strip())
-        soul = self._text(self.soul).strip()
-        head = '\n\nIdentity (SOUL.md, written by the lab; you do not edit it):\n\n' + soul if soul else ''
+        head = self.soul_block() if soul else ''
         if not parts:
             return head
-        return head + '\n\nCore memory (cite entries by their [rec:...] tags; edit with memory_add, memory_replace, memory_remove):\n\n' + '\n\n'.join(parts)
+        # memory_add is the only memory tool Genesis holds: rewriting and removing are the night's
+        # proposal and a person's adoption (A2). Naming the other two here sent it after tools it has not got.
+        return head + '\n\nCore memory (cite entries by their [rec:...] tags; add one with memory_add. An entry that is wrong or spent is rewritten by the nightly consolidation, which a person adopts; you never rewrite or remove one yourself):\n\n' + '\n\n'.join(parts)
+
+    def soul_block(self):
+        """SOUL.md as the first block of a prompt, or nothing when it is empty."""
+        text = self._text(self.soul).strip()
+        return '\n\nIdentity (SOUL.md, written by the lab; you do not edit it):\n\n' + text if text else ''
 
     # ---- access, probation and decay ----------------------------------------------
     def _access(self):

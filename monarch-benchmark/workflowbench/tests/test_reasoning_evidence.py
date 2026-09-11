@@ -73,6 +73,29 @@ def test_gemini_sdk_asks_for_thoughts_and_keeps_them_apart_from_the_answer(monke
     assert t["reasoning"] == ["Check Airtable first."] and t["text"] == "All done." and t["stop_reason"] == "STOP"
 
 
+def test_gemini_sdk_bills_thinking_as_output(monkeypatch):
+    """Gemini charges thinking at the output rate and reports it apart from the answer. The SDK adapter
+    counts both, like the gateway does, or a turn settles below its receipt."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test")
+    key = next(k for k, p in providers.REGISTRY.items() if p.adapter == "gemini")
+    a = _GeminiAdapter(providers.get(key), build_tools_gemini())
+    part = lambda **kw: SimpleNamespace(**{"function_call": None, "text": None, "thought": None, **kw})
+    def answer(meta):
+        resp = SimpleNamespace(usage_metadata=meta, candidates=[SimpleNamespace(
+            content=SimpleNamespace(parts=[part(text="Thinking.", thought=True), part(text="Done.")]),
+            finish_reason="FinishReason.STOP")])
+        a.client = SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kw: resp))
+        return a.turn(a.start("sys", "brief"))
+    reported = answer(SimpleNamespace(prompt_token_count=10, candidates_token_count=5,
+                                      thoughts_token_count=400, cached_content_token_count=None))
+    assert reported["output_tokens"] == 405
+    # no thoughts field: what the total leaves over after the prompt and the answer is thinking
+    inferred = answer(SimpleNamespace(prompt_token_count=10, candidates_token_count=5,
+                                      total_token_count=415, cached_content_token_count=None))
+    assert inferred["output_tokens"] == 405
+
+
 def test_gemini_gateway_reports_thought_parts_as_reasoning():
     reply = {"candidates": [{"content": {"parts": [{"text": "Plan: search, then patch.", "thought": True},
                                                    {"text": "Finished."}]}, "finishReason": "STOP"}],
@@ -172,3 +195,27 @@ def test_manifest_declares_recorded_reasoning_summaries(tmp_path):
     assert manifest["coverage"]["private_reasoning"] == "summaries"
     assert evidence.write_manifest(root, episode_id="e", contract_sha256="c",
                                    agent_messages="normalized")["coverage"]["private_reasoning"] == "unavailable"
+
+
+@pytest.mark.parametrize("text,stop,termination", [
+    ("done", "end_turn", "completed"), ("done", None, "completed"),
+    ("", "end_turn", "agent_error"), ("half an answer", "max_tokens", "agent_error"), ("half", "length", "agent_error"),
+])
+def test_api_loop_treats_an_abnormal_stop_as_no_answer(monkeypatch, text, stop, termination):
+    """The CLI loop follows the Studio loop: no text, or a stop the provider calls
+    abnormal, is not a finished attempt (it used to be recorded as completed)."""
+    class _Adapter:
+        def start(self, system, brief):
+            return [{"role": "user", "content": brief}]
+
+        def turn(self, messages, timeout=None):
+            return {"tool_calls": [], "text": text, "reasoning": [], "stop_reason": stop,
+                    "prompt_tokens": 3, "output_tokens": 2, "cached_tokens": 0, "cache_source": None}
+
+    monkeypatch.setattr(ApiLoopArm, "_adapter", lambda self: _Adapter())
+    ep = SimpleNamespace(task={"prompt": [{"content": "sys"}, {"content": "brief"}]}, episode_id="e1", record_agent_event=lambda e: None)
+    res = ApiLoopArm("claude-opus-4-8").run(ep)
+    assert res.termination == termination
+    assert res.final_text == text
+    if termination == "agent_error":
+        assert res.error.startswith("Model stopped without a complete final answer")

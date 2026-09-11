@@ -37,12 +37,12 @@ def test_the_file_of_the_person_named_by_the_turn_enters_the_prompt(genesis, mon
     monkeypatch.setattr(harness, 'freshness', lambda now=None: 'FRESHNESS')
     people.write(genesis, 'lucas', 'Lucas decides the design and QAs.')
     people.write(genesis, 'ana', 'Ana runs the graders.')
-    prompt = harness.build_prompt(genesis, {'id': 'x', 'message': 'hello', 'by': 'human:lucas'})
+    prompt = harness.prompt_text(genesis, {'id': 'x', 'message': 'hello', 'by': 'human:lucas'})
     assert 'What you know about lucas' in prompt and 'Lucas decides the design and QAs.' in prompt
     assert 'Ana runs the graders' not in prompt
     assert prompt.index('What you know about lucas') < prompt.index('Previous exchange:')
-    assert 'What you know about' not in harness.build_prompt(genesis, {'id': 'y', 'message': 'hello'})
-    assert 'What you know about ana' in harness.build_prompt(genesis, {'id': 'z', 'message': 'hi', 'person': 'ana'})
+    assert 'What you know about' not in harness.prompt_text(genesis, {'id': 'y', 'message': 'hello'})
+    assert 'What you know about ana' in harness.prompt_text(genesis, {'id': 'z', 'message': 'hi', 'person': 'ana'})
 
 
 def _conversation(genesis, thread_id='th-1'):

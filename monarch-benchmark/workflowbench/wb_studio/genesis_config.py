@@ -13,11 +13,10 @@ import threading
 from pathlib import Path
 
 # Every step of Genesis's work that spends a model turn, in the order the page shows them.
-STEPS = ('chat', 'intake', 'reading', 'review', 'ranking', 'plan', 'verdict', 'consolidation',
-         'sweep', 'extraction', 'embedding', 'patch', 'brief')
-# Steps that read and summarise; the rest judge or write and default to the same cheap route
-# until an admin names a stronger one on the configuration page.
-DEFAULT_CHEAP = ('intake', 'reading', 'ranking', 'consolidation', 'extraction', 'embedding', 'brief')
+STEPS = ('chat', 'reading', 'review', 'ranking', 'consolidation', 'sweep', 'extraction', 'embedding', 'patch')
+# Steps that judge or write take the strongest available route by list price until an admin names
+# one (Lucas, 10 Sep 2026); every other step takes the cheapest.
+DEFAULT_STRONG = ('review', 'patch')
 
 
 def list_price(route_id: str) -> float:
@@ -31,6 +30,12 @@ def cheapest(routes) -> dict | None:
     """The cheapest available route by list price; ties keep the earlier one."""
     available = [r for r in routes if r.get('available')]
     return min(available, key=lambda r: list_price(r['id'])) if available else None
+
+
+def strongest(routes) -> dict | None:
+    """The priciest available route by list price, the lab's stand-in for the strongest; unpriced routes never win."""
+    available = [r for r in routes if r.get('available') and list_price(r['id']) != float('inf')]
+    return max(available, key=lambda r: list_price(r['id'])) if available else cheapest(routes)
 
 
 class Config:
@@ -77,7 +82,7 @@ class Config:
         routes = list(routes if routes is not None else self._routes())
         wanted = self.read()['models'].get(step)
         chosen = next((r for r in routes if r['id'] == wanted and r.get('available')), None) if wanted else None
-        return chosen or cheapest(routes)
+        return chosen or (strongest(routes) if step in DEFAULT_STRONG else cheapest(routes))
 
     def effective(self, routes=None) -> dict:
         """Step to route id as it would be used now, for the page and the state."""

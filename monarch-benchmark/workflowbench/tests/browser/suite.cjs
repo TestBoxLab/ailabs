@@ -116,6 +116,39 @@ check('run row opens the run; expander shows configuration; no ghost height afte
   } finally { await context.close(); }
 });
 
+check('run overview ranks the models, the failures are columns of a share, and Results filters by model', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#run/fixture-1');
+  try {
+    at('standings'); await p.waitForSelector('.standings-table tbody tr');
+    const standings = await p.evaluate(() => [...document.querySelectorAll('.standings-table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()));
+    assert(standings.length === 2 && /100%/.test(standings[0]) && /0%/.test(standings[1]), 'the best pass rate leads: ' + standings.join(' | '));
+    assert(!(await p.locator('.report-intro').innerText()).includes('passed 3 of 3;'), 'the breakdown sentence is gone');
+    at('failure columns'); await p.waitForSelector('.chart .column[data-bucket]');
+    const columns = await p.evaluate(() => [...document.querySelectorAll('.chart .column[data-bucket]')].map(c => c.getAttribute('aria-label')));
+    assert(columns.length && columns.every(a => /\d+%$/.test(a)), 'every failure column carries its share: ' + columns.join(' | '));
+    await p.locator('.chart .column[data-bucket]').first().click();
+    await p.waitForFunction(() => /of \d+ failed attempts/.test(document.querySelector('#diagnostic-count').textContent));
+    assert(await p.evaluate(() => !!document.querySelector('.chart .column[aria-pressed=true]')), 'the chosen bucket is marked');
+    at('reasoning review');
+    const review = await p.locator('.analysis-section').innerText();
+    assert(!review.includes('optional, paid') && !review.includes('Analyze this run'), 'the reading is never a paid opt-in: ' + review);
+    at('results'); await p.locator('[data-view=results]').click();
+    await p.waitForSelector('.results-table [data-index]');
+    const heads = await p.evaluate(() => [...document.querySelectorAll('.results-table thead th')].map(t => t.innerText.trim()));
+    assert(heads[1] === 'Model' && heads.includes('Tool calls'), 'model is its own column: ' + heads.join('|'));
+    const every = await p.evaluate(() => document.querySelectorAll('#result-rows tr').length);
+    await p.selectOption('#results-model', { index: 1 });
+    await p.waitForFunction(n => document.querySelectorAll('#result-rows tr').length < n, every);
+    assert((await p.locator('.filter-chip').count()) === 1, 'the active model filter shows as a chip');
+    assert(/of \d+ attempts/.test(await p.locator('#results-count').innerText()), 'the count says how much is hidden');
+    at('sort'); await p.locator('[data-results-sort=cost]').click();
+    assert(await p.evaluate(() => document.querySelector('[data-results-sort=cost]').closest('th').getAttribute('aria-sort') !== 'none'), 'a sorted column says so');
+    at('clear'); await p.locator('.filter-chip').first().click();
+    await p.waitForFunction(n => document.querySelectorAll('#result-rows tr').length === n, every);
+    await noOverflowNoErrors(p, errors, 'run overview');
+  } finally { await context.close(); }
+});
+
 check('new run is a route: Escape cancels and returns to runs, draft survives', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#runs');
   try {
@@ -163,7 +196,7 @@ for (const theme of ['light', 'dark']) {
         const figures = [
           Charts.dotWhisker({ title: 'Informed worker passes 8 of 10, Bare 6 of 10', source: 'run-1 · 10 tasks · frozen set abc123', rows, ceiling: 1, ceilingLabel: 'answer key' }),
           Charts.scatter({ title: 'Cost against pass rate', source: 'run-1', xLog: true, pareto: true, points: [{ label: 'Informed worker', x: .12, y: .8, low: .49, high: .94, link: 'a' }, { label: 'Informed worker · high', x: .4, y: .9, link: 'a' }, { label: 'Bare Opus', baseline: true, x: .09, y: .6 }, { label: 'GPT-5.6 Sol', x: .05, y: .7 }] }),
-          Charts.bars({ title: 'Where it failed', source: 'run-1', rows: [{ label: 'Changes outside permitted scope', value: 3, denominator: 5, cls: 'fail' }, { label: 'Requirements unmet', value: 2, denominator: 5, cls: 'fail' }, { label: 'Infrastructure', value: 0, denominator: 5, cls: 'neutral' }] }),
+          Charts.failureColumns({ title: '69 of 106 attempts failed', source: 'run-1', failed: 69, buckets: [{ id: 'unintended_changes', short_label: 'Out of scope', count: 30, percent_failed: 43.48 }, { id: 'requirement_unmet', short_label: 'Requirement unmet', count: 24, percent_failed: 34.78 }, { id: 'infrastructure', short_label: 'Infrastructure', count: 9, percent_failed: 13.04 }, { id: 'timeout', short_label: 'Timeout', count: 6, percent_failed: 8.7 }, { id: 'budget_limit', short_label: 'Budget', count: 0, percent_failed: 0 }] }),
           Charts.columns({ title: 'Tokens per model', groups: [{ label: 'claude-opus-4-8', values: [{ label: 'claude', value: 253000 }] }, { label: 'gemini-3.7-flash', values: [{ label: 'gemini', value: 143000 }] }] }),
           Charts.strips({ title: 'Seconds to finish', rows: [{ label: 'Informed worker', values: [4, 7, 12, 30, 8], median: 8 }, { label: 'Bare Opus', baseline: true, values: [3, 5, 9, 11], median: 7 }] }),
           Charts.waterfall({ title: 'Tokens by kind', rows: [{ label: 'Informed worker', parts: { uncached: 120000, cache_write: 20000, cached: 80000, output: 30000 } }, { label: 'Bare Opus', parts: { uncached: 90000, cache_write: 0, cached: 0, output: 20000 } }] }),
@@ -191,7 +224,7 @@ check('reports are the front door: index, run report, round report, back', async
     await p.waitForSelector('#report-article .verdict');
     assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
     const order = await p.evaluate(() => [...document.querySelectorAll('#report-article h2')].map(h => h.textContent));
-    assert(order.join('|') === 'Verdict|Findings|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured', 'section order: ' + order.join('|'));
+    assert(order.join('|') === 'Verdict|Findings|What went right and wrong|Pass rate|By category|Where it failed|What it cost|What to keep in mind|How it was measured', 'section order: ' + order.join('|'));
     assert(await p.evaluate(() => document.querySelectorAll('#report-article figure.chart svg').length >= 2), 'figures drawn');
     assert(await p.evaluate(() => document.querySelector('#report-article .grade').textContent.trim().length > 0), 'grade shown');
     assert(await p.evaluate(() => !document.querySelector('[style]')), 'no inline styles');
@@ -299,9 +332,14 @@ check('run page: a failing check and its event in two clicks from the Runs table
     await p.waitForSelector('#report-view .matrix-cell button');
     assert((await p.locator('#report-view .outcome-matrix tfoot').innerText()).includes('3 / 3'), 'matrix footer counts passes per setup');
     at('click 2: open the failing attempt'); await p.locator('.matrix-cell.fail button').first().click();
-    await p.waitForSelector('#output .check-row.failed');
+    await p.waitForSelector('#output .verdict');
     const tabs = await p.evaluate(() => [...document.querySelectorAll('.inspector-tabs [role=tab]')].map(b => b.textContent + ':' + b.getAttribute('aria-selected')));
-    assert(tabs.join('|') === 'Output:false|Checks:true|Trace:false|Timeline:false', 'tabs: ' + tabs.join('|'));
+    assert(tabs.join('|') === 'What happened:true|Output:false|Checks:false|Trace:false|Timeline:false', 'tabs: ' + tabs.join('|'));
+    const story = await p.locator('#output').innerText();
+    assert(story.startsWith('Failed:') && story.includes('What went wrong') && story.includes('Denver'), 'the story opens first, names the verdict and the change that failed it: ' + story.slice(0, 200));
+    assert(await p.evaluate(() => document.querySelectorAll('#output .story-facts button').length > 0), 'every fact in the story links its evidence');
+    at('checks tab'); await p.locator('#inspector-tab-checks').click();
+    await p.waitForSelector('#output .check-row.failed');
     const failed = await p.locator('#output .check-row.failed').first().innerText();
     assert(failed.includes('Failed') && failed.includes('No changes outside the permitted scope'), 'failed row names the check and its verdict: ' + failed);
     const checks = await p.locator('#output').innerText();
@@ -372,7 +410,7 @@ check('studio: New architecture opens the template menu and a choice opens the e
   } finally { await context.close(); }
 });
 
-check('runs: days as group rows, text filters, a Report link at the edge, the pager only when needed', async browser => {
+check('runs: days as group rows, text filters, the pager only when needed', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#runs');
   try {
     await p.waitForSelector('#history-rows [data-open-run]');
@@ -383,9 +421,7 @@ check('runs: days as group rows, text filters, a Report link at the edge, the pa
     assert((await p.locator('#history-rows').innerText()).includes('No runs match'), 'the failed filter empties the fixture list');
     await p.locator('[data-history-clear]').click();
     await p.waitForSelector('#history-rows [data-open-run]');
-    at('report link'); await p.locator('#history-rows [data-open-report]').first().click();
-    await p.waitForSelector('#report-panel:not(.hidden)');
-    assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
+    assert((await p.locator('#history-rows [data-open-report], #history-rows [data-run-again]').count()) === 0, 'no per-row action buttons');
     await noOverflowNoErrors(p, errors, 'runs list');
   } finally { await context.close(); }
 });
@@ -413,7 +449,7 @@ check('settings: budget, capacity, providers with key presence, Monarch pin, all
     assert(/Key present|No key/.test(providers), 'each provider says whether a key is present: ' + providers);
     assert(!/sk-|AIza/.test(providers), 'no key value on the page');
     at('genesis configuration'); await p.waitForSelector('#settings-genesis-config .step-table');
-    assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 13, 'one row per step of Genesis\'s work');
+    assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 9, 'one row per step of Genesis\'s work');
     const genesisText = await p.locator('#settings-genesis-config').innerText();
     assert(/envelope/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
     await p.waitForSelector('#config-jobs .schedule-table'); assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');
@@ -462,6 +498,13 @@ check('genesis: chat first with the rail and the tracking pane; a dropped senten
     await p.locator('#genesis-tab-board').click(); await p.waitForSelector('#genesis-board-view:not(.hidden)');
     await snapshot(p, 'genesis-board-light');
     await noOverflowNoErrors(p, errors, 'genesis board');
+    at('phone width'); const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+    const q = await phone.newPage(); await q.goto(BASE + '/#genesis'); await q.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const narrow = await q.evaluate(() => ({ overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      composer: !!document.querySelector('#genesis-message')?.getClientRects().length, paneWidth: document.querySelector('.genesis-tracking')?.getBoundingClientRect().width || 0 }));
+    assert(narrow.overflow <= 1, 'the conversation overflows on a phone by ' + narrow.overflow + 'px');
+    assert(narrow.composer, 'the composer is on screen on a phone');
+    await phone.close();
   } finally { await context.close(); }
 });
 
@@ -480,7 +523,10 @@ check('genesis: chat first with the rail and the tracking pane; a dropped senten
     }
   } finally {
     await browser.close();
-    server.kill();
+    // `uv run` wraps the fixture server in a child process; on Windows killing the
+    // wrapper alone leaves the Python listener behind (the stale-server error above).
+    if (process.platform === 'win32') require('child_process').spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    else server.kill();
   }
   console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
   process.exit(failed ? 1 : 0);

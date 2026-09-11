@@ -384,3 +384,42 @@ def test_front_door_without_a_running_shim_says_so(studio, monkeypatch):
     with server_for(studio) as port:
         status, _, body = request(port, "GET", "/front-door/salesforce/x")
         assert status == 502 and "front door is not running" in body
+
+
+def test_event_ids_stay_continuous_when_the_log_changes_underneath(studio):
+    """emit caches the line count; a write it did not make invalidates the cache."""
+    job = studio.create(payload(studio), start=False)
+    first = studio.emit(job["id"], "a")["id"]
+    assert studio.emit(job["id"], "b")["id"] == first + 1
+    log = studio.directory / job["id"] / "events.jsonl"
+    with log.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps({"id": first + 2, "type": "external"}) + "\n")
+    assert studio.emit(job["id"], "c")["id"] == first + 3
+    assert [e["id"] for e in studio.events(job["id"])] == list(range(1, first + 4))
+
+
+def test_events_from_tails_by_offset_and_leaves_a_partial_line(studio):
+    job = studio.create(payload(studio), start=False)
+    studio.emit(job["id"], "a")
+    first, offset = studio.events_from(job["id"], 0)
+    assert first[-1]["type"] == "a" and offset == (studio.directory / job["id"] / "events.jsonl").stat().st_size
+    log = studio.directory / job["id"] / "events.jsonl"
+    with log.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write('{"id": 2, "type": "half')
+    assert studio.events_from(job["id"], offset) == ([], offset)
+    with log.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write('"}\n')
+    rest, offset2 = studio.events_from(job["id"], offset)
+    assert [e["type"] for e in rest] == ["half"] and offset2 == log.stat().st_size
+
+
+def test_an_unexpected_defect_answers_500_as_json(studio, monkeypatch):
+    def broken():
+        raise RuntimeError("stored job is corrupt")
+    monkeypatch.setattr(studio, "jobs", broken)
+    with server_for(studio) as port:
+        status, _, body = request(port, "GET", "/api/jobs")
+        assert status == 500
+        assert "RuntimeError" in json.loads(body)["error"] and "corrupt" not in body
+        status, _, body = request(port, "POST", "/api/jobs", "{}", {"X-Studio-Token": studio.token, "Origin": f"http://127.0.0.1:{port}"})
+        assert status in (400, 500) and json.loads(body)["error"]

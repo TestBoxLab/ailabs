@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from wb_studio.memory import scan
@@ -84,16 +85,17 @@ class Skills:
         return {'name': path.stem, 'removed': True}
 
     def prompt_block(self, kind: str | None) -> str:
-        """The skills that apply to this turn, or nothing."""
+        """The skills that apply to this turn, by name and first line; the body comes through skill_read (M6)."""
         parts = []
         for path in sorted(self.root.glob('*.md')):
             text = path.read_text(encoding='utf8').strip()
             applies = self.applies(text)
             if 'always' in applies or (kind and kind in applies):
-                parts.append('Skill ' + path.stem + ':\n' + text)
+                lines = [l.strip() for l in text.splitlines()[1:] if l.strip() and not l.strip().startswith('#')]
+                parts.append('- ' + path.stem + ': ' + (lines[0][:160] if lines else '(no description)'))
         if not parts:
             return ''
-        return '\n\nSkills (procedures you wrote; edit with skill_write when a step proved wrong):\n\n' + '\n\n'.join(parts)
+        return '\n\nSkills that apply (procedures you wrote; read one with skill_read before following it, edit with skill_write when a step proved wrong):\n' + '\n'.join(parts)
 
     # ---- candidates waiting for the Reviewer (feature 022) --------------------------
     def pending_path(self, slug: str) -> Path:
@@ -147,6 +149,13 @@ def earned(genesis, turn):
     recent = genesis.autonomy.tail(300)
     if any(e.get('kind') == 'skill-asked' and e.get('card') == card['id'] for e in recent):
         return None  # one question per card
+    from wb_studio.library import now_sao_paulo
+    now = now_sao_paulo()  # the activity record stamps UTC; the day is the lab's, or the gate opens every evening
+    if any(e.get('kind') == 'skill-asked' and datetime.fromisoformat(e['at']).astimezone(now.tzinfo).date() == now.date() for e in recent):
+        return None  # one question a day (L6)
+    others = [c for c in genesis.listing('cards') if c['id'] != card['id'] and c.get('kind') == card.get('kind') and c.get('stage') in ('review', 'complete')]
+    if not others:
+        return None  # a procedure is never written from a single card (L6)
     debriefed = any(e.get('kind') == 'debrief' and e.get('card') == card['id'] for e in recent)
     if debriefed or (review.get('status') == 'done' and review.get('verdict') == 'accept'):
         return card

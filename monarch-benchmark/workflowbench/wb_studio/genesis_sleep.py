@@ -14,16 +14,27 @@ from wb_studio.genesis_config import cheapest
 from wb_studio.genesis_harness import model_routes
 from wb_studio.library import now_sao_paulo
 
-MESSAGE = ('Nightly consolidation for {day}. Use record_search to read the records added since yesterday '
-           '(turns, cards, analyses, sources). Then answer with one JSON object and nothing else: '
+MESSAGE = ('Nightly consolidation for {day}. Use memory_recent to list the records added since yesterday '
+           '(turns, cards, analyses, sources) and record_search or read_run to read the ones that matter. '
+           'Then answer with one JSON object and nothing else: '
            '{{"ops": [{{"op": "add", "replace" or "remove", "section": "Known" or "Recent", "text": "the new entry", '
            '"old": "a piece of the entry to change", "new": "its replacement", "record": "kind:id"}}], '
-           '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order through '
-           'memory_add, memory_replace and memory_remove and stops at the first one LAB.md refuses, so merge '
-           'before you add when the file is near its budget, name the record of every entry you write, and put '
+           '"contradictions": ["one sentence each"]}}. The Studio applies the operations in order to a copy of '
+           'LAB.md and stops at the first one it refuses; what results waits on a card for a person to adopt or '
+           'decline, so merge before you add when the file is near its budget, name the record of every entry you write, and put '
            'the most important operation first. List a contradiction when a new source or run disagrees with an '
            'Analyzed card. Move any library source filed under Other to a better topic with library_reclassify '
            'when its text makes the topic clear. Do not propose experiments and do not answer in prose.')
+
+
+def previous_brief(genesis, now):
+    """Yesterday's brief, so the night sees what it already said (L3: continuity, not a re-summary)."""
+    day = (now - timedelta(days=1)).date().isoformat()
+    try:
+        card = genesis.read('cards', 'brief-' + day)
+    except (ValueError, FileNotFoundError, OSError):
+        return ''
+    return '\n\nYesterday\'s brief (' + day + '): ' + str(card.get('body') or '')[:1500]
 
 
 def _titles(items, limit=5):
@@ -68,7 +79,7 @@ def nightly(studio):
             if studio.ledger.status(now=now).available_usd < ceiling:
                 summary['errors'].append('consolidation: the weekly ledger cannot cover the night ceiling')
             else:
-                turn = genesis.chat({'message': MESSAGE.format(day=day), 'model': route['id'], 'maximum_usd': str(ceiling), 'purpose': 'Genesis nightly'})
+                turn = genesis.chat({'message': MESSAGE.format(day=day) + previous_brief(genesis, now), 'model': route['id'], 'maximum_usd': str(ceiling), 'purpose': 'Genesis nightly'})
         except Exception as exc:
             summary['errors'].append(f'consolidation: {type(exc).__name__}: {exc}')
     summary['consolidation_turn'] = turn['id'] if turn else None
@@ -108,15 +119,7 @@ def nightly(studio):
         return genesis.card(payload)['id']
     step('brief', brief)
 
-    def slack():
-        """The brief posted after it is written; with no webhook, one line and nothing sent."""
-        from wb_studio import genesis_channels
-        if not os.environ.get(genesis_channels.WEBHOOK):
-            return {'posted': False, 'reason': genesis_channels.NO_WEBHOOK}
-        return genesis_channels.post_brief(genesis, genesis.read('cards', summary['brief']))
-    if summary.get('brief'):
-        step('slack', slack)
-    return summary
+    return summary  # the brief is posted by the genesis-brief job at the brief hour (genesis_channels)
 
 
 DAILY = ('genesis-sleep', 3, nightly)

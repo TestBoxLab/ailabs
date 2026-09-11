@@ -144,6 +144,7 @@ def test_the_embedding_path_reserves_before_sending_and_settles_from_the_receipt
 
 # ---- skills that write themselves --------------------------------------------------------
 def accepted_card(genesis):
+    genesis.card({'id': 'card-0', 'title': 'An earlier hypothesis of the same kind', 'stage': 'complete'})  # a procedure is never written from a single card
     return genesis.card({'id': 'card-1', 'title': 'Retry caps help', 'stage': 'review',
                          'review': {'status': 'done', 'verdict': 'accept', 'round': 1}})
 

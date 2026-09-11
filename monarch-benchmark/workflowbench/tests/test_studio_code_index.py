@@ -144,6 +144,6 @@ def test_daily_job_is_discovered_and_exposed(studio):
     assert entry["status"] == "completed" and entry["summary"]["status"] == "completed"
 
 
-def test_mcp_allow_list_names_the_code_tools():
-    text = (ROOT / "wb_studio" / "genesis_mcp.py").read_text(encoding="utf-8")
-    assert all(name in text for name in code_index.TOOLS)
+def test_the_tool_list_names_the_code_tools():
+    from wb_studio.genesis_schemas import action_names
+    assert all(name in action_names() for name in code_index.TOOLS)

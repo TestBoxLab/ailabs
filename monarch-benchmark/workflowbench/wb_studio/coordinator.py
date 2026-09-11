@@ -20,7 +20,6 @@ import sqlite3
 import time
 import uuid
 
-from wb_results.evidence import write_json
 from wb_studio.gateways import GatewayError
 
 TERMINAL = {'completed', 'failed', 'cancelled', 'interrupted'}

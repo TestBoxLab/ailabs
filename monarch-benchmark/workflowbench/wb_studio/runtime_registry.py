@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from wb_arms import providers
@@ -85,7 +86,64 @@ RUNNER_PROVIDERS = ("anthropic", "openai", "fireworks", "gemini", "moonshot", "z
 CONTROL_NAMES = {"claude-opus-5": "Claude Opus 5", "claude-opus-4-8": "Claude Opus 4.8", "gemini-3.7-flash": "Gemini 3.7 Flash",
                  "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "kimi-k3-fireworks": "Kimi K3 (Fireworks)",
                  "glm-5.3-fireworks": "GLM 5.3 (Fireworks)", "kimi-k3": "Kimi K3 (Moonshot)", "glm-5.3": "GLM 5.3 (Z.ai)"}
+SCRIPTED_NAMES = {"oracle": "Scripted reference", "sloppy": "Near-miss control", "null": "Null control"}
+HARNESS_NAMES = {"claude-code": "Claude Code", "codex": "Codex", "gemini-cli": "Gemini CLI",
+                 "opencode": "OpenCode", "monarch": "Monarch"}
+# The generic tool loop is how a model is run by default; saying so adds nothing.
+PLAIN_HARNESS = "api"
+BUILD_CHARS = "@+*/"
 RESEARCH_DIR = Path(__file__).resolve().parents[3] / "research"
+
+
+def _titled(token: str) -> str:
+    """An unknown identifier as a name; anything already capitalised is left alone."""
+    text = str(token or "").strip()
+    return text.replace("-", " ").title() if text and text == text.lower() else text
+
+
+def _without_build(text: str) -> str:
+    """Drop the words a build stamps in: commit hashes and branch tokens."""
+    words = [w for w in str(text or "").split()
+             if not any(ch in w for ch in BUILD_CHARS) and not re.fullmatch(r"[0-9a-f]{7,40}", w)]
+    return " ".join(words)
+
+
+def _one_setup(ident: str) -> str:
+    """One competitor token: a model, a model/harness pair, or a model@effort pair."""
+    base, _, effort = str(ident or "").partition("@")
+    model, _, harness = base.partition("/")
+    name = (CONTROL_NAMES.get(model) or SCRIPTED_NAMES.get(model)
+            or HARNESS_NAMES.get(model) or _titled(model))
+    parts = [name]
+    if harness and harness != PLAIN_HARNESS:
+        parts.append(HARNESS_NAMES.get(harness) or _titled(harness))
+    if effort:
+        parts.append(effort)
+    return " · ".join(p for p in parts if p)
+
+
+def display_name(setup_id, given=None) -> str:
+    """One readable name for a competitor, wherever the run was launched from.
+
+    A run launched from a config plan names its competitors ``model/harness``
+    (``kimi-k3-fireworks/api``); a run launched in the Studio carries a name on
+    the arm. Both land here, and both lose the build tokens no label can hold:
+    ``monarch · 0cf63a74e+feat/railway-dev-deploy* reasoning`` is ``Monarch ·
+    reasoning``. The full identifier stays in the record and in the method notes.
+    """
+    raw = str(given or setup_id or "").strip()
+    if not raw:
+        return str(setup_id or "")
+    head, separator, tail = raw.partition(" · ")
+    if not separator:
+        return _one_setup(raw)
+    return " · ".join(p for p in (_one_setup(head), _without_build(tail)) if p)
+
+
+def fit_name(name: str, width: int = 34) -> str:
+    """A name a figure label can hold, cut on a word boundary."""
+    text = str(name or "")
+    return text if len(text) <= width else text[:width - 1].rsplit(" ", 1)[0] + "…"
 
 
 def _research_dir(studio) -> Path:

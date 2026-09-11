@@ -106,4 +106,22 @@ tier-simple launch. Historical results continue to carry their original world.
 
 Evidence files and hash inventories are retained locally under temporary
 `wb-config-controls-deploy-232hgfxt` and `wb-controls-read-j8wd0cx4` directories;
-no credentials are stored in this record. Changes are committed locally only.
+no credentials are stored in this record. Changes were committed locally at the
+deployment checkpoint.
+
+## Publication and current-main integration
+
+Carlos subsequently requested push and a pull request. Integrated `main` at
+`0d7a127` before publication. Resolved the two workspace conflicts by preserving
+main's simplified Runs table and retaining the configured recovery dialog styles.
+No additional service deployment accompanied this integration.
+
+The integrated regression group finished with 131 passing tests and one stale
+test assertion already present in main: it required an Actions column that main
+had removed. Removed that obsolete assertion; all nine run-page tests then passed.
+The real browser continuation journey again completed four free attempts in two
+segments with unchanged finalized results. Editor journeys passed on desktop and
+at 390px, including conflict handling, draft retention and pinned launch preview.
+
+The PR workflow runs Python tests and corpus validation on Ubuntu, using pinned
+upstream AutomationBench `4a8e106`. It contains no infrastructure deployment step.

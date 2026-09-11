@@ -27,7 +27,6 @@ def genesis(tmp_path, monkeypatch):
     # the watcher works only what arrives after it first ran; these tests use old fixtures, so it "first ran" long ago
     (tmp_path / 'genesis').mkdir(exist_ok=True)
     (tmp_path / 'genesis' / 'watcher.json').write_text(json.dumps({'since': '2000-01-01T00:00:00+00:00'}), encoding='utf8')
-    monkeypatch.setattr('wb_studio.genesis_watcher.fetch_page', lambda url, timeout=10: (None, ''))
     monkeypatch.setattr('wb_studio.genesis_harness.model_routes', lambda: ROUTE)
     studio = SimpleNamespace(directory=tmp_path, create=Mock(side_effect=AssertionError('The watcher must never launch')),
                              jobs=Mock(return_value=[]), events=Mock(return_value=[]),
@@ -54,7 +53,6 @@ def fake_turn(genesis, turn):
 
 def test_drop_classifies_link_run_id_and_free_text(genesis, monkeypatch):
     genesis.studio.jobs.return_value = JOBS
-    monkeypatch.setattr('wb_studio.genesis_watcher.fetch_page', lambda url, timeout=10: ('Attention is all you need', 'Abstract text') if 'arxiv' in url else (None, ''))
     monkeypatch.setattr('wb_studio.genesis_ingest.fetch_source', lambda url, timeout=20: {'title': 'Attention is all you need', 'text': 'Full text', 'kind': 'paper', 'note': 'Abstract text'} if 'arxiv' in url else {'title': None, 'text': '', 'kind': 'other', 'note': ''})  # feature 022: a drop fetches the whole source, never the network in tests
     source = genesis.drop({'text': 'https://arxiv.org/abs/1706.03762'})
     record = genesis.library.read(source['evidence'][0]['id'])
@@ -99,15 +97,16 @@ def test_daily_tally_counts_only_today_and_gates_the_cap(genesis, monkeypatch):
     now = datetime.now(timezone.utc)
     write_turn(genesis, 'today-a', now)
     write_turn(genesis, 'yesterday', now - timedelta(days=1), maximum='1.00')
-    write_turn(genesis, 'today-chat', now, card=None, maximum='2.00')
-    assert str(genesis.watcher.today_usd()) == '0.50'
-    assert genesis.watcher.refusal() is None  # 0.50 + 0.50 fits under 2.00
+    write_turn(genesis, 'today-chat', now, card=None, maximum='0.10')  # a turn without a card counts too (R5)
+    assert str(genesis.watcher.today_usd()) == '0.60'
+    assert genesis.watcher.refusal() is None  # 0.60 + 0.50 fits under 2.00
     write_turn(genesis, 'today-b', now, maximum='1.50')
     card = genesis.drop({'text': 'Hypothesis three'})
     assert genesis.watcher.wake() is None
     assert genesis.watcher.status()['reason'] == "Waiting: today's cap of $2.00 is reached"
     assert genesis.read('cards', card['id'])['work']['status'] == 'queued'
-    assert genesis.watcher.status()['today_usd'] == '2.00'
+    assert genesis.watcher.status()['today_usd'] == '2.10'
+    assert any(e['kind'] == 'refused' for e in genesis.autonomy.tail(5))  # the refusal is in the record, once
 
 
 def test_watcher_refuses_when_the_weekly_ledger_cannot_cover(genesis):
@@ -221,7 +220,7 @@ def test_routes_drop_status_pause_and_stop(tmp_path, monkeypatch):
         assert card['kind'] == 'hypothesis' and card['work']['status'] == 'queued'
         status, _, body = request(port, 'GET', '/api/genesis/watcher')
         assert status == 200
-        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None, 'interval_s': 30}
+        assert json.loads(body) == {'paused': False, 'queue': [card['id']], 'working': None, 'today_usd': '0', 'cap_usd': '6.00', 'last_wake': None, 'reason': None, 'last_error': None, 'warning': None, 'interval_s': 30}
         assert json.loads(request(port, 'GET', '/api/genesis')[2])['watcher']['queue'] == [card['id']]
         status, _, body = request(port, 'POST', '/api/genesis/watcher', json.dumps({'paused': True}), headers)
         assert status == 200 and json.loads(body)['paused'] is True

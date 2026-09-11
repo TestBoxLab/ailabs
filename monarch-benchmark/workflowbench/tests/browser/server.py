@@ -138,7 +138,7 @@ def configured_controls(directory):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8766))
     parser.add_argument("--keep", action="store_true", help="keep the temporary workspace")
     parser.add_argument("--live", action="store_true", help="add a run left mid-stream for the live views")
     parser.add_argument("--configured-results", action="store_true", help="emit configured result events with retries")

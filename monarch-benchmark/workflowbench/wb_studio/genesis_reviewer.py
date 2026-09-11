@@ -179,6 +179,37 @@ def ON_TURN(genesis, turn):
     genesis.autonomy.record('review', card=card['id'], turn=turn['id'], status=review['status'],
                             verdict=review.get('verdict'), reason=review.get('reason'),
                             round=review.get('round'), note=problem)
+    if review.get('status') == 'done' and review.get('verdict') == 'accept' and review.get('subject') == 'plan' and not problem:
+        # R3: an accepted smoke plan launches now, under the same gates, instead of waiting for a second turn.
+        launch = getattr(genesis, 'launch_if_allowed', None)
+        if callable(launch):
+            try:
+                launch(card['id'])
+            except Exception as exc:
+                genesis.autonomy.record('plugin-error', card=card['id'], module=__name__, error=type(exc).__name__ + ': ' + str(exc)[:200])
+
+
+def PROMPT(genesis, turn) -> str:
+    """What the Reviewer flagged most in the last seven days, so Genesis fixes it before asking (S4)."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    counts = {}
+    try:
+        cards = genesis.listing('cards')
+    except Exception:
+        return ''
+    for card in cards:
+        review = card.get('review') or {}
+        if review.get('status') != 'done' or str(review.get('at') or '') < since:
+            continue
+        for issue in review.get('issues') or []:
+            kind = issue.get('kind') if isinstance(issue, dict) else None
+            if kind:
+                counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return ''
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return '\n\nThis week the Reviewer flagged most often: ' + ', '.join(k + ' (' + str(n) + ')' for k, n in top) + '. Fix these before you ask for a review.'
 
 
 TOOLS = {'request_review': lambda genesis, payload: request_review(genesis, payload.get('card'), payload.get('subject', 'plan')),
@@ -186,7 +217,8 @@ TOOLS = {'request_review': lambda genesis, payload: request_review(genesis, payl
 
 PROTOCOL = ('The Reviewer is the lab\'s second chamber: a separate turn on its own model that judges one '
             'artifact against the methodology and answers accept, revise or reject with its issues. Call '
-            'request_review with the card and a subject (hypothesis, plan, verdict, skill or patch) before you '
-            'propose a launch and again after you write a verdict, then read_review to read it back. A plan does '
+            'request_review with the card and a subject (hypothesis, plan, verdict, skill or patch). It judges what '
+            'the card already carries, so call propose_experiment first and ask about the plan it wrote, then again '
+            'after you write a verdict, and read_review to read it back. A plan does '
             'not launch without an accepted review of that exact plan; if the plan changes, ask again. You may '
             'answer one revise; the second review is the last, so fix everything it named.')

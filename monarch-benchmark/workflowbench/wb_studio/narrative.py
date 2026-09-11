@@ -60,7 +60,7 @@ def _clip(text, n=240) -> str:
 
 def turns(trace: list[dict], actions: dict[int, dict]) -> list[dict]:
     """Model replies in order, each with the tool calls it made."""
-    out, current = [], None
+    out, current, open_nodes = [], None, {}
     for e in trace:
         if e["type"] == "model_finished":
             current = {"turn": len(out) + 1, "event_ids": [e["id"]], "reasoning": _clip(" ".join(e.get("reasoning") or [])),
@@ -69,12 +69,21 @@ def turns(trace: list[dict], actions: dict[int, dict]) -> list[dict]:
             out.append(current)
         elif e["type"] == "node_started" and current is not None:
             a = actions.get(e["id"], {})
-            end = next((x for x in trace if x["type"] == "node_finished" and x.get("node") == e.get("node") and x["id"] > e["id"]), None)
-            current["actions"].append({"event_id": e["id"], "title": a.get("title", e.get("label", "tool call")),
-                                       "detail": a.get("detail", ""), "method": a.get("method"), "url": a.get("url"),
-                                       "status": "error" if end and end.get("status") == "error" else "observed" if end else "pending",
-                                       "error": _clip(end.get("output"), 160) if end and end.get("status") == "error" else None})
+            action = {"event_id": e["id"], "title": a.get("title", e.get("label", "tool call")),
+                      "detail": a.get("detail", ""), "method": a.get("method"), "url": a.get("url"),
+                      "status": "pending", "error": None}
+            current["actions"].append(action)
             current["event_ids"].append(e["id"])
+            open_nodes[e.get("node")] = action
+        elif e["type"] == "node_finished" and e.get("node") in open_nodes:
+            action = open_nodes.pop(e["node"])
+            known = actions.get(action["event_id"])
+            if known and known.get("status") in ("error", "observed"):
+                action["status"], action["error"] = known["status"], _clip(known.get("error"), 160) if known.get("error") else None
+            else:
+                failed = e.get("status") == "error"
+                action["status"] = "error" if failed else "observed"
+                action["error"] = _clip(e.get("output"), 160) if failed else None
     return out
 
 
@@ -165,7 +174,7 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
     # One failure mode, in the order a reader would rule them out.
     if result.get("passed"):
         mode = "passed"
-    elif infra or termination.startswith("infra:") and termination not in RAN_OUT:
+    elif infra or (termination.startswith("infra:") and termination not in RAN_OUT):
         mode = "infrastructure"
     elif termination in RAN_OUT or "turn limit" in str(result.get("error", "")).lower():
         mode = "ran_out"
@@ -212,6 +221,15 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
             "turning_point": turning, "limits": LIMITS}
 
 
+def without_reasoning(s: dict | None) -> dict | None:
+    """The same story for readers outside the lab: the provider's reasoning
+    summaries stay internal, the observed timeline does not."""
+    if not s:
+        return s
+    timeline = [{**t, "reasoning": ""} for t in s.get("timeline", [])]
+    return {**s, "timeline": [{**t, "sentence": _sentence(t)} for t in timeline]}
+
+
 def run_story(attempts: list[dict], names: dict[str, str] | None = None) -> dict:
     """What a run's failures have in common, by setup and by task."""
     names = names or {}
@@ -224,21 +242,23 @@ def run_story(attempts: list[dict], names: dict[str, str] | None = None) -> dict
         counts = Counter(a["story"]["mode"] for a in failed if a.get("story"))
         by_setup.append({"setup": s, "name": name(s), "attempts": len(mine), "failed": len(failed),
                          "modes": [{"mode": m, "label": MODES.get(m, m), "count": c,
-                                    "tasks": [a["task"] for a in failed if a.get("story", {}).get("mode") == m]}
+                                    "tasks": list(dict.fromkeys(a["task"] for a in failed if (a.get("story") or {}).get("mode") == m))}
                                    for m, c in counts.most_common()]})
     by_task: dict[str, list[dict]] = {}
     for a in attempts:
         by_task.setdefault(a["task"], []).append(a)
     suspect, separating, clean = [], [], []
     for task, rows in by_task.items():
-        modes = {a.get("story", {}).get("mode") for a in rows if not a["passed"]}
-        if all(a["passed"] for a in rows):
+        # A setup may repeat a task; name each setup once, on the side where it finished.
+        modes = {(a.get("story") or {}).get("mode") for a in rows if not a["passed"]}
+        passed_by = list(dict.fromkeys(name(a["model"]) for a in rows if a["passed"]))
+        failed_by = list(dict.fromkeys(name(a["model"]) for a in rows if not a["passed"]))
+        if not failed_by:
             clean.append(task)
-        elif any(a["passed"] for a in rows):
-            separating.append({"task": task, "passed": [name(a["model"]) for a in rows if a["passed"]],
-                               "failed": [name(a["model"]) for a in rows if not a["passed"]]})
-        elif len(rows) >= 2 and len(modes) == 1 and next(iter(modes)) not in (None, "infrastructure", "ran_out"):
-            suspect.append({"task": task, "mode_label": MODES[next(iter(modes))], "setups": [name(a["model"]) for a in rows]})
+        elif passed_by:
+            separating.append({"task": task, "passed": passed_by, "failed": failed_by})
+        elif len(failed_by) >= 2 and len(modes) == 1 and next(iter(modes)) not in (None, "infrastructure", "ran_out"):
+            suspect.append({"task": task, "mode_label": MODES[next(iter(modes))], "setups": failed_by})
     paragraphs = []
     for s in by_setup:
         if not s["attempts"]:
