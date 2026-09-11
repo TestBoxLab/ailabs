@@ -94,11 +94,27 @@ function stoppedLine(t){
 }
 function turnHtml(t){return '<article class="genesis-turn" data-turn="'+esc(t.id)+'"><div class="user-message"><span class="meta">'+esc(String(t.by||'You').replace('human:',''))+' · '+esc(when(t.created_at))+'</span><p>'+esc(t.message)+'</p>'+(t.card?'<button type="button" class="rec-chip" data-rec-kind="card" data-rec-id="'+esc(t.card)+'">'+esc(recLabel('card',t.card))+'</button>':'')+'</div><div class="scientist-message"><span class="message-model" data-family="'+genesisFamily(t.model)+'">'+esc(genesisModelName(t.model))+'</span><div class="turn-work">'+stepsHtml(t)+'</div><div class="genesis-answer">'+genesisText(t.answer||'')+'</div><p class="genesis-turn-status">'+esc(t.status==='running'?'Working…':'')+'</p>'+stoppedLine(t)+'</div></article>';}
 function bindTurnChips(){$$('#genesis-messages .rec-chip').forEach(b=>b.onclick=()=>openRecord(b.dataset.recKind,b.dataset.recId));}
-function pollGenesis(id){clearTimeout(genesisPoll);$('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';const stop=$('#genesis-stop');stop.hidden=false;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
+// WCAG 2.2.2: content that updates itself beside other content needs a way to pause,
+// stop or hide it. A turn re-renders its step list for minutes while the rest of the
+// workspace stays interactive, and the Studio had no such control anywhere. Paused, the
+// turn keeps running and keeps being recorded — only the screen holds still.
+let genesisPaused=false,genesisPending=null;
+function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
+ if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
+$('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
+function paintTurn(t){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
+ const messages=$('#genesis-messages'),follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<60;
+ el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);
+ linkRecTags(el);bindTurnChips();el.querySelector('.genesis-turn-status').textContent=t.status==='running'?'Working…':'';
+ const old=el.querySelector('.turn-stopped');if(old)old.remove();
+ el.querySelector('.scientist-message').insertAdjacentHTML('beforeend',stoppedLine(t));
+ if(follow)messages.scrollTop=messages.scrollHeight;}
+function pollGenesis(id){clearTimeout(genesisPoll);$('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';const stop=$('#genesis-stop');stop.hidden=false;$('#genesis-pause-updates').hidden=false;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
  genesisPoll=setTimeout(async()=>{try{const i=threadTurns.findIndex(x=>x.id===id);const known=i>=0?threadTurns[i]:null;const last=known?.events?.length?known.events[known.events.length-1].id:0;const fresh=await api('/api/genesis/turns/'+id+(known?'?after='+last:''));const t=known&&fresh.partial?{...fresh,events:known.events.concat(fresh.events)}:fresh;if(i>=0)threadTurns[i]=t;const el=$$('[data-turn]').find(e=>e.dataset.turn===id);
-  if(el){const messages=$('#genesis-messages'),follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<60;el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);linkRecTags(el);bindTurnChips();el.querySelector('.genesis-turn-status').textContent=t.status==='running'?'Working…':'';const old=el.querySelector('.turn-stopped');if(old)old.remove();el.querySelector('.scientist-message').insertAdjacentHTML('beforeend',stoppedLine(t));if(follow)messages.scrollTop=messages.scrollHeight;}
+  // Paused: keep the newest turn and paint it when the reader asks, so nothing is lost.
+  if(el){if(genesisPaused)genesisPending=t;else paintTurn(t);}
   if(trackingTab==='trace')renderTracking();
-  if(t.status==='running')pollGenesis(id);else{$('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;$('#genesis-status').textContent=t.status==='completed'?'':'Stopped';genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();api('/api/budget').then(budget).catch(()=>{});}}catch(e){$('#genesis-status').textContent='Reconnecting';pollGenesis(id);}},650);}
+  if(t.status==='running')pollGenesis(id);else{$('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;if(genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;$('#genesis-status').textContent=t.status==='completed'?'':'Stopped';genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();api('/api/budget').then(budget).catch(()=>{});}}catch(e){$('#genesis-status').textContent='Reconnecting';pollGenesis(id);}},650);}
 $('#genesis-form').onsubmit=async e=>{e.preventDefault();$('#genesis-error').textContent='';$('#genesis-send').disabled=true;
  try{const t=await api('/api/genesis/chat',{message:$('#genesis-message').value,model:$('#genesis-model').value,effort:$('#genesis-effort').value,parent:genesisParent,thread:genesisThread||undefined,card:genesisScope||undefined,by:PERSON});
   $('#genesis-message').value='';$('#genesis-message').style.height='auto';
