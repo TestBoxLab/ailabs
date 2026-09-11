@@ -5,16 +5,33 @@ existing rule. This contract names what changes.
 
 ## One estimator for uncertainty
 
-`measures.wilson` is the only interval in the codebase.
+**Corrected on 11 September, during implementation.** This contract first said rank and
+interval should both come from `measures.pass_rate`'s Wilson-over-attempts bounds, and
+that was wrong. `leaderboard.uncertainty` is the *more* careful estimator: with
+repetitions it clusters by task rather than treating retries as independent samples,
+which `AI-LABS-DIRECTION.md:132` asks for in as many words. Replacing it would have
+overstated certainty on exactly the repeated runs FR-019 is adding.
 
 | Consumer | Before | After |
 |---|---|---|
-| Rank in Standings | Wilson over attempts (`measures.pass_rate`) | unchanged |
-| Interval shown beside rank | Wald over per-task shares (`leaderboard.uncertainty`) — can return zero width | Wilson over attempts, the same source as the rank |
+| Rank in Standings | Wilson over attempts (`measures.pass_rate`) | `leaderboard.uncertainty` — the interval the row prints |
+| Interval shown beside rank | `leaderboard.uncertainty`, which could return zero width | unchanged estimator, no longer degenerate |
 | Difficulty interval | a third Wilson inlined in `difficulty.py` | `measures.wilson` |
 
-A 95% interval is never zero-width. Rank and the interval printed beside it always come
-from the same estimator.
+Two rules:
+
+- **A 95% interval is never a point.** The clustered estimator uses the sample variance
+  of the per-task shares; when every task scores the same it is zero and the interval
+  collapses. Three tasks that all passed printed "100%, 95% CI 100 to 100". Where the
+  variance degenerates, fall back to Wilson over the **task** count — the conservative
+  binomial answer, keeping tasks as the unit so repetitions still buy no confidence. A
+  single task returns no bounds at all: absent is honest, zero-width is a false claim.
+- **Rank comes from the interval the row shows**, and each row says so (`rank_basis`).
+
+A consequence worth stating, because it changed a pinned test: two tasks cannot separate
+a setup that passed both from one that failed both. Wilson over tasks gives [0.34, 1.0]
+against [0.0, 0.66], which overlap, so both rank 1 with a spread of 2. The old rank of 2
+came from counting two repetitions of two tasks as four independent samples.
 
 ## One cohort key
 

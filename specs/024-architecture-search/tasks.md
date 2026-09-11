@@ -35,7 +35,7 @@ Tests under `wb/tests/`. Always `uv run`; never bare Python.
 **Purpose**: Establish the baseline this feature is measured against.
 
 - [x] T001 Record the pre-change baseline by running the full suite detached and capturing pass/fail/duration into `.tmp/024-baseline.txt` from `wb/` with `uv run python -m pytest tests -q`
-- [ ] T002 [P] Confirm the stored ten-task run `6022e89fbb974c7483716f85a5e3c4fe` is present under `wb/out/studio/` and record its current headline number and setup labels into `.tmp/024-baseline-report.txt` — this is the evidence every US2 task reproduces against
+- [x] T002 [P] Confirm the stored ten-task run `6022e89fbb974c7483716f85a5e3c4fe` is present under `wb/out/studio/` and record its current headline number and setup labels into `.tmp/024-baseline-report.txt` — this is the evidence every US2 task reproduces against
 
 ---
 
@@ -148,32 +148,32 @@ the [quickstart.md](./quickstart.md) Story 2 table.
 
 ### Liveness of stored attempts (FR-012)
 
-- [ ] T043 [P] [US2] Write a failing test in `wb/tests/test_studio_report_baseline.py` using `stored_run` asserting the four attempts on moved hashes are marked non-comparable
-- [ ] T044 [US2] Compare each stored attempt's recorded hash against the live corpus in `wb/wb_studio/report_data.py`, emitting `live` / `superseded` / `absent` per [contracts/measures.md](./contracts/measures.md), making T043 pass
-- [ ] T045 [US2] Exclude superseded attempts from every headline number and figure, stating the denominator actually scored, in `wb/wb_studio/report_data.py`, with a test asserting the headline changes
-- [ ] T046 [US2] Promote `leaderboard.exclusion_reason()` from unused to the source of the exclusion text in `wb/wb_studio/report_data.py`, with a test in `wb/tests/test_studio_leaderboard.py`
+- [x] T043 [P] [US2] Write a failing test in `wb/tests/test_studio_report_baseline.py` using `stored_run` asserting the four attempts on moved hashes are marked non-comparable
+- [x] T044 [US2] Compare each stored attempt's recorded hash against the live corpus in `wb/wb_studio/report_data.py`, emitting `live` / `superseded` / `absent` per [contracts/measures.md](./contracts/measures.md), making T043 pass
+- [x] T045 [US2] Exclude superseded attempts from every headline number and figure, stating the denominator actually scored, in `wb/wb_studio/report_data.py`, with a test asserting the headline changes
+- [x] T046 [US2] Promote `leaderboard.exclusion_reason()` from unused to the source of the exclusion text in `wb/wb_studio/report_data.py`, with a test in `wb/tests/test_studio_leaderboard.py`
 
 ### One failure classification (FR-013) — R7
 
-- [ ] T047 [P] [US2] Write a failing test in `wb/tests/test_studio_failure_analysis.py` using `stored_run` asserting the bar chart and the per-attempt folds agree on all eight failed attempts
-- [ ] T048 [US2] Derive `failure_analysis` buckets from `narrative.MODES` at `wb/wb_studio/failure_analysis.py:36`, or remove the second classifier, making T047 pass
-- [ ] T049 [US2] Point `report_data.code_findings` at the single classification in `wb/wb_studio/report_data.py:221`, with a test asserting no finding cites a bucket the narrative contradicts
+- [x] T047 [P] [US2] Write a failing test in `wb/tests/test_studio_failure_analysis.py` using `stored_run` asserting the bar chart and the per-attempt folds agree on all eight failed attempts
+- [x] T048 [US2] Derive `failure_analysis` buckets from `narrative.MODES` at `wb/wb_studio/failure_analysis.py:36`, or remove the second classifier, making T047 pass
+- [x] T049 [US2] Point `report_data.code_findings` at the single classification in `wb/wb_studio/report_data.py:221`, with a test asserting no finding cites a bucket the narrative contradicts
 
 ### Labels and titles (FR-014, FR-015)
 
-- [ ] T050 [P] [US2] Write a failing test in `wb/tests/test_display_names.py` using `stored_run` asserting the hero bar names model and version, not "low reasoning"
-- [ ] T051 [US2] Rewrite `short_name()` at `wb/wb_studio/report_data.py:242` to keep the identifying segments, making T050 pass
-- [ ] T052 [P] [US2] Write a failing test in `wb/tests/test_studio_reports.py` asserting a trend over a cohort with no Monarch is not titled "Monarch pass rate by run"
-- [ ] T053 [US2] Derive the trend title and colour family from the data at `wb/wb_studio/static/reports.js:329`, making T052 pass
+- [x] T050 [P] [US2] Write a failing test in `wb/tests/test_display_names.py` using `stored_run` asserting the hero bar names model and version, not "low reasoning"
+- [x] T051 [US2] Rewrite `short_name()` at `wb/wb_studio/report_data.py:242` to keep the identifying segments, making T050 pass
+- [x] T052 [P] [US2] Write a failing test in `wb/tests/test_studio_reports.py` asserting a trend over a cohort with no Monarch is not titled "Monarch pass rate by run"
+- [x] T053 [US2] Derive the trend title and colour family from the data at `wb/wb_studio/static/reports.js:329`, making T052 pass
 
 ### One cohort key and one interval (FR-016) — R5, R6
 
-- [ ] T054 [P] [US2] Write a failing test in `wb/tests/test_studio_report_baseline.py` asserting runs with no pinned judge are not pooled with pinned ones
-- [ ] T055 [US2] Replace `report_data.cohorts`' key at `wb/wb_studio/report_data.py:408` with `leaderboard.py:50`'s key and delete the weaker one, making T054 pass
-- [ ] T056 [US2] Surface the existing provisional sentence from `wb/wb_studio/leaderboard.py:57` in the rendered round, with a test in `wb/tests/test_studio_reports.py`
-- [ ] T057 [P] [US2] Write a failing test in `wb/tests/test_studio_measures.py` asserting no displayed 95% interval is ever zero-width
-- [ ] T058 [US2] Fill the displayed interval at `wb/wb_studio/report_data.py:462` from `measures.pass_rate`'s Wilson bounds, the same source as the rank at `:452`, making T057 pass
-- [ ] T059 [P] [US2] Delete the inlined Wilson in `wb/wb_studio/difficulty.py` in favour of `measures.wilson`, with the existing difficulty tests still green
+- [x] T054 [P] [US2] Write a failing test in `wb/tests/test_studio_report_baseline.py` asserting runs with no pinned judge are not pooled with pinned ones
+- [x] T055 [US2] Replace `report_data.cohorts`' key at `wb/wb_studio/report_data.py:408` with `leaderboard.py:50`'s key and delete the weaker one, making T054 pass
+- [x] T056 [US2] Surface the existing provisional sentence from `wb/wb_studio/leaderboard.py:57` in the rendered round, with a test in `wb/tests/test_studio_reports.py`
+- [x] T057 [P] [US2] Write a failing test in `wb/tests/test_studio_measures.py` asserting no displayed 95% interval is ever zero-width
+- [x] T058 [US2] Fill the displayed interval at `wb/wb_studio/report_data.py:462` from `measures.pass_rate`'s Wilson bounds, the same source as the rank at `:452`, making T057 pass
+- [x] T059 [P] [US2] Delete the inlined Wilson in `wb/wb_studio/difficulty.py` in favour of `measures.wilson`, with the existing difficulty tests still green
 
 **Checkpoint**: the round report's statements are defensible. Independently shippable.
 
@@ -429,3 +429,41 @@ are foundational for User Story 2, which has not started.
   one pre-existing failure (`test_run_page.py::test_index_has_evidence_tabs_and_runs_table_counts`).
 - A second session is editing this checkout. `wb_report/`, `report_data.py`, `caveats.py`,
   `narrative.py`, `figures.py`, `reports.js`, `report.css` and the audience gate are theirs.
+
+
+---
+
+## User Story 2 complete, 11 September 2026
+
+All eight defects in what a round asserts are closed, and the round report's statements
+now hold against the stored ten-task run they were reproduced from.
+
+Five were fixed by other sessions working the same checkout, and are recorded against
+their work rather than claimed here: the Google substring match (`reports.resolve_service`
+resolves host and path, so Google Ads is not Gmail), the false-completion signal (now
+excludes turn-limit terminations and prompt text echoed back), the liveness check
+(`report_data` emits live / superseded / absent against the live corpus), the hero label
+(`short_name` goes through `display_name`/`fit_name`), and the two failure classifiers
+(`failure_analysis.BUCKETS = dict(MODES)`, derived from narrative rather than independent).
+
+Three were mine:
+
+| Defect | Fix | Tests |
+|---|---|---|
+| Zero-width 95% intervals, and a rank from a different estimator than the one printed | `leaderboard.uncertainty` falls back to Wilson over tasks where the sample variance degenerates; `report_data` ranks on the interval it shows and records `rank_basis` | `test_studio_intervals.py` (10) |
+| A round pooled runs on task hashes and track alone | `leaderboard.evaluation_contract` is the one partition rule, used by both `rank_records` and `report_data.cohorts`; the weaker key is deleted | `test_studio_cohorts.py` (9) |
+| The over-time figure was titled "Monarch pass rate by run" and coloured Monarch whatever the cohort held — and excluded every setup not named "monarch", so other rounds had no trend at all | `trend_title_for` writes the title from the series; the client resolves each series' family | `test_studio_trend.py` (5) |
+
+**One contract correction, made during implementation and recorded in
+`contracts/measures.md`.** The review said to rank and display on Wilson over attempts.
+That was wrong: `uncertainty` clusters by task, which is what stops repetitions from
+buying confidence, and `AI-LABS-DIRECTION.md:132` requires it. Following the review would
+have overstated certainty on precisely the repeated runs FR-019 adds. The estimator
+stayed; its degenerate case was fixed and the rank was moved onto it.
+
+That change moved a pinned expectation in `test_studio_reports.py`: two setups that used
+to rank 1 and 2 now both rank 1 with a spread of 2. Two tasks cannot separate a setup
+that passed both from one that failed both, and the old rank counted two repetitions of
+two tasks as four independent samples. The test carries the explanation.
+
+240 tests green across the twelve report, narrative, measures and chart suites.

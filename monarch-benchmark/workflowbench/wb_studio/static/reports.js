@@ -379,7 +379,10 @@ function renderRoundReport(r) {
   if (r.trend.length > 1) {
     const series = {};
     for (const t of r.trend) (series[t.series] = series[t.series] || []).push(t);
-    $('[data-slot="trend"]', article).replaceWith(Charts.trend({ title: 'Monarch pass rate by run', series: Object.entries(series).map(([label, points]) => ({ label, family: 'monarch', points })), source: 'Each point is one run; whiskers show the 95% interval.' }));
+    // Title and colour come from the data. Both were constants: every round was titled
+    // "Monarch pass rate by run" and every series drawn in the Monarch colour, whatever
+    // the cohort held (feature 024, FR-015).
+    $('[data-slot="trend"]', article).replaceWith(Charts.trend({ title: r.trend_title || 'Pass rate by run', series: Object.entries(series).map(([label, points]) => ({ label, family: setupFamily(label), points })), source: 'Each point is one run; whiskers show the 95% interval.' }));
   }
   const matrix = Charts.matrix({ tasks: r.tasks, setups: r.order.map(id => ({ id, name: setupName(r, id), baseline: id === r.baseline, family: setupFamily(setupName(r, id)) })), cells: r.matrix });
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(matrix);

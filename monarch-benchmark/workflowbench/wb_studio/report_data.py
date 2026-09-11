@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from wb_studio import caveats, measures
-from wb_studio.leaderboard import exclusion_reason, full_benchmark_run
+from wb_studio.leaderboard import contract_note, evaluation_contract, exclusion_reason, full_benchmark_run
 from wb_studio.reports import CATEGORIES
 from wb_world.episode import contract_hash
 
@@ -87,6 +87,23 @@ def grade(setup, baseline) -> dict:
     if worse:
         return {"grade": "Regression", "reason": tally}
     return {"grade": "Tie", "reason": tally}
+
+
+def trend_title_for(names) -> str:
+    """The over-time figure's title, written from the series it draws.
+
+    One or two setups are named outright; more than that would not fit a figure title,
+    so it says how many. An empty trend still returns a sentence rather than None, so a
+    caller never has to invent one (feature 024, FR-015).
+    """
+    names = [n for n in (names or []) if n]
+    if not names:
+        return "Pass rate by run"
+    if len(names) == 1:
+        return f"{names[0]}: pass rate by run"
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}: pass rate by run"
+    return f"Pass rate by run, {len(names)} setups"
 
 
 def pct(value):
@@ -222,7 +239,7 @@ def code_findings(m, shown, baseline_id, fa) -> list:
     violators = [(s, s["violations"]) for s in setups if s["violations"]["attempts_with_changes"]]
     for s, v in sorted(violators, key=lambda x: -x[1]["attempts_with_changes"])[:1]:
         out.append({"kind": "violations", "text": f"{s['name']} changed something outside the task in {v['attempts_with_changes']} of {v['attempts']} attempts.",
-                    "number": v["per_attempt"], "evidence": {"kind": "bucket", "ref": "unintended_changes", "setup": s["id"]}})
+                    "number": v["per_attempt"], "evidence": {"kind": "bucket", "ref": "scope_violation", "setup": s["id"]}})
     if ranked:
         top = ranked[0]
         lead = f"{top['name']} had the highest pass rate: " if len(ranked) > 1 else f"{top['name']} passed "
@@ -266,9 +283,20 @@ def model_findings(narrative, aliases_back) -> list:
 
 def short_name(name: str) -> str:
     """The part of a setup name a figure label can hold; the build token and the
-    full identifier drop to the method section."""
+    full identifier drop to the method section, keeping the identifying segments
+    (architecture, version and model)."""
     from wb_studio.runtime_registry import display_name, fit_name
-    return fit_name(display_name(name), 36)
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    head, sep, tail = raw.partition(" · ")
+    if " / " in head:
+        segs = [s.strip() for s in head.split(" / ")]
+        if len(segs) >= 3:
+            return fit_name(f"{' / '.join(segs[:-1])} · {segs[-1]}", 44)
+        if len(segs) == 2:
+            return fit_name(f"{segs[0]} / {segs[1]}", 44)
+    return fit_name(display_name(name), 44)
 
 
 def hero_rows(m, shown):
@@ -480,9 +508,15 @@ def cohorts(studio) -> dict:
         if job.get("status") not in FINISHED or not job.get("task_hashes"):
             continue
         settings = job.get("settings") or {}
-        key = hashlib.sha256(json.dumps([sorted((job.get("task_hashes") or {}).items()), settings.get("track", "agentic-request")], separators=(",", ":")).encode()).hexdigest()[:12]
-        cohort = groups.setdefault(key, {"id": key, "task_set": task_set_id(job), "task_count": len(job["task_hashes"]), "track": settings.get("track", "agentic-request"),
+        # The whole evaluation contract, not task hashes and track alone. This keyed on
+        # two of the six, so a round could pool runs graded by different judges, or on
+        # different world revisions, and rank them against each other as one
+        # measurement (feature 024, FR-016). The rule lives in one place now.
+        contract = evaluation_contract(job, job.get("task_hashes") or {})
+        key = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+        cohort = groups.setdefault(key, {"id": key, "task_set": task_set_id(job), "task_count": len(job["task_hashes"]), "track": contract["track"],
                                          "tasks": settings.get("tasks") or [], "task_hashes": job.get("task_hashes") or {}, "runs": [], "full_benchmark": False,
+                                         "contract": contract, "note": contract_note(contract),
                                          "benchmark": (job.get("benchmark") or {}).get("id")})
         cohort["runs"].append({"id": job["id"], "title": job.get("title"), "status": job["status"], "created_at": job.get("created_at"), "finished_at": job.get("finished_at"),
                                "full_benchmark": full_benchmark_run(job), "exclusion_reason": exclusion_reason(job)})
@@ -524,8 +558,20 @@ def round_report(studio, cohort_id) -> dict:
     standings = [m["setups"][s] for s in shown if s in m["setups"] and m["setups"][s]["pass"]["attempts"]]
     # Rank the way LMArena and SEAL do: one plus the number of setups whose whole interval sits above this one;
     # the far end of the spread counts every setup this one cannot be told apart from.
-    def low(s): return s["pass"]["low"] if s["pass"]["low"] is not None else (s["pass"]["rate"] or 0)
-    def high(s): return s["pass"]["high"] if s["pass"]["high"] is not None else (s["pass"]["rate"] or 0)
+    #
+    # Ranked on the interval the row actually prints. It used to rank on
+    # measures.pass_rate's Wilson-over-attempts bounds while showing
+    # leaderboard.uncertainty's clustered ones, and with repetitions those disagree —
+    # so a reader saw a rank derived from an interval that was not on the page
+    # (feature 024, FR-016). The clustered estimator is the one to keep: it counts
+    # tasks, not retries, which AI-LABS-DIRECTION.md:132 asks for.
+    intervals = {s["id"]: uncertainty(groups.get(s["id"], [])) for s in standings}
+    def low(s):
+        u = intervals[s["id"]]
+        return u["low"] if u["low"] is not None else (u["rate"] if u["rate"] is not None else (s["pass"]["rate"] or 0))
+    def high(s):
+        u = intervals[s["id"]]
+        return u["high"] if u["high"] is not None else (u["rate"] if u["rate"] is not None else (s["pass"]["rate"] or 0))
     ranks = {s["id"]: 1 + sum(1 for o in standings if o is not s and low(o) > high(s)) for s in standings}
     spread = {s["id"]: sum(1 for o in standings if high(o) >= low(s)) for s in standings}
     standings.sort(key=lambda s: (ranks[s["id"]], -(s["pass"]["rate"] or 0), s["cost"]["per_attempt"] if s["cost"]["per_attempt"] is not None else float("inf"), s["name"]))
@@ -534,14 +580,19 @@ def round_report(studio, cohort_id) -> dict:
         rank = ranks[s["id"]]
         rows.append({"rank": rank, "rank_high": max(rank, spread[s["id"]]), "id": s["id"], "name": s["name"], "is_baseline": s["is_baseline"], "pass": s["pass"], "pass_k": s["pass_k"], "cost": s["cost"],
                      "paired": s["paired"], "grade": grade(s, baseline) if not s["is_baseline"] else None, "runs": sorted({r["id"] for r in cohort["runs"]}),
-                     "interval": uncertainty(groups.get(s["id"], []))})
+                     "interval": intervals[s["id"]], "rank_basis": "interval"})
+    # Every setup that ran, not only the ones named "monarch". The filter meant a round
+    # comparing anything else produced no over-time figure at all, and the figure that
+    # did appear was titled by a constant — asserting the programme's headline subject
+    # onto whatever the cohort happened to contain (feature 024, FR-015).
     trend = []
     for entry in sorted(cohort["runs"], key=lambda r: r["created_at"] or ""):
         run_job = studio.job(entry["id"])
         rm = measures.run_measures(run_job, [])
         for sid, s in rm["setups"].items():
-            if sid in shown and "monarch" in (s["name"] or "").lower() and s["pass"]["attempts"]:
+            if sid in shown and s["pass"]["attempts"]:
                 trend.append({"series": s["name"], "x": (entry["created_at"] or "")[:10], "run": entry["id"], "y": s["pass"]["rate"], "low": s["pass"]["low"], "high": s["pass"]["high"]})
+    trend_title = trend_title_for(sorted({p["series"] for p in trend}))
     return {"version": 1, "cohort": cohort_id, "task_set": cohort["task_set"], "task_count": cohort["task_count"], "track": cohort["track"],
             "full_benchmark": cohort["full_benchmark"], "runs": cohort["runs"], "latest": cohort.get("latest"), "first": cohort.get("first"),
             "baseline": baseline_id, "standings": rows, "hero": hero_rows(m, shown),
@@ -550,7 +601,7 @@ def round_report(studio, cohort_id) -> dict:
             "excluded": [{"id": r["id"], "title": r.get("title"), "reason": exclusion_reason(studio.job(r["id"]))} for r in cohort["runs"] if not r["full_benchmark"]],
             "paired": paired_table(job, m, shown, baseline_id), "matrix": matrix_cells(job, shown, studio.tasks), "tasks": task_rows(job, studio.tasks),
             "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown], "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
-            "trend": trend, "repetitions": m["repetitions"],
+            "trend": trend, "trend_title": trend_title, "repetitions": m["repetitions"],
             "caveats": caveats.for_round({**cohort, "baseline": baseline_id}),
             "method": {"task_set": cohort["task_set"], "task_count": cohort["task_count"], "task_hashes": cohort["task_hashes"], "runs": [r["id"] for r in cohort["runs"]],
                        "repetitions": m["repetitions"], "fork": caveats.fork_version(), "benchmark": cohort.get("benchmark")}}

@@ -37,6 +37,37 @@ def comparison_runner(studio, arm):
     except (ValueError,KeyError): return None
 
 
+def evaluation_contract(job, hashes=None) -> dict:
+    """Everything that must agree before two runs may be compared as one measurement.
+
+    The task identities, the track, the judge, how much the competitor was helped, the
+    world revision, and — for a workflow round — the workflow contract. PLAN.md §1.1
+    requires paired comparisons only on identical sets and a config hash per run; this
+    is that rule as one function.
+
+    It is one function because it was two. `report_data.cohorts` keyed a round on task
+    hashes and track alone, so the surface a person actually opens could pool a run
+    graded by one judge with a run graded by another and rank them against each other
+    (feature 024, FR-016). Both partitions now come from here.
+    """
+    settings = job.get('settings') or {}
+    if hashes is None:
+        hashes = {task: (job.get('task_hashes') or {}).get(task) for task in settings.get('tasks') or []}
+    return {'task_hashes': hashes, 'track': settings.get('track', 'agentic-request'),
+            'judge': (job.get('component_manifest') or {}).get('judge') or 'historical-unpinned',
+            'assistance': settings.get('assistance', 'unattended'),
+            'world': job.get('world_manifest', 'historical-unpinned'),
+            'workflow_contract': job.get('workflow_contract', 'historical-unpinned') if settings.get('track') == 'create-and-run' else None}
+
+
+def contract_note(contract) -> str:
+    """What a reader must know about the partition before believing a ranking in it."""
+    pinned = contract.get('judge') != 'historical-unpinned'
+    return ('Same task identities and evaluation contract. '
+            + ('Component identities are pinned.' if pinned
+               else 'Historical records lack a pinned judge; rankings are provisional.'))
+
+
 def rank_records(studio):
     cohorts = {}
     for job in studio.jobs():
@@ -46,15 +77,11 @@ def rank_records(studio):
         hashes = {task: job['task_hashes'].get(task) for task in settings['tasks']}
         if not all(hashes.values()):
             continue
-        judge = job.get('component_manifest', {}).get('judge')
-        contract = {'task_hashes': hashes, 'track': settings.get('track', 'agentic-request'),
-                    'judge': judge or 'historical-unpinned', 'assistance': settings.get('assistance', 'unattended'),
-                    'world': job.get('world_manifest', 'historical-unpinned'),
-                    'workflow_contract': job.get('workflow_contract', 'historical-unpinned') if settings.get('track')=='create-and-run' else None}
+        contract = evaluation_contract(job, hashes)
         key = digest(contract)
         cohort = cohorts.setdefault(key, {'id': key, 'contract': contract, 'track': contract['track'],
                                          'task_count': len(hashes), 'groups': {},
-                                         'note': 'Same task identities and evaluation contract. '+('Component identities are pinned.' if judge else 'Historical records lack a pinned judge; rankings are provisional.')})
+                                         'note': contract_note(contract)})
         arms = settings.get('arms') or [{'id': identity, 'name': identity, 'kind': 'runner'} for identity in settings['models']]
         for arm in arms:
             rows = [r for r in job.get('results', []) if r['model'] == arm['id']]
@@ -140,7 +167,16 @@ def task_shares(rows):
 def uncertainty(rows):
     """95 % interval for a setup's pass rate. Each task run once: Wilson over
     attempts. Repetitions: a normal interval over the per-task pass shares, so
-    the unit is tasks and repeated tasks do not shrink the interval."""
+    the unit is tasks and repeated tasks do not shrink the interval.
+
+    A sample with no variance between tasks — every task passed, every task failed,
+    or every task passed the same fraction of its repetitions — has a sample standard
+    error of zero, and the normal interval collapses to a point. Three tasks that all
+    passed printed "100%, 95% CI 100 to 100" (feature 024, FR-016). That is not
+    certainty; it is a degenerate estimator on a small sample. Where it degenerates,
+    fall back to Wilson over the **task** count, which is the conservative binomial
+    answer and keeps tasks as the unit, so repetitions still do not buy confidence.
+    """
     from wb_studio.measures import wilson
     shares, k = task_shares(rows)
     n = len(shares)
@@ -148,10 +184,15 @@ def uncertainty(rows):
         passed = int(sum(shares.values()))
         low, high = wilson(passed, n)
         return {'unit': 'attempts', 'tasks': n, 'repetitions': k, 'rate': passed / n if n else None, 'low': low, 'high': high}
+    if not n:
+        return {'unit': 'tasks', 'tasks': 0, 'repetitions': k, 'rate': None, 'low': None, 'high': None}
     mean = sum(shares.values()) / n
     if n < 2:
         return {'unit': 'tasks', 'tasks': n, 'repetitions': k, 'rate': mean, 'low': None, 'high': None}
     se = math.sqrt(sum((v - mean) ** 2 for v in shares.values()) / (n - 1) / n)
+    if se <= 0:
+        low, high = wilson(round(mean * n), n)
+        return {'unit': 'tasks', 'tasks': n, 'repetitions': k, 'rate': mean, 'low': low, 'high': high}
     return {'unit': 'tasks', 'tasks': n, 'repetitions': k, 'rate': mean, 'low': max(0.0, mean - 1.96 * se), 'high': min(1.0, mean + 1.96 * se)}
 
 

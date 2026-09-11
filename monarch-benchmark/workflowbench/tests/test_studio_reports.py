@@ -101,7 +101,15 @@ def test_rounds_group_runs_on_the_same_frozen_set_and_pool_repetitions(studio):
     assert {r["id"] for r in cohort["runs"]} == {first["id"], second["id"]} and cohort["full_benchmark"] is False
     report = report_data.round_report(studio, cohort["id"])
     assert report["repetitions"] == 2 and report["standings"][0]["name"] == "Scripted reference" and report["standings"][0]["rank"] == 1
-    assert report["standings"][0]["pass_k"]["k"] == 2 and report["standings"][1]["rank"] == 2
+    # Both rank 1, with a spread of 2. Two tasks cannot separate a setup that passed
+    # both from one that failed both: Wilson over tasks gives [0.34, 1.0] against
+    # [0.0, 0.66], which overlap. This asserted rank 2 while the rank came from a
+    # Wilson interval over *attempts*, counting two repetitions of two tasks as four
+    # independent samples — the narrowing feature 024 removed (FR-016).
+    assert report["standings"][0]["pass_k"]["k"] == 2
+    assert [s["rank"] for s in report["standings"]] == [1, 1]
+    assert all(s["rank_high"] == 2 for s in report["standings"])
+    assert all(s["rank_basis"] == "interval" for s in report["standings"])
     assert any("not the frozen benchmark of 50 tasks" in c for c in report["caveats"])
     index = report_data.index(studio)
     assert index["rounds"][0]["id"] == cohort["id"] and index["rounds"][0]["best"]["name"] == "Scripted reference"
@@ -197,3 +205,38 @@ def test_false_completion_finding_labels_signal_as_inferred_from_wording():
 
     reports_js = (ROOT / "wb_studio" / "static" / "reports.js").read_text(encoding="utf-8")
     assert "inferred from wording" in reports_js
+
+
+def test_no_finding_cites_a_bucket_the_narrative_contradicts(stored_run):
+    from wb_studio.narrative import MODES
+    studio, job = stored_run
+    report = report_data.run_report(studio, stored_run.run_id)
+    findings = report.get("findings", [])
+    bucket_findings = [f for f in findings if (f.get("evidence") or {}).get("kind") == "bucket"]
+    assert bucket_findings, "Expected at least one finding citing a failure bucket"
+    mode_keys = set(MODES.keys())
+    failure_bucket_ids = {b["id"] for b in report["failures"]["buckets"]}
+    for f in bucket_findings:
+        ref = f["evidence"]["ref"]
+        assert ref in mode_keys, f"Finding evidence ref '{ref}' is not in MODES: {f}"
+        assert ref in failure_bucket_ids, f"Finding evidence ref '{ref}' is not in failure_analysis buckets: {f}"
+        matching_attempts = [
+            a for a in report["failures"]["attempts"]
+            if (a.get("story") or {}).get("mode") == ref or a.get("bucket") == ref
+        ]
+        assert len(matching_attempts) > 0, f"Finding cites bucket '{ref}', but no attempt narrative has that mode"
+
+
+def test_trend_over_cohort_with_no_monarch_is_not_titled_monarch_pass_rate_by_run(studio):
+    finished_run(studio, "round-a", title="First")
+    finished_run(studio, "round-b", title="Second")
+    cohort = next(iter(report_data.cohorts(studio).values()))
+    report = report_data.round_report(studio, cohort["id"])
+    assert len(report["trend"]) > 1
+    assert not any("monarch" in t["series"].lower() for t in report["trend"])
+    assert "Monarch" not in report.get("trend_title", "")
+    assert "Scripted reference" in report.get("trend_title", "")
+
+    reports_js = (ROOT / "wb_studio" / "static" / "reports.js").read_text(encoding="utf-8")
+    assert "title: 'Monarch pass rate by run'" not in reports_js
+    assert "family: 'monarch'" not in reports_js
