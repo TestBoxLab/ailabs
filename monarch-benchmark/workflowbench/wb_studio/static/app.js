@@ -165,7 +165,7 @@ async function openJob(id) {
       if(seenEvents.has(event.id))return;
       seenEvents.add(event.id); events.push(event);
       if(event.type==='run_control') {job.pause_requested=event.pause_requested;job.active_attempts=event.active_attempts;job.status=event.status;syncJob(job);}
-      else if(event.type==='finished') { syncJob(event.job); api('/api/budget').then(budget).catch(()=>{}); source.close(); queueReportRefresh(id,sequence); }
+      else if(event.type==='finished') { if(job.resumed_at&&Date.parse(event.job.finished_at)<Date.parse(job.resumed_at))return; syncJob(event.job); api('/api/budget').then(budget).catch(()=>{}); source.close(); queueReportRefresh(id,sequence); }
       else if(event.type==='result'&&(job.config_source||job.settings?.plan_semantics))queueReportRefresh(id,sequence);
       else if(event.type==='attempt_finished') {
         if(!job.results.some(r=>r.task===event.task&&r.model===event.model)) {job.results.push(event);job.completed++;syncJob(job);}

@@ -86,6 +86,8 @@ def configured_results_handler(studio):
     job.update(status="running", config_source={"commit": "fixture"},
                results=[first], completed=1, total=3, cost_usd=0.25)
     job["settings"]["plan_semantics"] = True
+    studio.emit(identity, "finished", job={**job, "status": "failed", "finished_at": "2026-09-10T20:00:00+00:00"})
+    job["resumed_at"] = "2026-09-10T21:00:00+00:00"
     studio.save(job)
     subscribed = threading.Event()
 

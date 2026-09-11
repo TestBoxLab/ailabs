@@ -282,13 +282,14 @@ class Orchestrator:
 
     def _pending_retries(self, run_id: str, arm_name: str) -> list[tuple[dict, int]]:
         """Retries a resumed run still owes: a recorded attempt that failed on a
-        non-infra termination, whose retry trial was never recorded.
+        non-infra termination, whose retry trial has no final outcome.
 
         Derived from the store rather than remembered, so an interrupted run
         picks up exactly the retries it had not run yet.
         """
         if not self.retry_on_fail:
             return []
+        completed = self.store.completed_identities(run_id)
         by_task: dict[str, dict[int, dict]] = {}
         for r in self.store.episodes(run=run_id)["rows"]:
             if r["arm"] == arm_name:
@@ -299,7 +300,8 @@ class Orchestrator:
             for trial in sorted(trials):
                 row = trials[trial]
                 if (self._earns_a_retry(row["passed"], row["termination"])
-                        and self._retry_budget_left(trial) and trial + self.k not in trials):
+                        and self._retry_budget_left(trial)
+                        and (task["task"], arm_name, trial + self.k) not in completed):
                     work.append((task, trial + self.k))
         return work
 

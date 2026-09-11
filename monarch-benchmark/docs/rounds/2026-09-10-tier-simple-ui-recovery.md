@@ -1,6 +1,7 @@
 # Tier-simple: hosted launch and operational continuation
 
-Status at 21:55 UTC: **running**, not a completed benchmark report.
+Final operational status: **stopped by a run-envelope reservation refusal** at
+23:16 UTC. Initial tasks finished; the configured retry allowance was not completed.
 Operator and continuation authorization: Carlos, 10 September 2026.
 
 ## Identity and original launch
@@ -113,3 +114,71 @@ The local CSV and SQLite copies were explicitly refreshed after this success.
 - Temporary Railway SSH key fingerprint:
   `SHA256:oOcCRXemhZ1lRn4hgVy8Fmbsp5jNyC6Ab+2Dp176+PQ`. Retain while the observer
   exports; remove this task-specific key after the final export is verified.
+
+## Terminal accounting and remaining work
+
+At 22:52:18 UTC, `finance.annual_budget_prep` trial 1 was refused before dispatch.
+The recovery envelope was USD 44.995480, of which USD 39.020996 was committed at
+that instant, leaving USD 5.974484 against a required USD 8 reservation. Three
+already-admitted attempts still held capacity: Airtable find/update, email lead,
+and calendar product review. The orchestrator stopped admitting work and drained
+these attempts, finally ending at 23:16 UTC with 100 result rows and recorded cost
+USD 40.39968721. The error incorrectly calls this exhaustion of the shared weekly
+budget; inspection confirmed that the run envelope caused the refusal.
+
+The 100 rows comprise 99 executed attempts and one zero-cost budget refusal.
+All ten initial Monarch tasks ran; three passed. Seven failed tasks still have
+their configured retry pending, including the refused retry. Completing all
+seven would yield 106 result rows, because one replaces the refusal row. No new
+paid continuation was launched during the subsequent counter investigation.
+
+Final export verification: SQLite integrity check `ok`, 100 rows in the database
+and CSV, and 1,882 archive entries including the recovery receipt. One original
+GLM request reservation remains unresolved; it was not released or treated as a
+verified zero. The display's USD 40.40 is recorded spending, not a declaration
+that every provider charge has been reconciled.
+
+## Seven-retry continuation
+
+Carlos requested completion of the seven pending retries. At September 11
+00:04:14 UTC (September 10 21:04 Sao Paulo), the same hosted run resumed using
+the isolated original runtime and world. Configuration hash remains
+`a3dbc30fc6d376b1`; the original USD 60 ceiling is unchanged. The operational
+concurrency override is one, avoiding simultaneous reservations for Monarch
+work that the backend already serializes.
+
+The shared ledger reserved a new, immutable `#recovery-2` envelope of USD
+19.351117: USD 60 minus USD 40.399936 settled and the unresolved original GLM
+hold of USD 0.248947. The earlier closed envelope was not reopened. Expected
+additional cost was disclosed as USD 15–25; execution remains constrained by
+the smaller remaining ceiling and may stop before every retry if needed.
+
+Before dispatch, all 100 evidence manifests were verified and the exact seven
+pending identities checked. The 99 final rows are checked for equality during
+the continuation. The budget-refused trial receives `attempt-001`, preserving
+its refused attempt's files. New request reservations use `#recovery-2` IDs.
+The operational receipt and before-state database are under the hosted job's
+`recovery-2/`; local exports retain the previous terminal state in
+`out/tier-simple-ui-20260910/before-retries/`.
+
+Two operational corrections were reproduced before applying fixes:
+
+- Retry scheduling used row existence, incorrectly skipping an infrastructure
+  refusal on a retry trial. It now uses the store's final-identity definition,
+  including the existing rule that `infra:attempt_cap` remains final. The real
+  simulator regression failed at the missing retry, then passed. Recovery,
+  retry and envelope checks: 41 passed.
+- Replayed historical `finished` SSE closed a resumed run's live connection.
+  The frontend ignores terminal events older than `resumed_at`. The real HTTP
+  browser fixture failed before the change and passed afterward; seven static
+  CSP checks also passed. The served asset was replaced without a restart.
+  Browser inspection confirmed `running`, an open stream, and retained history.
+
+The operational launcher is retained on the host as
+`/data/recovery-source-427ab78/monarch-benchmark/workflowbench/scripts/finish_retries.py`,
+SHA-256 `7e5bdc799bf10733891a07fe4806b1c477e8a675db7494f6d947f8fd7c33e365`.
+The frontend asset SHA-256 is
+`76494bc012021a8daf004bf5234dd6c92dacd2d3df56e6431d88a16d80f4e548`.
+The detached local observer continues status, call inspection and metric exports.
+The first resumed task made two Google Drive GET requests with HTTP 200. This
+confirms application access, not a successful task verdict.

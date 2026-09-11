@@ -50,6 +50,19 @@ results. Current incident: run `f2799405-f9b3-4fb2-8e41-a517e9c39260`.
 
 ## Complete UI metrics and billing visibility
 
+- Distinguish a run-envelope refusal from exhaustion of the weekly budget. This
+  continuation rejected an USD 8 attempt reservation while only USD 5.974484
+  was unreserved and three other attempts still held capacity. It then drained
+  those attempts and stopped at USD 40.39968721, below the original USD 60 ceiling.
+  The current error incorrectly says the weekly budget was exhausted. Consider
+  waiting for in-flight settlements before stopping for temporary reservation
+  pressure; never release unknown charges or bypass an actual budget limit.
+- Distinguish completed attempts from the maximum allowed attempts. The full
+  tier-simple plan permits 140 only if every initial attempt fails and earns a
+  retry; successful attempts remove that retry from the actual workload. At
+  22:50 UTC, 95 rows were finalized, with 9 required and up to 4 conditional
+  attempts remaining. Show the maximum separately, rather than implying that
+  `95 / 140` means 45 attempts are still pending or that all runs must reach 140.
 - Expose all retained attempt metrics and an Excel-compatible export from the UI,
   including timing, actions, tokens, retries and authoring/execution costs.
 - Connect configured-plan activity events: the Results count and run status can
