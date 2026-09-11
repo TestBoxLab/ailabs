@@ -57,6 +57,29 @@ class RoundAdmissionError(Exception):
 
 
 # legacy: runs recorded before product/plan files
+_ABSENT = object()
+
+
+def _drifted(recorded: dict, current: dict, prefix: str = "") -> list[str]:
+    """The settings in `current` that differ from `recorded`, named, one level into maps.
+
+    Only `current`'s own keys are compared: the stored configuration carries fields
+    beside the hashed ones (paths, the cost ceiling), and naming those as drift
+    would point at the wrong file.
+    """
+    names = []
+    for key in sorted(current):
+        was, now = recorded.get(key, _ABSENT), current[key]
+        if was == now:
+            continue
+        if isinstance(now, dict) and isinstance(was, dict):
+            names += _drifted(was, now, f"{prefix}{key}.")
+            names += [f"{prefix}{key}.{k}" for k in sorted(set(was) - set(now))]
+        else:
+            names.append(f"{prefix}{key}")
+    return names
+
+
 def config_hash(tasks: list[dict], arms: list[str], k: int, timeout_s: float) -> str:
     blob = json.dumps({"tasks": sorted(contract_hash(t) for t in tasks),
                        "arms": sorted(arms), "k": k, "timeout_s": timeout_s},
@@ -226,6 +249,24 @@ class Orchestrator:
             return self.run_config.hash
         return config_hash(self.tasks, self.arm_keys, self.k, self.timeout_s)
 
+    def _drift_detail(self, run: dict) -> str:
+        """Which settings differ from the ones the run was recorded under.
+
+        Two hashes and "refusing to resume" say a round cannot continue without
+        saying why, and the cause is usually one field in one file. The run row
+        already stores the configuration, so naming it costs a dict comparison.
+        """
+        try:
+            recorded = json.loads(run["config_json"])
+        except (TypeError, ValueError, KeyError):
+            return ""
+        current = self.run_config._hashed() if self.run_config else self._config()
+        names = _drifted(recorded, current)
+        if not names:
+            # Every named setting agrees, so what moved is inside the task files.
+            return ". The task set's contents changed: same files, different contracts"
+        return ". Changed since the run was recorded: " + ", ".join(names)
+
     def run(self, run_id: str | None = None) -> str:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         arms = self._arms()
@@ -241,7 +282,7 @@ class Orchestrator:
         if run["config_hash"] != self._hash():
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
-                "refusing to resume")
+                f"refusing to resume{self._drift_detail(run)}")
         if run["suite"] != self.suite:
             raise ConfigDrift(
                 f"suite drift: run {run_id} was recorded under {run['suite']}, the task set "

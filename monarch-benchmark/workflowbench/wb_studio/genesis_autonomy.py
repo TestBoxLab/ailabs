@@ -58,6 +58,11 @@ class Autonomy:
         except (OSError, ValueError):
             data = {}
         out = {**DEFAULTS, **{k: v for k, v in data.items() if k in DEFAULTS}}
+        # A stored value this version does not know (an older file, a hand edit) falls
+        # back to off rather than raising: every caller of read() is a gate, and a gate
+        # that crashes is a gate whose caller decides what to do without it.
+        out.update({key: DEFAULTS[key] for key in WORDS
+                    if not (isinstance(out[key], str) and out[key] in WORDS[key])})
         out['words'] = {key: WORDS[key][out[key]] for key in WORDS}
         out['smoke_attempts'] = SMOKE_SCALE_ATTEMPTS
         out['card_usd'] = os.environ.get('STUDIO_GENESIS_CARD_USD', '2.00')

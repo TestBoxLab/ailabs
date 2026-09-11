@@ -34,6 +34,12 @@ from wb_world.openapi import build_spec, load_schemas
 
 # How much of a request and a response body one log line keeps.
 LOG_BODY_CHARS = 500
+# The largest body this accepts, matching the Studio's front door.
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+
+class BodyTooLarge(Exception):
+    """The request claimed a body this refuses to read."""
 
 
 class _Server(ThreadingHTTPServer):
@@ -95,10 +101,23 @@ class EpisodeHTTPShim:
             def handle_one_request(self):
                 self._t0 = time.monotonic()
                 self._req_body = b""
-                super().handle_one_request()
+                try:
+                    super().handle_one_request()
+                except BodyTooLarge as exc:
+                    self._reply(413, {"error": str(exc)})
 
             def _body(self) -> bytes:
-                n = int(self.headers.get("Content-Length") or 0)
+                # The competitor under test is what calls this, and `wb_arms.monarch`
+                # binds the shim to 0.0.0.0. An unbounded Content-Length was a request
+                # to read as much as the sender claimed. Same 8 MB the Studio's front
+                # door allows, so a body it accepts is a body this accepts.
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = -1
+                if not 0 <= n <= MAX_BODY_BYTES:
+                    self._req_body = b""
+                    raise BodyTooLarge(f"Content-Length must be 0 to {MAX_BODY_BYTES}")
                 self._req_body = self.rfile.read(n) if n else b""
                 return self._req_body
 
@@ -139,6 +158,8 @@ class EpisodeHTTPShim:
                     else:
                         out = ep.base64_encode(req["text"])
                     self._reply(200, {"result": out})
+                except BodyTooLarge:
+                    raise          # one refusal, one status, whichever path asked
                 except Exception as e:
                     self._reply(400, {"error": str(e)})
 

@@ -3,6 +3,7 @@ Validity is checked with openapi-spec-validator, the Python twin of the
 swagger-parser gate Feature Discovery runs on every spec it ingests."""
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.request
@@ -185,3 +186,18 @@ def test_fixed_port_refuses_an_active_listener():
             EpisodeHTTPShim(ep, port=listener.getsockname()[1])
     finally:
         listener.close()
+
+
+def test_a_body_larger_than_the_cap_is_refused_without_reading_it(shim):
+    """The competitor under test calls this, and wb_arms.monarch binds it to 0.0.0.0.
+    An oversized Content-Length must be refused, not read."""
+    from wb_arms.http_shim import MAX_BODY_BYTES
+    for path in ("/fetch", "/salesforce/services/data/v59.0/sobjects/Contact"):
+        connection = http.client.HTTPConnection("127.0.0.1", shim[0].port, timeout=10)
+        connection.putrequest("POST", path)
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(MAX_BODY_BYTES + 1))
+        connection.endheaders()
+        connection.send(b"{}")          # far less than it claimed; nothing waits for the rest
+        assert connection.getresponse().status == 413, path
+        connection.close()

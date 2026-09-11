@@ -102,31 +102,45 @@ class Scheduler:
                 recorder("job-incident", job=name, repeats=entry["repeats"], error=entry["error"][:200])
         return entry
 
-    def paused(self) -> bool:
+    def stopped(self) -> str | None:
+        """Why unattended work must not run now, or None.
+
+        Settings that cannot be read stop the jobs. This used to fall through to
+        running them: the dials are a spending gate, and a gate that fails open
+        because it crashed is worse than no gate, because it reads as one.
+        """
+        autonomy = getattr(getattr(self.studio, "genesis", None), "autonomy", None)
+        if autonomy is None:
+            return None   # a Studio without Genesis has nothing to pause
         try:
-            return bool(self.studio.genesis.autonomy.read()["paused"])
-        except AttributeError:
-            return False   # a Studio without Genesis has nothing to pause
+            from wb_studio.genesis_autonomy import background_wanted
+            if autonomy.read()["paused"]:
+                return "Genesis is paused; a person has to turn it back on."
+            if not background_wanted(autonomy):
+                return "The research loop is stopped; an exhausted envelope or all dials off."
+        except Exception as exc:
+            return (f"Genesis's settings could not be read ({type(exc).__name__}); "
+                    "nothing paid runs unattended until they can.")
+        return None
 
     def run_due(self, now: datetime | None = None) -> list:
-        """Every due job, unless a person has hit Pause.
+        """Every due job, unless a person has hit Pause or the dials are off.
 
         FR-003: six daily jobs reach paid model turns, and none of them read the dial.
         Gating them here rather than in each module means a job added later is paused
         too, without its author having to remember. A skipped job is not stamped, so it
         runs when the pause is lifted rather than being silently lost for the day.
         """
-        if self.paused():
-            skipped = []
-            for job in self.due(now):
-                entry = {"name": job["name"], "status": "skipped",
-                         "reason": "Genesis is paused; a person has to turn it back on."}
-                recorder = getattr(getattr(getattr(self.studio, "genesis", None), "autonomy", None), "record", None)
-                if callable(recorder):
-                    recorder("job-skipped", job=job["name"], reason=entry["reason"])
-                skipped.append(entry)
-            return skipped
-        return [self.run(j["name"], now) for j in self.due(now)]
+        reason = self.stopped()
+        if reason is None:
+            return [self.run(j["name"], now) for j in self.due(now)]
+        recorder = getattr(getattr(getattr(self.studio, "genesis", None), "autonomy", None), "record", None)
+        skipped = []
+        for job in self.due(now):
+            if callable(recorder):
+                recorder("job-skipped", job=job["name"], reason=reason)
+            skipped.append({"name": job["name"], "status": "skipped", "reason": reason})
+        return skipped
 
     def status(self) -> list:
         stamps = self._read()
