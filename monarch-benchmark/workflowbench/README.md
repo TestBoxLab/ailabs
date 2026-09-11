@@ -1,5 +1,11 @@
 # WorkflowBench — T0 (synthetic mode)
 
+Current configuration operations are documented in the
+[configuration repository guide](../../specs/013-benchmark-config-repository/quickstart.md).
+Studio supports editing committed plans under Settings > Benchmark configuration.
+The T0 material below is historical; current approval, billing and resume rules
+are defined by [AGENTS.md](../../AGENTS.md) and the current configuration guide.
+
 Working implementation of the T0 spec: world server, graph ingester, grader, pilot runner.
 Everything here runs against `zapier/AutomationBench` (MIT) as a library — pinned clone expected as a sibling install (`pip install -e ../ab`).
 

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_config import edit, site, write  # noqa: F401  (site is a fixture)
-from tests.test_run_config import MODEL_MOCK
+from tests.test_run_config import mock_model
 from wb_arms.api_loop import ApiLoopArm, InfraError
 from wb_orchestrator import config
 from wb_orchestrator.budget import BudgetLedger
@@ -172,7 +172,7 @@ def test_attempt_cap_counts_what_the_attempt_already_settled(tmp_path, mock_serv
 # -- the plan field --------------------------------------------------------------
 
 def mock_plan(site, extra="", repetitions=1, ceiling=5, competitors="  - {model: mock, harness: api}\n"):
-    write(site / "config/models", MODEL_MOCK)
+    write(site / "config/models", mock_model())
     plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
     plan = edit(plan, "baseline", "mock/api").replace("repetitions: 2", f"repetitions: {repetitions}")
     plan = plan.replace("concurrency: 4", "concurrency: 1")

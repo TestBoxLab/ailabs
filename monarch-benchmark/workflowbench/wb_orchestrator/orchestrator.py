@@ -113,6 +113,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
     h = competitor.harness
     if h.kind == "api":
         arm = ApiLoopArm(competitor.model.name, ledger=ledger, operator=operator,
+                         provider=providers.from_model(competitor.model),
                          attempt_cap_usd=run_config.plan.attempt_cap_usd if run_config else None)
         arm.provider_key = competitor.model.name
     elif h.kind == "scripted":
@@ -135,7 +136,7 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         if run_config is None:
             raise ValueError("a Monarch competitor needs the run config to build its arm")
         config_dir = Path(run_config.config_dir)
-        repo = config_mod.from_workflowbench(h.monarch_repo, config_dir)
+        repo = config_mod.from_workflowbench(h.monarch_repo, config_dir, run_config.runtime_root)
         try:
             name = monarch_version(repo, os.environ.get("MONARCH_BUILD"))
         except ValueError as e:
@@ -163,14 +164,16 @@ class Orchestrator:
     @classmethod
     def from_config(cls, store: Store, run_config: config_mod.RunConfig, out_dir: str | Path,
                     provider_concurrency: int | None = None, ledger=None,
-                    operator: str | None = None) -> "Orchestrator":
+                    operator: str | None = None, attempt_admission=None,
+                    attempt_release=None) -> "Orchestrator":
         plan = run_config.plan
         # arms=[] skips the old key validation; competitor names are set below.
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
                    provider_concurrency=provider_concurrency or plan.concurrency,
                    tasks=run_config.tasks, retry_on_fail=plan.retry_on_fail,
-                   ledger=ledger, operator=operator)
+                   ledger=ledger, operator=operator, attempt_admission=attempt_admission,
+                   attempt_release=attempt_release)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
         return self
@@ -179,7 +182,8 @@ class Orchestrator:
                  out_dir: str | Path, timeout_s: float = 600.0,
                  provider_concurrency: int = 4, stop_after: int | None = None,
                  tasks: list[dict] | None = None, retry_on_fail: int = 0,
-                 ledger=None, operator: str | None = None, grader=None):
+                 ledger=None, operator: str | None = None, grader=None,
+                 attempt_admission=None, attempt_release=None):
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
         if retry_on_fail < 0:
@@ -208,6 +212,9 @@ class Orchestrator:
         self._thread_errors: list[BaseException] = []
         self._spent = 0.0            # cumulative cost_usd, carried over on resume
         self._stop_reason: str | None = None
+        self.attempt_admission = attempt_admission
+        self.attempt_release = attempt_release
+        self._paused = threading.Event()
         # The shared weekly ledger paid arms reserve through, who launched the
         # run, and the approval record it runs under (milestone M3).
         self.ledger = ledger
@@ -231,13 +238,28 @@ class Orchestrator:
         arms = self._arms()
         self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
         self.store.create_run(run_id, self._hash(), self.suite, self._config())
+        if self.run_config and self.run_config.config_source:
+            evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
         self._execute(run_id, skip=set(), arms=arms)
         return run_id
+
+    def cancel(self) -> None:
+        """Stop scheduling and drain in-flight attempts, preserving their evidence and spend."""
+        self._stop_reason = "cancelled"
+        self._abort.set()
 
     def resume(self, run_id: str) -> str:
         run = self.store.run(run_id)
         if run is None:
             raise KeyError(f"unknown run {run_id!r}")
+        if run["stop_reason"] == "cancelled":
+            raise RunKilled(f"run {run_id} was explicitly cancelled and cannot resume")
+        recorded_config = json.loads(run["config_json"])
+        source = recorded_config.get("config_source")
+        if source and (self.run_config is None or source != self.run_config.config_source):
+            raise ConfigDrift("configuration source drift: resume requires the original repository revision and bytes")
+        if source and recorded_config["cost_ceiling_usd"] != self.run_config.plan.cost_ceiling_usd:
+            raise ConfigDrift("configuration ceiling drift: a higher ceiling requires a new committed plan and run")
         if run["config_hash"] != self._hash():
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
@@ -268,13 +290,14 @@ class Orchestrator:
 
     def _pending_retries(self, run_id: str, arm_name: str) -> list[tuple[dict, int]]:
         """Retries a resumed run still owes: a recorded attempt that failed on a
-        non-infra termination, whose retry trial was never recorded.
+        non-infra termination, whose retry trial has no final outcome.
 
         Derived from the store rather than remembered, so an interrupted run
         picks up exactly the retries it had not run yet.
         """
         if not self.retry_on_fail:
             return []
+        completed = self.store.completed_identities(run_id)
         by_task: dict[str, dict[int, dict]] = {}
         for r in self.store.episodes(run=run_id)["rows"]:
             if r["arm"] == arm_name:
@@ -285,9 +308,33 @@ class Orchestrator:
             for trial in sorted(trials):
                 row = trials[trial]
                 if (self._earns_a_retry(row["passed"], row["termination"])
-                        and self._retry_budget_left(trial) and trial + self.k not in trials):
+                        and self._retry_budget_left(trial)
+                        and (task["task"], arm_name, trial + self.k) not in completed):
                     work.append((task, trial + self.k))
         return work
+
+    def _pending_work(self, run_id: str, arm_name: str,
+                      completed: set[tuple[str, str, int]]) -> list[tuple[dict, int]]:
+        work = [(task, trial) for task in self.tasks for trial in range(self.k)
+                if (task["task"], arm_name, trial) not in completed]
+        return work + self._pending_retries(run_id, arm_name)
+
+    def pending_work(self, run_id: str, *, competitor_names: list[str]) -> dict[str, int]:
+        """Preview recorded identities without constructing or preparing provider adapters.
+
+        Callers supply the frozen result identities, including Monarch's version.
+        Conditional retries count only future failures reachable from pending work.
+        """
+        completed = self.store.completed_identities(run_id)
+        initial = retries = conditional = 0
+        for name in competitor_names:
+            for _, trial in self._pending_work(run_id, name, completed):
+                initial += trial < self.k
+                retries += trial >= self.k
+                conditional += max(0, self.retry_on_fail - trial // self.k)
+        return dict(required_initial=initial, earned_retries=retries,
+                    required_attempts=initial + retries, conditional_retries=conditional,
+                    maximum_attempts=initial + retries + conditional)
 
     def _earns_a_retry(self, passed: bool, termination: str) -> bool:
         """A failed attempt is retried unless the infrastructure was what failed:
@@ -358,10 +405,7 @@ class Orchestrator:
         arms = arms if arms is not None else self._arms()
         threads = []
         for arm in arms:
-            work = [(task, trial) for task in self.tasks for trial in range(self.k)
-                    if (task["task"], arm.name, trial) not in skip]
-            work += [(t, trial) for t, trial in self._pending_retries(run_id, arm.name)
-                     if (t["task"], arm.name, trial) not in skip]
+            work = self._pending_work(run_id, arm.name, skip)
             if not work:
                 continue
             t = threading.Thread(target=self._run_arm_group, args=(run_id, arm, work),
@@ -400,11 +444,19 @@ class Orchestrator:
                 "as infra:weekly_budget and run again on resume. When the week has room (Monday 00:00 "
                 f"America/Sao_Paulo, or an earlier hold settles), run: wb resume {run_id}")
         if self._abort.is_set():
+            if self._stop_reason == "cancelled":
+                self.store.set_stop_reason(run_id, "cancelled")
             raise RunKilled(f"run {run_id} killed after {self._recorded} episodes")
+        if self._paused.is_set() and self.pending_work(
+                run_id, competitor_names=[arm.name for arm in arms])["required_attempts"]:
+            self.store.set_stop_reason(run_id, "paused")
+            raise RunKilled(f"run {run_id} paused after {self._recorded} attempts; active attempts drained")
         self.store.finish_run(run_id)
         self.store.export_jsonl(run_id, self._run_dir(run_id) / "episodes.jsonl")
 
     def _run_arm_group(self, run_id: str, arm, work: list[tuple[dict, int]]) -> None:
+        if self._abort.is_set():
+            return
         if hasattr(arm, "prepare"):   # ponytail: hasattr check; only Monarch has one
             # A refused competitor stops the whole run before any attempt: the
             # thread body's exception is invisible to the joiner otherwise.
@@ -445,7 +497,22 @@ class Orchestrator:
         with sem:
             if self._abort.is_set():
                 return
-            earned = self._run_episode(run_id, arm, task, trial)
+            identity = (task["task"], arm.name, trial)
+            if self.attempt_admission is not None:
+                reason = self.attempt_admission(*identity)
+                if reason == "paused":
+                    self._paused.set()
+                    return
+                if reason == "cancelled":
+                    self.cancel()
+                    return
+                if reason is not None:
+                    raise ValueError(f"invalid attempt admission decision: {reason!r}")
+            try:
+                earned = self._run_episode(run_id, arm, task, trial)
+            finally:
+                if self.attempt_release is not None:
+                    self.attempt_release(*identity)
         if earned and queue is not None and self._retry_budget_left(trial):
             with self._count_lock:
                 queue.append((task, trial + self.k))

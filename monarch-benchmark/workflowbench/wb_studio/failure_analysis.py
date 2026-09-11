@@ -158,6 +158,10 @@ def analysis(studio, identity):
     planned_pairs = {(task, model) for task in settings.get("tasks", []) for model in models}
     planned = len(planned_pairs)
     unrecorded = len(planned_pairs - set(counts))
+    if settings.get("plan_semantics"):
+        from wb_studio.measures import run_measures
+        counts_report = run_measures(job, events)
+        planned, unrecorded = counts_report["planned_attempts"], counts_report["unrecorded_attempts"]
     return {"version": 1, "run": identity, "basis": "Recorded results, deterministic evaluator checks and trace events; no model review",
             "summary": {"recorded_attempts": len(attempts), "successful_attempts": len(attempts) - failed,
                         "failed_attempts": failed, "infrastructure_attempts": sum(a["infrastructure"] for a in attempts),

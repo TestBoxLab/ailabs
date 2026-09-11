@@ -9,6 +9,12 @@ the targets change. Update it in place.
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
+11 September Studio controls: configured Pause and explicit Resume implemented,
+deployed and browser verified. Git configuration integration is deployed in
+read-only snapshot mode; PAT repository access remains blocked. Historical files
+and upstream inputs are unchanged. Evidence and remaining runtime prerequisite:
+[deployment record](docs/rounds/2026-09-11-studio-run-controls.md).
+
 10 September continuation: shared harness instructions reconciled. Carlos's final
 comparability decision preserves upstream world, routes, seeds and assertions;
 only our approval-rule translation may change. Airtable/invoice limitations and

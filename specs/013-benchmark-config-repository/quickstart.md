@@ -1,0 +1,122 @@
+# Configuration repository operations and verification
+
+The approved private repository is
+https://github.com/TestBoxLab/ailabls-benchmark-config, branch `main`.
+AI Labs owns the loaders, validation rules and execution code. The associated
+repository contains concrete `config/` artifacts using the existing directory
+layout. No Git submodule or configuration redeploy is required.
+
+## Setup
+
+Configure `WB_CONFIG_REPOSITORY=TestBoxLab/ailabls-benchmark-config` and
+`WB_CONFIG_GITHUB_TOKEN` on the Studio service. The credential needs Contents
+read/write access to this repository only. Keep it in Railway variables or the
+existing gitignored WorkflowBench `.env`; never place it in configuration files.
+The default hosted cache is `$STUDIO_DATA_DIR/config-revisions`.
+`WB_CONFIG_CACHE` overrides the CLI cache. Local CLI use can also use an existing
+GitHub CLI login. The hosted service never falls back to that login.
+
+For a reviewed offline revision, set `WB_CONFIG_SNAPSHOT` to an existing source
+manifest JSON containing `repository`, `branch`, `commit` and `files` with text
+and SHA-256 hashes. This mode takes precedence over GitHub access, verifies the
+approved repository/main revision through the immutable cache, and permits
+preview and authorized execution while refusing edits. Missing or invalid
+snapshots fail without falling back to GitHub or bundled configuration.
+
+In Studio, open Settings, then Benchmark configuration. Select or create a file,
+edit its YAML, validate, inspect the diff, enter your name and a commit message,
+then save to main. Multiple edits form one commit. A conflicting main revision
+keeps the draft for explicit comparison; no forced update overwrites another save.
+Saving never launches a run. Select the saved product and plan, preview attempts,
+cost ceiling and readiness, then use the separate launch control when authorized.
+
+From `monarch-benchmark/workflowbench`, use `uv run wb preview --product
+simulated-apps --plan check-infrastructure --revision <full-commit>` for a free
+preview. Configured execution uses the same resolver and orchestrator in CLI and
+Studio. Existing ad hoc Studio comparisons remain separate. Use `--local-config`
+for an explicitly local CLI plan; a configured remote source never silently falls
+back to bundled files.
+
+Each configured run retains the full source revision and resolved configuration.
+Resume uses that original source even after cache deletion. A changed budget
+ceiling needs a new committed plan and a new run. Configured Studio runs support
+graceful cancel, not pause; repeat them from the saved-plan selector in Settings.
+Approval, verified billing, budget and task-freeze checks still gate launch.
+
+## Migration evidence
+
+All 41 original configuration artifacts were verified byte for byte against
+remote commit `c32d16d1d76f9b7ea6409f25acb59ddfa36614a7`. The repository's
+`migration.json` records their SHA-256 hashes; `.gitattributes` preserves those
+bytes. Original bundled configurations remain available for historical/local use.
+No AutomationBench tasks, assertions, seeds or vendor code changed.
+
+Four existing missing-harness references in two achievable-50 plans remain
+visible warnings when those files are untouched. Editing an invalid file requires
+fixing it; selecting an invalid plan still blocks launch. Migration does not
+silently repair benchmark artifacts.
+
+## Verification evidence
+
+- Existing configuration baseline: 115 passed.
+- Repository, Studio integration, execution, Studio regressions and CSP group:
+  104 passed in 37.46 seconds, including the final persisted billing-shape regression.
+- Runtime agent groups: 124 configuration/resolution checks; 117 run/approval/
+  dispatch/guard checks; 26 competitor/budget checks passed. Groups overlap.
+- Browser fixture exercises editing, multi-file commits, conflicts, outages,
+  preview gates, immutable launch payloads, operator changes and run controls.
+  Desktop and 390-pixel views were inspected. Auxiliary knowledge files remain
+  editable but are excluded from product choices.
+- Independent review reproduced a billing aggregation issue using numeric cost
+  plus unknown-billing flags. The repaired aggregation retains unknown totals for `None`, `billing=unknown`
+  and `cost_missing`; regression tests preserve real numeric subtotals.
+
+No paid competitor calls belong to this feature verification. The complete test
+set has not been run for this feature. Real local-browser save created commit
+`cecb7e4f8291e02a43082fe8d67e9420b07347f4`, changing only config/README.md
+(+7 lines), with exactly one save request and no run request.
+
+Hosted code deployment is verified; repository access remains blocked. The Railway token is present and was
+copied into the original checkout's existing gitignored WorkflowBench `.env`.
+It authenticates against GitHub (HTTP 200 for the user endpoint), but access to
+the private configuration repository currently returns HTTP 404. Carlos was asked
+to check repository selection and organization approval; no broader credential
+was substituted into the hosted service.
+
+Graphify AST refresh completed: 17,197 nodes, 43,036 edges, 412 communities.
+Deployment source: clean commit `9bd2f2c`. Railway deployment
+`723fa1c7-a747-44c8-be34-4d4a39842aa9` reached SUCCESS; image digest
+`sha256:189a54f061cfa8edd1e877ae5162889622f4bd17b15c6964675e235346fbad49`.
+The authenticated hosted browser renders Settings > Benchmark configuration and
+reports the repository HTTP 404 accurately. Existing job listing was checked
+before deployment: 11 jobs and no active job. No benchmark run was launched.
+
+The local browser verified a saved-plan preview using Carlos as operator; missing
+provider credentials correctly blocked launch. Desktop and mobile screenshots
+were inspected. The local test server was stopped after verification.
+
+The AI Labs implementation is committed locally on `ailabs/config-repository`;
+it has not been pushed to AI Labs GitHub. Configuration repository commits are
+published to main as explicitly authorized. Hosted browse/save/preview completion
+still requires the restricted token to access the private repository.
+
+## Integration with the latest AI Labs main
+
+Remote main advanced to `08b7a399b6fde0be2edfdf1c415ac59abb5808a4` while this
+feature was being implemented. It adds recorded-attempt narratives, reasoning
+evidence and the hosted Genesis CLI installation. It was merged without conflicts
+into `ailabs/config-repository` at `3e63186`, preserving those changes.
+The combined configuration/Studio/narrative/reasoning/streaming regression group
+passed: 136 tests in 46.41 seconds. Both README entry points now link this guide,
+and `.env.example` documents the optional repository settings without enabling
+remote mode by default. No tasks or concrete bundled configuration changed.
+
+The merged browser fixture passed all configuration flows at desktop and mobile
+sizes. Deployment `e192c71e-21a9-4f8c-9d9a-7f4642b9a971` from clean source
+`3e63186` reached SUCCESS, superseding deployment `723fa1c7` above. Image digest:
+`sha256:dcdd18e87033125c03470989c8efac70171b7e8fe4ab22f3cf051dbc4df8c2ab`.
+Authenticated HTTP reads confirmed exact SHA-256 agreement between the deployed
+`benchmark-config.js`, `reports.js`, `app.js` and this merged source. The hosted
+Settings page loaded without JavaScript errors and continued to report GitHub's
+HTTP 404 for repository access. Carlos is arranging the token permission; no
+bypass or broader hosted credential was used. No paid benchmark was launched.

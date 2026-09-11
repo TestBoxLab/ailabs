@@ -1,5 +1,5 @@
 'use strict';
-function runStatus(value){return value.pause_requested&&["queued","running"].includes(value.status)?(value.active_attempts?"pausing":"paused"):value.status;}
+function runStatus(value){return !(value.config_source||value.settings?.plan_semantics)&&value.pause_requested&&["queued","running"].includes(value.status)?(value.active_attempts?"pausing":"paused"):value.status;}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const knownNumber=n=>n!==null&&n!==undefined&&n!==''&&Number.isFinite(Number(n));
@@ -136,7 +136,24 @@ function renderJobs() {
   $$('[data-job]').forEach(b=>b.onclick=()=>openJob(b.dataset.job));
   if(focusId)$$('[data-job]').find(b=>b.dataset.job===focusId)?.focus({preventScroll:true});
 }
-function syncJob(value){job=value;const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;renderJobs();$('#comparison-title').textContent=job.title;if(!$('.workspace').classList.contains('hidden'))document.title='AI Labs — '+job.title;$('#run-again').classList.toggle('hidden',!['completed','failed','cancelled','interrupted'].includes(job.status));$('#run-details').classList.remove('hidden');$('#comparison-meta').innerHTML=runFacts(job);const paused=job.pause_requested&&['queued','running'].includes(job.status);$('#job-status').textContent=paused?(job.active_attempts?'Pausing…':'Paused'):job.status;$('#pause-run').classList.toggle('hidden',paused||!['queued','running'].includes(job.status));$('#resume-run').classList.toggle('hidden',!paused);$('#pause-run').disabled=false;$('#resume-run').disabled=false;$('#job-status').className='status '+job.status;$('#cancel-run').classList.toggle('hidden',!['queued','running','cancelling'].includes(job.status));$('#cancel-run').disabled=job.status==='cancelling';$('#result-count').textContent=job.results.length;$('#stream-note').textContent=runStatus(job)==='paused'?'Paused':['queued','running','cancelling'].includes(job.status)?'Live updates':'Recorded execution';const controlNote=paused?(job.active_attempts?'Pausing after active tasks finish. No new tasks will start.':'Paused. Resume to continue the remaining tasks.'):job.status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':'';$('#run-message').textContent=controlNote||job.error||'';$('#run-message').classList.toggle('hidden',!controlNote&&!job.error)}
+function syncJob(value){
+  job=value;const configured=!!(job.config_source||job.settings?.plan_semantics),status=runStatus(job);
+  const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;
+  renderJobs();$('#comparison-title').textContent=job.title;
+  if(!$('.workspace').classList.contains('hidden'))document.title='AI Labs — '+job.title;
+  $('#run-again').classList.toggle('hidden',configured||!['completed','failed','cancelled','interrupted'].includes(job.status));
+  $('#run-details').classList.remove('hidden');$('#comparison-meta').innerHTML=runFacts(job);
+  const paused=status==='paused',pausing=status==='pausing',recoverable=configured&&['paused','interrupted','failed'].includes(status);
+  $('#job-status').textContent=pausing?'Pausing…':human(status);$('#job-status').className='status '+status;
+  $('#pause-run').classList.toggle('hidden',!['queued','running'].includes(status));
+  $('#resume-run').classList.toggle('hidden',configured?!recoverable:!paused);
+  $('#pause-run').disabled=false;$('#resume-run').disabled=false;
+  $('#cancel-run').classList.toggle('hidden',!['queued','running','pausing','paused','cancelling'].includes(status));
+  $('#cancel-run').disabled=status==='cancelling';$('#result-count').textContent=job.results.length;
+  $('#stream-note').textContent=paused?'Paused':['queued','running','pausing','cancelling'].includes(status)?'Live updates':'Recorded execution';
+  const controlNote=pausing?'Pausing after active attempts finish. No new attempts will start.':paused?'Paused. Resume to review and continue the remaining attempts.':status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':recoverable?'Review remaining attempts and spending before resuming this run.':configured&&['completed','cancelled'].includes(status)?'To run this configured plan again, open Settings and preview its saved product and plan.':'';
+  $('#run-message').textContent=[controlNote,job.error].filter(Boolean).join(' ');$('#run-message').classList.toggle('hidden',!controlNote&&!job.error);
+}
 function runFacts(j){
   const started=j.created_at?new Date(j.created_at):null,ended=j.finished_at?new Date(j.finished_at):null;
   const duration=started&&ended?((ended-started)/1000<90?Math.round((ended-started)/1000)+'s':Math.round((ended-started)/60000)+' min'):['queued','running','cancelling'].includes(j.status)?'running':'';
@@ -172,8 +189,9 @@ async function openJob(id) {
       try { event=JSON.parse(e.data); } catch { setConnection('Unreadable update','error'); return; }
       if(seenEvents.has(event.id))return;
       seenEvents.add(event.id); events.push(event);
-      if(event.type==='run_control') {job.pause_requested=event.pause_requested;job.active_attempts=event.active_attempts;job.status=event.status;syncJob(job);}
-      else if(event.type==='finished') { syncJob(event.job); api('/api/budget').then(budget).catch(()=>{}); source.close(); queueReportRefresh(id,sequence); }
+      if(event.type==='run_control') {if(job.resumed_at&&Date.parse(event.at)<Date.parse(job.resumed_at))return;if(event.resumed_at)job.resumed_at=event.resumed_at;job.pause_requested=event.pause_requested;job.active_attempts=event.active_attempts;job.status=event.status;syncJob(job);}
+      else if(event.type==='finished') { if(job.resumed_at&&Date.parse(event.job.finished_at)<Date.parse(job.resumed_at))return; syncJob(event.job); api('/api/budget').then(budget).catch(()=>{}); source.close(); queueReportRefresh(id,sequence); }
+      else if(event.type==='result'&&(job.config_source||job.settings?.plan_semantics))queueReportRefresh(id,sequence);
       else if(event.type==='attempt_finished') {
         if(!job.results.some(r=>r.task===event.task&&r.model===event.model)) {job.results.push(event);job.completed++;syncJob(job);}
         queueReportRefresh(id,sequence);
@@ -199,8 +217,10 @@ function queueReportRefresh(id,sequence) {
 async function refreshReport(id,sequence) {
   const revision=++reportSequence;
   try {
-    const next=await api('/api/jobs/'+id+'/report');
+    const configured=job?.id===id&&(job.config_source||job.settings?.plan_semantics);
+    const [next,current]=await Promise.all([api('/api/jobs/'+id+'/report'),configured?api('/api/jobs/'+id):null]);
     if(sequence!==openSequence||revision!==reportSequence)return;
+    if(current){syncJob(current);scheduleEventRender();}
     report=next; renderReport();
   } catch(error) {if(sequence===openSequence)toast('Findings could not refresh. '+error.message);}
 }
@@ -601,11 +621,41 @@ $('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('
   try {await navigator.clipboard.writeText(outputMode==='output'?(typeof selected.output==='string'?selected.output:JSON.stringify(selected.output??null,null,2)):$('#output').innerText);toast(outputMode==='output'?'Output copied':'Copied the '+outputMode+' tab as text');}
   catch {toast('Clipboard access is unavailable. Select and copy the text in the evidence panel.');}
 };
+let resumeReview=null,resumeReviewSequence=0;
+async function reviewResume(id){
+  const sequence=++resumeReviewSequence;
+  resumeReview=null;$('#resume-summary').textContent='Loading remaining work and spending…';$('#resume-error').textContent='';$('#resume-confirm').disabled=true;
+  $('#resume-dialog').showModal();
+  try{
+    const preview=await api('/api/jobs/'+id+'/resume-preview');
+    if(sequence!==resumeReviewSequence||!$('#resume-dialog').open||job?.id!==id)return;
+    const rows=[['Initial attempts remaining',preview.required_initial],['Earned retries',preview.earned_retries],['Required attempts',preview.required_attempts],['Possible conditional retries',preview.conditional_retries],['Maximum remaining attempts',preview.maximum_attempts],['Known spending',money(preview.known_cost_usd)],['Unresolved charges',money(preview.unresolved_usd)],['Reserved spending',money(preview.reserved_usd)],['Remaining original ceiling',money(preview.remaining_ceiling_usd)],['Frozen configuration revision',preview.config_commit||'Local configuration']];
+    $('#resume-summary').innerHTML='<dl>'+rows.map(([label,value])=>'<div><dt>'+esc(label)+'</dt><dd>'+esc(value??'Not available')+'</dd></div>').join('')+'</dl>';
+    $('#resume-error').textContent=(preview.reasons||[]).join(' ');
+    if(preview.resumable&&preview.preview_id){resumeReview={id,preview_id:preview.preview_id};$('#resume-confirm').disabled=false;}
+  }catch(error){if(sequence===resumeReviewSequence&&$('#resume-dialog').open)$('#resume-error').textContent=error.message;}
+}
+$('#resume-cancel').onclick=()=>$('#resume-dialog').close();
+$('#resume-dialog').addEventListener('close',()=>{resumeReview=null;resumeReviewSequence++;});
+$('#resume-form').onsubmit=async e=>{
+  e.preventDefault();if(!resumeReview||$('#resume-confirm').disabled)return;
+  const reviewed=resumeReview;resumeReview=null;$('#resume-confirm').disabled=true;$('#resume-error').textContent='';
+  try{
+    const next=await api('/api/jobs/'+reviewed.id+'/resume',{preview_id:reviewed.preview_id});
+    $('#resume-dialog').close();
+    if(job?.id===reviewed.id){syncJob(next);await openJob(reviewed.id);}
+  }catch(error){$('#resume-error').textContent=error.message+' Close this review and check the run before requesting a new preview.';}
+};
 for(const action of ['pause','resume'])$('#'+action+'-run').onclick=async()=>{
   if(!job||$('#'+action+'-run').disabled)return;
-  const id=job.id;$('#pause-run').disabled=true;$('#resume-run').disabled=true;
-  try{const next=await api('/api/jobs/'+id+'/'+action,{});if(job?.id===id)syncJob(next);}
-  catch(error){toast(error.message);if(job?.id===id)syncJob(job);}
+  const id=job.id,configured=!!(job.config_source||job.settings?.plan_semantics);
+  $('#pause-run').disabled=true;$('#resume-run').disabled=true;
+  try{
+    if(action==='resume'&&configured){await reviewResume(id);return;}
+    const next=await api('/api/jobs/'+id+'/'+action,{});
+    if(job?.id===id){syncJob(next);if(action==='resume')await openJob(id);}
+  }catch(error){toast(error.message);}
+  finally{if(job?.id===id)syncJob(job);}
 };
 $('#cancel-run').onclick=async()=>{
   if(!job||$('#cancel-run').disabled)return;
@@ -939,7 +989,7 @@ function reviewRule(){const tasks=selectedTasks.size,arms=armCount(),amount=Numb
   return week+'the ceiling '+money(amount)+' is reserved before the first request and settled from receipts. '+(tasks>20?'Above smoke scale: a launch by anyone but Lucas creates an approval request and waits.':'Smoke scale: it runs at once, no approval record needed.');}
 
 // ---- Feature 021: Run again opens New run with this run's tasks and setups (Postman's "Run Again", GitHub's re-run) ----
-function runAgain(job){const s=job.settings||{};const arms=s.arms||[];
+function runAgain(job){if(job.config_source||job.settings?.plan_semantics)return toast('Open Settings and preview the saved product and plan to run it again.');const s=job.settings||{};const arms=s.arms||[];
   const draft={includeBare:arms.some(a=>a.kind==='bare'),tasks:s.tasks||[],models:(s.models||[]).filter(id=>!String(id).startsWith('blueprint.')&&id!=='default-monarch-enterprise'),architectures:s.architectures||[],
     fields:{'run-track':s.track||'agentic-request','run-title':'','run-budget':s.maximum_usd||'1','run-concurrency':String(s.concurrency||1),'task-set':'custom','architecture-choice':(s.architectures||[])[0]||'without-monarch'}};
   try{localStorage.setItem('ailabs-run-draft',JSON.stringify(draft));}catch{}

@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from wb_world.episode import Episode
-from wb_world.openapi import build_spec, load_schemas
+from wb_world.openapi import build_spec, load_schemas, world_url
 
 
 # How much of a request and a response body one log line keeps.
@@ -150,8 +150,7 @@ class EpisodeHTTPShim:
                     self._reply(404, {"error": f"unknown service {svc!r}"})
                     return
                 rest = parts[1] if len(parts) > 1 else ""
-                base = outer.schemas[svc].get("baseUrl", "").rstrip("/")
-                url = f"{base}/{rest}"
+                url = world_url(svc, rest, outer.schemas)
                 # Single-valued query params, like every AB router expects.
                 params = {k: v[-1] for k, v in parse_qs(sp.query, keep_blank_values=True).items()}
                 raw = self._body()
