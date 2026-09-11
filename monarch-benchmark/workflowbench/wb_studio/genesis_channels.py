@@ -136,7 +136,8 @@ def digest(genesis, week) -> dict:
         track = [l for l in (genesis.memory.root / 'TRACK.md').read_text(encoding='utf8').splitlines() if l.startswith('Calibration')]
     except OSError:
         track = []
-    gates = {'reviews': {}, 'questions': 0, 'answers': 0, 'defaults_taken': 0, 'launches': 0, 'held': 0, 'refused_turns': 0}
+    gates = {'reviews': {}, 'questions': 0, 'answers': 0, 'defaults_taken': 0, 'launches': 0, 'held': 0,
+             'refused_turns': 0, 'opened': 0}
     defaults = {c['id']: c.get('default') for c in cards if c.get('kind') == 'question'}
     for e in genesis.autonomy.tail(2000):
         if not inside(e.get('at')):
@@ -156,6 +157,8 @@ def digest(genesis, week) -> dict:
             gates['held'] += 1
         elif kind == 'refused':
             gates['refused_turns'] += 1
+        elif kind == 'initiative':
+            gates['opened'] += 1  # cards Genesis opened for itself
     return {'week': week, 'from': start, 'to': end, 'gates': gates,
             'ran': [{'id': j['id'], 'title': j.get('title') or j['id'], 'status': j.get('status')} for j in jobs][:20],
             'done': [{'id': c['id'], 'title': c['title'], 'tag': '[rec:card:' + c['id'] + ']'} for c in done][:20],

@@ -199,10 +199,12 @@ def test_the_digest_counts_what_the_gates_did(genesis):
     q = genesis.card({'title': 'Which set?', 'body': 'q', 'kind': 'question', 'stage': 'approval', 'question': 'Which set?', 'default': 'tier-simple'})
     genesis.autonomy.record('question', card=q['id'])
     genesis.autonomy.record('answer', card=q['id'], answer='tier-simple')
+    genesis.autonomy.record('initiative', card='c4', rule='unsettled-hypothesis')
     from wb_studio.library import now_sao_paulo
     week = now_sao_paulo().strftime('%G-W%V')
     gates = genesis_channels.digest(genesis, week)['gates']
-    assert gates == {'reviews': {'accept': 1, 'revise': 1}, 'questions': 1, 'answers': 1, 'defaults_taken': 1, 'launches': 1, 'held': 1, 'refused_turns': 0}
+    assert gates == {'reviews': {'accept': 1, 'revise': 1}, 'questions': 1, 'answers': 1, 'defaults_taken': 1,
+                     'launches': 1, 'held': 1, 'refused_turns': 0, 'opened': 1}
 
 
 def test_the_meta_review_names_the_weeks_most_flagged_issues(genesis):

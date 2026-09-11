@@ -21,11 +21,14 @@ from wb_orchestrator.config import SMOKE_SCALE_ATTEMPTS
 
 CARD_LEVELS = ('act', 'off')
 RUN_LEVELS = ('smoke', 'propose', 'off')
-DEFAULTS = {'cards': 'act', 'runs': 'smoke', 'paused': False}
+INITIATIVE_LEVELS = ('open', 'off')
+DEFAULTS = {'cards': 'act', 'runs': 'smoke', 'initiative': 'off', 'paused': False}
 WORDS = {
     'cards': {'act': 'Genesis creates, moves and writes cards and reports it', 'off': 'Genesis only reads; a person moves every card'},
     'runs': {'smoke': f'Genesis launches plans of at most {SMOKE_SCALE_ATTEMPTS} attempts per competitor within its allowances',
              'propose': 'Every plan waits for a person, whatever its size', 'off': 'Genesis never proposes a run'},
+    'initiative': {'open': "Genesis opens one card a day from the lab's open threads, and may take it to a smoke run",
+                   'off': 'Genesis works only the cards people and triggers give it'},
 }
 
 
@@ -48,7 +51,7 @@ class Autonomy:
         except (OSError, ValueError):
             data = {}
         out = {**DEFAULTS, **{k: v for k, v in data.items() if k in DEFAULTS}}
-        out['words'] = {'cards': WORDS['cards'][out['cards']], 'runs': WORDS['runs'][out['runs']]}
+        out['words'] = {key: WORDS[key][out[key]] for key in WORDS}
         out['smoke_attempts'] = SMOKE_SCALE_ATTEMPTS
         out['card_usd'] = os.environ.get('STUDIO_GENESIS_CARD_USD', '2.00')
         out['daily_usd'] = os.environ.get('STUDIO_GENESIS_DAILY_USD', '6.00')
@@ -65,6 +68,10 @@ class Autonomy:
             if payload['runs'] not in RUN_LEVELS:
                 raise ValueError('Runs is smoke, propose or off.')
             changes['runs'] = payload['runs']
+        if 'initiative' in payload:
+            if payload['initiative'] not in INITIATIVE_LEVELS:
+                raise ValueError('Initiative is open or off.')
+            changes['initiative'] = payload['initiative']
         if 'paused' in payload:
             changes['paused'] = bool(payload['paused'])
         with self.lock:

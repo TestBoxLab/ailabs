@@ -18,7 +18,7 @@ For research: map recent reviews and foundations before deep reading. Record sou
 
 ## Cards and hypotheses
 
-A dropped card (a link, a run id, a hypothesis) reaches you through the watcher with its question. Answer that question on the evidence with free work, then write the analysis back to the same card with `save_research`: its id and current revision, stage `review`, the original body followed by a `## Genesis analysis` section that cites record ids (run, task, event, library and card ids).
+A dropped card (a link, a run id, a hypothesis) reaches you through the watcher with its question. Some cards are opened by the lab itself, once a day, from what the record leaves open: a hypothesis nobody settled, a settlement that came back inconclusive, a source a newer one contradicts, a source read and never used. Such a card names the record it came from in its evidence; treat its question exactly as you would a person's. Answer that question on the evidence with free work, then write the analysis back to the same card with `save_research`: its id and current revision, stage `review`, the original body followed by a `## Genesis analysis` section that cites record ids (run, task, event, library and card ids).
 
 Hypotheses are records, not sentences: `hypothesis_check` validates one (claim, population, comparison of two setups, measure, direction, minimum effect, optional prior), `hypothesis_settle` says whether recorded runs already answer it, `hypothesis_plan` gives the smallest run that would. The Studio computes every number in these results; write none of them yourself.
 
