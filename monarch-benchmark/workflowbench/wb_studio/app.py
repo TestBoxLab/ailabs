@@ -788,6 +788,10 @@ class Studio:
                                 row = next(r for r in store.episodes(run=identity)["rows"] if r["task_id"] == task_id and r["arm"] == arm["id"])
                                 result = {"task": task_id, "model": arm["id"], "passed": row["passed"], "termination": row["termination"],
                                           "error": row["error"], "cost_usd": row["cost_usd"], "tokens": row["tokens"],
+                                          # `run` is the whole attempt; `authoring` and `execution` sit beside it
+                                          # and are what the break-even curve is computed from (FR-024, FR-025).
+                                          # Dropped until 11 September, which put the split out of the Studio's reach.
+                                          "phases": row["phases"],
                                           "seconds": row["phases"]["run"]["wall_clock_s"], "tool_calls": row["tool_calls"],
                                           "checks": row["check_results"] + [{"type": "allowed_changes_only", "passed": row["invariant_passed"]}],
                                           "unexpected_changes": row["unexpected_changes"], "flags": row["flags"], "output": live.output}

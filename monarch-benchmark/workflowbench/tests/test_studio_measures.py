@@ -6,11 +6,31 @@ import pytest
 from wb_studio import measures
 
 
-def result(task, model, passed, *, termination="completed", cost=0.10, checks=None, changes=(), flags=(), output="Done.", tokens=None, seconds=1.0, tool_calls=2):
-    return {"task": task, "model": model, "passed": passed, "termination": termination, "cost_usd": cost,
-            "checks": checks if checks is not None else [{"type": "field_equals", "passed": passed}, {"type": "allowed_changes_only", "passed": not changes}],
-            "unexpected_changes": list(changes), "flags": list(flags), "output": output,
-            "tokens": tokens or {"prompt": 100, "cached": 40, "cache_write": 10, "output": 20}, "seconds": seconds, "tool_calls": tool_calls}
+def result(task, model, passed, *, termination="completed", cost=0.10, checks=None, changes=(), flags=(), output="Done.", tokens=None, seconds=1.0, tool_calls=2, phases=None):
+    row = {"task": task, "model": model, "passed": passed, "termination": termination, "cost_usd": cost,
+           "checks": checks if checks is not None else [{"type": "field_equals", "passed": passed}, {"type": "allowed_changes_only", "passed": not changes}],
+           "unexpected_changes": list(changes), "flags": list(flags), "output": output,
+           "tokens": tokens or {"prompt": 100, "cached": 40, "cache_write": 10, "output": 20}, "seconds": seconds, "tool_calls": tool_calls}
+    if phases is not None:
+        row["phases"] = phases
+    return row
+
+
+def split(authoring_usd, execution_usd, total=None, *, authoring_s=None, execution_s=None, seconds=1.0, extra=None):
+    """A stored `phases` dict shaped as the orchestrator writes one.
+
+    `run` is always present and is the WHOLE attempt, never a part: the orchestrator
+    composes `{**arm_phases, "run": ...}` at orchestrator.py:655. `model:<family>` keys
+    are the same money cut by model and must never be summed with the phases.
+    """
+    total = sum(c for c in (authoring_usd, execution_usd) if c is not None) if total is None else total
+    out = {"run": {"cost_usd": total, "wall_clock_s": seconds, "turns": 1, "tool_calls": 2}}
+    if authoring_usd is not None or authoring_s is not None:
+        out["authoring"] = {"cost_usd": authoring_usd, "wall_clock_s": authoring_s}
+    if execution_usd is not None or execution_s is not None:
+        out["execution"] = {"cost_usd": execution_usd, "wall_clock_s": execution_s}
+    out.update(extra or {})
+    return out
 
 
 def job(results, arms):
@@ -70,6 +90,80 @@ def test_cost_stays_unknown_when_any_attempt_lacks_billing():
     known = measures.cost([result("t1", "a", True, cost=0.5), result("t2", "a", False, cost=0.25)])
     assert known["total"] == 0.75 and known["per_attempt"] == 0.375 and known["per_pass"] == 0.75
     assert known["tokens"] == {"prompt": 200, "cached": 80, "cache_write": 20, "output": 40, "uncached": 120}
+
+
+def test_cost_by_phase_splits_a_monarch_attempt_and_reconciles_with_the_total():
+    """FR-024. Configure once, execute many: the split is the fitness function's input."""
+    rows = [result("t1", "monarch", True, cost=0.30, phases=split(0.20, 0.10)),
+            result("t2", "monarch", True, cost=0.50, phases=split(0.35, 0.15))]
+    out = measures.cost_by_phase(rows)
+    assert out["phases"]["authoring"] == pytest.approx(0.55)
+    assert out["phases"]["execution"] == pytest.approx(0.25)
+    assert out["total"] == pytest.approx(0.80)
+    assert out["reconciles"] is True and out["unattributed"] == pytest.approx(0.0)
+    # `run` is the whole attempt and `model:*` is the same money by model. Summing
+    # either with the phases doubles or triples the round's cost.
+    assert "run" not in out["phases"] and not [k for k in out["phases"] if k.startswith("model:")]
+
+
+def test_cost_by_phase_keeps_money_it_cannot_attribute_rather_than_dropping_it():
+    """A phase the price table reached but `phases` never carried is still spend."""
+    rows = [result("t1", "monarch", True, cost=0.30,
+                   phases=split(0.20, 0.05, total=0.30, extra={"model:opus": {"cost_usd": 0.30}}))]
+    out = measures.cost_by_phase(rows)
+    assert out["phases"]["unattributed"] == pytest.approx(0.05)
+    # The money is kept and named, and `reconciles` is how a reader learns it was needed.
+    assert out["reconciles"] is False
+    assert sum(out["phases"].values()) == pytest.approx(out["total"])
+
+
+def test_a_competitor_with_no_authoring_phase_is_not_applicable_not_zero():
+    """FR-024. A bare model never configures anything; that is not a cost of zero."""
+    bare = result("t1", "gemini-bare", True, cost=0.10, phases=split(None, None, total=0.10))
+    assert measures.is_not_applicable(measures.phase_cost(bare, "authoring"))
+    assert measures.phase_cost(bare, "run") == pytest.approx(0.10)
+    out = measures.cost_by_phase([bare])
+    assert "authoring" not in out["phases"] and "authoring" in out["not_applicable"]
+
+
+def test_an_unreadable_phase_cost_stays_unknown_and_never_becomes_zero():
+    """FR-026. Unknown holds its reservation; zero would settle it."""
+    # A Monarch attempt whose Langfuse read failed still carries both phase keys:
+    # monarch.py records them in a `finally` with their clocks, and only the cost is None.
+    blind = result("t1", "monarch", True, cost=0.30, flags=["cost_missing"],
+                   phases=split(None, None, total=None, authoring_s=2.0, execution_s=1.0))
+    assert measures.is_unknown(measures.phase_cost(blind, "authoring"))
+    ran = result("t2", "monarch", True, cost=0.30, phases=split(None, 0.10, total=0.30,
+                                                               authoring_s=4.0))
+    # The phase ran — it has a clock — but nobody could price it.
+    assert measures.is_unknown(measures.phase_cost(ran, "authoring"))
+    out = measures.cost_by_phase([blind, ran])
+    assert out["total"] is None and out["unknown_attempts"] == 2
+    assert out["phases"] == {}
+
+
+def test_time_by_phase_reconciles_with_the_attempt_clock():
+    """FR-025. Time splits at the same boundary as cost, from the clocks already recorded."""
+    rows = [result("t1", "monarch", True, seconds=10.0,
+                   phases=split(0.2, 0.1, authoring_s=6.0, execution_s=4.0, seconds=10.0))]
+    out = measures.time_by_phase(rows)
+    assert out["configure_s"] == pytest.approx(6.0) and out["execute_s"] == pytest.approx(4.0)
+    assert out["total_s"] == pytest.approx(10.0) and out["reconciles"] is True
+    slow = [result("t1", "monarch", True, seconds=10.0,
+                   phases=split(0.2, 0.1, authoring_s=6.0, execution_s=1.0, seconds=10.0))]
+    # Three seconds unaccounted for is past the one-second tolerance and says so.
+    assert measures.time_by_phase(slow)["reconciles"] is False
+
+
+def test_cost_per_pass_says_no_passes_rather_than_unknown():
+    """FR-028. A competitor that never passed has no cost per pass; that is not unknown."""
+    failed = [result("t1", "a", False, cost=0.5), result("t2", "a", False, cost=0.5)]
+    out = measures.cost_per_pass(failed)
+    assert out is measures.NO_PASSES and not measures.is_unknown(out)
+    assert measures.cost_per_pass([result("t1", "a", True, cost=0.5),
+                                   result("t2", "a", False, cost=0.5)]) == pytest.approx(1.0)
+    blind = [result("t1", "a", True, cost=0.5, flags=["billing=unknown"])]
+    assert measures.is_unknown(measures.cost_per_pass(blind))
 
 
 def test_turns_count_model_finished_events_per_attempt():

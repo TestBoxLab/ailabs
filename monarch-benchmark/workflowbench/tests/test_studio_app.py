@@ -242,6 +242,13 @@ def test_fake_api_control_streams_tool_output_and_final_text_with_usage(studio, 
     assert result["cost_usd"] == pytest.approx(.02)
     assert result["tool_calls"] == 1
     assert result["passed"] is False  # Prose and a harmless tool call do not complete the business task.
+    # FR-024/FR-025: the phase block reaches the Studio, which is the only input
+    # `measures` ever gets. A bare model records `run` and nothing else — so its
+    # authoring cost is not applicable rather than zero, and the split says so.
+    assert set(result["phases"]) == {"run"}
+    assert result["seconds"] == result["phases"]["run"]["wall_clock_s"]
+    from wb_studio import measures
+    assert measures.is_not_applicable(measures.phase_cost(result, "authoring"))
     assert len(requests) == 2
     assert requests[0]["bounds"]["scope_id"] == job["id"]
     assert requests[0]["bounds"]["scope_limit_usd"] == "2.00"

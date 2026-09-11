@@ -260,6 +260,61 @@ def test_wall_clock_is_the_phase_sum(four_arm_store, phase_store):
     assert nothing["n_with"] == 0 and nothing["n_total"] == 1
 
 
+def test_attempt_seconds_does_not_add_the_run_phase_to_its_own_parts():
+    """A real Monarch row carries `run` AND the phases it is made of (FR-025).
+
+    The orchestrator composes `{**arm_phases, "run": ...}` (orchestrator.py:655), so
+    every stored row has a `run` phase that is the whole attempt. Summing it with
+    `authoring` and `execution` reports roughly double the true duration — and the
+    "faster than a harness" claim is read straight off this number. The fixtures above
+    never caught it because none of them carries `run` beside real phases.
+    """
+    from runner.schema import PhaseMetrics
+
+    from wb_report.metrics import attempt_seconds
+
+    real = _row("t1", "monarch", 0, True, phases={
+        "run": PhaseMetrics(turns=1, wall_clock_s=100.0, cost_usd=0.30),
+        "authoring": PhaseMetrics(turns=2, wall_clock_s=60.0, cost_usd=0.20),
+        "execution": PhaseMetrics(wall_clock_s=40.0, cost_usd=0.10),
+        # The same money cut by model. It carries no clock, so it never reached the
+        # sum — but it must stay excluded by name, not by luck.
+        "model:opus": PhaseMetrics(cost_usd=0.30, wall_clock_s=None),
+    }).model_dump()
+    assert attempt_seconds(real) == pytest.approx(100.0)
+
+
+def test_a_phase_nobody_could_price_is_unknown_and_not_zero():
+    """FR-026. `PhaseMetrics.cost_usd` is already None when unpriced; the reader lost it.
+
+    An attempt whose Langfuse read failed holds its full ceiling against the week
+    rather than settling — up to US$ 25.00 apiece. Rendering that phase as US$ 0.00
+    tells a reader the round was cheap while the ledger is still holding the money.
+    """
+    from runner.schema import PhaseMetrics
+
+    from wb_report.metrics import _phase_block
+
+    blind = _row("t1", "monarch", 0, True, phases={
+        "run": PhaseMetrics(wall_clock_s=100.0, cost_usd=None),
+        "authoring": PhaseMetrics(wall_clock_s=60.0, cost_usd=None),
+        "execution": PhaseMetrics(wall_clock_s=40.0, cost_usd=0.10),
+    }).model_dump()
+    phases, _ = _phase_block([blind])
+    assert phases["authoring"]["cost_usd"] is None
+    assert phases["authoring"]["cost_unknown"] == 1
+    # The phase that WAS priced keeps its number; one blind phase does not blind the row.
+    assert phases["execution"]["cost_usd"] == pytest.approx(0.10)
+    assert phases["execution"]["cost_unknown"] == 0
+    # A genuine zero stays zero — it is a reading, not a gap.
+    free = _row("t2", "monarch", 0, True, phases={
+        "run": PhaseMetrics(wall_clock_s=1.0, cost_usd=0.0),
+        "authoring": PhaseMetrics(wall_clock_s=1.0, cost_usd=0.0),
+    }).model_dump()
+    assert _phase_block([free])[0]["authoring"] == {"wall_clock_s": pytest.approx(1.0),
+                                                    "cost_usd": 0.0, "cost_unknown": 0}
+
+
 def test_phase_and_monarch_fields(phase_store, four_arm_store):
     """T014: the phase split, cost per model, questions asked and declined to
     build; and all four empty or zero on a round with only a `run` phase."""
@@ -267,9 +322,9 @@ def test_phase_and_monarch_fields(phase_store, four_arm_store):
 
     m = competitor_metrics(_rows(phase_store, "run-p", "monarch"), k=1)
     assert m["phases"]["authoring"] == {"wall_clock_s": pytest.approx(10.0),
-                                        "cost_usd": pytest.approx(0.35)}
+                                        "cost_usd": pytest.approx(0.35), "cost_unknown": 0}
     assert m["phases"]["execution"] == {"wall_clock_s": pytest.approx(2.0),
-                                        "cost_usd": pytest.approx(0.15)}
+                                        "cost_usd": pytest.approx(0.15), "cost_unknown": 0}
     assert m["cost_per_model"] == {"opus-4.8": pytest.approx(0.35)}
     assert m["questions_asked"] == 2
     assert m["declined_to_build"] == 1

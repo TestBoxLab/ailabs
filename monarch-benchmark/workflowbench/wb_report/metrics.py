@@ -38,11 +38,25 @@ def _div(numerator: float, denominator: float) -> float | None:
 
 
 def attempt_seconds(row: dict) -> float | None:
-    """The attempt's wall-clock: the sum over its phases (research R6), so the
-    total always agrees with the phase columns beside it. `None` - not 0 - when
-    no phase carries one; such an attempt joins neither the mean nor the
-    median."""
-    values = [p.get("wall_clock_s") for p in (row.get("phases") or {}).values()]
+    """The attempt's wall-clock, agreeing with the phase columns beside it (research R6).
+
+    `run` is the whole attempt, written by the orchestrator beside whatever phases the
+    arm recorded (`{**arm_phases, "run": ...}`), so it is the answer where it carries a
+    clock — never a term added to its own parts. It was, until 11 September: a Monarch
+    row reported `run` + `authoring` + `execution` and so was roughly twice its true
+    duration, which is the number the "faster than a harness" claim is read off.
+    `model:<family>` is the same attempt cut by model and is excluded for the same
+    reason, by name rather than by carrying no clock.
+
+    `None` - not 0 - when nothing carries one; such an attempt joins neither the mean
+    nor the median.
+    """
+    phases = row.get("phases") or {}
+    whole = (phases.get("run") or {}).get("wall_clock_s")
+    if whole is not None:
+        return whole
+    values = [p.get("wall_clock_s") for name, p in phases.items()
+              if name != "run" and not name.startswith(SYNTHETIC_PHASE_PREFIX)]
     values = [v for v in values if v is not None]
     return sum(values) if values else None
 
@@ -238,10 +252,16 @@ def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
     """
     seconds: dict[str, list[float]] = {}
     costs: dict[str, float] = {}
+    blind: dict[str, int] = {}
     per_model: dict[str, float] = {}
     for row in rows:
         for name, phase in (row.get("phases") or {}).items():
-            cost = phase.get("cost_usd") or 0.0
+            # `PhaseMetrics.cost_usd` is None when nobody could price the phase, and
+            # `or 0.0` read that as free. An unpriced attempt holds its whole ceiling
+            # against the week instead of settling, so calling it zero tells a reader
+            # the round was cheap while the ledger is still holding the money.
+            priced = phase.get("cost_usd")
+            cost = 0.0 if priced is None else priced
             if name.startswith(SYNTHETIC_PHASE_PREFIX):
                 model = name[len(SYNTHETIC_PHASE_PREFIX):]
                 per_model[model] = per_model.get(model, 0.0) + cost
@@ -249,10 +269,14 @@ def _phase_block(rows: list[dict]) -> tuple[dict[str, dict], dict[str, float]]:
             if name == "run":
                 continue
             costs[name] = costs.get(name, 0.0) + cost
+            blind[name] = blind.get(name, 0) + (priced is None)
             if phase.get("wall_clock_s") is not None:
                 seconds.setdefault(name, []).append(phase["wall_clock_s"])
     phases = {name: {"wall_clock_s": _div(sum(seconds.get(name, [])), len(seconds.get(name, []))),
-                     "cost_usd": cost}
+                     # Unknown for the whole phase the moment one attempt of it is
+                     # unpriced: a partial sum presented as the total is the error.
+                     "cost_usd": None if blind.get(name) else cost,
+                     "cost_unknown": blind.get(name, 0)}
               for name, cost in costs.items()}
     return phases, per_model
 

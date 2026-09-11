@@ -34,6 +34,9 @@ NOT_APPLICABLE = Sentinel("not_applicable")
 not_applicable = NOT_APPLICABLE
 UNKNOWN = Sentinel("unknown")
 unknown = UNKNOWN
+# A cohort that never passed has no cost per pass. That is a fact about the cohort,
+# not a gap in the record, and the contract forbids reporting it as unknown.
+NO_PASSES = Sentinel("no_passes")
 
 
 def is_not_applicable(val) -> bool:
@@ -42,6 +45,20 @@ def is_not_applicable(val) -> bool:
 
 def is_unknown(val) -> bool:
     return val is UNKNOWN or val == "unknown"
+
+
+# The whole attempt, written by the orchestrator beside whatever phases the arm
+# recorded. It is the TOTAL, never a part: summing it with the parts doubles the round.
+TOTAL_PHASE = "run"
+# The same money cut by model rather than by phase (`wb_report.metrics`). Also never
+# a part. Duplicated here rather than imported so measures stays free of wb_report.
+SYNTHETIC_PHASE = "model:"
+# The phases the fitness function is defined over, in the order a report reads them.
+COST_PHASES = ("authoring", "execution", "discovery")
+# Money the price table saw that no named phase claimed. Kept and named, never dropped.
+UNATTRIBUTED = "unattributed"
+CENT = 0.01
+SECOND = 1.0
 
 
 DONE_CLAIM = re.compile(r"\b(done|completed?|finished|success(?:ful|fully)?|updated|created|sent|resolved|processed)\b", re.I)
@@ -195,6 +212,141 @@ def cost(rows) -> dict:
             "tokens": tokens}
 
 
+def phase_cost(result: dict, phase: str):
+    """One attempt's cost for one phase: a number, UNKNOWN, or NOT_APPLICABLE.
+
+    The three are kept apart on purpose (contract §Cost). `n/a` means this competitor
+    has no such phase — a bare model never configures anything, and calling that zero
+    would make it look free at the one thing Monarch charges for. `unknown` means the
+    phase ran and nobody could price it; it holds its ledger reservation, and calling
+    *that* zero would settle a hold against money we know was spent.
+    """
+    phases = result.get("phases") or {}
+    if phase == TOTAL_PHASE:
+        value = known_cost(result)
+        return UNKNOWN if value is None else value
+    if phase not in phases:
+        # Absent is the arm's own statement: it records a phase in a `finally`, so a
+        # phase it ran is present even when the attempt died inside it.
+        return NOT_APPLICABLE
+    if known_cost(result) is None:
+        return UNKNOWN          # the whole read failed; no part of it is trustworthy
+    value = (phases[phase] or {}).get("cost_usd")
+    if value is None:
+        return UNKNOWN
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return UNKNOWN
+    return value if math.isfinite(value) and value >= 0 else UNKNOWN
+
+
+def cost_by_phase(rows) -> dict:
+    """FR-024. Cohort cost split at the authoring boundary, reconciled against the total.
+
+    Configure once, execute many: this split is what the break-even curve is computed
+    from, so a phase that quietly loses money would move the crossing point. Anything
+    the named phases do not claim is returned as `unattributed` rather than dropped,
+    and `reconciles` says whether that bucket was needed.
+    """
+    totals = {phase: 0.0 for phase in COST_PHASES}
+    seen = {phase: False for phase in COST_PHASES}
+    grand, unknown_attempts = 0.0, 0
+    for r in rows:
+        attempt_total = known_cost(r)
+        if attempt_total is None:
+            unknown_attempts += 1
+            continue
+        for phase in COST_PHASES:
+            value = phase_cost(r, phase)
+            if is_unknown(value):
+                unknown_attempts += 1
+                break
+            if is_not_applicable(value):
+                continue
+            seen[phase] = True
+            totals[phase] += value
+        else:
+            grand += attempt_total
+    if unknown_attempts:
+        # Same discipline as `cost`: one unreadable attempt makes the cohort's total
+        # unknown rather than a sum that silently omits it.
+        return {"phases": {}, "total": None, UNATTRIBUTED: None, "reconciles": False,
+                "unknown_attempts": unknown_attempts, "attempts": len(rows),
+                "not_applicable": [p for p in COST_PHASES if not seen[p]]}
+    out = {phase: round(totals[phase], 6) for phase in COST_PHASES if seen[phase]}
+    residual = round(grand - sum(out.values()), 6)
+    reconciles = abs(residual) <= CENT
+    if not reconciles:
+        out[UNATTRIBUTED] = residual
+    return {"phases": out, "total": round(grand, 6), UNATTRIBUTED: residual,
+            "reconciles": reconciles, "unknown_attempts": 0, "attempts": len(rows),
+            "not_applicable": [p for p in COST_PHASES if not seen[p]]}
+
+
+def phase_seconds(result: dict, phase: str):
+    """One attempt's wall clock for one phase. Absent phase is NOT_APPLICABLE, not zero."""
+    phases = result.get("phases") or {}
+    if phase == TOTAL_PHASE:
+        recorded = (phases.get(TOTAL_PHASE) or {}).get("wall_clock_s")
+        recorded = result.get("seconds") if recorded is None else recorded
+        return UNKNOWN if recorded is None else float(recorded)
+    if phase not in phases:
+        return NOT_APPLICABLE
+    value = (phases[phase] or {}).get("wall_clock_s")
+    return UNKNOWN if value is None else float(value)
+
+
+def time_by_phase(rows) -> dict:
+    """FR-025. Time to a saved workflow, then time per execution.
+
+    The clocks are already recorded — the arm stamps each phase in a `finally`, so no
+    new timestamp is needed and a timed-out attempt still reports where the deadline
+    passed. This reads them and checks each attempt's parts against its own total.
+    """
+    configure, execute, total = 0.0, 0.0, 0.0
+    counted, reconciles = 0, True
+    for r in evaluated(rows):
+        whole = phase_seconds(r, TOTAL_PHASE)
+        if is_unknown(whole):
+            continue
+        parts = 0.0
+        for phase, bucket in (("authoring", "configure"), ("execution", "execute")):
+            value = phase_seconds(r, phase)
+            if isinstance(value, float):
+                parts += value
+                if bucket == "configure":
+                    configure += value
+                else:
+                    execute += value
+        if parts and abs(whole - parts) > SECOND:
+            # The attempt spent time in neither phase. Worth seeing, not worth hiding.
+            reconciles = False
+        total += whole
+        counted += 1
+    if not counted:
+        return {"configure_s": None, "execute_s": None, "total_s": None,
+                "reconciles": True, "attempts": 0}
+    return {"configure_s": round(configure, 4), "execute_s": round(execute, 4),
+            "total_s": round(total, 4), "reconciles": reconciles, "attempts": counted}
+
+
+def cost_per_pass(rows):
+    """FR-028. Cohort cost divided by passes: a cheap competitor that fails is not cheap.
+
+    Returns NO_PASSES rather than UNKNOWN when nothing passed — the record is complete,
+    the answer is simply undefined, and a reader told "unknown" would go looking for
+    missing data that does not exist.
+    """
+    out = cost(rows)
+    if out["total"] is None:
+        return UNKNOWN
+    passed = sum(bool(r.get("passed")) for r in evaluated(rows))
+    if not passed:
+        return NO_PASSES
+    return round(out["total"] / passed, 6)
+
+
 def time(rows) -> dict:
     seconds = sorted(float(r.get("seconds") or 0) for r in evaluated(rows))
     if not seconds:
@@ -263,7 +415,7 @@ def minimum_discordant_pairs() -> int:
     raise RuntimeError("the sign test reached no significance below 100 pairs")
 
 
-def settleable(tasks: int, repetitions: int = 1, flip_rate: float = None) -> dict:
+def settleable(tasks: int, repetitions: int = 1, flip_rate: float | None = None) -> dict:
     """Whether an experiment of this size can produce a verdict, and what would be enough.
 
     Checked before any money is reserved. Repetitions do not add discordant pairs — the
