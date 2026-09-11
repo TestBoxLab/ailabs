@@ -36,6 +36,17 @@
 .turn-steps li.live .step-action{color:var(--signal)}
 .step-body{padding:0 0 var(--space-3) 16px}.step-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--text-1);background:var(--surface);padding:var(--space-2);max-height:260px;overflow:auto}
 .genesis-answer{font-size:var(--text-3);line-height:1.6}.genesis-answer p{margin:0 0 var(--space-3)}.genesis-answer h4{margin:var(--space-4) 0 var(--space-2)}.genesis-answer pre{background:var(--surface);padding:var(--space-3);overflow:auto;font-size:var(--text-1)}.genesis-answer table{margin:var(--space-3) 0;font-size:var(--text-2)}.genesis-answer ul,.genesis-answer ol{padding-left:22px}
+/* A step that just arrived. The flash marks the DATA landing, never the view being
+   re-rendered, and it is deliberately not --signal: red means the current place in this
+   system, and a saturated hue carries the stricter flash threshold under WCAG 2.3.1.
+   The word "new" carries it too, so neither colour nor motion is load-bearing. Rows are
+   coalesced by the caller, so a burst of fifty is one paint (feature 024, stage S2). */
+.turn-steps li.is-new{background:var(--surface-2);box-shadow:-2px 0 0 0 var(--line-strong)}
+.turn-steps li.is-new .step-action:after{content:" new";color:var(--muted);font-family:var(--font-mono);font-size:var(--text-1);font-weight:400}
+@media(prefers-reduced-motion:no-preference){
+ .turn-steps li.is-fading{transition:background var(--dur-3,1000ms) linear,box-shadow var(--dur-3,1000ms) linear}
+}
+
 /* Where Genesis pointed. A link, not a move: the reader decides (WCAG 3.2.5). */
 .genesis-goto{margin:var(--space-2) 0 0;display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap}
 .genesis-goto a{font-weight:500}

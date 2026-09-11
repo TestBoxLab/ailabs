@@ -530,8 +530,10 @@ class Studio:
         if paid and not operator:
             raise ValueError("A paid launch names the person who asked for it. "
                              "Set WB_OPERATOR, or send `operator` with the launch.")
+        # FR-019: a run carries an explicit number of repetitions, default 1.
+        repetitions = positive_int(payload.get("repetitions", 1), "Repetitions", 100)
         # FR-008: one attempt may never be allowed to spend the whole round.
-        cap = attempt_cap_for(maximum, attempts=len(tasks) * max(1, len(arms)),
+        cap = attempt_cap_for(maximum, attempts=len(tasks) * max(1, len(arms)) * repetitions,
                               explicit=payload.get("attempt_cap_usd"), floor=floor)
         approval_request_id = payload.get("approval_request") or payload.get("approval_request_id")
         if paid:
@@ -539,10 +541,11 @@ class Studio:
                 "tasks": sorted(tasks),
                 "models": [a["id"] for a in arms],
                 "maximum_usd": str(maximum),
+                "repetitions": repetitions,
             }, sort_keys=True).encode()).hexdigest()[:16]
             rc = SimpleNamespace(
-                attempts_per_competitor=len(tasks),
-                attempts_total=len(tasks) * len(arms),
+                attempts_per_competitor=len(tasks) * repetitions,
+                attempts_total=len(tasks) * len(arms) * repetitions,
                 hash=config_hash,
                 product_path="studio",
                 plan_path="studio",
@@ -556,7 +559,8 @@ class Studio:
                 raise ApprovalError(launch.message)
             if launch.request_id:
                 approval_request_id = launch.request_id
-        settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks, "maximum_usd": str(maximum), "track": track,
+        settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks,
+                    "repetitions": repetitions, "maximum_usd": str(maximum), "track": track,
                     "architectures": [v["id"] for v in versions],
                     "operator": operator, "attempt_cap_usd": str(cap),
                     "approval_request_id": approval_request_id}
@@ -598,7 +602,7 @@ class Studio:
                 path.mkdir()
                 job = {"id": identity, "title": title,
                        "created_at": now(), "status": "queued", "settings": settings, "results": [], "completed": 0,
-                       "total": len(tasks) * len(arms), "task_hashes": {t: contract_hash(self.tasks[t]) for t in tasks}}
+                       "total": len(tasks) * len(arms) * repetitions, "task_hashes": {t: contract_hash(self.tasks[t]) for t in tasks}}
                 from wb_studio.task_sets import task_sets
                 reference = next((item for item in task_sets(self, ROOT)['items'] if item['id']=='catalog-50'), None)
                 if reference and set(tasks)==set(reference['tasks']) and len(tasks)==50:
@@ -1227,6 +1231,47 @@ def handler(studio):
                     from wb_studio import figures
                     try: return self.send_json(figures.read(studio.genesis,figure_match[1]))
                     except ValueError as exc: return self.send_json({'error':str(exc)},404)
+                turn_stream=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/events',url.path)
+                if turn_stream:
+                    # The live view used to re-ask for the whole turn every 650 ms, which is a
+                    # fresh TCP handshake per tick against the browser's six-connection budget
+                    # and re-implements Last-Event-ID by hand. This is the same shape as the
+                    # run stream above (feature 024, stage S2).
+                    #
+                    # ponytail: one thread per open stream, and a held stream owns one of the
+                    # six connections for its lifetime. One stream per tab; a connection
+                    # manager if that ever stops being true.
+                    identity=turn_stream[1]
+                    cursor=int(self.headers.get('Last-Event-ID') or parse_qs(url.query).get('after',['0'])[0])
+                    studio.genesis.read('turns',identity)   # 404 before the stream opens, not after
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.send_header('Cache-Control','no-cache')
+                    self.send_header('X-Accel-Buffering','no')
+                    self.end_headers()
+                    # EventSource has no backoff of its own; without this the reconnect delay is
+                    # whatever the browser decided (~3 s in Chrome, 1 s in Firefox).
+                    self.wfile.write(b'retry: 2000\n\n')
+                    last=time.monotonic()
+                    while True:
+                        turn=studio.genesis.read('turns',identity)
+                        fresh=[e for e in turn.get('events') or [] if e['id']>cursor]
+                        for event in fresh:
+                            frame='id: %d\nevent: step\ndata: %s\n\n' % (event['id'], json.dumps(event))
+                            self.wfile.write(frame.encode())
+                            cursor=event['id']
+                        if turn.get('status')!='running':
+                            # The turn itself, once, so the client never has to ask again.
+                            rest={k:v for k,v in turn.items() if k!='events'}
+                            self.wfile.write(('event: done\ndata: %s\n\n' % json.dumps(rest)).encode())
+                            self.wfile.flush()
+                            break
+                        if fresh or time.monotonic()-last>15:
+                            self.wfile.write(b': keepalive\n\n')
+                            last=time.monotonic()
+                        self.wfile.flush()
+                        time.sleep(.4)
+                    return
                 genesis_match=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)',url.path)
                 if genesis_match:
                     turn=studio.genesis.read('turns',genesis_match[1])

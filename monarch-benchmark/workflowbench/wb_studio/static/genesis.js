@@ -70,7 +70,7 @@ async function renderConversation(){
  $('#genesis-messages').innerHTML=threadTurns.length?threadTurns.map(turnHtml).join(''):'<p class="genesis-welcome">Nothing here yet.</p>';
  linkRecTags($('#genesis-messages'));drawFigures($('#genesis-messages'));bindTurnChips();
  $('#genesis-messages').scrollTop=$('#genesis-messages').scrollHeight;
- const running=threadTurns.find(x=>x.status==='running');if(running)pollGenesis(running.id);
+ const running=threadTurns.find(x=>x.status==='running');if(running)streamGenesis(running.id);
  renderTracking();
 }
 function stepList(t){
@@ -120,27 +120,65 @@ function announceShow(t){
  const region=$('#genesis-pointer');
  const line='Genesis pointed at '+r.label+(r.why?': '+r.why:'')+'.';
  if(region.textContent!==line){region.textContent=line;setTimeout(()=>{if(region.textContent===line)region.textContent='';},400);}}
-function paintTurn(t){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
+let paintedSteps={};
+function paintTurn(t,opts){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
+ const before=paintedSteps[t.id]||0;
  const messages=$('#genesis-messages'),follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<60;
  el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);
  linkRecTags(el);bindTurnChips();el.querySelector('.genesis-turn-status').textContent=t.status==='running'?'Working…':'';
  const old=el.querySelector('.turn-stopped');if(old)old.remove();
  el.querySelector('.scientist-message').insertAdjacentHTML('beforeend',stoppedLine(t));
+ // Flash only rows that actually arrived, and only when data landed — a re-render
+ // because the reader switched tabs is not news (feature 024, stage S2).
+ const rows=el.querySelectorAll('.turn-steps li');paintedSteps[t.id]=rows.length;
+ if(opts&&opts.fresh&&rows.length>before){for(let k=before;k<rows.length;k++)rows[k].classList.add('is-new');
+  setTimeout(()=>{for(let k=before;k<rows.length;k++){const r=rows[k];if(r){r.classList.remove('is-new');r.classList.add('is-fading');setTimeout(()=>r.classList.remove('is-fading'),1000);}}},500);}
  if(follow)messages.scrollTop=messages.scrollHeight;
  announceShow(t);}
-function pollGenesis(id){clearTimeout(genesisPoll);$('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';const stop=$('#genesis-stop');stop.hidden=false;$('#genesis-pause-updates').hidden=false;stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
- genesisPoll=setTimeout(async()=>{try{const i=threadTurns.findIndex(x=>x.id===id);const known=i>=0?threadTurns[i]:null;const last=known?.events?.length?known.events[known.events.length-1].id:0;const fresh=await api('/api/genesis/turns/'+id+(known?'?after='+last:''));const t=known&&fresh.partial?{...fresh,events:known.events.concat(fresh.events)}:fresh;if(i>=0)threadTurns[i]=t;const el=$$('[data-turn]').find(e=>e.dataset.turn===id);
-  // Paused: keep the newest turn and paint it when the reader asks, so nothing is lost.
-  if(el){if(genesisPaused)genesisPending=t;else paintTurn(t);}
-  if(trackingTab==='trace')renderTracking();
-  if(t.status==='running')pollGenesis(id);else{$('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;if(genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;$('#genesis-status').textContent=t.status==='completed'?'':'Stopped';genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();api('/api/budget').then(budget).catch(()=>{});}}catch(e){$('#genesis-status').textContent='Reconnecting';pollGenesis(id);}},650);}
+// One stream per turn, replacing a 650 ms re-ask. Arrivals are buffered and flushed once
+// per frame, so fifty events in a burst cost one DOM update rather than fifty
+// (feature 024, stage S2). `Last-Event-ID` is the protocol's own catch-up, so a dropped
+// connection resumes rather than replaying.
+let genesisStream=null,genesisQueue=[],genesisFrame=0;
+function closeGenesisStream(){if(genesisStream){genesisStream.close();genesisStream=null;}genesisQueue=[];if(genesisFrame){cancelAnimationFrame(genesisFrame);genesisFrame=0;}}
+function streamGenesis(id){
+ closeGenesisStream();
+ $('#genesis-send').disabled=true;$('#genesis-status').textContent='Working';
+ const stop=$('#genesis-stop');stop.hidden=false;$('#genesis-pause-updates').hidden=false;
+ stop.onclick=async()=>{stop.disabled=true;try{await api('/api/genesis/turns/'+id+'/stop',{});}catch(e){toast(e.message);}stop.disabled=false;};
+ const i=threadTurns.findIndex(x=>x.id===id),known=i>=0?threadTurns[i]:null;
+ const seen=known&&known.events&&known.events.length?known.events[known.events.length-1].id:0;
+ const flush=()=>{genesisFrame=0;if(!genesisQueue.length)return;
+  const j=threadTurns.findIndex(x=>x.id===id);if(j<0){genesisQueue=[];return;}
+  const t={...threadTurns[j],events:(threadTurns[j].events||[]).concat(genesisQueue)};
+  genesisQueue=[];threadTurns[j]=t;
+  if(genesisPaused)genesisPending=t;else paintTurn(t,{fresh:true});
+  if(trackingTab==='trace')renderTracking();};
+ genesisStream=new EventSource('/api/genesis/turns/'+encodeURIComponent(id)+'/events?after='+seen);
+ genesisStream.addEventListener('step',e=>{try{genesisQueue.push(JSON.parse(e.data));}catch(err){return;}
+  if(!genesisFrame)genesisFrame=requestAnimationFrame(flush);});
+ genesisStream.addEventListener('done',async e=>{
+  closeGenesisStream();
+  let settled=null;try{settled=JSON.parse(e.data);}catch(err){}
+  const j=threadTurns.findIndex(x=>x.id===id);
+  if(j>=0&&settled)threadTurns[j]={...settled,events:threadTurns[j].events||[]};
+  const t=j>=0?threadTurns[j]:null;
+  if(t){if(genesisPending){genesisPending=null;}paintTurn(t,{fresh:false});}
+  setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;
+  $('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;
+  $('#genesis-status').textContent=(t&&t.status==='completed')?'':'Stopped';
+  genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();
+  api('/api/budget').then(budget).catch(()=>{});});
+ // EventSource retries by itself; say so rather than leaving the reader guessing.
+ genesisStream.onerror=()=>{if(genesisStream&&genesisStream.readyState===EventSource.CONNECTING)$('#genesis-status').textContent='Reconnecting';};
+}
 $('#genesis-form').onsubmit=async e=>{e.preventDefault();$('#genesis-error').textContent='';$('#genesis-send').disabled=true;
  try{const t=await api('/api/genesis/chat',{message:$('#genesis-message').value,model:$('#genesis-model').value,effort:$('#genesis-effort').value,parent:genesisParent,thread:genesisThread||undefined,card:genesisScope||undefined,by:PERSON});
   $('#genesis-message').value='';$('#genesis-message').style.height='auto';
   if(!genesisThread){genesisThread=t.thread;genesisData=await api('/api/genesis');renderRail();$('#genesis-thread-title').textContent=(genesisData.threads.find(x=>x.id===genesisThread)||{}).title||'Conversation';settleGenesisHash();}
   if($('#genesis-messages .genesis-welcome'))$('#genesis-messages').innerHTML='';
   threadTurns.push(t);$('#genesis-messages').insertAdjacentHTML('beforeend',turnHtml(t));$('#genesis-messages').scrollTop=$('#genesis-messages').scrollHeight;
-  api('/api/budget').then(budget).catch(()=>{});pollGenesis(t.id);
+  api('/api/budget').then(budget).catch(()=>{});streamGenesis(t.id);
  }catch(err){$('#genesis-error').textContent=err.message;$('#genesis-send').disabled=false;}};
 $('#genesis-drop-as-card').onclick=async()=>{const text=$('#genesis-message').value.trim();if(!text){toast('Write the link, run id or sentence first');return;}try{const card=await api('/api/genesis/drop',{text,by:PERSON});$('#genesis-message').value='';toast('On the board: '+card.title.slice(0,60));await refreshGenesis();trackingTab='cards';renderTracking();}catch(e){toast(e.message);}};
 $('#genesis-message').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('#genesis-send').disabled)$('#genesis-form').requestSubmit();}});
