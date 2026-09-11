@@ -765,3 +765,14 @@ no matching distribution), no entry in any of the three installed marketplaces, 
 plugin in `installed_plugins.json`, no binary on the path, no skill, and no
 `graphify-out/` directory in the repository. The constitution forbids claiming a refresh
 that did not happen, so this stays open.
+
+The search turned up why. `monarch-benchmark/docs/HANDOFF-2026-09-02.md:49` lists
+"Initialize Graphify on the repo (`/graphify-init`)" as a **to-do**, and it was never
+done. `CLAUDE.md` nonetheless opens its Graphify section with "This project has a
+graphify knowledge graph at `graphify-out/`" and instructs every agent to read
+`GRAPH_REPORT.md` before architecture questions. A task that was planned on 2 September
+and never carried out has been described as an existing asset ever since.
+
+So T112 is not "a tool is missing"; it is an instruction that has been wrong for nine
+days. Two ways to close it, and both are a person's call: run `/graphify-init` and build
+the graph, or delete the Graphify section from `CLAUDE.md`.
