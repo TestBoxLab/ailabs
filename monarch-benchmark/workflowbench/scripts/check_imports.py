@@ -120,8 +120,10 @@ def main() -> int:
     print("check_imports: imports that name a module git does not track.\n")
     for path, line, module in sorted(bad):
         print(f"  {path}:{line}: {module}")
-    print("\nEach of these is committed code that raises on a clean checkout.")
-    print("`git add` the missing module, or take the import out.")
+    # Run locally, these usually are not committed yet - which is the point, and
+    # the message has to be true at the moment someone reads it.
+    print("\nEach of these raises on a clean checkout once committed.")
+    print("`git add` the missing module in the same commit, or take the import out.")
     return 1
 
 

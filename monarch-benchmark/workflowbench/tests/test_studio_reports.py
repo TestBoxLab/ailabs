@@ -1,5 +1,5 @@
-"""Reports read verdict first, hide lab setups from the public view, and say
-what they leave out; every number comes from stored records."""
+"""Reports read verdict first, show every setup that ran, and say what they
+leave out; every number comes from stored records."""
 import json
 
 import pytest
@@ -142,3 +142,34 @@ def test_the_report_keeps_the_timeline_and_the_reasoning(studio):
     turns = [t for a in report["failures"]["attempts"] if a["story"] for t in a["story"]["timeline"]]
     assert turns and any("Private plan" in t["reasoning"] for t in turns)
     assert any("Private plan" in t["sentence"] for t in turns)
+
+
+def test_googleads_write_does_not_render_as_gmail(stored_run):
+    from wb_studio.reports import outcome_report
+    events = stored_run.studio.events(stored_run.run_id)
+    report = outcome_report(stored_run.job, events, stored_run.studio.tasks)
+    ad_audit = next(a for a in report["attempts"] if a["task"] == "marketing.ad_platform_audit")
+    googleads_writes = [
+        act for act in ad_audit["actions"]
+        if "googleads.googleapis.com" in (act.get("url") or "") and act.get("method") == "POST"
+    ]
+    assert googleads_writes, "Expected at least one googleads POST write in stored run"
+    for write_action in googleads_writes:
+        assert "Gmail" not in write_action["title"], f"googleads write rendered as Gmail: {write_action['title']}"
+        assert "Google Ads" in write_action["title"], f"googleads write did not name Google Ads: {write_action['title']}"
+
+
+def test_resolve_service_distinguishes_google_and_other_services():
+    from wb_studio.reports import resolve_service
+    assert resolve_service("https://googleads.googleapis.com/v19/customers/123/campaigns") == "Google Ads"
+    assert resolve_service("https://sheets.googleapis.com/v4/spreadsheets/123") == "Google Sheets"
+    assert resolve_service("https://www.googleapis.com/calendar/v3/calendars/primary") == "Google Calendar"
+    assert resolve_service("https://calendar.googleapis.com/calendar/v3/events") == "Google Calendar"
+    assert resolve_service("https://www.googleapis.com/drive/v3/files") == "Google Drive"
+    assert resolve_service("https://drive.googleapis.com/drive/v3/files") == "Google Drive"
+    assert resolve_service("https://gmail.googleapis.com/gmail/v1/users/me/messages") == "Gmail"
+    assert resolve_service("https://my-instance.salesforce.com/services/data/v61.0/sobjects") == "Salesforce"
+    assert resolve_service("https://api.airtable.com/v0/app123/Table") == "Airtable"
+    assert resolve_service("https://slack.com/api/conversations.history") == "Slack"
+    assert resolve_service("https://us1.api.mailchimp.com/3.0/campaigns") == "Mailchimp"
+    assert resolve_service("https://subdomain.freshdesk.com/api/v2/tickets") == "Freshdesk"
