@@ -61,6 +61,16 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def setup_names(job) -> dict:
+    """Every competitor in a run under one readable name, so the run page, the
+    report and an export cannot disagree about what a setup is called."""
+    from wb_studio.runtime_registry import display_name
+    settings = job.get("settings", {})
+    arms = {a["id"]: a.get("name") for a in (settings.get("arms") or []) if a.get("id")}
+    identifiers = list(dict.fromkeys([*arms, *settings.get("models", [])]))
+    return {i: display_name(i, arms.get(i)) for i in identifiers}
+
+
 def front_door_target(env, rest: str) -> str:
     """Where the front door relays an application call.
 
@@ -990,11 +1000,12 @@ def handler(studio):
                     if not match[2]:
                         return self.send_json(studio.job(identity))
                     if match[2] == "/report":
+                        from wb_studio.report_data import narrative_status
                         report_job = studio.job(identity)
                         report = outcome_report(report_job, studio.events(identity), studio.tasks, studio.directory / identity / "results.sqlite3")
-                        analysis = studio.directory / identity / "analysis.json"
-                        report["analysis"] = (json.loads(analysis.read_text(encoding="utf-8")) if analysis.exists()
-                                              else {"status": "pending"} if (studio.directory / identity / "analysis.claimed").exists() else None)
+                        # The same reading the report shows, with the reason when it could not run.
+                        report["analysis"] = narrative_status(studio.directory / identity)
+                        report["names"] = setup_names(report_job)
                         return self.send_json(report)
                     cursor = int(self.headers.get("Last-Event-ID") or parse_qs(url.query).get("after", ["0"])[0])
                     studio.job(identity)
@@ -1278,7 +1289,8 @@ def handler(studio):
                 analyze = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/analyze", self.path)
                 if analyze:
                     from wb_studio.analysis import review
-                    return self.send_json(review(studio, analyze[1]))
+                    # Asking by hand is asking again: a reading that failed is re-dispatched.
+                    return self.send_json(review(studio, analyze[1], retry=True))
                 if self.path == "/api/bare-coverage":
                     from wb_studio.bare_coverage import coverage
                     return self.send_json(coverage(studio, payload))

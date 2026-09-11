@@ -199,7 +199,7 @@ window.Charts = (() => {
       const n = group.values.length, barWidth = Math.min(40, (groupWidth - 16) / Math.max(1, n));
       group.values.forEach((v, vi) => {
         const x0 = gi * groupWidth + (groupWidth - n * barWidth) / 2 + vi * barWidth;
-        const g = interactive(el('g', { class: 'column ' + seriesClass(v) }, f.plot), v);
+        const g = interactive(el('g', { class: 'column ' + (v.cls || seriesClass(v)) }, f.plot), v);
         el('rect', { x: x0 + 1, y: y(v.value || 0), width: barWidth - 2, height: f.height - y(v.value || 0), class: 'bar' }, g);
         el('text', { x: x0 + barWidth / 2, y: y(v.value || 0) - 5, 'text-anchor': 'middle', class: 'value-label' }, g, (options.format || compact)(v.value || 0));
       });
@@ -207,6 +207,30 @@ window.Charts = (() => {
       if (group.sub) el('text', { x: gi * groupWidth + groupWidth / 2, y: f.height + 32, 'text-anchor': 'middle', class: 'row-sub' }, f.plot, group.sub);
     });
     return f.figure;
+  }
+
+  // Where a run's failures went: one column per bucket, as a share of the failed
+  // attempts, largest first. Infrastructure is not a model failure and never takes
+  // the fail colour. The run page and the report both draw this, so neither drifts.
+  function failureColumns(options) {
+    const failed = options.failed || 0;
+    const rows = (options.buckets || []).filter(b => b.count).map(b => ({
+      id: b.id, label: b.short_label || b.label, count: b.count,
+      share: b.percent_failed ?? (failed ? b.count * 100 / failed : 0),
+    })).sort((a, b) => b.share - a.share || a.label.localeCompare(b.label));
+    return columns({
+      title: options.title, source: options.source, height: options.height,
+      format: v => Math.round(v) + '%', yLabel: 'share of failures',
+      empty: options.empty || 'No failed attempts',
+      groups: rows.map(r => ({
+        label: r.label,
+        values: [{
+          label: r.label, value: r.share, cls: r.id === 'infrastructure' ? 'neutral' : 'fail',
+          data: { bucket: r.id },
+          aria: `${r.label}: ${r.count} of ${failed} failed attempts, ${Math.round(r.share)}%`,
+        }],
+      })),
+    });
   }
 
   // 6. Time strips: every attempt as a tick, the median as a mark.
@@ -372,5 +396,5 @@ window.Charts = (() => {
     observer.observe(figure);
     return figure;
   };
-  return { dotWhisker: fitted(dotWhisker), scatter: fitted(scatter), bars: fitted(bars), columns: fitted(columns), strips: fitted(strips), waterfall: fitted(waterfall), trend: fitted(trend), timeline: fitted(timeline), matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
+  return { dotWhisker: fitted(dotWhisker), scatter: fitted(scatter), bars: fitted(bars), columns: fitted(columns), failureColumns: fitted(failureColumns), strips: fitted(strips), waterfall: fitted(waterfall), trend: fitted(trend), timeline: fitted(timeline), matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
 })();

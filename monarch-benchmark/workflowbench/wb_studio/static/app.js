@@ -41,7 +41,15 @@ function syncAttemptFromHash(){
 }
 window.syncAttemptFromHash=syncAttemptFromHash;
 function attemptIndex(){if(!selected||!report)return -1;const task=selected.task||taskId;return report.attempts.findIndex(a=>a.task===task&&a.model===selected.model);}
-function moveAttempt(step){const i=attemptIndex();if(i<0)return;const next=i+step;if(next<0||next>=report.attempts.length)return;selectReport(next);}
+// Paging follows the list you are looking at: filter the results and Next stays
+// inside that filter instead of walking back out of it.
+function attemptOrder(){
+  if(!report)return [];
+  if(view!=='results')return report.attempts.map((_,i)=>i);
+  const shown=visibleResults().map(([r])=>report.attempts.findIndex(a=>a.task===r.task&&a.model===r.model)).filter(i=>i>=0);
+  return shown.length?shown:report.attempts.map((_,i)=>i);
+}
+function moveAttempt(step){const order=attemptOrder(),at=order.indexOf(attemptIndex());if(at<0)return;const next=at+step;if(next<0||next>=order.length)return;selectReport(order[next]);}
 function markCurrent(){
   const task=selected?.category==='result'?(selected.task||taskId):null,model=selected?.model;
   $$('#report-view .matrix-cell').forEach(td=>{const b=td.querySelector('[data-report]');const a=b&&report?.attempts[Number(b.dataset.report)];td.classList.toggle('current',!!a&&a.task===task&&a.model===model);});
@@ -226,7 +234,7 @@ function renderOutput(){
   $('#inspector-title').textContent=isResult?shortTaskLabel(selected.task||taskId):nodeLabel(selected);
   $('#inspector-meta').textContent=modelName(selected.model)+(isResult?'':' · '+selected.status);
   verdict.className='attempt-verdict '+(isResult?(selected.result?.passed?'pass':'fail'):'');verdict.textContent=isResult?(selected.result?.passed?'Passed':String(selected.result?.termination||'').startsWith('infra:')?'Execution issue':'Failed'):(selected.status==='error'?'Attention':selected.status==='running'?'Running':'Done');
-  const i=attemptIndex(),n=report?.attempts?.length||0;$('#attempt-position').textContent=isResult&&i>=0?(i+1)+' of '+n:'';$('#attempt-prev').hidden=!isResult||i<0;$('#attempt-next').hidden=!isResult||i<0;$('#attempt-prev').disabled=i<=0;$('#attempt-next').disabled=i<0||i>=n-1;
+  const order=attemptOrder(),at=order.indexOf(attemptIndex()),n=order.length;$('#attempt-position').textContent=isResult&&at>=0?(at+1)+' of '+n:'';$('#attempt-prev').hidden=!isResult||at<0;$('#attempt-next').hidden=!isResult||at<0;$('#attempt-prev').disabled=at<=0;$('#attempt-next').disabled=at<0||at>=n-1;
   const task=selected.task||taskId,model=selected.model,box=$('#output');
   const result=selected.result||job?.results.find(r=>r.task===task&&r.model===model)||null;
   const account=selected.report||report?.attempts.find(a=>a.task===task&&a.model===model)||null;
@@ -354,30 +362,107 @@ $('.inspector-tabs').addEventListener('keydown',e=>{
   e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
   tabs[next].click();tabs[next].focus();
 });
-let resultsFilter='';
+let resultsFilter='',resultsModel='',resultsQuery='',resultsSort='',resultsDescending=false;
+const outcomeKind=r=>String(r.termination||'').startsWith('infra:')?'infra':r.passed?'passed':'failed';
+const OUTCOME_WORDS={passed:'Passed',failed:'Failed',infra:'Execution issues'};
+function resultFinding(r){const a=report?.attempts.find(x=>x.task===r.task&&x.model===r.model);return a?outcomeFinding(a):'';}
+// One filtered, sorted list, read by the table, the count, the chips and by paging.
+function visibleResults(){
+  if(!job)return [];
+  const query=resultsQuery.trim().toLowerCase();
+  const rows=job.results.map((r,i)=>[r,i]).filter(([r])=>
+    (!resultsFilter||outcomeKind(r)===resultsFilter)&&(!resultsModel||r.model===resultsModel)&&
+    (!query||(shortTaskLabel(r.task)+' '+modelName(r.model)+' '+resultFinding(r)).toLowerCase().includes(query)));
+  if(!resultsSort)return rows;
+  const rank={passed:0,failed:1,infra:2};
+  const key={task:([r])=>shortTaskLabel(r.task).toLowerCase(),model:([r])=>modelName(r.model).toLowerCase(),
+    outcome:([r])=>rank[outcomeKind(r)],time:([r])=>knownNumber(r.seconds)?Number(r.seconds):-1,
+    cost:([r])=>knownNumber(r.cost_usd)?Number(r.cost_usd):-1,tools:([r])=>knownNumber(r.tool_calls)?Number(r.tool_calls):-1}[resultsSort];
+  if(!key)return rows;
+  const direction=resultsDescending?-1:1;
+  return rows.slice().sort((a,b)=>{const x=key(a),y=key(b);return (x<y?-1:x>y?1:a[1]-b[1])*direction;});
+}
+function resultsChips(){
+  const chips=[];
+  if(resultsFilter)chips.push(['outcome',OUTCOME_WORDS[resultsFilter]||resultsFilter]);
+  if(resultsModel)chips.push(['model',modelName(resultsModel)]);
+  if(resultsQuery.trim())chips.push(['query','“'+resultsQuery.trim()+'”']);
+  return chips;
+}
+function clearResultFilters(){
+  resultsFilter='';resultsModel='';resultsQuery='';
+  $('#results-search').value='';$('#results-model').value='';
+  $$('[data-results-filter]').forEach(x=>x.setAttribute('aria-pressed',String(!x.dataset.resultsFilter)));
+  renderResults();
+}
 $$('[data-results-filter]').forEach(b=>b.onclick=()=>{resultsFilter=b.dataset.resultsFilter;$$('[data-results-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));renderResults();});
+$('#results-search').oninput=e=>{resultsQuery=e.target.value;renderResults();};
+$('#results-model').onchange=e=>{resultsModel=e.target.value;renderResults();};
+$$('[data-results-sort]').forEach(b=>b.onclick=()=>{
+  const key=b.dataset.resultsSort;
+  resultsDescending=resultsSort===key?!resultsDescending:key==='task'||key==='model'?false:true;
+  resultsSort=key;renderResults();
+});
 function renderResults() {
   if(!job)return;
   const focused=document.activeElement?.dataset?.index;
-  const results=job.results, total=results.length, assessed=results.filter(r=>!String(r.termination||'').startsWith('infra:')), passed=assessed.filter(r=>r.passed).length;
+  const results=job.results, total=results.length, assessed=results.filter(r=>outcomeKind(r)!=='infra'), passed=assessed.filter(r=>r.passed).length;
   const known=results.filter(r=>knownNumber(r.cost_usd)), cost=known.reduce((a,r)=>a+Number(r.cost_usd),0);
   const unresolved=results.some(r=>!knownNumber(r.cost_usd)||r.flags?.includes('billing=unknown'));
   $('#results-summary').innerHTML='<div class="result-stat"><strong>'+passed+' / '+assessed.length+'</strong><span>Evaluated attempts passed</span></div><div class="result-stat"><strong>'+money(known.length?cost:null)+'</strong><span>Known cost estimate'+(unresolved?' · incomplete billing':'')+'</span></div><div class="result-stat"><strong>'+job.completed+' / '+job.total+'</strong><span>Attempts finished'+(total-assessed.length?' · '+(total-assessed.length)+' execution issues':'')+'</span></div>';
-  const kindOf=r=>String(r.termination||'').startsWith('infra:')?'infra':r.passed?'passed':'failed';
-  const shown=results.map((r,i)=>[r,i]).filter(([r])=>!resultsFilter||kindOf(r)===resultsFilter);
-  const finding=r=>{const a=report?.attempts.find(x=>x.task===r.task&&x.model===r.model);return a?outcomeFinding(a):'';};
-  $('#result-rows').innerHTML=shown.map(([r,i])=>'<tr data-row="'+i+'"><td><button class="result-link" data-index="'+i+'">'+esc(shortTaskLabel(r.task))+'<small>'+esc(modelName(r.model))+'</small></button></td><td><span class="matrix-word '+(kindOf(r)==='infra'?'neutral':kindOf(r)==='passed'?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Failed':esc(human(r.termination||'Not evaluated')))+'</span></td><td class="result-finding">'+esc(r.passed?'':finding(r))+'</td><td class="num">'+(knownNumber(r.seconds)?Number(r.seconds).toFixed(1)+'s':'—')+'</td><td class="num">'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td><td class="num">'+(knownNumber(r.tool_calls)?r.tool_calls:'—')+'</td></tr>').join('')||'<tr><td colspan="6" class="results-empty"><strong>'+(results.length?'No attempts match this filter':'No finished attempts yet')+'</strong>'+(results.length?'':'<p>'+(['queued','running','cancelling'].includes(job.status)?'Results appear here as work finishes. Open Activity to follow the current task.':'This run ended before an attempt finished. Check the run message and activity for details.')+'</p>')+'</td></tr>';
+  const setups=[...new Set(results.map(r=>r.model))];
+  const picker=$('#results-model');
+  if(picker.dataset.setups!==setups.join('|')){
+    picker.dataset.setups=setups.join('|');
+    picker.innerHTML='<option value="">All models</option>'+setups.map(m=>'<option value="'+esc(m)+'">'+esc(modelName(m))+'</option>').join('');
+    picker.value=setups.includes(resultsModel)?resultsModel:(resultsModel='');
+  }
+  const shown=visibleResults();
+  const chips=resultsChips();
+  $('#results-chips').innerHTML=chips.map(([kind,label])=>'<button type="button" class="filter-chip" data-drop-filter="'+kind+'">'+esc(label)+'<span aria-hidden="true">×</span><span class="sr-only">Remove this filter</span></button>').join('')+(chips.length>1?'<button type="button" class="text-button" id="results-clear">Clear all</button>':'');
+  $('#results-count').textContent=chips.length?shown.length+' of '+total+' '+plural(total,'attempt'):total+' '+plural(total,'attempt');
+  $$('[data-results-sort]').forEach(b=>b.closest('th').setAttribute('aria-sort',resultsSort===b.dataset.resultsSort?(resultsDescending?'descending':'ascending'):'none'));
+  $('#result-rows').innerHTML=shown.map(([r,i])=>{
+    const kind=outcomeKind(r);
+    return '<tr data-row="'+i+'"><th scope="row" data-label="Task"><button class="result-link" data-index="'+i+'">'+esc(shortTaskLabel(r.task))+'</button></th>'+
+      '<td data-label="Model"><span class="model-tag family-'+esc(Charts.familyOf(modelName(r.model)))+'" title="'+esc(r.model)+'">'+esc(modelName(r.model))+'</span></td>'+
+      '<td data-label="Outcome"><span class="matrix-word '+(kind==='infra'?'neutral':kind==='passed'?'pass':'fail')+'">'+(r.passed?'Passed':r.termination==='completed'?'Failed':esc(human(r.termination||'Not evaluated')))+'</span></td>'+
+      '<td class="result-finding" data-label="Finding">'+esc(r.passed?'':resultFinding(r))+'</td>'+
+      '<td class="num" data-label="Time">'+(knownNumber(r.seconds)?Number(r.seconds).toFixed(1)+'s':'—')+'</td>'+
+      '<td class="num" data-label="Cost">'+money(r.cost_usd)+(r.flags?.includes('billing=unknown')?' + held':'')+'</td>'+
+      '<td class="num" data-label="Tool calls">'+(knownNumber(r.tool_calls)?r.tool_calls:'—')+'</td></tr>';
+  }).join('')||'<tr><td colspan="7" class="results-empty"><strong>'+(total?'No attempts match these filters':'No finished attempts yet')+'</strong>'+(total?'':'<p>'+(['queued','running','cancelling'].includes(job.status)?'Results appear here as work finishes. Open Activity to follow the current task.':'This run ended before an attempt finished. Check the run message and activity for details.')+'</p>')+'</td></tr>';
   markCurrent();
-  $$('[data-index]').forEach(button=>button.onclick=()=>{
-    const r=results[Number(button.dataset.index)];taskId=r.task;$('#task-select').value=taskId;
-    selected={node:'result',model:r.model,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};
-    revealSelection();
+  $$('[data-index]').forEach(button=>button.onclick=()=>selectResultRow(Number(button.dataset.index)));
+  $$('[data-drop-filter]').forEach(b=>b.onclick=()=>{
+    const kind=b.dataset.dropFilter;
+    if(kind==='outcome'){resultsFilter='';$$('[data-results-filter]').forEach(x=>x.setAttribute('aria-pressed',String(!x.dataset.resultsFilter)));}
+    if(kind==='model'){resultsModel='';$('#results-model').value='';}
+    if(kind==='query'){resultsQuery='';$('#results-search').value='';}
+    renderResults();
   });
+  if($('#results-clear'))$('#results-clear').onclick=clearResultFilters;
   if(focused!==undefined)$$('[data-index]').find(b=>b.dataset.index===focused)?.focus({preventScroll:true});
+}
+function selectResultRow(index){
+  const r=job.results[index];if(!r)return;
+  taskId=r.task;$('#task-select').value=taskId;
+  selected={node:'result',model:r.model,label:'Task result',category:'result',status:r.passed?'completed':'error',output:r.output,result:r};
+  revealSelection();
+}
+// Open Results already narrowed: a standings row or a matrix total lands here.
+function showResultsFor(model,outcome){
+  resultsModel=model||'';resultsFilter=outcome||'';resultsQuery='';
+  const search=$('#results-search');if(search)search.value='';
+  $$('[data-results-filter]').forEach(x=>x.setAttribute('aria-pressed',String((x.dataset.resultsFilter||'')===resultsFilter)));
+  switchView('results');
+  const picker=$('#results-model');if(picker)picker.value=resultsModel;
+  renderResults();
+  $('#results-count')?.scrollIntoView({block:'nearest'});
 }
 function switchView(next) {
   view=next;
-  $$('[data-view]').forEach(b=>{
+  $$('.tabs [data-view]').forEach(b=>{
     const active=b.dataset.view===view;
     b.classList.toggle('active',active); b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;
   });
@@ -385,7 +470,9 @@ function switchView(next) {
   if(view==='live')renderGraph(); else if(view==='results')renderResults(); else renderReport();
 }
 function taskTitle(id){return state.tasks.find(t=>t.id===id)?.title||human(id)}
-function modelName(id){const arm=job?.settings?.arms?.find(a=>a.id===id);if(arm)return arm.name;const [base,effort]=id.split('@');return (state.models.find(m=>m.id===base)?.name||base)+(effort?' · '+effort+' reasoning':'')}
+// The server resolves one readable name per competitor (wb_studio/runtime_registry.py);
+// a run whose report has not arrived yet falls back to what the job carries.
+function modelName(id){const given=report?.names?.[id];if(given)return given;const arm=job?.settings?.arms?.find(a=>a.id===id);if(arm)return arm.name;const [base,effort]=String(id).split('@');return (state.models.find(m=>m.id===base)?.name||base)+(effort?' · '+effort+' reasoning':'')}
 function armKind(id){const arm=job?.settings?.arms?.find(a=>a.id===id);return arm?arm.kind:state.models.find(m=>m.id===id.split('@')[0])?.kind||'Setup'}
 function filteredTasks(){const q=$('#task-search').value.trim().toLowerCase(),category=$('#task-category').value;return state.tasks.filter(t=>(!category||t.category===category)&&(!$('#task-difficulty').value||(t.difficulty?.level||'unrated')===$('#task-difficulty').value)&&(t.title+' '+t.brief+' '+(t.applications||[]).join(' ')).toLowerCase().includes(q))}
 function renderTaskOptions(){const filtered=filteredTasks();const history=new Map();for(const j of state.jobs||[])for(const r of j.results||[]){const h=history.get(r.task)||{n:0,passed:0};h.n++;if(r.passed)h.passed++;history.set(r.task,h);}
@@ -508,7 +595,7 @@ async function openLaunch(options={}) {
  finally{launchOpening=false;$('#launch-loading').classList.add('hidden');launchSize();if(options.focusStart){$('#launch-button').focus();$('#launch-button').scrollIntoView({block:'center'});}}
 }
 
-$('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('#close-dialog').onclick=cancelLaunch;$('#task-search').oninput=renderTaskOptions;$('#select-all').onclick=()=>{$('#task-set').value='custom';const ids=filteredTasks().map(t=>t.id);const all=ids.every(id=>selectedTasks.has(id));ids.forEach(id=>all?selectedTasks.delete(id):selectedTasks.add(id));renderTaskOptions()};$('#task-select').onchange=e=>{taskId=e.target.value;clearSelection();renderGraph()};$('#fit-view').onclick=()=>$('#graph-scroll').scrollTo({top:0,left:0,behavior:'smooth'});$$('[data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-output]').forEach(b=>b.onclick=()=>{setOutputMode(b.dataset.output);renderOutput();bindEvidence()});$('#copy-output').onclick=async()=>{
+$('#new-comparison').onclick=openLaunch;$('#empty-start').onclick=openLaunch;$('#close-dialog').onclick=cancelLaunch;$('#task-search').oninput=renderTaskOptions;$('#select-all').onclick=()=>{$('#task-set').value='custom';const ids=filteredTasks().map(t=>t.id);const all=ids.every(id=>selectedTasks.has(id));ids.forEach(id=>all?selectedTasks.delete(id):selectedTasks.add(id));renderTaskOptions()};$('#task-select').onchange=e=>{taskId=e.target.value;clearSelection();renderGraph()};$('#fit-view').onclick=()=>$('#graph-scroll').scrollTo({top:0,left:0,behavior:'smooth'});$$('.tabs [data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$$('[data-output]').forEach(b=>b.onclick=()=>{setOutputMode(b.dataset.output);renderOutput();bindEvidence()});$('#copy-output').onclick=async()=>{
   if(!selected)return toast('Select an output first');
   const raw={arguments:selected.arguments,output:selected.output,status:selected.status,...(selected.result?{checks:selected.result.checks,termination:selected.result.termination,flags:selected.result.flags,unexpected_changes:selected.result.unexpected_changes,report:selected.report}:{})};
   try {await navigator.clipboard.writeText(outputMode==='output'?(typeof selected.output==='string'?selected.output:JSON.stringify(selected.output??null,null,2)):$('#output').innerText);toast(outputMode==='output'?'Output copied':'Copied the '+outputMode+' tab as text');}
@@ -566,7 +653,7 @@ $('#run-title').oninput=launchSize;$('#run-turns').oninput=launchSize;
 $('#clear-tasks').onclick=()=>{selectedTasks.clear();$('#task-set').value='custom';renderTaskOptions();};
 $('#reset-task-filters').onclick=()=>{$('#task-search').value='';$('#task-category').value='';$('#task-difficulty').value='';renderTaskOptions();$('#task-search').focus();};
 $('.tabs').addEventListener('keydown',e=>{
-  const tabs=$$('[data-view]'),index=tabs.indexOf(document.activeElement);
+  const tabs=$$('.tabs [data-view]'),index=tabs.indexOf(document.activeElement);
   if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
   e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
   tabs[next].click();tabs[next].focus();
@@ -638,7 +725,7 @@ function setOutputMode(mode) {
   $$('[data-output]').forEach(b=>{const active=b.dataset.output===mode;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;});
 }
 function bindEvidence() {
-  $$('[data-review-run]').forEach(b=>b.onclick=()=>{b.disabled=true;b.textContent='Analyzing…';$('#analyze-run')?.click();});
+  $$('[data-review-run]').forEach(b=>b.onclick=()=>{b.disabled=true;b.textContent='Reading the execution…';runReasoningReview();});
   $$('[data-evidence]').forEach(b=>b.onclick=()=>{
     const event=events.find(e=>e.id===Number(b.dataset.evidence));
     if(!event)return toast('Evidence is still loading. Try again shortly.');
@@ -664,17 +751,58 @@ function bindEvidence() {
 
   });
 }
-function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;const reviewOpen=$('#reasoning-review')?.open;
+function renderReport(){if(!job||!report)return;const focused=document.activeElement?.dataset?.report;
  const attempts=report.attempts,valid=attempts.filter(a=>!a.infrastructure),live=['queued','running','cancelling'].includes(job.status),setups=job.settings.models,tasks=job.settings.tasks,passed=valid.filter(a=>a.passed).length;
  const perSetup=m=>{const rows=valid.filter(a=>a.model===m);return {passed:rows.filter(a=>a.passed).length,total:rows.length};};
  const cell=(t,m)=>{const i=attempts.findIndex(a=>a.task===t&&a.model===m);if(i<0)return '<td class="matrix-cell pending"><span class="neutral">'+(live?'Waiting':'—')+'</span></td>';const a=attempts[i],cls=a.infrastructure?'neutral':a.passed?'pass':'fail';return '<td class="matrix-cell '+cls+'"><button type="button" data-report="'+i+'" title="'+esc(outcomeFinding(a))+'"><span class="matrix-word">'+(a.infrastructure?'Error':a.passed?'Passed':'Failed')+'</span>'+(a.passed?'':'<small>'+esc(outcomeFinding(a))+'</small>')+'</button></td>';};
  const verdict=attempts.length?passed+' of '+valid.length+' passed':live?'The work is underway':'No evaluated outcomes';
- const breakdown=setups.length>1?setups.map(m=>{const s=perSetup(m);return modelName(m)+' passed '+s.passed+' of '+s.total;}).join('; ')+'.':'';
- const sentence=attempts.length?[breakdown,attempts.length-valid.length?(attempts.length-valid.length)+' attempts could not be evaluated.':'',live?'More arrive as attempts finish.':''].filter(Boolean).join(' '):live?'Outcomes appear as each attempt finishes. Follow the work under Activity.':'This run ended before any task could be evaluated. See the run message and Activity.';
- const matrix=attempts.length||live?'<div class="table-scroll"><table class="table outcome-matrix"><thead><tr><th scope="col">Task</th>'+setups.map(m=>'<th scope="col">'+esc(modelName(m))+'</th>').join('')+'</tr></thead><tbody>'+tasks.map(t=>'<tr><th scope="row">'+esc(shortTaskLabel(t))+'</th>'+setups.map(m=>cell(t,m)).join('')+'</tr>').join('')+'</tbody>'+(tasks.length>1?'<tfoot><tr><th scope="row">Passed</th>'+setups.map(m=>{const s=perSetup(m);return '<td>'+(s.total?s.passed+' / '+s.total:'—')+'</td>';}).join('')+'</tr></tfoot>':'')+'</table></div>':'';
- const analysis=report.analysis;
- $('#report-view').innerHTML='<div class="report-intro"><h3>'+esc(verdict)+'</h3><p>'+esc(sentence)+'</p></div>'+matrix+'<div id="failure-slot"></div><details id="reasoning-review" class="analysis-section" '+(reviewOpen?'open':'')+'><summary>Reasoning review <span class="meta">'+(analysis?.status==='completed'?'available':analysis?.status==='failed'?'failed':(analysisPending.has(job.id)||analysis?.status==='pending')?'running':'optional, paid')+'</span></summary>'+(analysis?.status==='completed'?'<p>'+esc(analysis.summary)+'</p>'+analysis.findings.map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+f.event_ids.map(evidenceButton).join('')+'</article>').join('')+'<h4>Next experiment</h4><p>'+esc(analysis.next_experiment)+'</p><p class="report-caveat">'+esc(analysis.limitations)+' · '+esc(analysis.model)+' / '+esc(analysis.effort)+'</p>':analysis?.status==='failed'?'<p class="fail">'+esc(analysis.error)+'</p>':'<button class="button" id="analyze-run" '+(!attempts.length||analysisPending.has(job.id)||analysis?.status==='pending'||live?'disabled':'')+'>'+((analysisPending.has(job.id)||analysis?.status==='pending')?'Reading the execution…':'Analyze this run · Gemini medium')+'</button><p class="report-caveat">Paid analysis uses the remaining run budget and weekly limit. Interpretations do not change task verdicts.</p>')+'</details>';
- $$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));bindEvidence();if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});if($('#analyze-run'))$('#analyze-run').onclick=async()=>{
+ const notes=attempts.length?[attempts.length-valid.length?(attempts.length-valid.length)+' '+plural(attempts.length-valid.length,'attempt')+' could not be evaluated.':'',live?'More arrive as attempts finish.':''].filter(Boolean).join(' '):live?'Outcomes appear as each attempt finishes. Follow the work under Activity.':'This run ended before any task could be evaluated. See the run message and Activity.';
+ const matrix=attempts.length||live?'<div class="table-scroll"><table class="table outcome-matrix"><thead><tr><th scope="col">Task</th>'+setups.map(m=>'<th scope="col">'+esc(modelName(m))+'</th>').join('')+'</tr></thead><tbody>'+tasks.map(t=>'<tr><th scope="row">'+esc(shortTaskLabel(t))+'</th>'+setups.map(m=>cell(t,m)).join('')+'</tr>').join('')+'</tbody>'+(tasks.length>1?'<tfoot><tr><th scope="row">Passed</th>'+setups.map(m=>{const s=perSetup(m);return '<td>'+(s.total?'<button type="button" class="text-button" data-open-results="'+esc(m)+'">'+s.passed+' / '+s.total+'</button>':'—')+'</td>';}).join('')+'</tr></tfoot>':'')+'</table></div>':'';
+ $('#report-view').innerHTML='<div class="report-intro"><h3>'+esc(verdict)+'</h3>'+(notes?'<p>'+esc(notes)+'</p>':'')+'</div>'
+  +standingsBlock(setups,perSetup)+matrix+'<div id="failure-slot"></div>'+reviewSection(live);
+ $$('[data-report]').forEach(b=>b.onclick=()=>selectReport(Number(b.dataset.report)));
+ $$('[data-open-results]').forEach(b=>b.onclick=()=>showResultsFor(b.dataset.openResults));
+ bindEvidence();
+ if(focused!==undefined)$$('[data-report]').find(b=>b.dataset.report===focused)?.focus({preventScroll:true});
+ if($('#analyze-run'))$('#analyze-run').onclick=runReasoningReview;
+}
+// Who won, at a glance: sorted by pass rate, with the cost of a passed task beside it.
+function standingsBlock(setups,perSetup){
+ if(setups.length<2)return '';
+ const priced=m=>{const rows=job.results.filter(r=>r.model===m&&knownNumber(r.cost_usd));
+  const spent=rows.reduce((a,r)=>a+Number(r.cost_usd),0),won=perSetup(m).passed;
+  return rows.length&&won?spent/won:null;};
+ const rows=setups.map(m=>({id:m,name:modelName(m),...perSetup(m),perPass:priced(m)}))
+  .filter(s=>s.total).sort((a,b)=>b.passed/b.total-a.passed/a.total||b.total-a.total);
+ if(!rows.length)return '';
+ const anyCost=rows.some(s=>s.perPass!==null);
+ return '<div class="table-scroll"><table class="table standings-table"><caption class="sr-only">Pass rate by model, best first</caption>'
+  +'<thead><tr><th scope="col">Model</th><th scope="col" class="num">Passed</th><th scope="col" class="num">Rate</th>'
+  +(anyCost?'<th scope="col" class="num">Per passed task</th>':'')+'</tr></thead><tbody>'
+  +rows.map(s=>'<tr><th scope="row"><button type="button" class="text-button" data-open-results="'+esc(s.id)+'" title="'+esc(s.id)+'">'+esc(s.name)+'</button></th>'
+   +'<td class="num">'+s.passed+' / '+s.total+'</td><td class="num">'+Math.round(s.passed*100/s.total)+'%</td>'
+   +(anyCost?'<td class="num">'+(s.perPass===null?'—':money(s.perPass))+'</td>':'')+'</tr>').join('')
+  +'</tbody></table></div>';
+}
+// The reading runs for every finished run on its own; a person only ever asks again.
+function reviewSection(live){
+ const a=report.analysis||{},running=analysisPending.has(job.id)||a.status==='pending'&&/dispatched/i.test(a.reason||'');
+ const head='<h3>Reasoning review</h3>';
+ if(a.status==='completed')return '<section class="analysis-section">'+head
+  +'<p>'+esc(a.summary||'')+'</p>'
+  +(a.findings||[]).map(f=>'<article class="analysis-finding"><h4>'+esc(f.title)+' <small>'+esc(f.kind)+'</small></h4><p>'+esc(f.explanation)+'</p>'+(f.event_ids||[]).map(evidenceButton).join('')+'</article>').join('')
+  +(a.next_experiment?'<h4>Next experiment</h4><p>'+esc(a.next_experiment)+'</p>':'')
+  +'<p class="report-caveat">'+esc(a.limitations||'')+' · '+esc(a.model||'')+(a.effort?' / '+esc(a.effort):'')+'</p></section>';
+ if(a.status==='failed')return '<section class="analysis-section">'+head
+  +'<div class="analysis-retry"><button class="button" id="analyze-run"'+(running?' disabled':'')+'>'+(running?'Reading the execution…':'Try again')+'</button>'
+  +'<p class="fail">'+esc(a.error||'The reading did not complete.')+'</p></div></section>';
+ // A reason that says the reading cannot run is not an invitation to ask for it.
+ const askable=!running&&!live&&(!a.reason||/has not run yet/i.test(a.reason));
+ return '<section class="analysis-section">'+head
+  +'<p class="meta">'+esc(running?'Reading the execution…':a.reason||'The reading has not run yet.')+'</p>'
+  +(askable?'<button class="button" id="analyze-run">Run it now</button>':'')+'</section>';
+}
+async function runReasoningReview(){
   const reviewId=job.id;if(analysisPending.has(reviewId))return;
   analysisPending.add(reviewId);const button=$('#analyze-run');button.disabled=true;button.textContent='Reading the execution…';
   try {
@@ -683,7 +811,7 @@ function renderReport(){if(!job||!report)return;const focused=document.activeEle
     budget((await api('/api/state')).budget);
   } catch(error) {toast(error.message);}
   finally {analysisPending.delete(reviewId);if(job?.id===reviewId){renderReport();if(selected?.report){renderOutput();bindEvidence();}}}
-};}
+}
 $('#task-category').onchange=renderTaskOptions;
 function renderSetups(){}
 

@@ -6,6 +6,15 @@ const fmtPct = v => v === null || v === undefined ? '—' : Math.round(v * 100) 
 // Three significant figures below a dollar, cents above: $0.0284, $0.107, $1.26.
 const fmtMoney = v => v === null || v === undefined ? 'unknown' : v === 0 ? '$0.00' : v >= 1 ? '$' + v.toFixed(2) : '$' + Number(v.toPrecision(3)).toString();
 const fmtDate = s => s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+// One date per round: the day it ran, or the span when its runs cross days.
+function roundDates(runs) {
+  const stamps = runs.map(r => r.created_at && Date.parse(r.created_at)).filter(Boolean);
+  if (!stamps.length) return '';
+  const first = new Date(Math.min(...stamps)), last = new Date(Math.max(...stamps));
+  if (fmtDate(first) === fmtDate(last)) return fmtDate(last);
+  const sameYear = first.getFullYear() === last.getFullYear();
+  return (sameYear ? first.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : fmtDate(first)) + ' – ' + fmtDate(last);
+}
 const trackWords = t => t === 'create-and-run' ? 'Workflow configuration' : 'Agentic requests';
 const gradeClass = g => ({ Improvement: 'improvement', Regression: 'regression', Tradeoff: 'tradeoff', Tie: 'tie', Undecided: 'undecided' }[g] || 'none');
 const meta = parts => '<p class="meta">' + parts.filter(Boolean).map(esc).join('<span class="sep">·</span>') + '</p>';
@@ -60,7 +69,7 @@ function renderReportsIndex(data) {
     const best = round.best ? '<strong>' + esc(round.best.name) + '</strong> passed ' + round.best.passed + ' of ' + round.best.attempts + ' (' + fmtPct(round.best.rate) + ')' : 'No evaluated attempts';
     const comparable = round.grade && round.grade.grade !== 'Not comparable';
     return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + (run.status === 'completed' ? '' : meta([run.status])) + '</li>').join('') + '</ul></td>' +
-      '<td class="round-date"><ul class="round-runs">' + round.runs.map(run => '<li>' + esc(fmtDate(run.created_at)) + '</li>').join('') + '</ul></td>' +
+      '<td class="round-date">' + esc(roundDates(round.runs)) + '</td>' +
       '<td class="round-lead">' + (comparable ? gradeBadge(round.grade) : '') + '<span>' + best + '</span>' + (comparable ? '<span class="meta">' + esc(round.grade.reason) + '</span>' : '') + '</td>' +
       '<td>' + round.task_count + ' ' + (round.task_count === 1 ? 'task' : 'tasks') + '<br><span class="meta">' + esc(trackWords(round.track)) + ' · ' + round.setups + (round.setups === 1 ? ' setup' : ' setups') + '</span></td>' +
       '<td class="action"><a href="#round/' + encodeURIComponent(round.id) + audienceQuery() + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
@@ -157,8 +166,11 @@ function heroFigure(r, title) {
 }
 
 function failuresBlock(r) {
-  const buckets = (r.failures?.buckets || []).filter(b => b.count).map(b => ({ label: b.label, value: b.count, denominator: r.failures.summary.failed_attempts, cls: b.id === 'infrastructure' ? 'neutral' : 'fail', data: { bucket: b.id } }));
-  const bars = buckets.length ? Charts.bars({ title: r.failures.summary.failed_attempts + ' of ' + r.failures.summary.recorded_attempts + ' attempts failed', rows: buckets, labelWidth: 260, source: sourceText(r, '') }) : null;
+  const summary = r.failures?.summary || {};
+  const bars = (r.failures?.buckets || []).some(b => b.count)
+    ? Charts.failureColumns({ buckets: r.failures.buckets, failed: summary.failed_attempts,
+        title: summary.failed_attempts + ' of ' + summary.recorded_attempts + ' attempts failed', source: sourceText(r, '') })
+    : null;
   const matrix = Charts.matrix({ tasks: r.tasks, setups: r.order.map(id => ({ id, name: setupName(r, id), baseline: id === r.baseline, family: setupFamily(setupName(r, id)) })), cells: r.matrix });
   const wrap = document.createElement('div'); wrap.className = 'failures-block';
   if (bars) wrap.appendChild(bars); else { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = 'No failed attempts.'; wrap.appendChild(p); }

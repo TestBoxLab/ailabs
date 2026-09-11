@@ -13,6 +13,15 @@ BUCKETS = {
     "requirement_unmet": "Recorded requirements unmet",
     "unclassified": "Insufficient evidence to classify",
 }
+# The same buckets in the two or three words a chart axis can hold.
+SHORT_LABELS = {
+    "infrastructure": "Infrastructure",
+    "budget_limit": "Budget",
+    "timeout": "Timeout",
+    "unintended_changes": "Out of scope",
+    "requirement_unmet": "Requirement unmet",
+    "unclassified": "Unclassified",
+}
 BUDGET_TERMINATIONS = {"infra:attempt_cap", "infra:weekly_budget"}
 TIMEOUT_TERMINATIONS = {"timeout", "infra:timeout"}
 LIMITATION = (
@@ -139,7 +148,8 @@ def analysis(studio, identity):
     failed = sum(not attempt["passed"] for attempt in attempts)
     bucket_counts = Counter(a["bucket"] for a in attempts if not a["passed"])
     percentages = _percentages([bucket_counts[k] for k in BUCKETS], failed)
-    buckets = [{"id": key, "label": label, "count": bucket_counts[key], "percent_failed": percentages[i],
+    buckets = [{"id": key, "label": label, "short_label": SHORT_LABELS[key],
+                "count": bucket_counts[key], "percent_failed": percentages[i],
                 "percent_all": round(bucket_counts[key] * 100 / len(attempts), 2) if attempts else None,
                 "attempt_ids": [a["id"] for a in attempts if a["bucket"] == key]}
                for i, (key, label) in enumerate(BUCKETS.items())]

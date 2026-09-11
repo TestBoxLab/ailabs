@@ -18,7 +18,7 @@ function showWorkspaceSurface(surface, updateHash=true) {
 }
 window.showWorkspaceSurface=showWorkspaceSurface;
 let historyStatus='',historyTrack='',historySince='';
-const ACTIVE_STATUS=['queued','running','pausing','paused','cancelling'],FAILED_STATUS=['failed','cancelled','interrupted'],FINISHED_STATUS=['completed','failed','cancelled','interrupted'];
+const ACTIVE_STATUS=['queued','running','pausing','paused','cancelling'],FAILED_STATUS=['failed','cancelled','interrupted'];
 function historyFiltered(){
   const q=$('#history-search').value.toLowerCase().trim(),sort=$('#history-sort').value;
   const rows=(state?.jobs||[]).filter(j=>{const s=runStatus(j);const ok=!historyStatus||(historyStatus==='active'?ACTIVE_STATUS.includes(s):historyStatus==='failed'?FAILED_STATUS.includes(s):s===historyStatus);const since=!historySince||Date.parse(j.created_at)>=Date.now()-Number(historySince)*86400000;return ok&&since&&(!historyTrack||j.settings.track===historyTrack)&&[j.title,j.id,...(j.settings.models||[]),...(j.settings.arms||[]).map(a=>a.name)].join(' ').toLowerCase().includes(q);});
@@ -32,10 +32,10 @@ const countCell=(c,value)=>'<td class="num">'+(c?value(c):'…')+'</td>';
 function runCost(j){const results=j.results||[];return results.length&&results.every(r=>r.cost_usd!==null&&r.cost_usd!==undefined&&!(r.flags||[]).some(f=>['billing=unknown','cost_missing'].includes(f)))?results.reduce((n,r)=>n+Number(r.cost_usd),0):null;}
 function historyRow(j){
   const valid=(j.results||[]).filter(r=>!String(r.termination).startsWith('infra:')),passed=valid.filter(r=>r.passed).length,open=expandedRuns.has(j.id);
-  const arms=j.settings.arms||j.settings.models.map(id=>({id,name:id})),finished=FINISHED_STATUS.includes(j.status)&&j.completed>0;
+  const arms=j.settings.arms||j.settings.models.map(id=>({id,name:id}));
   const passedCell=valid.length?'<span class="passed-cell '+(passed===valid.length?'all':passed?'some':'none')+'">'+passed+' / '+valid.length+'</span>':'<span class="neutral">Not assessed</span>';
-  return '<tr class="history-row" data-run-row="'+esc(j.id)+'" tabindex="0"><th scope="row"><div class="run-cell"><button class="run-expander" data-expand-run="'+esc(j.id)+'" aria-expanded="'+open+'" aria-controls="run-detail-'+esc(j.id)+'" aria-label="Run configuration">'+chevron+'</button><div><button class="run-open" data-open-run="'+esc(j.id)+'">'+esc(j.title)+'</button><small class="run-setups">'+esc(arms.map(a=>a.name||a.id).join(', '))+' · '+j.settings.tasks.length+' '+(j.settings.tasks.length===1?'task':'tasks')+'</small></div></div></th><td><span class="status '+esc(j.status)+'">'+esc(runStatus(j))+'</span></td><td>'+trackName(j.settings.track)+'</td><td>'+j.completed+' / '+j.total+'</td><td>'+passedCell+'</td>'+countCell(runCounts?.[j.id],c=>c.turns===null?'—':Number(c.turns).toFixed(1))+countCell(runCounts?.[j.id],c=>c.violations+' / '+c.attempts)+'<td class="num">'+esc(money(runCost(j)))+'</td><td><time datetime="'+esc(j.created_at)+'" title="'+esc(new Date(j.created_at).toLocaleString())+'">'+esc(clock(j.created_at))+'</time></td><td class="run-report">'+(finished?'<button class="text-button" type="button" data-open-report="'+esc(j.id)+'">Report</button> <button class="text-button" type="button" data-run-again="'+esc(j.id)+'">Run again</button>':'')+'</td></tr>'+
-    '<tr id="run-detail-'+esc(j.id)+'" class="history-expanded '+(open?'':'hidden')+'"><td colspan="10"><div class="run-expansion"><div><h3>Setups</h3>'+arms.map(a=>'<p>'+esc(a.name||a.id)+'</p>').join('')+'</div><dl><dt>Concurrent agents</dt><dd>'+esc(j.settings.concurrency||1)+'</dd><dt>Spending limit</dt><dd>'+esc(money(j.settings.maximum_usd))+'</dd><dt>Run ID</dt><dd><code>'+esc(j.id)+'</code></dd></dl><div><div class="run-config-summary">'+readableRunConfig(j)+'<button class="text-button" data-download-run="'+esc(j.id)+'">Download configuration</button></div>'+(j.error?'<p class="fail">'+esc(j.error)+'</p>':'')+'</div></div></td></tr>';
+  return '<tr class="history-row" data-run-row="'+esc(j.id)+'" tabindex="0"><th scope="row"><div class="run-cell"><button class="run-expander" data-expand-run="'+esc(j.id)+'" aria-expanded="'+open+'" aria-controls="run-detail-'+esc(j.id)+'" aria-label="Run configuration">'+chevron+'</button><div><button class="run-open" data-open-run="'+esc(j.id)+'">'+esc(j.title)+'</button><small class="run-setups">'+esc(arms.map(a=>a.name||a.id).join(', '))+' · '+j.settings.tasks.length+' '+(j.settings.tasks.length===1?'task':'tasks')+'</small></div></div></th><td><span class="status '+esc(j.status)+'">'+esc(runStatus(j))+'</span></td><td>'+trackName(j.settings.track)+'</td><td>'+j.completed+' / '+j.total+'</td><td>'+passedCell+'</td>'+countCell(runCounts?.[j.id],c=>c.turns===null?'—':Number(c.turns).toFixed(1))+countCell(runCounts?.[j.id],c=>c.violations+' / '+c.attempts)+'<td class="num">'+esc(money(runCost(j)))+'</td><td><time datetime="'+esc(j.created_at)+'" title="'+esc(new Date(j.created_at).toLocaleString())+'">'+esc(clock(j.created_at))+'</time></td></tr>'+
+    '<tr id="run-detail-'+esc(j.id)+'" class="history-expanded '+(open?'':'hidden')+'"><td colspan="9"><div class="run-expansion"><div><h3>Setups</h3>'+arms.map(a=>'<p>'+esc(a.name||a.id)+'</p>').join('')+'</div><dl><dt>Concurrent agents</dt><dd>'+esc(j.settings.concurrency||1)+'</dd><dt>Spending limit</dt><dd>'+esc(money(j.settings.maximum_usd))+'</dd><dt>Run ID</dt><dd><code>'+esc(j.id)+'</code></dd></dl><div><div class="run-config-summary">'+readableRunConfig(j)+'<button class="text-button" data-download-run="'+esc(j.id)+'">Download configuration</button></div>'+(j.error?'<p class="fail">'+esc(j.error)+'</p>':'')+'</div></div></td></tr>';
 }
 function renderHistory(){
   if(!state)return;
@@ -45,18 +45,16 @@ function renderHistory(){
   let lastDay=null,html='';
   for(const j of rows.slice(historyPage*historyPageSize,(historyPage+1)*historyPageSize)){
     const day=dayLabel(j.created_at);
-    if(!byName&&day!==lastDay){lastDay=day;const n=rows.filter(x=>dayLabel(x.created_at)===day).length;html+='<tr class="history-day"><th colspan="10" scope="colgroup">'+esc(day)+'<span>'+n+' '+(n===1?'run':'runs')+'</span></th></tr>';}
+    if(!byName&&day!==lastDay){lastDay=day;const n=rows.filter(x=>dayLabel(x.created_at)===day).length;html+='<tr class="history-day"><th colspan="9" scope="colgroup">'+esc(day)+'<span>'+n+' '+(n===1?'run':'runs')+'</span></th></tr>';}
     html+=historyRow(j);
   }
-  $('#history-rows').innerHTML=html||'<tr><td colspan="10">'+(state.jobs.length?'<div class="empty-state"><p>No runs match this search.</p><button class="text-button" type="button" data-history-clear>Show every run</button></div>':'<div class="empty-state"><h3>No runs yet</h3><p>A run is one task set against one or more setups. Every attempt is graded afterwards by the scripted checker, never by the model that did the work.</p><button class="button primary" data-new-run>New run</button></div>')+'</td></tr>';
+  $('#history-rows').innerHTML=html||'<tr><td colspan="9">'+(state.jobs.length?'<div class="empty-state"><p>No runs match this search.</p><button class="text-button" type="button" data-history-clear>Show every run</button></div>':'<div class="empty-state"><h3>No runs yet</h3><p>A run is one task set against one or more setups. Every attempt is graded afterwards by the scripted checker, never by the model that did the work.</p><button class="button primary" data-new-run>New run</button></div>')+'</td></tr>';
   $$('[data-new-run]').forEach(b=>b.onclick=()=>openLaunch());$$('[data-history-clear]').forEach(b=>b.onclick=clearHistoryFilters);
   $('#history-count').textContent=rows.length===state.jobs.length&&pages<=1?'':rows.length+' of '+state.jobs.length+' runs';
   $('#history-pager').hidden=pages<=1;$('#history-page').textContent=(historyPage+1)+' / '+pages;$('#history-prev').disabled=historyPage===0;$('#history-next').disabled=historyPage+1>=pages;
   $$('[data-expand-run]').forEach(b=>b.onclick=()=>{expandedRuns.has(b.dataset.expandRun)?expandedRuns.delete(b.dataset.expandRun):expandedRuns.add(b.dataset.expandRun);renderHistory();$('#history-rows [data-expand-run="'+b.dataset.expandRun+'"]').focus({preventScroll:true});});
   $$('[data-run-row]').forEach(row=>row.onclick=e=>{if(!e.target.closest('button,a'))openJob(row.dataset.runRow);});
   $$('[data-open-run]').forEach(b=>b.onclick=()=>openJob(b.dataset.openRun));
-  $$('#history-rows [data-open-report]').forEach(b=>b.onclick=()=>{const hash='#report/'+encodeURIComponent(b.dataset.openReport);history.pushState(null,'',hash);window.reportRoute?.(hash);});
-  $$('#history-rows [data-run-again]').forEach(b=>b.onclick=()=>{const j=state.jobs.find(x=>x.id===b.dataset.runAgain);if(j&&window.runAgain)runAgain(j);});
   const noTurns=runCounts&&rows.length&&rows.every(j=>!runCounts[j.id]||runCounts[j.id].turns===null);$('#runs-panel .history-table').classList.toggle('no-turns',!!noTurns);
   if(focus)$$('[data-expand-run]').find(b=>b.dataset.expandRun===focus)?.focus({preventScroll:true});
 }
@@ -152,10 +150,72 @@ renderReport=function(){
  api('/api/jobs/'+job.id+'/diagnostics').then(data=>{diagnosticsCache.set(key,data);if(job&&job.id+':'+job.completed+':'+job.status===key)renderDiagnostics(data);}).catch(e=>{if(job&&job.id+':'+job.completed+':'+job.status===key&&$('#failure-breakdown'))$('#failure-breakdown').textContent=e.message;}).finally(()=>diagnosticsPending.delete(key));
 };
 function renderDiagnostics(data){
- const box=$('#failure-breakdown');if(!box)return;const counts=data.summary;
- box.innerHTML='<h3>Where it failed</h3>'+(counts.failed_attempts?'<div class="failure-list">'+data.buckets.filter(b=>b.count).map(b=>'<button type="button" class="failure-bar" data-failure-bucket="'+esc(b.id)+'" aria-pressed="false"><span>'+esc(b.label)+'</span><strong>'+b.count+' of '+counts.failed_attempts+' failed</strong></button>').join('')+'</div><div id="diagnostic-attempts">'+data.attempts.filter(a=>!a.passed).map(a=>diagnosticAttempt(a)).join('')+'</div>':'<p>No failed attempts in the recorded outcomes.</p>')+(counts.unrecorded_attempts?'<p>'+counts.unrecorded_attempts+' attempts have no recorded outcome.</p>':'')+'<details class="diagnostic-limits"><summary>Evidence limits</summary><p>'+esc(Array.isArray(data.limitations)?data.limitations.join(' '):(data.limitations||''))+'</p></details>';
- $$('[data-failure-bucket]').forEach(b=>b.onclick=()=>{const selected=b.getAttribute('aria-pressed')!=='true';$$('[data-failure-bucket]').forEach(x=>x.setAttribute('aria-pressed','false'));b.setAttribute('aria-pressed',String(selected));$('#diagnostic-attempts').innerHTML=data.attempts.filter(a=>!a.passed&&(!selected||a.bucket===b.dataset.failureBucket)).map(diagnosticAttempt).join('');bindEvidence();});
+ const box=$('#failure-breakdown');if(!box)return;
+ const counts=data.summary,failed=counts.failed_attempts;
+ box.innerHTML='<h3>Where it failed</h3>'+suspectLine(data)
+  +(failed?'<div data-slot="failure-columns"></div>'+failureMix(data)
+     +'<p class="failure-count" id="diagnostic-count" role="status"></p>'
+     +'<div id="diagnostic-attempts">'+data.attempts.filter(a=>!a.passed).map(diagnosticAttempt).join('')+'</div>'
+   :'<p>No failed attempts in the recorded outcomes.</p>')
+  +(counts.unrecorded_attempts?'<p class="node-help">'+counts.unrecorded_attempts+' '+plural(counts.unrecorded_attempts,'attempt')+' have no recorded outcome.</p>':'')
+  +'<details class="diagnostic-limits"><summary>Evidence limits</summary><p>'+esc(Array.isArray(data.limitations)?data.limitations.join(' '):(data.limitations||''))+'</p></details>';
+ if(failed){
+  const chart=Charts.failureColumns({buckets:data.buckets,failed,
+   title:failed+' of '+counts.recorded_attempts+' attempts failed',
+   source:'One bucket per failed attempt, read from the record.'});
+  $('[data-slot="failure-columns"]',box).replaceWith(chart);
+  bindBucketFilter(box,data,failed);
+ }
  bindEvidence();
+}
+// A column filters the evidence beneath it; the mix table follows the same choice.
+// Delegated, because the chart kit swaps the figure element when it refits to a
+// new width and a handler bound to the old node would go with it.
+function bindBucketFilter(box,data,failed){
+ let chosen=null;
+ const paint=()=>{
+  $$('[data-bucket]',box).forEach(c=>c.setAttribute('aria-pressed',String(c.dataset.bucket===chosen)));
+  $$('[data-mix-bucket]',box).forEach(c=>c.classList.toggle('chosen',!!chosen&&c.dataset.mixBucket===chosen));
+  const shown=data.attempts.filter(a=>!a.passed&&(!chosen||a.bucket===chosen));
+  const count=$('#diagnostic-count');
+  if(count)count.textContent=chosen?shown.length+' of '+failed+' failed attempts':'';
+  $('#diagnostic-attempts').innerHTML=shown.map(diagnosticAttempt).join('');
+  bindEvidence();
+ };
+ const toggle=event=>{
+  const column=event.target.closest?.('[data-bucket]');
+  if(!column||!box.contains(column))return false;
+  chosen=chosen===column.dataset.bucket?null:column.dataset.bucket;paint();return true;
+ };
+ box.addEventListener('click',toggle);
+ box.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&toggle(e))e.preventDefault();});
+ paint();
+}
+// A task every model failed the same way is a task to suspect, not a model.
+function suspectLine(data){
+ const suspects=data.story?.suspect_tasks||[];
+ if(!suspects.length)return '';
+ return '<p class="suspect-note"><strong>Suspect the task first.</strong> '
+  +suspects.map(t=>esc(shortTaskLabel(t.task))+' ('+esc(String(t.mode_label||'').toLowerCase())+', every model)').join('; ')+'.</p>';
+}
+// How each model fails, not just how often. A table, because at six buckets and
+// seven setups a stacked bar loses the baseline every comparison needs.
+function failureMix(data){
+ const failed=data.attempts.filter(a=>!a.passed);
+ const buckets=data.buckets.filter(b=>b.count).sort((a,b)=>b.count-a.count);
+ const setups=[...new Set(failed.map(a=>a.model))];
+ if(buckets.length<2||setups.length<2)return '';
+ const tally=new Map(setups.map(m=>[m,{total:0,by:new Map()}]));
+ for(const a of failed){const row=tally.get(a.model);row.total++;row.by.set(a.bucket,(row.by.get(a.bucket)||0)+1);}
+ const rows=[...tally.entries()].sort((a,b)=>b[1].total-a[1].total);
+ const head='<tr><th scope="col">Model</th><th scope="col" class="num">Failed</th>'
+  +buckets.map(b=>'<th scope="col" class="num" data-mix-bucket="'+esc(b.id)+'">'+esc(b.short_label||b.label)+'</th>').join('')+'</tr>';
+ const body=rows.map(([model,row])=>'<tr><th scope="row">'+esc(modelName(model))+'</th><td class="num">'+row.total+'</td>'
+  +buckets.map(b=>{const n=row.by.get(b.id)||0;
+   return '<td class="num'+(n?'':' mix-none')+'" data-mix-bucket="'+esc(b.id)+'"'+(n?' title="'+n+' of '+row.total+'"':'')+'>'+(n?Math.round(n*100/row.total)+'%':'—')+'</td>';}).join('')+'</tr>').join('');
+ return '<h4 class="mix-heading">Failure mix by model</h4><div class="table-scroll"><table class="table failure-mix">'
+  +'<caption class="sr-only">Share of each model’s failed attempts by bucket</caption>'
+  +'<thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>';
 }
 function diagnosticAttempt(a){const seen=new Set();const facts=(a.observed_facts||[]).map(f=>f.text);const line=facts.find(x=>!/^(Recorded |Passed:|Failed:)/.test(x))||facts.find(x=>/^Failed:/.test(x))||a.headline||'';return '<details class="diagnostic-attempt"><summary><span class="diag-task">'+esc(shortTaskLabel(a.task))+'</span><span class="diag-line">'+esc(line)+'</span><small>'+esc(modelName(a.model))+'</small></summary><h4>'+esc(a.headline)+'</h4><p>'+esc(a.narrative)+'</p>'+(a.story?'<p class="meta">'+esc(a.story.mode_label)+(a.story.turning_point?' · '+esc(a.story.turning_point.text)+' '+evidenceButton(a.story.turning_point.event_id):'')+'</p>':'')+'<ul>'+a.observed_facts.map(f=>'<li>'+esc(f.text)+(f.event_ids||[]).filter(id=>!seen.has(id)&&seen.add(id)).map(id=>' '+evidenceButton(id)).join('')+'</li>').join('')+'</ul><details><summary>Recorded checks</summary><dl>'+a.checks.map(c=>'<dt>'+esc(c.title||c.name)+'</dt><dd>'+esc(c.passed?'Met':'Not met')+'</dd>').join('')+'</dl></details>'+(a.earliest_supported_evidence?'<p>Earliest linked evidence: '+esc(a.earliest_supported_evidence.text)+' '+evidenceButton(a.earliest_supported_evidence.event_id)+'</p>':'')+'<p class="node-help">'+esc(Array.isArray(a.limitations)?a.limitations.join(' '):(a.limitations||''))+'</p></details>';}
 function applyTheme(theme){document.documentElement.dataset.theme=theme;document.documentElement.classList.toggle('dark',theme==='dark');$('#theme-toggle').textContent=theme==='dark'?'Light':'Dark';$('#theme-toggle').setAttribute('aria-label','Switch to '+(theme==='dark'?'light':'dark')+' theme');}

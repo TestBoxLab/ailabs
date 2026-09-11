@@ -116,6 +116,39 @@ check('run row opens the run; expander shows configuration; no ghost height afte
   } finally { await context.close(); }
 });
 
+check('run overview ranks the models, the failures are columns of a share, and Results filters by model', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#run/fixture-1');
+  try {
+    at('standings'); await p.waitForSelector('.standings-table tbody tr');
+    const standings = await p.evaluate(() => [...document.querySelectorAll('.standings-table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()));
+    assert(standings.length === 2 && /100%/.test(standings[0]) && /0%/.test(standings[1]), 'the best pass rate leads: ' + standings.join(' | '));
+    assert(!(await p.locator('.report-intro').innerText()).includes('passed 3 of 3;'), 'the breakdown sentence is gone');
+    at('failure columns'); await p.waitForSelector('.chart .column[data-bucket]');
+    const columns = await p.evaluate(() => [...document.querySelectorAll('.chart .column[data-bucket]')].map(c => c.getAttribute('aria-label')));
+    assert(columns.length && columns.every(a => /\d+%$/.test(a)), 'every failure column carries its share: ' + columns.join(' | '));
+    await p.locator('.chart .column[data-bucket]').first().click();
+    await p.waitForFunction(() => /of \d+ failed attempts/.test(document.querySelector('#diagnostic-count').textContent));
+    assert(await p.evaluate(() => !!document.querySelector('.chart .column[aria-pressed=true]')), 'the chosen bucket is marked');
+    at('reasoning review');
+    const review = await p.locator('.analysis-section').innerText();
+    assert(!review.includes('optional, paid') && !review.includes('Analyze this run'), 'the reading is never a paid opt-in: ' + review);
+    at('results'); await p.locator('[data-view=results]').click();
+    await p.waitForSelector('.results-table [data-index]');
+    const heads = await p.evaluate(() => [...document.querySelectorAll('.results-table thead th')].map(t => t.innerText.trim()));
+    assert(heads[1] === 'Model' && heads.includes('Tool calls'), 'model is its own column: ' + heads.join('|'));
+    const every = await p.evaluate(() => document.querySelectorAll('#result-rows tr').length);
+    await p.selectOption('#results-model', { index: 1 });
+    await p.waitForFunction(n => document.querySelectorAll('#result-rows tr').length < n, every);
+    assert((await p.locator('.filter-chip').count()) === 1, 'the active model filter shows as a chip');
+    assert(/of \d+ attempts/.test(await p.locator('#results-count').innerText()), 'the count says how much is hidden');
+    at('sort'); await p.locator('[data-results-sort=cost]').click();
+    assert(await p.evaluate(() => document.querySelector('[data-results-sort=cost]').closest('th').getAttribute('aria-sort') !== 'none'), 'a sorted column says so');
+    at('clear'); await p.locator('.filter-chip').first().click();
+    await p.waitForFunction(n => document.querySelectorAll('#result-rows tr').length === n, every);
+    await noOverflowNoErrors(p, errors, 'run overview');
+  } finally { await context.close(); }
+});
+
 check('new run is a route: Escape cancels and returns to runs, draft survives', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#runs');
   try {
@@ -163,7 +196,7 @@ for (const theme of ['light', 'dark']) {
         const figures = [
           Charts.dotWhisker({ title: 'Informed worker passes 8 of 10, Bare 6 of 10', source: 'run-1 · 10 tasks · frozen set abc123', rows, ceiling: 1, ceilingLabel: 'answer key' }),
           Charts.scatter({ title: 'Cost against pass rate', source: 'run-1', xLog: true, pareto: true, points: [{ label: 'Informed worker', x: .12, y: .8, low: .49, high: .94, link: 'a' }, { label: 'Informed worker · high', x: .4, y: .9, link: 'a' }, { label: 'Bare Opus', baseline: true, x: .09, y: .6 }, { label: 'GPT-5.6 Sol', x: .05, y: .7 }] }),
-          Charts.bars({ title: 'Where it failed', source: 'run-1', rows: [{ label: 'Changes outside permitted scope', value: 3, denominator: 5, cls: 'fail' }, { label: 'Requirements unmet', value: 2, denominator: 5, cls: 'fail' }, { label: 'Infrastructure', value: 0, denominator: 5, cls: 'neutral' }] }),
+          Charts.failureColumns({ title: '69 of 106 attempts failed', source: 'run-1', failed: 69, buckets: [{ id: 'unintended_changes', short_label: 'Out of scope', count: 30, percent_failed: 43.48 }, { id: 'requirement_unmet', short_label: 'Requirement unmet', count: 24, percent_failed: 34.78 }, { id: 'infrastructure', short_label: 'Infrastructure', count: 9, percent_failed: 13.04 }, { id: 'timeout', short_label: 'Timeout', count: 6, percent_failed: 8.7 }, { id: 'budget_limit', short_label: 'Budget', count: 0, percent_failed: 0 }] }),
           Charts.columns({ title: 'Tokens per model', groups: [{ label: 'claude-opus-4-8', values: [{ label: 'claude', value: 253000 }] }, { label: 'gemini-3.7-flash', values: [{ label: 'gemini', value: 143000 }] }] }),
           Charts.strips({ title: 'Seconds to finish', rows: [{ label: 'Informed worker', values: [4, 7, 12, 30, 8], median: 8 }, { label: 'Bare Opus', baseline: true, values: [3, 5, 9, 11], median: 7 }] }),
           Charts.waterfall({ title: 'Tokens by kind', rows: [{ label: 'Informed worker', parts: { uncached: 120000, cache_write: 20000, cached: 80000, output: 30000 } }, { label: 'Bare Opus', parts: { uncached: 90000, cache_write: 0, cached: 0, output: 20000 } }] }),
@@ -377,7 +410,7 @@ check('studio: New architecture opens the template menu and a choice opens the e
   } finally { await context.close(); }
 });
 
-check('runs: days as group rows, text filters, a Report link at the edge, the pager only when needed', async browser => {
+check('runs: days as group rows, text filters, the pager only when needed', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#runs');
   try {
     await p.waitForSelector('#history-rows [data-open-run]');
@@ -388,9 +421,7 @@ check('runs: days as group rows, text filters, a Report link at the edge, the pa
     assert((await p.locator('#history-rows').innerText()).includes('No runs match'), 'the failed filter empties the fixture list');
     await p.locator('[data-history-clear]').click();
     await p.waitForSelector('#history-rows [data-open-run]');
-    at('report link'); await p.locator('#history-rows [data-open-report]').first().click();
-    await p.waitForSelector('#report-panel:not(.hidden)');
-    assert(await p.evaluate(() => location.hash.startsWith('#report/')), 'route is #report/<id>');
+    assert((await p.locator('#history-rows [data-open-report], #history-rows [data-run-again]').count()) === 0, 'no per-row action buttons');
     await noOverflowNoErrors(p, errors, 'runs list');
   } finally { await context.close(); }
 });

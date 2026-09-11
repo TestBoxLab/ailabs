@@ -240,12 +240,10 @@ def model_findings(narrative, aliases_back) -> list:
 
 
 def short_name(name: str) -> str:
-    """The part of a setup name a figure label can hold: a build's version token
-    (anything with @, + or a slash) drops to the method section."""
-    parts = [p.strip() for p in str(name or "").split(" · ")]
-    kept = [p for p in parts if not any(ch in p for ch in "@+/")] or parts[:1]
-    short = " · ".join(kept)
-    return short if len(short) <= 36 else short[:34].rsplit(" ", 1)[0] + "…"
+    """The part of a setup name a figure label can hold; the build token and the
+    full identifier drop to the method section."""
+    from wb_studio.runtime_registry import display_name, fit_name
+    return fit_name(display_name(name), 36)
 
 
 def hero_rows(m, shown):
@@ -415,7 +413,6 @@ def cohorts(studio) -> dict:
     for cohort in groups.values():
         cohort["runs"].sort(key=lambda r: r["created_at"] or "", reverse=True)
         cohort["latest"] = cohort["runs"][0]["created_at"] if cohort["runs"] else None
-        cohort["first"] = cohort["runs"][-1]["created_at"] if cohort["runs"] else None
         cohort["first"] = cohort["runs"][-1]["created_at"] if cohort["runs"] else None
     return groups
 
