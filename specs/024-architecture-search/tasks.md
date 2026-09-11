@@ -190,42 +190,42 @@ admitted, confirm on held-out and see the lineage refused thereafter.
 
 ### The stratified split (FR-017, FR-018, FR-033) — R4
 
-- [ ] T060 [P] [US3] Write a failing test in `wb/tests/test_slate.py` asserting a stratified draw leaves the two slates differing by at most one task per tier and per domain
-- [ ] T061 [US3] Extract the structural difficulty measure used by `wb corpus tiers` into a reusable function in `wb/wb_orchestrator/corpus.py`, with a unit test asserting it scores an arbitrary corpus task
-- [ ] T062 [US3] Implement the stratified draw in `wb/wb_orchestrator/slate.py`, making T060 pass
-- [ ] T063 [US3] Write the manifest per [contracts/config-files.md](./contracts/config-files.md) — measure, `measure_kind`, `measure_version`, cuts, seed, per-slate tier and domain counts, per-task rows — in `wb/wb_orchestrator/slate.py`, with a test asserting every field is present
-- [ ] T064 [US3] Add `wb corpus split` to `wb/wb_orchestrator/cli.py` per [contracts/cli.md](./contracts/cli.md), with a CLI test in `wb/tests/test_corpus.py`
-- [ ] T065 [US3] Refuse redrawing a frozen held-out slate in `wb/wb_orchestrator/slate.py`, with the exact refusal text from the contract, tested in `wb/tests/test_slate.py`
+- [x] T060 [P] [US3] Write a failing test in `wb/tests/test_slate.py` asserting a stratified draw leaves the two slates differing by at most one task per tier and per domain
+- [x] T061 [US3] Extract the structural difficulty measure used by `wb corpus tiers` into a reusable function in `wb/wb_orchestrator/corpus.py`, with a unit test asserting it scores an arbitrary corpus task
+- [x] T062 [US3] Implement the stratified draw in `wb/wb_orchestrator/slate.py`, making T060 pass
+- [x] T063 [US3] Write the manifest per [contracts/config-files.md](./contracts/config-files.md) — measure, `measure_kind`, `measure_version`, cuts, seed, per-slate tier and domain counts, per-task rows — in `wb/wb_orchestrator/slate.py`, with a test asserting every field is present
+- [x] T064 [US3] Add `wb corpus split` to `wb/wb_orchestrator/cli.py` per [contracts/cli.md](./contracts/cli.md), with a CLI test in `wb/tests/test_corpus.py`
+- [x] T065 [US3] Refuse redrawing a frozen held-out slate in `wb/wb_orchestrator/slate.py`, with the exact refusal text from the contract, tested in `wb/tests/test_slate.py`
 
 ### Repetitions on a run (FR-019, FR-020)
 
-- [ ] T066 [P] [US3] Write a failing test in `wb/tests/test_studio_app.py` asserting a launch carries an explicit repetitions count into the settings dict
-- [ ] T067 [US3] Add `repetitions` to the settings dict at `wb/wb_studio/app.py:433` and into the config hash, making T066 pass
-- [ ] T068 [US3] Add `--repetitions N` to `wb run` in `wb/wb_orchestrator/cli.py`, defaulting to 1, with a test in `wb/tests/test_foundation_cli.py`
-- [ ] T069 [US3] Default a variant test to the development slate in `wb/wb_studio/genesis_hypotheses.py`, with a test in `wb/tests/test_genesis_hypotheses.py`
+- [x] T066 [P] [US3] Write a failing test in `wb/tests/test_studio_app.py` asserting a launch carries an explicit repetitions count into the settings dict
+- [x] T067 [US3] Add `repetitions` to the settings dict at `wb/wb_studio/app.py:433` and into the config hash, making T066 pass
+- [x] T068 [US3] Add `--repetitions N` to `wb run` in `wb/wb_orchestrator/cli.py`, defaulting to 1, with a test in `wb/tests/test_foundation_cli.py`
+- [x] T069 [US3] Default a variant test to the development slate in `wb/wb_studio/genesis_hypotheses.py`, with a test in `wb/tests/test_genesis_hypotheses.py`
 
 ### Sizing matched to the settling test (FR-021) — R11
 
-- [ ] T070 [P] [US3] Write a failing test in `wb/tests/test_genesis_hypotheses.py` asserting `smallest_plan` refuses a size whose paired sign test cannot reach p < 0.05 at any win count
-- [ ] T071 [US3] Add a `minimum_discordant_pairs()` helper to `wb/wb_studio/measures.py` derived from `sign_test`, returning 6, with a unit test covering 2–20 pairs against the table in [research.md](./research.md) R11
-- [ ] T072 [US3] Replace the two-proportion sizing at `wb/wb_studio/genesis_hypotheses.py:517` with sizing against the paired sign test, removing the floor of 10, making T070 pass
-- [ ] T073 [US3] Carry the assumed flip rate, expected discordant pairs and minimum needed onto the record's `power` field, with the refusal text from [contracts/cli.md](./contracts/cli.md), tested in `wb/tests/test_genesis_hypotheses_record.py`
-- [ ] T074 [US3] Re-size the seven already-queued hypotheses under the corrected rule and record which were under-powered as written, into `monarch-benchmark/docs/rounds/2026-09-11-resized-hypotheses.md`
+- [x] T070 [P] [US3] Write a failing test in `wb/tests/test_genesis_hypotheses.py` asserting `smallest_plan` refuses a size whose paired sign test cannot reach p < 0.05 at any win count
+- [x] T071 [US3] Add a `minimum_discordant_pairs()` helper to `wb/wb_studio/measures.py` derived from `sign_test`, returning 6, with a unit test covering 2–20 pairs against the table in [research.md](./research.md) R11
+- [x] T072 [US3] Replace the two-proportion sizing at `wb/wb_studio/genesis_hypotheses.py:517` with sizing against the paired sign test, removing the floor of 10, making T070 pass
+- [x] T073 [US3] Carry the assumed flip rate, expected discordant pairs and minimum needed onto the record's `power` field, with the refusal text from [contracts/cli.md](./contracts/cli.md), tested in `wb/tests/test_genesis_hypotheses_record.py`
+- [x] T074 [US3] Re-size the seven already-queued hypotheses under the corrected rule and record which were under-powered as written, into `monarch-benchmark/docs/rounds/2026-09-11-resized-hypotheses.md`
 
 ### The research envelope (FR-035) — depends on T023
 
-- [ ] T075 [US3] Write a failing test in `wb/tests/test_budget.py` asserting an absent `genesis/envelope.json` means zero, not unlimited
-- [ ] T076 [US3] Implement the envelope record per [contracts/config-files.md](./contracts/config-files.md) in `wb/wb_studio/genesis_access.py`, making T075 pass
-- [ ] T077 [US3] Refuse an experiment exceeding the envelope remainder or the per-experiment ceiling before any reservation, naming the shortfall, in `wb/wb_studio/genesis_hypotheses.py`, tested in `wb/tests/test_genesis_hypotheses.py`
-- [ ] T078 [US3] Stop the loop on an exhausted envelope without drawing on the weekly ceiling, in `wb/wb_studio/genesis_autonomy.py`, with a test asserting a full scheduled day spends zero
-- [ ] T079 [US3] Add `wb budget envelope --set/--per-experiment/--by` and `wb budget envelope status` to `wb/wb_orchestrator/cli.py`, with a test in `wb/tests/test_budget.py`
+- [x] T075 [US3] Write a failing test in `wb/tests/test_budget.py` asserting an absent `genesis/envelope.json` means zero, not unlimited
+- [x] T076 [US3] Implement the envelope record per [contracts/config-files.md](./contracts/config-files.md) in `wb/wb_studio/genesis_access.py`, making T075 pass
+- [x] T077 [US3] Refuse an experiment exceeding the envelope remainder or the per-experiment ceiling before any reservation, naming the shortfall, in `wb/wb_studio/genesis_hypotheses.py`, tested in `wb/tests/test_genesis_hypotheses.py`
+- [x] T078 [US3] Stop the loop on an exhausted envelope without drawing on the weekly ceiling, in `wb/wb_studio/genesis_autonomy.py`, with a test asserting a full scheduled day spends zero
+- [x] T079 [US3] Add `wb budget envelope --set/--per-experiment/--by` and `wb budget envelope status` to `wb/wb_orchestrator/cli.py`, with a test in `wb/tests/test_budget.py`
 
 ### Lineage and the record (FR-022, FR-023) — R13
 
-- [ ] T080 [P] [US3] Write a failing test in `wb/tests/test_genesis_hypotheses_record.py` asserting a descendant of a lineage that reached held-out is refused
-- [ ] T081 [US3] Add `slate`, `lineage` and `repetitions` to `check_hypothesis` at `wb/wb_studio/genesis_hypotheses.py:41`, extending the existing record rather than adding a store
-- [ ] T082 [US3] Enforce held-out once per lineage, and require a prior `supported` development verdict, in `wb/wb_studio/genesis_hypotheses.py`, making T080 pass
-- [ ] T083 [US3] Add `wb experiment propose` and `wb experiment confirm` to `wb/wb_orchestrator/cli.py` as a surface over the existing record, with tests in `wb/tests/test_foundation_cli.py`
+- [x] T080 [P] [US3] Write a failing test in `wb/tests/test_genesis_hypotheses_record.py` asserting a descendant of a lineage that reached held-out is refused
+- [x] T081 [US3] Add `slate`, `lineage` and `repetitions` to `check_hypothesis` at `wb/wb_studio/genesis_hypotheses.py:41`, extending the existing record rather than adding a store
+- [x] T082 [US3] Enforce held-out once per lineage, and require a prior `supported` development verdict, in `wb/wb_studio/genesis_hypotheses.py`, making T080 pass
+- [x] T083 [US3] Add `wb experiment propose` and `wb experiment confirm` to `wb/wb_orchestrator/cli.py` as a surface over the existing record, with tests in `wb/tests/test_foundation_cli.py`
 
 **Checkpoint**: an experiment can conclude, or is refused with a reason. Independently
 shippable.
@@ -467,3 +467,41 @@ that passed both from one that failed both, and the old rank counted two repetit
 two tasks as four independent samples. The test carries the explanation.
 
 240 tests green across the twelve report, narrative, measures and chart suites.
+
+
+---
+
+## User Story 3 complete, 11 September 2026
+
+An experiment can now return a verdict, or be refused with a reason before any money is
+committed. Much of it was built by other sessions on this checkout the same day and is
+recorded against their work, not claimed here.
+
+| | Built by |
+|---|---|
+| T060–T065 stratified split, frozen, manifest, redraw refused (`wb corpus split`) | another session |
+| T066–T069 repetitions on a run, development slate the default | another session |
+| T075–T079 research envelope, exhaustion stops the loop (`wb budget envelope`) | another session |
+| T070–T074 sizing against the paired sign test, the power block, the re-sizing record | this session |
+| T080–T083 lineage, the once-only held-out rule, `wb experiment` | this session |
+
+**The held-out rule, stated once.** A lineage reaches that slate exactly one time,
+whatever the attempt returned. `not supported` is a result; being free to retry it is a
+search over the confirmation set rather than a confirmation, and the slate is spent the
+moment that happens. The unit is the lineage rather than the record, because otherwise
+re-wording a claim or nudging the minimum effect mints a fresh ticket to the same slate.
+`may_confirm` also requires a supported development result first — confirming something
+that was never promising is not a confirmation.
+
+**Two collisions with concurrent work, both resolved in favour of the stricter thing.**
+
+1. Another session added a `slate` check to `check_hypothesis` while this one did; there
+   were briefly two checks and two `SLATES` tuples. One survives.
+2. A refusal pinned by another session advised "raise repetitions to 3". That is wrong
+   and was misleading: the pairing is per task, so `settleable(10, 3)` reaches the same
+   three discordant pairs as `settleable(10, 1)`. Repetitions raise confidence in each
+   task's share and never change how many tasks can disagree. The text now says so and
+   the test asserts the equality instead of the sentence.
+
+Still not done: **T002** (the baseline report note) and **US4 / US5** — the fitness
+function and the curve, T084–T112.
