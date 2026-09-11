@@ -735,3 +735,33 @@ pytest only ever collected the second copy, and a stranded render function. All 
 looked like working code and none of it ran. That is the same shape as this feature's
 own central defect, a phase block dropped between the arm and the reader: something that
 reads as present and is not.
+
+### The development and held-out slates are drawn, 11 September 2026
+
+T093's second block is cleared. The task list named `tasks/dev-50`, which had never
+existed; `wb corpus split` is free, so it was drawn rather than left as a note:
+
+    development  50 tasks   simple 17  medium 17  complex 16
+    held-out     50 tasks   simple 17  medium 17  complex 16
+    frozen: tasks/development-50 (sha e724…), tasks/held-out-50 (sha 27b0…)
+
+Stratified by difficulty tier and domain over 800 usable tasks across seven domains,
+seed 20260911, recorded in `tasks/split-manifest.yaml`. The slates share no task, and a
+redraw of the held-out slate is refused rather than performed — the FR-018 rule, working.
+
+**Recipes must be authored against the development slate only.** Authoring a recipe
+means reading a task closely enough to build a correct workflow for it, which is the
+contamination the split exists to prevent. The held-out slate is run, once per lineage,
+with recipes it had no part in shaping.
+
+T093 itself remains refused on its first block, which is the one that matters: `wb
+monarch recipes` exits 2 on the milestone M5 gate before a client is built, and a paid
+launch needs a named human approver per decision D5. Neither is mine to clear.
+
+### T112, checked exhaustively rather than assumed
+
+Graphify is not obtainable here: no PyPI distribution (`pip index versions graphify` →
+no matching distribution), no entry in any of the three installed marketplaces, no
+plugin in `installed_plugins.json`, no binary on the path, no skill, and no
+`graphify-out/` directory in the repository. The constitution forbids claiming a refresh
+that did not happen, so this stays open.
