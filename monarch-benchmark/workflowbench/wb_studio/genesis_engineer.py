@@ -46,8 +46,12 @@ RUN_MARKER = re.compile(r'^Run: ([a-zA-Z0-9_-]{1,80})$', re.M)
 BUCKET_MARKER = re.compile(r'^Bucket: ([\w.-]{1,80})$', re.M)  # so the card's signature matches what `already_open` looks for
 # The only commands the Studio will run on a model's say-so. `uv run --directory` keeps the
 # bench's environment; the browser suite is how a view is checked.
+# The path must start at `tests/` and may not contain `..`. Without both, `[\w./-]` admitted
+# `/etc/passwd`, `tests/../../../elsewhere`, `..` and even `--pdb` — and pytest executes conftest.py
+# and every test module it collects, so a path outside the worktree is code execution on the lab's
+# machine at a path a model chose. The allowlist exists to make that impossible, not unlikely.
 VERIFY_ALLOWED = re.compile(
-    r'^(uv run --directory monarch-benchmark/workflowbench python -m pytest [\w./-]{1,120}(?: -q)?'
+    r'^(uv run --directory monarch-benchmark/workflowbench python -m pytest (?!.*\.\.)tests/[\w./-]{1,110}(?: -q)?'
     r'|node tests/browser/suite\.cjs)$')
 # A bucket that names the task, the data or the harness is not a defect in anyone's code.
 SETUP_BUCKETS = ('setup', 'task-setup', 'harness', 'infrastructure', 'budget', 'cancelled')
@@ -64,7 +68,9 @@ OUTPUT = (
     '  "found": true when you traced the failure to a place in the code; false when you did not.\n'
     '  "location": "path:line".\n'
     '  "repo": "monarch" or "lab".\n'
-    '  "verify": the command that must fail before and pass after, or "" when no test can run.\n\n'
+    '  "verify": the command that must fail before and pass after, or "" when no test can run. Either '
+    '"uv run --directory monarch-benchmark/workflowbench python -m pytest tests/<path> -q", whose path '
+    'starts at tests/ and holds no "..", or "node tests/browser/suite.cjs".\n\n'
     'If you cannot trace the failure to a line of code, answer {"analysis": "...", "found": false} '
     'and stop. That is a complete, correct answer and the lab records it as one. A location you are '
     'not sure of is worse than none: it sends an agent to edit the wrong file. Do not fill the '
@@ -171,7 +177,8 @@ def check_spec(data: dict) -> dict:
         raise ValueError('Name the commit you read, as commit.')
     if spec['verify'] and not VERIFY_ALLOWED.fullmatch(spec['verify']):
         raise ValueError('verify is one of: "uv run --directory monarch-benchmark/workflowbench python -m pytest '
-                         '<path> -q", or "node tests/browser/suite.cjs", or empty when no test can run.')
+                         'tests/<path> -q", where the path starts at tests/ and contains no "..", or '
+                         '"node tests/browser/suite.cjs", or empty when no test can run.')
     return spec
 
 
