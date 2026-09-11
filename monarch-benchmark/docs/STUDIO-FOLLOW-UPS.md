@@ -4,6 +4,11 @@ Requested by Carlos on 10 September 2026. This is a backlog, not a claim that
 these capabilities already exist. Preserve AutomationBench inputs and historical
 results. Current incident: run `f2799405-f9b3-4fb2-8e41-a517e9c39260`.
 
+Drafts for Carlos's review: [short brainstorm](../../specs/013-benchmark-config-repository/operational-follow-ups/brainstorm.md)
+and [acceptance specification](../../specs/013-benchmark-config-repository/operational-follow-ups/spec.md).
+These cover resume, pause and Git activation after PAT approval; they do not
+claim implementation or replace the separate deployment and metrics backlog.
+
 ## Resume interrupted runs from the UI
 
 - Connect the existing CLI continuation to the Studio job lifecycle and live
