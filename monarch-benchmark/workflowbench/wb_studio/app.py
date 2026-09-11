@@ -580,18 +580,21 @@ class Studio:
         job = self.job(identity)
         arms = job["settings"].get("arms") or [{"id": m, "kind": "runner"} for m in job["settings"]["models"]]
         ceiling = self.analysis_ceiling
+        # `askable` says whether a person could still ask for the reading by hand.
+        # Turning the automatic pass off is a choice about spending, not a wall:
+        # `review` pays from the run's own ceiling, so the button stays.
         if all(a.get("kind") == "scripted" or a["id"] in ("oracle", "sloppy", "null") for a in arms):
-            return write_json(pending, {"reason": "Scripted checks only; there is nothing to interpret.", "ceiling_usd": str(ceiling)})
+            return write_json(pending, {"reason": "Scripted checks only; there is nothing to interpret.", "ceiling_usd": str(ceiling), "askable": False})
         if ceiling <= 0:
-            return write_json(pending, {"reason": "Automatic analysis is off for this workspace (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling)})
+            return write_json(pending, {"reason": "The automatic reading is off for this workspace (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling), "askable": True})
         if self.gateway_factory is None and not credential_status()["configured"]:
-            return write_json(pending, {"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": str(ceiling)})
+            return write_json(pending, {"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": str(ceiling), "askable": False})
         available = Decimal(str(self.budget().get("available", "0")))
         if available < ceiling:
             short = ceiling - available
             return write_json(pending, {"reason": f"The weekly ledger cannot cover the ${ceiling:.2f} analysis ceiling; ${short:.2f} short.",
-                                        "shortfall_usd": str(short), "ceiling_usd": str(ceiling)})
-        write_json(pending, {"reason": "The analysis was dispatched and has not returned yet.", "ceiling_usd": str(ceiling)})
+                                        "shortfall_usd": str(short), "ceiling_usd": str(ceiling), "askable": False})
+        write_json(pending, {"reason": "The analysis was dispatched and has not returned yet.", "ceiling_usd": str(ceiling), "askable": False})
         threading.Thread(target=self._narrative, args=(identity, ceiling), daemon=True).start()
 
     def _narrative(self, identity, ceiling):

@@ -796,8 +796,9 @@ function reviewSection(live){
  if(a.status==='failed')return '<section class="analysis-section">'+head
   +'<div class="analysis-retry"><button class="button" id="analyze-run"'+(running?' disabled':'')+'>'+(running?'Reading the execution…':'Try again')+'</button>'
   +'<p class="fail">'+esc(a.error||'The reading did not complete.')+'</p></div></section>';
- // A reason that says the reading cannot run is not an invitation to ask for it.
- const askable=!running&&!live&&(!a.reason||/has not run yet/i.test(a.reason));
+ // The server says whether asking by hand could still work; a reason that names a
+ // wall (nothing to interpret, no credential, no ledger) is not an invitation.
+ const askable=!running&&!live&&a.askable!==false;
  return '<section class="analysis-section">'+head
   +'<p class="meta">'+esc(running?'Reading the execution…':a.reason||'The reading has not run yet.')+'</p>'
   +(askable?'<button class="button" id="analyze-run">Run it now</button>':'')+'</section>';

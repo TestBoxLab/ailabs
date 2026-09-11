@@ -327,8 +327,8 @@ def narrative_status(folder) -> dict:
         except ValueError:
             pass
     if (folder / "analysis.claimed").exists():
-        return {"status": "pending", "reason": "the analysis was dispatched and has not returned yet."}
-    return {"status": "pending", "reason": "the analysis has not run yet."}
+        return {"status": "pending", "reason": "The reading was dispatched and has not returned yet.", "askable": False}
+    return {"status": "pending", "reason": "The reading has not run yet.", "askable": True}
 
 
 def task_set_id(job) -> str:
@@ -378,7 +378,7 @@ def run_report(studio, identity, audience="public") -> dict:
         "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
                      if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
         "model_findings": model_findings(narrative, aliases_back),
-        "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
+        "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "askable", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
         "story": run_story(fa_attempts, {sid: m["setups"][sid]["name"] for sid in shown if sid in m["setups"]}),
         "hero": hero_rows(m, shown), "paired": paired_table(job, m, shown, baseline_id),
         "setups": {sid: {**m["setups"][sid], "short_name": short_name(m["setups"][sid]["name"])} for sid in shown if sid in m["setups"]}, "order": shown,

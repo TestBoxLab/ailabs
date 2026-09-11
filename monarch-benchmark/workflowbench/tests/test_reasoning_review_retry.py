@@ -125,7 +125,50 @@ def test_an_interrupted_dispatch_unblocks_once_the_request_could_not_still_be_op
 def test_the_run_page_reads_the_reason_the_automatic_reading_could_not_run(tmp_path):
     from wb_studio.report_data import narrative_status
     (tmp_path / "analysis.pending.json").write_text(
-        json.dumps({"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": "0.50"}),
+        json.dumps({"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": "0.50", "askable": False}),
         encoding="utf-8")
     status = narrative_status(tmp_path)
-    assert status["status"] == "pending" and "GEMINI_API_KEY" in status["reason"]
+    assert status["status"] == "pending" and "GEMINI_API_KEY" in status["reason"] and status["askable"] is False
+
+
+def test_a_reading_that_never_ran_can_still_be_asked_for(tmp_path):
+    from wb_studio.report_data import narrative_status
+    assert narrative_status(tmp_path)["askable"] is True
+
+
+def test_turning_the_automatic_reading_off_does_not_take_the_button_away(tmp_path, monkeypatch):
+    """STUDIO_ANALYSIS_USD is a choice about automatic spending. `review` pays from
+    the run's own ceiling, so a person can still ask; only a wall hides the button."""
+    from wb_studio.app import Studio
+    from wb_studio.report_data import narrative_status
+    monkeypatch.setenv("STUDIO_ANALYSIS_USD", "0")
+    studio = Studio(tmp_path / "workspace", tasks={}, gateway_factory=None)
+    assert studio.analysis_ceiling == 0
+    identity = "run-off"
+    folder = studio.directory / identity
+    folder.mkdir(parents=True, exist_ok=True)
+    studio.job = lambda i: {"id": i, "status": "completed", "results": [],
+                            "settings": {"tasks": [], "models": ["claude-opus-5/api"], "maximum_usd": "5.00"}}
+    studio.schedule_narrative(identity)
+    status = narrative_status(folder)
+    assert "STUDIO_ANALYSIS_USD is 0" in status["reason"] and status["askable"] is True
+
+
+def test_scripted_only_and_a_missing_credential_are_walls(tmp_path, monkeypatch):
+    from wb_studio.app import Studio
+    from wb_studio.report_data import narrative_status
+    monkeypatch.setenv("STUDIO_ANALYSIS_USD", "0.50")
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    studio = Studio(tmp_path / "workspace", tasks={}, gateway_factory=None)
+    settings = {"tasks": [], "maximum_usd": "5.00"}
+
+    studio.job = lambda i: {"id": i, "status": "completed", "results": [], "settings": {**settings, "models": ["oracle"]}}
+    (studio.directory / "scripted").mkdir(parents=True, exist_ok=True)
+    studio.schedule_narrative("scripted")
+    assert narrative_status(studio.directory / "scripted")["askable"] is False
+
+    studio.job = lambda i: {"id": i, "status": "completed", "results": [], "settings": {**settings, "models": ["claude-opus-5/api"]}}
+    (studio.directory / "nokey").mkdir(parents=True, exist_ok=True)
+    studio.schedule_narrative("nokey")
+    assert narrative_status(studio.directory / "nokey")["askable"] is False
