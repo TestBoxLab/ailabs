@@ -12,14 +12,23 @@ on disk but resolves every import against `git ls-files`. A module you have not
 
     uv run python scripts/check_imports.py
 
-Two traps this exists to avoid, both of which produced a scan that reassured
-instead of checking:
+Three traps, and the reason this lives in CI rather than in anyone's head: three
+people wrote this check the same afternoon and each shipped a different
+structural blindness. Every version would have passed the bug it was written to
+catch.
 
 - **Indented imports count.** This codebase imports lazily inside functions all
   over the Studio; anchoring the pattern at `^` misses about two thirds of them.
 - **`from wb_studio import allowances` names a module too.** Matching only the
   part after `from` resolves `wb_studio`, which always exists, and never looks
-  at `allowances`. Each imported name is checked as a possible submodule.
+  at `allowances` - the import that broke the Budget page. Each imported name is
+  checked as a possible submodule.
+- **`as` hides the name.** `from wb_studio import genesis_engineer as engineer`
+  reads as an import of `genesis_engineer as engineer` unless the alias is cut
+  first, and that is the exact line behind one of the four half-commits.
+
+A missing dotted module is reported once, not once per imported symbol: the head
+is resolved first and the individual names are only examined when it exists.
 """
 from __future__ import annotations
 
