@@ -112,10 +112,69 @@ let genesisPaused=false,genesisPending=null;
 function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
  if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
 $('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
+startFollow();
 // The opening sentence of the answer, which is the part a person waiting for a verdict
 // actually needs. The whole answer is on screen; reading all of it aloud is a lecture.
 function firstSentence(text){const plain=String(text||'').replace(/[#*`>_]/g,' ').replace(/\s+/g,' ').trim();
  const cut=plain.search(/[.!?](\s|$)/);return (cut>0?plain.slice(0,cut+1):plain).slice(0,300);}
+// --- Follow Genesis (feature 024, stage S5) -----------------------------------------
+// Off by default. This checkbox IS the WCAG 3.2.5 conformance mechanism: a change of
+// context is allowed when it is "initiated only by user request, OR a mechanism is
+// available to turn off such changes". Per browser in localStorage and never a server
+// setting, or one person's toggle would move the other's screen.
+const FOLLOW_KEY='genesis.follow';
+let followArmed=false,followBroken=false;
+function followOn(){try{return localStorage.getItem(FOLLOW_KEY)==='1';}catch(e){return false;}}
+function followBar(){
+ const bar=$('#genesis-follow-bar');if(!bar)return;
+ const on=followOn();
+ bar.hidden=!on;
+ if(!on)return;
+ bar.querySelector('.follow-words').textContent=followBroken?'Following paused — you took the wheel':'Following Genesis';
+ bar.querySelector('#genesis-follow-stop').textContent=followBroken?'Resume following':'Stop following';
+}
+function breakFollow(){
+ if(!followArmed||followBroken)return;
+ followBroken=true;followBar();
+}
+function armFollow(){
+ // Break on any gesture, for the rest of the turn. Google Slides is the precedent: the
+ // instant you act, following stops — no confirmation, no ceremony.
+ if(followArmed)return;
+ followArmed=true;followBroken=false;
+ for(const kind of ['wheel','keydown','pointerdown','touchstart'])
+  document.addEventListener(kind,breakFollow,{once:true,passive:true});
+ followBar();
+}
+function disarmFollow(){followArmed=false;followBroken=false;followBar();}
+function follow(route){
+ // Degrade to the link silently when it cannot be watched: moving a hidden tab, or a
+ // surface the reader is not on, is a change of context with no witness.
+ if(!followOn()||followBroken||document.hidden)return false;
+ if(genesisView!=='chat'&&genesisView!=='board')return false;
+ if(!window.goRoute)return false;
+ history.pushState(null,'',route);
+ window.goRoute(route);
+ // Scroll moves; focus does not. Focus is on the change-of-context list too, and taking
+ // it mid-keystroke breaks actual typing. It moves only when the person clicked the link.
+ return true;
+}
+function startFollow(){
+ const box=$('#genesis-follow');if(!box)return;
+ box.checked=followOn();
+ box.addEventListener('change',()=>{
+  try{localStorage.setItem(FOLLOW_KEY,box.checked?'1':'0');}catch(e){}
+  if(!box.checked)disarmFollow();else followBar();
+ });
+ const stop=$('#genesis-follow-stop');
+ if(stop)stop.addEventListener('click',()=>{
+  if(followBroken){followBroken=false;followBar();return;}
+  box.checked=false;try{localStorage.setItem(FOLLOW_KEY,'0');}catch(e){}
+  disarmFollow();
+ });
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&followArmed)breakFollow();});
+ followBar();
+}
 function announceShow(t){
  const shown=stepList(t).filter(s=>s.action==='show'&&s.result!==null);
  if(!shown.length)return;
@@ -123,7 +182,8 @@ function announceShow(t){
  if(!r||!r.label)return;
  const region=$('#genesis-pointer');
  const line='Genesis pointed at '+r.label+(r.why?': '+r.why:'')+'.';
- if(region.textContent!==line){region.textContent=line;setTimeout(()=>{if(region.textContent===line)region.textContent='';},400);}}
+ if(region.textContent!==line){region.textContent=line;setTimeout(()=>{if(region.textContent===line)region.textContent='';},400);}
+ if(r.route)follow(r.route);}
 let paintedSteps={};
 function paintTurn(t,opts){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
  const before=paintedSteps[t.id]||0;
@@ -158,6 +218,7 @@ function streamGenesis(id){
   genesisQueue=[];threadTurns[j]=t;
   if(genesisPaused)genesisPending=t;else paintTurn(t,{fresh:true});
   if(trackingTab==='trace')renderTracking();};
+ armFollow();
  genesisStream=new EventSource('/api/genesis/turns/'+encodeURIComponent(id)+'/events?after='+seen);
  genesisStream.addEventListener('step',e=>{try{genesisQueue.push(JSON.parse(e.data));}catch(err){return;}
   if(!genesisFrame)genesisFrame=requestAnimationFrame(flush);});
@@ -169,7 +230,7 @@ function streamGenesis(id){
   const t=j>=0?threadTurns[j]:null;
   if(t){if(genesisPending){genesisPending=null;}paintTurn(t,{fresh:false});
    if(window.genesisAnnounce&&t.answer)window.genesisAnnounce(firstSentence(t.answer));}
-  setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;
+  disarmFollow();setGenesisPaused(false);$('#genesis-pause-updates').hidden=true;
   $('#genesis-send').disabled=false;$('#genesis-stop').hidden=true;
   $('#genesis-status').textContent=(t&&t.status==='completed')?'':'Stopped';
   genesisParent=id;genesisData=await api('/api/genesis');renderRail();renderNavCount(genesisData.cards);renderTracking();

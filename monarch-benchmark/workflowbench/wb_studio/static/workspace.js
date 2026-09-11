@@ -230,7 +230,12 @@ $$('[data-pg-view][type=button]').forEach(button=>button.onclick=()=>{
 
 
 
-window.addEventListener('popstate',async()=>{
+// One router. It was inline in the popstate listener, so "go to this address" existed
+// only as a side effect of the browser going back — anything else wanting to route had to
+// write a second copy (feature 024, stage S5).
+window.goRoute=async function(hash){
  if(!state)return;
- try{const route=location.hash.slice(1);if(route.startsWith('run/')){const id=decodeURIComponent(route.slice(4).split('/')[0]);if(typeof job!=='undefined'&&job?.id===id&&!$('.workspace').classList.contains('hidden')){if(window.syncAttemptFromHash)syncAttemptFromHash();}else await openJob(id);}else if(route==='genesis'||route.startsWith('genesis/'))await openGenesis();else if(route==='studio')await $('#open-setup').onclick();else if(route==='budget')await openBudget();else if(route==='launch')await openLaunch();else if(route==='runtime')await $('#nav-runtime').onclick();else if(route==='runs')showWorkspaceSurface('runs',false);else if(route==='reports'||route==='leaderboard'||route===''||route.startsWith('report/')||route.startsWith('round/'))await window.reportRoute(location.hash);else showWorkspaceSurface('runs',false);}catch(e){toast(e.message);}
-});
+ const route=String(hash||location.hash).replace(/^#/,'');
+ try{if(route.startsWith('run/')){const id=decodeURIComponent(route.slice(4).split('/')[0]);if(typeof job!=='undefined'&&job?.id===id&&!$('.workspace').classList.contains('hidden')){if(window.syncAttemptFromHash)syncAttemptFromHash();}else await openJob(id);}else if(route==='genesis'||route.startsWith('genesis/'))await openGenesis();else if(route==='studio')await $('#open-setup').onclick();else if(route==='budget')await openBudget();else if(route==='launch')await openLaunch();else if(route==='runtime')await $('#nav-runtime').onclick();else if(route==='runs')showWorkspaceSurface('runs',false);else if(route==='reports'||route==='leaderboard'||route===''||route.startsWith('report/')||route.startsWith('round/'))await window.reportRoute(location.hash);else showWorkspaceSurface('runs',false);}catch(e){toast(e.message);}
+};
+window.addEventListener('popstate',()=>window.goRoute(location.hash));
