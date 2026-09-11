@@ -298,7 +298,7 @@ audience and confirm no fact is asserted in one and contradicted in another.
 
 ## Phase 8: Polish & cross-cutting
 
-- [ ] T107 Run the full suite detached from `wb/` with `uv run python -m pytest tests -q` and compare against the T001 baseline; no previously-passing test may fail
+- [x] T107 Run the full suite detached from `wb/` with `uv run python -m pytest tests -q` and compare against the T001 baseline; no previously-passing test may fail
 - [x] T108 [P] Run `node tests/browser/suite.cjs` from `wb/` and review the snapshots for the US2 and US5 frontend changes
 - [x] T109 [P] Correct `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md` §3, which lists feature 004 as "specified, not built" when `wb_orchestrator/monarch_recipes.py` is complete
 - [x] T110 [P] Add the slate manifest, the research envelope and the front-door secret to the file map in `CLAUDE.md`
@@ -720,3 +720,18 @@ refresh if Graphify is unavailable") was written to prevent.
 
 Not marked done, and not faked. Either install Graphify and build the graph, or strike
 the instruction from `CLAUDE.md` so it stops asking for something that is not there.
+
+### T107, the full suite
+
+**2542 passed, 3 skipped, 0 failed** (911s), against the T001 baseline of 2364. No
+previously-passing test fails. The count moved by more than this feature added: three
+sessions were committing to this checkout through the day, one of them deleting ~1,300
+lines of dead code and its tests.
+
+Worth recording alongside it: `ruff --select F811` is clean across every file this
+feature touched. A peer session found three shadowed definitions elsewhere in the repo
+the same day — a duplicated conftest fixture, 134 lines of tests pasted twice where
+pytest only ever collected the second copy, and a stranded render function. All three
+looked like working code and none of it ran. That is the same shape as this feature's
+own central defect, a phase block dropped between the arm and the reader: something that
+reads as present and is not.
