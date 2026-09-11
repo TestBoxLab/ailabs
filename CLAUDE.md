@@ -99,26 +99,27 @@ names. Code identifiers may keep the internal ones.
 
 This workspace runs the same standard as `data-generator-2.0`: **Superpowers**
 for Socratic discovery + workflow-enforced execution, **Spec Kit** for
-artifact-driven planning in between, **Graphify** as the knowledge layer. The
-governing contract is the constitution at `.specify/memory/constitution.md`.
+artifact-driven planning in between, and **Graphify** as the intended knowledge
+layer — intended because it has never been initialised here; see the last section.
+The governing contract is the constitution at `.specify/memory/constitution.md`.
 
 **The front door is always Superpowers brainstorming — never Spec Kit cold.**
 Mental model: *Superpowers brainstorming figures out what we're actually doing;
-Spec Kit writes that up as spec + plan + tasks; Superpowers executes it;
-Graphify grounds all of it in the existing code.*
+Spec Kit writes that up as spec + plan + tasks; Superpowers executes it; and the
+code itself grounds all of it, since the graph that was meant to does not exist.*
 
 For any non-trivial feature, bug fix, or behavior change, follow the pipeline —
 each stage hands its artifact to the next:
 
 | Stage | Owner | Command / skill | Artifact |
 |-------|-------|-----------------|----------|
-| 0. Ground | Graphify | read `graphify-out/GRAPH_REPORT.md` | context |
+| 0. Ground | the code | file map below; `HOW-WORKFLOWBENCH-WORKS.md` (Graphify is not built) | context |
 | 1. Brainstorm | Superpowers | `superpowers:brainstorming` | shared understanding |
 | 2. Specify | Spec Kit | `/speckit-specify` (+ `/speckit-clarify`) | `specs/<id>/spec.md` |
 | 3. Plan + Tasks | Spec Kit | `/speckit-plan`, `/speckit-tasks` | `plan.md`, `tasks.md` |
 | 4. (optional) Validate | Spec Kit | `/speckit-analyze`, `/speckit-checklist` | consistency report |
 | 5. Execute | Superpowers | `executing-plans` / `subagent-driven-development` (worktree → TDD → review → finish-branch) | branch, tests, code |
-| 6. Refresh | Graphify | rebuild code graph | updated `graphify-out/` |
+| 6. Refresh | — | nothing to rebuild until Graphify is initialised | — |
 
 **Handoff rules:**
 - **Brainstorm first, always.** Do not open `/speckit-specify` on a cold
@@ -176,10 +177,9 @@ each stage hands its artifact to the next:
   The repo is public; the specs carry vendor legal notes.
 - **Language.** Conversation with Carlos in Portuguese. Every file in the repo
   in English, plain language, no internal jargon in shared docs.
-- **Graphify grounds everything.** Read `graphify-out/GRAPH_REPORT.md` before
-  architecture or codebase questions and before specs that touch existing
-  code; refresh the graph after code changes. The vendored
-  `workflowbench/vendor/automation-bench` is excluded from the graph.
+- **Graphify is not built** (checked 11 September 2026; see the section at the end
+  of this file). Ground architecture questions in the code and the file map, not in
+  `graphify-out/`, which does not exist. Never claim a refresh that did not happen.
 - **Stack:** Python 3.13 managed by `uv`. Environment:
   `cd monarch-benchmark/workflowbench && uv sync && uv run python -m pytest tests -q`.
   Always `uv run`, never bare Python. On Windows run the full suite detached
@@ -263,7 +263,7 @@ and actual configuration rather than treating those examples as runtime pins.
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |
 | `workflowbench/deferred.md` | Deferred items of the bench: the sandbox for competitor harnesses (future), `wb doctor --record`, and smaller items carried from features 002 to 006. |
 | `workflowbench/out/` | Run outputs and reports (gitignored where large). |
-| `graphify-out/` | Knowledge graph (read before code questions; refresh after). |
+| `graphify-out/` | **Does not exist.** Planned on 2 September, never initialised; see the last section of this file. |
 | `.github/workflows/` | `ci.yml` (PRs to main or manual; free) and `smoke.yml` (manual; ~US$ 2). |
 | `../monarch` | Sibling clone of Monarch; `feature-discovery/docs/public-api-seeds-runbook.md` for the OpenAPI path. |
 
@@ -290,13 +290,22 @@ and actual configuration rather than treating those examples as runtime pins.
   authorized corrections are limited to WorkflowBench's own rule translation,
   keeping AutomationBench's world, routes, seeds and assertions unchanged.
 
-## graphify
+## graphify — not built, 11 September 2026
 
-This project has a graphify knowledge graph at graphify-out/.
+**There is no knowledge graph in this repository.** `graphify-out/` does not exist
+and never has. `HANDOFF-2026-09-02.md:49` listed "Initialize Graphify on the repo
+(`/graphify-init`)" as a to-do; it was never carried out, and this section went on
+describing the result as an existing asset for nine days. Graphify is also not
+installed on this machine: no distribution, no plugin, no binary, no skill.
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files, refresh the graph through the installed Graphify
-  skill using its `uv`-managed environment; do not invoke bare `python3` or
-  silently claim a refresh if Graphify is unavailable.
+Until someone runs `/graphify-init` and builds it, **read the code**. The entry
+points are the file map above, `monarch-benchmark/docs/HOW-WORKFLOWBENCH-WORKS.md`
+for what an attempt is, and `docs/STATE-OF-THE-PROGRAM.md` for where things stand.
+
+The rule that survives, because it is about honesty rather than about the tool:
+**never claim a graph refresh that did not happen**, and never invoke bare
+`python3` to fake one. If the graph is built later, these are its rules — read
+`graphify-out/GRAPH_REPORT.md` before architecture questions, prefer
+`graphify-out/wiki/index.md` over raw files when it exists, refresh through the
+installed Graphify skill in its `uv`-managed environment after changing code, and
+keep the vendored `workflowbench/vendor/automation-bench` out of the graph.
