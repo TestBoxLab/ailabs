@@ -47,12 +47,12 @@ from wb_orchestrator.monarch_setup import Stop, expand, public_front_door_url
 from wb_results.evidence import write_json
 from wb_world.episode import EvidenceWriteError
 
+from wb_orchestrator.monarch_probe import PROBE_FILE, PROBE_TTL, load_probe, probe_path
+
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = "default-monarch-enterprise"
 PRODUCT = "simulated-apps"
 HARNESS = "monarch"
-PROBE_FILE = "enterprise-probe.json"
-PROBE_TTL = timedelta(hours=2)
 ATTEMPT_TIMEOUT_S = 1800.0            # the tier plans' allowance per attempt
 # DEFAULT_CEILING_USD, CEILING_ENV and attempt_ceiling_usd live with the arm
 # (wb_arms.monarch) since milestone M3, so the CLI reserves the same amount.
@@ -204,20 +204,8 @@ def checkout_identity(repo: Path) -> dict:
     return {"commit": commit, "branch": branch, "dirty": dirty, "patch_sha256": patch, "version": version}
 
 
-# -- verification probe ------------------------------------------------------------
+# -- verification probe (probe_path and load_probe imported from wb_orchestrator.monarch_probe) ---
 
-def probe_path(studio) -> Path:
-    return Path(studio.directory) / PROBE_FILE
-
-
-def load_probe(studio) -> dict | None:
-    path = probe_path(studio)
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
 
 
 def verify(studio) -> dict:

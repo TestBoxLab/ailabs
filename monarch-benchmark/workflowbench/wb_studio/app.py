@@ -4,6 +4,7 @@ import argparse
 import base64
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -13,6 +14,8 @@ import secrets
 import sys
 import threading
 import time
+from types import SimpleNamespace
+
 import urllib.error
 import urllib.request
 import uuid
@@ -22,6 +25,7 @@ from dotenv import load_dotenv
 from runner.arms import OracleArm, SloppyArm
 from wb_arms.api_loop import ArmResult
 from wb_arms.runtime_manifest import sha256_json
+from wb_orchestrator.approvals import ApprovalError, admit_launch
 from wb_orchestrator.budget import BudgetLedger, BudgetExceeded
 from wb_orchestrator.config import derive_langfuse_keys
 from wb_orchestrator.monarch_setup import front_door_path, front_door_secret
@@ -183,6 +187,12 @@ class Studio:
         if os.environ.get("STUDIO_LEDGER_PATH"):
             ledger_path = Path(os.environ["STUDIO_LEDGER_PATH"]).expanduser()
         self.ledger = BudgetLedger(self.directory / "budget.sqlite3" if gateway_factory is not None else ledger_path)
+        store_path = REPO / "wb.sqlite3"
+        if data_dir():
+            store_path = data_dir() / "wb.sqlite3"
+        if os.environ.get("STUDIO_STORE_PATH"):
+            store_path = Path(os.environ["STUDIO_STORE_PATH"]).expanduser()
+        self.store = Store(self.directory / "wb.sqlite3" if gateway_factory is not None else store_path)
         self.gateway_factory = gateway_factory      # test hook for the Gemini control
         self.adapter_factory = adapter_factory      # test hook for every other provider
         # Every finished run gets its interpretation automatically, under this per-run ceiling (US$).
@@ -523,9 +533,34 @@ class Studio:
         # FR-008: one attempt may never be allowed to spend the whole round.
         cap = attempt_cap_for(maximum, attempts=len(tasks) * max(1, len(arms)),
                               explicit=payload.get("attempt_cap_usd"), floor=floor)
+        approval_request_id = payload.get("approval_request") or payload.get("approval_request_id")
+        if paid:
+            config_hash = hashlib.sha256(json.dumps({
+                "tasks": sorted(tasks),
+                "models": [a["id"] for a in arms],
+                "maximum_usd": str(maximum),
+            }, sort_keys=True).encode()).hexdigest()[:16]
+            rc = SimpleNamespace(
+                attempts_per_competitor=len(tasks),
+                attempts_total=len(tasks) * len(arms),
+                hash=config_hash,
+                product_path="studio",
+                plan_path="studio",
+                plan=SimpleNamespace(name=title, cost_ceiling_usd=maximum),
+            )
+            env = dict(os.environ)
+            if operator:
+                env["WB_OPERATOR"] = operator
+            launch = admit_launch(self.store, rc, env, request_id=approval_request_id)
+            if not launch.run:
+                raise ApprovalError(launch.message)
+            if launch.request_id:
+                approval_request_id = launch.request_id
         settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks, "maximum_usd": str(maximum), "track": track,
                     "architectures": [v["id"] for v in versions],
-                    "operator": operator, "attempt_cap_usd": str(cap)}
+                    "operator": operator, "attempt_cap_usd": str(cap),
+                    "approval_request_id": approval_request_id}
+
         concurrency = positive_int(payload.get("concurrency", 1), "Concurrent agents", self.runtime.max_agents)
         pins = self.components.pin(payload.get("components"))
         if any(a["kind"] == "enterprise" for a in arms) and any(pins[r]["id"] != self.components.defaults[r] for r in ("brain", "action_builder")):
@@ -572,7 +607,6 @@ class Studio:
                 job["world_manifest"] = {"package": "automation-bench", "installed_version": installed_world_version(),
                                          "task_worlds": {task: world_of(self.tasks[task]) or {"version": "1.0.6"} for task in tasks}}
                 if track == "create-and-run":
-                    import hashlib
                     from wb_studio import workflows
                     job["workflow_contract"] = {"formats": {"experimental": "studio-workflow-v1", "monarch": "native-recipe"}, "runtime_sha256": hashlib.sha256(Path(workflows.__file__).read_bytes()).hexdigest(),
                                                 "requirement": "saved workflow artifact plus execution"}
@@ -1458,8 +1492,9 @@ def handler(studio):
                 return self.send_json({"error": "Not found"}, 404)
             except BudgetExceeded as exc:
                 self.send_json({"error": str(exc)}, 409)
-            except (ValueError, TypeError, KeyError, FileNotFoundError) as exc:
+            except (ValueError, TypeError, KeyError, FileNotFoundError, ApprovalError) as exc:
                 self.send_json({"error": str(exc)}, 400)
+
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             except Exception as exc:

@@ -1,13 +1,14 @@
 """People, keys and the lab's Genesis settings (feature 022, lane B, design sections 4, 8, 9 and 11).
 
 One JSON file, `genesis/people.json`: the people list (name, role member or admin, the
-hash of their key, who added them and when), Genesis's weekly envelope, the brief hour
-and the digest day. No passwords and no third-party login: an admin hands a person a
-key, the browser keeps it, and every write carries it. Until the first person exists, the
-Studio token alone opens every write, so a fresh workspace can be set up.
+hash of their key, who added them and when), the brief hour and the digest day. No
+passwords and no third-party login: an admin hands a person a key, the browser keeps it,
+and every write carries it. Until the first person exists, the Studio token alone opens
+every write, so a fresh workspace can be set up.
 
-The envelope is a gate: `Genesis.chat` refuses a turn the envelope cannot cover and
-`Genesis.launch_if_allowed` refuses a plan (deep dive of 10 Sep 2026, R4).
+Genesis's weekly spending gate is no longer here: it is one of the named allowances in
+`wb_studio/allowances.py`, which budgets every kind of work the same way. The value a
+person set as the envelope migrates on first read.
 """
 from __future__ import annotations
 
@@ -18,12 +19,10 @@ import re
 import secrets
 import threading
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 
 NAME = re.compile(r'[a-z0-9][a-z0-9._-]{0,60}')
 ROLES = ('member', 'admin')
-ENVELOPE_DEFAULT = '25.00'  # Lucas, 10 Sep 2026
 WEBHOOK = 'SLACK_WEBHOOK_AILABS'
 PUBLIC_URL = 'STUDIO_PUBLIC_URL'
 
@@ -47,7 +46,6 @@ class Access:
         if not isinstance(data, dict):
             data = {}
         data.setdefault('people', [])
-        data.setdefault('envelope_usd', ENVELOPE_DEFAULT)
         data.setdefault('brief_hour', 8)
         data.setdefault('digest_day', 'monday')
         return data
@@ -110,21 +108,13 @@ class Access:
             return False, f"{person['name']} is a member; an admin changes this."
         return True, None
 
-    # ---- the envelope and the channels -----------------------------------------------------
+    # ---- the lab's settings and the channels -----------------------------------------------------
     def settings(self) -> dict:
         data = self._read()
-        return {'envelope_usd': str(data['envelope_usd']), 'brief_hour': int(data['brief_hour']), 'digest_day': str(data['digest_day'])}
+        return {'brief_hour': int(data['brief_hour']), 'digest_day': str(data['digest_day'])}
 
     def set_settings(self, payload: dict) -> dict:
         data = self._read()
-        if 'envelope_usd' in payload:
-            try:
-                value = Decimal(str(payload['envelope_usd']))
-            except Exception:
-                raise ValueError('The envelope is an amount in dollars, like 20.00.')
-            if value < 0 or value > Decimal('300'):
-                raise ValueError('The envelope stays between $0 and the lab week of $300.')
-            data['envelope_usd'] = f'{value:.2f}'
         if 'brief_hour' in payload:
             hour = int(payload['brief_hour'])
             if not 0 <= hour <= 23:
@@ -137,20 +127,6 @@ class Access:
             data['digest_day'] = day
         self._write(data)
         return self.settings()
-
-    def envelope(self, ledger_lines: list) -> dict:
-        """What the envelope holds this week, from the ledger lines Genesis reserved: reserved, settled, left."""
-        limit = Decimal(self.settings()['envelope_usd'])
-        reserved = settled = Decimal('0')
-        for line in ledger_lines:
-            if line.get('who') != 'Genesis':
-                continue
-            if line.get('actual_usd') is not None:
-                settled += Decimal(str(line['actual_usd']))
-            elif line.get('state') == 'open':
-                reserved += Decimal(str(line['maximum_usd']))
-        return {'envelope_usd': f'{limit:.2f}', 'reserved_usd': f'{reserved:.2f}', 'settled_usd': f'{settled:.2f}',
-                'left_usd': f'{max(Decimal("0"), limit - reserved - settled):.2f}'}
 
     @staticmethod
     def channels() -> dict:

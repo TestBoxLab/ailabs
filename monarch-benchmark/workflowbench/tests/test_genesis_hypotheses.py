@@ -127,3 +127,16 @@ def test_every_turn_records_a_prompt_with_the_date_and_the_recency_rule(tmp_path
     assert 'America/Sao_Paulo' in brief
     assert 'Prefer sources from the last six months; keep foundational and contradicting work.' in brief
     assert brief.rstrip().endswith('What changed in agent evaluation this quarter?')
+
+
+def test_task_values_false_completion_restricts_to_competitor_produced_output():
+    from wb_studio.genesis_hypotheses import _task_values
+    rows = [
+        {"task": "t1", "model": "m", "passed": False, "termination": "agent_error", "output": "Please complete this task."},
+        {"task": "t2", "model": "m", "passed": False, "termination": "completed", "output": "I am done."},
+        {"task": "t3", "model": "m", "passed": True, "termination": "completed", "output": "Done."},
+    ]
+    values = _task_values(rows, [], "false_completion")
+    assert values.get("t1") == 0.0
+    assert values.get("t2") == 1.0
+    assert "t3" not in values

@@ -95,7 +95,10 @@ def test_index_has_evidence_tabs_and_runs_table_counts():
     assert names == ["What happened", "Output", "Checks", "Trace", "Timeline"]
     header = re.search(r'<thead><tr><th scope="col">Run</th>(.*?)</tr></thead>', html).group(1)
     assert "Turns" in header and "Violations" in header
-    assert '<th class="num">Actions</th>' in html
+    # The column counts tool calls; it was headed "Actions", which named nothing a reader could find.
+    assert 'data-results-sort="tools">Tool calls</button>' in html and '>Actions<' not in html
+    # The model is its own column, so an attempt can be filtered and sorted by it.
+    assert 'data-results-sort="model">Model</button>' in html and 'id="results-model"' in html
 
 
 def test_static_scripts_name_events_by_what_they_show():

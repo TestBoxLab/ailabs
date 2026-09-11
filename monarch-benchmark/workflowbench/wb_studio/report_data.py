@@ -17,7 +17,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from wb_studio import caveats, measures
+from wb_studio.leaderboard import exclusion_reason, full_benchmark_run
 from wb_studio.reports import CATEGORIES
+from wb_world.episode import contract_hash
 
 GRADES = ("Improvement", "Regression", "Tradeoff", "Tie", "Undecided", "Not comparable")
 FINISHED = ("completed", "failed", "cancelled", "interrupted")
@@ -234,7 +236,7 @@ def code_findings(m, shown, baseline_id, fa) -> list:
                         "number": pr["delta"], "evidence": {"kind": "matrix", "ref": "matrix", "tasks": tasks[:5]}})
     claims = [(s, s["false_completion"]) for s in setups if s["false_completion"]["count"]]
     for s, fc in sorted(claims, key=lambda x: -x[1]["count"])[:1]:
-        out.append({"kind": "false_completion", "text": f"{s['name']} said the work was done when it was not, in {fc['count']} of {fc['failed']} failed attempts.",
+        out.append({"kind": "false_completion", "text": f"{s['name']} said the work was done when it was not, in {fc['count']} of {fc['failed']} failed attempts (inferred from wording).",
                     "number": fc["rate"], "evidence": {"kind": "attempts", "ref": "failures", "setup": s["id"]}})
     costed = [s for s in setups if s["cost"]["per_pass"] is not None]
     if len(costed) > 1:
@@ -313,25 +315,53 @@ def paired_table(job, m, shown, baseline_id):
     return rows
 
 
+def task_liveness(task_id: str, stored_hash: str | None, tasks: dict) -> str:
+    """Compare a stored task hash against the live corpus, emitting live / superseded / absent."""
+    if task_id not in tasks:
+        return "absent"
+    current_hash = contract_hash(tasks[task_id])
+    if not stored_hash or stored_hash != current_hash:
+        return "superseded"
+    return "live"
+
+
 def matrix_cells(job, shown, tasks):
     cells = {}
     per = defaultdict(list)
+    task_hashes = job.get("task_hashes") or {}
     for r in job.get("results") or []:
         if r["model"] in shown:
             per[(r["task"], r["model"])].append(r)
     for (task, sid), rows in per.items():
         valid = [r for r in rows if not measures.is_infrastructure(r)]
         reps = [bool(r.get("passed")) for r in valid]
-        cells[f"{task} {sid}"] = {"rate": (sum(reps) / len(reps)) if reps else None, "reps": reps, "infra": len(rows) - len(valid)}
+        stored_hash = next((r.get("contract_sha256") for r in rows if r.get("contract_sha256")), None) or task_hashes.get(task)
+        liveness = task_liveness(task, stored_hash, tasks)
+        cells[f"{task} {sid}"] = {
+            "rate": (sum(reps) / len(reps)) if reps else None,
+            "reps": reps,
+            "infra": len(rows) - len(valid),
+            "liveness": liveness,
+            "comparable": (liveness == "live"),
+        }
     return cells
 
 
 def task_rows(job, tasks):
     out = []
+    task_hashes = job.get("task_hashes") or {}
     for task_id in (job.get("settings") or {}).get("tasks") or []:
         task = tasks.get(task_id)
         title = " ".join(task["prompt"][1]["content"].split()) if task else task_id
-        out.append({"id": task_id, "title": title if len(title) <= 120 else title[:117].rsplit(" ", 1)[0] + "...", "category": category_of(task_id)})
+        stored_hash = task_hashes.get(task_id)
+        liveness = task_liveness(task_id, stored_hash, tasks)
+        out.append({
+            "id": task_id,
+            "title": title if len(title) <= 120 else title[:117].rsplit(" ", 1)[0] + "...",
+            "category": category_of(task_id),
+            "liveness": liveness,
+            "comparable": (liveness == "live"),
+        })
     return out
 
 
@@ -364,19 +394,44 @@ def run_report(studio, identity) -> dict:
     from wb_studio.narrative import run_story
     job = studio.job(identity)
     events = studio.events(identity)
-    m = measures.run_measures(job, events)
+    task_hashes = job.get("task_hashes") or {}
+    results = job.get("results") or []
+    settings = job.get("settings") or {}
+    tasks_list = settings.get("tasks") or []
+
+    live_results = [
+        r for r in results
+        if task_liveness(r.get("task"), r.get("contract_sha256") or task_hashes.get(r.get("task")), studio.tasks) == "live"
+    ]
+    live_tasks = [
+        t for t in tasks_list
+        if task_liveness(t, task_hashes.get(t), studio.tasks) == "live"
+    ]
+    live_job = {
+        **job,
+        "results": live_results,
+        "settings": {**settings, "tasks": live_tasks},
+    }
+
+    m = measures.run_measures(live_job, events)
     shown = setup_ids(job)
     baseline_id = m["baseline"] if m["baseline"] in shown else None
     baseline = m["setups"].get(baseline_id) if baseline_id else None
     fa = failure_analysis(studio, identity)
     fa_attempts = [a for a in fa["attempts"] if a["model"] in shown]
+    for a in fa_attempts:
+        h = a.get("contract_sha256") or task_hashes.get(a.get("task"))
+        liv = task_liveness(a.get("task"), h, studio.tasks)
+        a["liveness"] = liv
+        a["comparable"] = (liv == "live")
+
     candidates = [m["setups"][s] for s in shown if s in m["setups"] and s != baseline_id and m["setups"][s]["pass"]["attempts"]]
     subject = max(candidates, key=lambda s: (s["pass"]["rate"] or 0, s["name"])) if candidates else (baseline or (m["setups"][shown[0]] if shown and shown[0] in m["setups"] else None))
-    reused = historical_baseline(studio, job, subject["id"]) if subject and baseline_id is None else None
+    reused = historical_baseline(studio, live_job, subject["id"]) if subject and baseline_id is None else None
     if reused:
-        job = with_baseline(job, reused)
-        m = measures.run_measures(job, events)
-        shown = setup_ids(job)
+        live_job = with_baseline(live_job, reused)
+        m = measures.run_measures(live_job, events)
+        shown = setup_ids(live_job)
         baseline_id = m["baseline"]
         baseline = m["setups"].get(baseline_id)
         subject = m["setups"][subject["id"]]
@@ -388,27 +443,28 @@ def run_report(studio, identity) -> dict:
         g = grade(subject, baseline) if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
     narrative = narrative_status(studio.directory / identity)
     aliases_back = {alias: m["setups"].get(real, {}).get("name", real) for real, alias in (narrative.get("aliases") or {}).items()}
-    settings = job.get("settings") or {}
     tasks = task_rows(job, studio.tasks)
     return {
         "version": 1, "run": identity, "title": job.get("title"), "status": job.get("status"),
         "created_at": job.get("created_at"), "finished_at": job.get("finished_at"), "track": settings.get("track", "agentic-request"),
         "grade": g, "subject": subject["id"] if subject else None, "baseline": baseline_id,
         "baseline_source": {"run": reused["run"], "title": reused["title"], "finished_at": reused["finished_at"]} if reused else None,
-        "verdict": verdict_text(subject, baseline, g, len(settings.get("tasks") or []), reused) if subject else "This run has no evaluated attempts.",
+        "verdict": verdict_text(subject, baseline, g, len(live_tasks), reused) if subject else "This run has no evaluated attempts.",
         "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
                      if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
         "model_findings": model_findings(narrative, aliases_back),
         "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "askable", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
         "story": run_story(fa_attempts, {sid: m["setups"][sid]["name"] for sid in shown if sid in m["setups"]}),
-        "hero": hero_rows(m, shown), "paired": paired_table(job, m, shown, baseline_id),
+        "hero": hero_rows(m, shown), "paired": paired_table(live_job, m, shown, baseline_id),
         "lab_setups": lab_setups(shown, m["setups"]),
+        "full_benchmark": full_benchmark_run(job),
+        "exclusion_reason": exclusion_reason(job),
         "setups": {sid: {**m["setups"][sid], "short_name": short_name(m["setups"][sid]["name"])} for sid in shown if sid in m["setups"]}, "order": shown,
         "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
         "failures": {"summary": fa["summary"], "buckets": fa["buckets"], "attempts": fa_attempts, "limitations": fa["limitations"]},
         "tasks": tasks, "matrix": matrix_cells(job, shown, studio.tasks),
         "caveats": caveats.for_run(job, m, narrative, reused=reused),
-        "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "task_hashes": job.get("task_hashes") or {},
+        "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "live_task_count": len(live_tasks), "task_hashes": job.get("task_hashes") or {},
                    "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "track": settings.get("track", "agentic-request"),
                    "judge": (job.get("component_manifest") or {}).get("judge"), "components": job.get("component_manifest"),
                    "world": job.get("world_manifest"), "configuration": settings.get("configuration"), "concurrency": settings.get("concurrency", 1),
@@ -419,7 +475,6 @@ def run_report(studio, identity) -> dict:
 
 def cohorts(studio) -> dict:
     """Runs grouped by frozen task set and track; the unit a round report covers."""
-    from wb_studio.leaderboard import full_benchmark_run
     groups = {}
     for job in studio.jobs():
         if job.get("status") not in FINISHED or not job.get("task_hashes"):
@@ -430,7 +485,7 @@ def cohorts(studio) -> dict:
                                          "tasks": settings.get("tasks") or [], "task_hashes": job.get("task_hashes") or {}, "runs": [], "full_benchmark": False,
                                          "benchmark": (job.get("benchmark") or {}).get("id")})
         cohort["runs"].append({"id": job["id"], "title": job.get("title"), "status": job["status"], "created_at": job.get("created_at"), "finished_at": job.get("finished_at"),
-                               "full_benchmark": full_benchmark_run(job)})
+                               "full_benchmark": full_benchmark_run(job), "exclusion_reason": exclusion_reason(job)})
         cohort["full_benchmark"] = cohort["full_benchmark"] or full_benchmark_run(job)
     for cohort in groups.values():
         cohort["runs"].sort(key=lambda r: r["created_at"] or "", reverse=True)

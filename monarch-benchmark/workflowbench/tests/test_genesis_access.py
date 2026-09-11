@@ -27,16 +27,13 @@ def test_people_keys_and_roles(tmp_path):
         access.remove('sam')
 
 
-def test_envelope_and_settings(tmp_path):
+def test_settings_keep_the_brief_and_the_digest_day(tmp_path):
+    """The weekly ceiling moved to wb_studio.allowances; this file keeps the rest."""
     access = Access(tmp_path)
-    assert access.settings()['envelope_usd'] == '25.00'
-    access.set_settings({'envelope_usd': '12.5', 'brief_hour': 7})
-    lines = [{'who': 'Genesis', 'maximum_usd': '2.00', 'actual_usd': None, 'state': 'open'},
-             {'who': 'Genesis', 'maximum_usd': '2.00', 'actual_usd': '0.35', 'state': 'closed'},
-             {'who': 'lucas', 'maximum_usd': '5.00', 'actual_usd': None, 'state': 'open'}]
-    assert access.envelope(lines) == {'envelope_usd': '12.50', 'reserved_usd': '2.00', 'settled_usd': '0.35', 'left_usd': '10.15'}
+    assert 'envelope_usd' not in access.settings()
+    assert access.set_settings({'brief_hour': 7})['brief_hour'] == 7
     with pytest.raises(ValueError):
-        access.set_settings({'envelope_usd': '900'})
+        access.set_settings({'brief_hour': 99})
 
 
 def test_routes_accept_a_key_and_record_who_wrote(tmp_path, monkeypatch):
@@ -60,6 +57,6 @@ def test_routes_accept_a_key_and_record_who_wrote(tmp_path, monkeypatch):
         entry = studio.genesis.autonomy.tail(1)[0]
         assert entry['kind'] == 'card' and entry['by'] == 'human:lucas'
         status, _, body = request(port, 'GET', '/api/genesis/settings')
-        assert status == 200 and json.loads(body)['envelope']['envelope_usd'] == '25.00' and json.loads(body)['channels']['slack_webhook'] is False
+        assert status == 200 and json.loads(body)['allowance']['limit_usd'] == '25.00' and json.loads(body)['channels']['slack_webhook'] is False
         status, _, body = request(port, 'GET', '/api/genesis/digest?week=2026-W37')
         assert status == 200 and json.loads(body)['week'] == '2026-W37'

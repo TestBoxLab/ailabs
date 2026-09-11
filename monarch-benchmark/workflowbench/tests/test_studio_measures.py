@@ -135,3 +135,27 @@ def test_run_measures_reports_unrecorded_attempts_and_infrastructure():
     assert out["unrecorded_attempts"] == 0
     missing = measures.run_measures({"id": "r", "settings": {"tasks": ["t1", "t2", "t3", "t4"], "models": ["arch-v1"], "arms": ARMS[:1]}, "results": rows}, [])
     assert missing["unrecorded_attempts"] == 1
+
+
+def test_sentinels_are_mutually_distinguishable():
+    """T004: not_applicable is distinct from unknown, from None, and from zero."""
+    assert measures.not_applicable is not measures.unknown
+    assert measures.not_applicable != measures.unknown
+    assert measures.not_applicable != 0
+    assert measures.unknown != 0
+    assert measures.not_applicable is not None
+    assert measures.unknown is not None
+    assert measures.is_not_applicable(measures.not_applicable)
+    assert measures.is_unknown(measures.unknown)
+    assert not measures.is_not_applicable(measures.unknown)
+    assert not measures.is_unknown(measures.not_applicable)
+
+
+def test_agent_error_turn_limit_attempts_produce_no_completion_claim(stored_run):
+    agent_error_rows = [r for r in stored_run.job["results"] if r.get("termination") == "agent_error"]
+    assert len(agent_error_rows) == 4, f"Expected 4 agent_error attempts, got {len(agent_error_rows)}"
+    for r in agent_error_rows:
+        claim = measures.false_completion([r])
+        assert claim["count"] == 0, f"Attempt {r['task']} produced a completion claim: {r.get('output')}"
+    assert measures.false_completion(agent_error_rows)["count"] == 0
+

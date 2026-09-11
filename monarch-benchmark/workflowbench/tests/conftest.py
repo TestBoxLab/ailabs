@@ -76,6 +76,35 @@ def mock_server(monkeypatch):
     providers.REGISTRY.pop("mock", None)
 
 
+class StoredRun:
+    def __init__(self, studio, job, run_id: str, path: Path):
+        self.studio = studio
+        self.job = job
+        self.run_id = run_id
+        self.path = path
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __iter__(self):
+        return iter((self.studio, self.job))
+
+
+@pytest.fixture
+def stored_run():
+    """T003: Loads job 6022e89fbb974c7483716f85a5e3c4fe from wb/out/studio/,
+    skipping with a clear reason when the directory is absent."""
+    from wb_studio.app import ROOT, Studio
+    run_id = "6022e89fbb974c7483716f85a5e3c4fe"
+    folder = ROOT / "out" / "studio" / run_id
+    if not folder.is_dir() or not (folder / "job.json").is_file():
+        pytest.skip(f"stored run {run_id} is absent under {folder.parent}")
+    studio = Studio(ROOT / "out" / "studio", gateway_factory=lambda *a, **k: None)
+    job = studio.job(run_id)
+    return StoredRun(studio, job, run_id, folder)
+
+
+
 def pytest_configure(config):
     """Windows refuses paths past 260 characters. Evidence folders are deep and pytest's
     default temp root ("pytest-of-<user>/pytest-NNN/<long test name>") pushes them past

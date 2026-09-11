@@ -74,9 +74,9 @@ def monarch_reason(harness, env) -> str | None:
     Langfuse checked against the deployment, no model money spent. It admits
     Monarch competitors for `PROBE_TTL` (two hours), for that backend only.
     """
-    from wb_studio import enterprise
+    from wb_orchestrator import monarch_probe
     from wb_orchestrator.monarch_setup import Stop, expand
-    probe = enterprise.load_probe(_probe_site())
+    probe = monarch_probe.load_probe(_probe_site())
     if probe is None:
         return f"{MONARCH_REASON}; {VERIFY_HINT}"
     try:
@@ -85,8 +85,8 @@ def monarch_reason(harness, env) -> str | None:
         return f"{MONARCH_REASON}; the last record carries no valid time; {VERIFY_HINT}"
     if checked.tzinfo is None:
         checked = checked.replace(tzinfo=timezone.utc)
-    hours = int(enterprise.PROBE_TTL.total_seconds() // 3600)
-    if datetime.now(timezone.utc) - checked > enterprise.PROBE_TTL:
+    hours = int(monarch_probe.PROBE_TTL.total_seconds() // 3600)
+    if datetime.now(timezone.utc) - checked > monarch_probe.PROBE_TTL:
         return f"{MONARCH_REASON}; the last verification is older than {hours} hours; {VERIFY_HINT}"
     if not probe.get("ok"):
         failed = ", ".join(c.get("name", "?") for c in probe.get("checks", []) if not c.get("ok")) or "unknown check"

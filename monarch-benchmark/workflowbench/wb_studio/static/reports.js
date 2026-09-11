@@ -242,7 +242,7 @@ function failuresBlock(r) {
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(matrix); wrap.appendChild(scroll);
   const src = document.createElement('p'); src.className = 'chart-source'; src.textContent = sourceText(r, ''); wrap.appendChild(src);
   const claims = r.order.map(id => r.setups[id]).filter(s => s && s.false_completion?.count);
-  if (claims.length) { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = claims.map(s => s.name + ' reported the work as done in ' + s.false_completion.count + ' of ' + s.false_completion.failed + ' failed attempts').join('; ') + ' (wording heuristic over the final output).'; wrap.appendChild(p); }
+  if (claims.length) { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = claims.map(s => s.name + ' reported the work as done in ' + s.false_completion.count + ' of ' + s.false_completion.failed + ' failed attempts (inferred from wording)').join('; ') + '.'; wrap.appendChild(p); }
   return wrap;
 }
 

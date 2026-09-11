@@ -479,6 +479,10 @@ def embed(genesis, texts) -> list | None:
                          'embedding route on the configuration page.')
     tokens = sum(len(t) // 4 + 1 for t in texts)
     ceiling = _money(Decimal(tokens) * price / 1_000_000) or Decimal('0.01')
+    # Embeddings are Genesis spend like any other and pass the same weekly gate.
+    ok, reason = genesis.allowance_allows(ceiling)
+    if not ok:
+        raise ValueError(reason)
     request_id = 'genesis-embed-' + uuid.uuid4().hex[:16]
     ledger = genesis.studio.ledger
     ledger.reserve(request_id, ceiling, scope_id='genesis-embedding',

@@ -78,3 +78,58 @@ def test_a_bare_only_run_is_not_compared_with_itself(studio):
     assert report["grade"] == {"grade": "Not comparable", "reason": "only the Bare baseline ran"}
     assert report["verdict"].count("Bare Gemini 3.7 Flash") == 1 and "against" not in report["verdict"]
 
+
+def test_attempts_on_moved_hashes_are_marked_non_comparable(stored_run):
+    studio, job = stored_run
+    report = report_data.run_report(studio, stored_run.run_id)
+    moved_tasks = {
+        "operations.access_request_validation",
+        "simple.airtable_create_contact",
+        "support.freshdesk_auto_merge",
+        "finance.annual_budget_prep",
+    }
+    by_id = {t["id"]: t for t in report["tasks"]}
+    for task_id in moved_tasks:
+        assert by_id[task_id]["comparable"] is False
+        assert by_id[task_id]["liveness"] == "superseded"
+    live_tasks = set(by_id) - moved_tasks
+    assert len(live_tasks) == 6
+    for task_id in live_tasks:
+        assert by_id[task_id]["comparable"] is True
+        assert by_id[task_id]["liveness"] == "live"
+
+    for key, cell in report["matrix"].items():
+        task = key.split()[0]
+        if task in moved_tasks:
+            assert cell["comparable"] is False
+            assert cell["liveness"] == "superseded"
+        else:
+            assert cell["comparable"] is True
+            assert cell["liveness"] == "live"
+
+    for attempt in report["failures"]["attempts"]:
+        if attempt["task"] in moved_tasks:
+            assert attempt["comparable"] is False
+            assert attempt["liveness"] == "superseded"
+        else:
+            assert attempt["comparable"] is True
+            assert attempt["liveness"] == "live"
+
+
+def test_superseded_attempts_excluded_from_headline_figures(stored_run):
+    studio, job = stored_run
+    report = report_data.run_report(studio, stored_run.run_id)
+    assert "passed 1 of 6 tasks" in report["verdict"]
+    assert "2 of 10 tasks" not in report["verdict"]
+
+    hero = report["hero"][0]
+    assert hero["attempts"] == 6
+    assert hero["passed"] == 1
+    assert "1 / 6" in hero["detail"]
+
+    count_findings = [f for f in report["findings"] if f["kind"] == "count"]
+    if count_findings:
+        assert "1 of 6 tasks" in count_findings[0]["text"]
+
+
+

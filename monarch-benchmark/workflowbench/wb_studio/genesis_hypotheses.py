@@ -373,7 +373,7 @@ def _task_values(rows, events, measure) -> dict:
         elif measure == 'violations':
             value = len(r.get('unexpected_changes') or [])
         elif measure == 'false_completion':
-            value = None if r.get('passed') else float(isinstance(r.get('output'), str) and bool(M.DONE_CLAIM.search(r['output'])))
+            value = None if r.get('passed') else float(M.claims_completion(r))
         else:
             value = turns.get((r.get('task'), r.get('model')), 0)
         if value is not None:
