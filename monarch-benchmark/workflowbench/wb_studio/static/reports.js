@@ -269,7 +269,7 @@ function readingHighlights(s) {
 }
 function readingBuckets(reading) {
   if (!reading.buckets.length) return '<p>No failed attempts recorded for this competitor.</p>';
-  return '<p class="report-note" style="font-size:inherit">One primary category per failed attempt; retries count separately. Cited interpretations are labeled separately from recorded outcomes; neither alone proves a root cause.</p>' +
+  return '<p class="report-note">One primary category per failed attempt; retries count separately. Cited interpretations are labeled separately from recorded outcomes; neither alone proves a root cause.</p>' +
     readingTable(['Category', 'Failed attempts', 'Share of failures', 'Recorded USD'], reading.buckets.map(b => [
       esc(b.label) + (b.basis ? '<small>' + esc(b.basis) + '</small>' : ''), String(b.count), esc(fmtPct(b.percent_failed / 100)), readingCost(b.cost, b.unknown_costs)
     ]), 'reading-buckets');

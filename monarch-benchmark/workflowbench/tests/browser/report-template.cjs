@@ -20,6 +20,7 @@ const check = async () => {
   assert(article.querySelector('#report-hero'), 'Comparison must precede diagnosis');
   const disclosure = article.querySelector('details.measurement-details');
   assert(disclosure && disclosure.querySelector('summary').textContent === 'Measurement definitions and limitations', 'One measurement disclosure must exist');
+  assert(getComputedStyle(article.querySelector('#report-buckets p')).fontSize === getComputedStyle(article.querySelector('#report-why p')).fontSize, 'Bucket explanation must match body prose size');
   assert(article.textContent.includes('Analysis pending'), 'No review must produce an explicit pending state');
   assert(article.textContent.includes('Initially solved') && article.textContent.includes('Including retries'), 'Task metrics need explicit initial/retry labels');
   assert(article.querySelector('[data-open-run-evidence]'), 'Studio must retain access to evidence');
