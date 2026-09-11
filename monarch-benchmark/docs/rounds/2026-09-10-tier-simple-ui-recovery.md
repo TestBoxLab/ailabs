@@ -182,3 +182,40 @@ The frontend asset SHA-256 is
 The detached local observer continues status, call inspection and metric exports.
 The first resumed task made two Google Drive GET requests with HTTP 200. This
 confirms application access, not a successful task verdict.
+
+### Final verification
+
+The continuation finished at September 11 00:45:27 UTC (September 10 21:45
+Sao Paulo). All seven retries executed; no pending retry remains. The hosted UI
+updated without reloading to `completed`, 106 results, USD 51.06925921. Additional
+recorded spending was USD 10.669572, within the original USD 60 ceiling.
+
+| Retried task | Termination | Passed | Added USD |
+|---|---|---|---:|
+| finance.annual_budget_prep | completed | No | 2.248709 |
+| finance.invoice_reconciliation | agent_error | No | 1.177159 |
+| marketing.featured_snippet | completed | No | 1.600151 |
+| marketing.industry_event_tracking | completed | No | 1.182546 |
+| marketing.product_adoption | completed | No | 1.833166 |
+| sales.update_contact_phone | completed | No | 1.933144 |
+| simple.airtable_find_update | completed | Yes | 0.694697 |
+
+The successful Airtable retry performed metadata discovery, a Contacts lookup
+and `POST /airtable/base_crm/Contacts`, all HTTP 200. The unchanged world's two
+judges accepted the final state. This demonstrates a successful write in this
+attempt; it does not establish that the ignored formula problem is repaired.
+Invoice reconciliation failed at `fetch_invoices`. The other five failed
+retries finished normally but did not satisfy the task's complete approval rule.
+
+All 106 evidence manifests verified. The 99 already-final rows match the
+before-continuation database exactly. Both remote and exported SQLite integrity
+checks returned `ok`; the CSV has 106 rows and 83 columns. The local final archive
+has 2,008 entries, including both recovery receipts and the operational source:
+SHA-256 `18787051251a2a70d88243ed6afd47b52641a15a113e55761cdc2b9f5287e1cd`.
+The observer finished exporting and exited. Local `verification-final.json`
+records the checks under `out/tier-simple-ui-20260910/`.
+
+Langfuse acknowledged all 106 result summaries and all 1,312 billing/state
+records for the run. The continuation envelope is closed. The original GLM
+reservation of USD 0.248947 remains unresolved and retained; delivery to Langfuse
+does not by itself reconcile that historical provider charge.
