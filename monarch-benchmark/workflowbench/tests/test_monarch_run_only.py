@@ -297,7 +297,7 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
         sc.workflows = {w: {"recipeVersion": 1} for w in ids.values()}
         rc = config.resolve(site / "config/products/simulated-apps.yaml",
                             site / "config/plans/smoke-frontier.yaml",
-                            env={**MONARCH_ENV}, audiences={"internal": ["*"]})
+                            env={**MONARCH_ENV})
         assert len(rc.tasks) == 9 and rc.excluded_tasks == {excluded: "checker_failed"}
         store = Store(tmp_path / "wb.sqlite3")
         orch = Orchestrator.from_config(store, rc, tmp_path / "out")
@@ -326,7 +326,7 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     assert not [r for r in monarch.requests if r["path"] == "/api/workflows/recipe/runs"]
     assert monarch.deleted_workflows == []
 
-    md = render_md(build_report(store, run_id, audience="internal"))
+    md = render_md(build_report(store, run_id))
     assert "oracle" in md and mon[0]["arm"] in md
     assert "1 task excluded (checker_failed)" in md
     assert ("Monarch executed a fixed known-correct workflow; the other competitors "

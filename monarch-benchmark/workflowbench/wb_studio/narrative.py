@@ -221,13 +221,6 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
             "turning_point": turning, "limits": LIMITS}
 
 
-def without_reasoning(s: dict | None) -> dict | None:
-    """The same story for readers outside the lab: the provider's reasoning
-    summaries stay internal, the observed timeline does not."""
-    if not s:
-        return s
-    timeline = [{**t, "reasoning": ""} for t in s.get("timeline", [])]
-    return {**s, "timeline": [{**t, "sentence": _sentence(t)} for t in timeline]}
 
 
 def run_story(attempts: list[dict], names: dict[str, str] | None = None) -> dict:

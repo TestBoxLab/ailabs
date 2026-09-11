@@ -120,7 +120,7 @@ def _banner(rc) -> str:
     monarch = [line for line in [_monarch_line(rc)] if line]
     return "\n".join([
         f"product   {p.name} ({p.kind}, {data})",
-        f"plan      {plan.name}  mode={plan.mode}  audience={plan.audience}",
+        f"plan      {plan.name}  mode={plan.mode}",
         f"tasks     {len(rc.tasks)} in {plan.tasks.rstrip('/')}/",
         _size_line(rc),
         f"competitors: {len(rc.competitors)}; attempts in the round: {rc.attempts_total}",
@@ -145,6 +145,30 @@ def cmd_genesis_index(args) -> int:
     from wb_studio.app import Studio
     from wb_studio.code_index import refresh
     print(json.dumps(refresh(Studio()), indent=2, default=str))
+    return 0
+
+
+def cmd_budget_acknowledge(args) -> int:
+    """A named person answers for one recorded overrun so admissions resume.
+
+    The overrun stays on the record and its money is unchanged; what this replaces is
+    editing research/budget.sqlite3 by hand, which was the only recovery before
+    (feature 024, FR-006).
+    """
+    from wb_orchestrator.budget import BudgetLedger, BudgetConfigurationError
+    path = args.ledger
+    operator = args.by or os.environ.get("WB_OPERATOR") or ""
+    try:
+        ledger = BudgetLedger(path)
+        row = ledger.acknowledge_overrun(args.reservation_id, by=operator, reason=args.reason)
+    except (BudgetConfigurationError, ValueError) as exc:
+        print(f"budget: {exc}", file=sys.stderr)
+        return 2
+    note = row.metadata["overrun_acknowledged"]
+    print(f"acknowledged {row.reservation_id}: reserved ${row.maximum_usd}, settled ${row.actual_usd}")
+    print(f"  by {note['by']} at {note['at']}: {note['reason']}")
+    remaining = ledger.status().overrun_ids
+    print("  overruns still blocking: " + (", ".join(remaining) if remaining else "none"))
     return 0
 
 
@@ -387,7 +411,7 @@ def cmd_report(args) -> int:
     from wb_report.report import GateError, write_report
     store = _store(args)
     try:
-        paths = write_report(store, args.run_id, args.out, audience=args.audience,
+        paths = write_report(store, args.run_id, args.out,
                              baseline_arm=args.baseline, sortable=not args.no_sort,
                              fmt=args.format)
     except (GateError, KeyError) as e:
@@ -421,8 +445,8 @@ def cmd_summary(args) -> int:
         out = args.summary_out
         if not out:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            out = Path(args.out) / f"summary-{stamp}-{args.audience}.html"
-        path = write_summary(store, run_ids, out, audience=args.audience,
+            out = Path(args.out) / f"summary-{stamp}.html"
+        path = write_summary(store, run_ids, out,
                              baseline=args.baseline, sortable=not args.no_sort)
     except (GateError, KeyError, ValueError) as e:
         print(e, file=sys.stderr)
@@ -744,6 +768,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="folder for <week>.md and <week>.json; default: research/reconciliation/ "
                          "next to the ledger")
     br.set_defaults(fn=cmd_budget_reconcile)
+    ba = bsub.add_parser("acknowledge",
+                         help="answer for one recorded overrun so admissions resume; the overrun stays on the record")
+    ba.add_argument("reservation_id")
+    ba.add_argument("--reason", required=True, help="why this overrun is understood; kept with the reservation")
+    ba.add_argument("--by", default=None, help="the person acknowledging; default: WB_OPERATOR")
+    ba.set_defaults(fn=cmd_budget_acknowledge)
 
     p = sub.add_parser("run")
     p.add_argument("--product", default=None, help="name in config/products or a path; asked if omitted")
@@ -788,7 +818,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("report")
     p.add_argument("run_id")
-    p.add_argument("--audience", default="internal", help="internal | public-rung2")
     p.add_argument("--baseline", default=None, help="baseline arm for paired stats")
     p.add_argument("--no-sort", action="store_true",
                    help="accepted for compatibility; the page has no sorting script")
@@ -801,10 +830,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--runs", default=None, help="comma list of run ids, in page order")
     p.add_argument("--plans", default=None,
                    help="comma list of plans; uses the most recent run of each")
-    p.add_argument("--audience", default="internal", help="internal | public-rung2")
     p.add_argument("--baseline", default=None, help="baseline where a round names none")
     p.add_argument("--out", dest="summary_out", default=None,
-                   help="output file; default out/summary-<timestamp>-<audience>.html")
+                   help="output file; default out/summary-<timestamp>.html")
     p.add_argument("--no-sort", action="store_true",
                    help="omit the column-sorting script")
     p.set_defaults(fn=cmd_summary)

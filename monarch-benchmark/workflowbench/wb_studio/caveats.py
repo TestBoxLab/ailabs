@@ -37,7 +37,7 @@ def efforts_by_setup(job) -> dict:
     return out
 
 
-def for_run(job, m, narrative=None, hidden=(), audience="public", reused=None) -> list[str]:
+def for_run(job, m, narrative=None, reused=None) -> list[str]:
     """Sentences about one run: what the numbers rest on and what they leave out."""
     out = [FORK_NOTE.format(version=fork_version())]
     setups = m.get("setups", {})
@@ -64,8 +64,6 @@ def for_run(job, m, narrative=None, hidden=(), audience="public", reused=None) -
         out.append(f"Each task ran {k} times per setup; the \"passed all {k} times\" column counts a task only when every try passed.")
     else:
         out.append("Each task ran once per setup, so nothing here says how consistent a setup is from one try to the next.")
-    if hidden:
-        out.append(f"{len(hidden)} setup{'s' if len(hidden) != 1 else ''} {'are' if len(hidden) != 1 else 'is'} internal-only and {'do' if len(hidden) != 1 else 'does'} not appear in the public view.")
     if any(s["cost"]["total"] is not None for s in setups.values()):
         out.append("Costs are settled from provider receipts at each model's recorded price table; cached and uncached tokens are priced separately.")
     if narrative:
@@ -80,15 +78,13 @@ def for_run(job, m, narrative=None, hidden=(), audience="public", reused=None) -
     return out
 
 
-def for_round(cohort, hidden=()) -> list[str]:
+def for_round(cohort) -> list[str]:
     out = [FORK_NOTE.format(version=fork_version())]
     runs = cohort.get("runs", [])
     if len(runs) > 1:
         out.append(f"Figures combine {len(runs)} runs on the same frozen task set; setups that ran more than once are pooled.")
     if not cohort.get("full_benchmark"):
         out.append("This task set is not the frozen benchmark of 50 tasks, so these standings do not count for the leaderboard.")
-    if hidden:
-        out.append(f"{len(hidden)} setup{'s' if len(hidden) != 1 else ''} internal-only, hidden from the public view.")
     if not cohort.get("baseline"):
         out.append("No Bare baseline ran on this task set, so paired deltas and grades are not available.")
     return out

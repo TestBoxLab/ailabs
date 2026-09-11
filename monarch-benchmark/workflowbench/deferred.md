@@ -59,9 +59,6 @@ than 30 days (warning, never a gate).
 
 ## 3. Smaller items carried from features 002 to 006
 
-- `wb_report/audiences.yaml`: the public allowlist matches the literal
-  `monarch`; real rows are `monarch@<sha>[+branch]`, so a public report needs
-  a `monarch@*` pattern before it can show Monarch. (PLAN.md §5)
 - `config.py::_hashed_harness` keeps `release: null` in every harness hash so
   the two smoke runs of 3 Sep keep their config hash; drop that line the next
   time the hash is allowed to move and old runs are re-hashed.

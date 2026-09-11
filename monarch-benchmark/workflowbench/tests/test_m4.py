@@ -1,4 +1,4 @@
-"""M4/M2 tests: stats, report builder + audience gates, telemetry collector."""
+"""M4/M2 tests: stats, report builder, telemetry collector."""
 from __future__ import annotations
 
 import math
@@ -6,7 +6,7 @@ import math
 import pytest
 
 from runner.schema import EpisodeRow, TokenUsage
-from wb_report.report import GateError, build_report, gate_arms, load_audiences, render_md, write_report
+from wb_report.report import GateError, build_report, render_md, write_report
 from wb_results.store import Store
 from wb_orchestrator.telemetry import TelemetryWriter, collect, read_events
 from wb_stats.stats import cluster_bootstrap, mcnemar, mean_sem, paired_wl, pass_hat_k
@@ -91,23 +91,15 @@ def seeded_store(tmp_path):
     return store
 
 
-def test_audience_gate_allowlists():
-    aud = load_audiences()
-    assert set(aud) == {"internal", "public-rung2"}
-    arms = ["kimi-k3/api", "monarch", "monarch-lab"]
-    assert gate_arms(arms, "internal") == arms
-    assert gate_arms(arms, "public-rung2") == ["monarch"]
-    with pytest.raises(GateError):
-        gate_arms(arms, "nonexistent")
-
-
-def test_report_internal_has_everything(seeded_store):
-    rep = build_report(seeded_store, "run-x", audience="internal",
+def test_one_report_carries_every_competitor_and_its_dollars(seeded_store):
+    """There is one report: no competitor is filtered out of it, lab builds
+    included, and cost is always the exact figure rather than a ratio."""
+    rep = build_report(seeded_store, "run-x",
                        baseline_arm="kimi-k3/api")
     assert sorted(rep["arms"]) == ["kimi-k3/api", "monarch", "monarch-lab"]
     md = render_md(rep)
-    assert "DO NOT EXPORT" in md            # lab arm watermark
-    assert "cost (USD)" in md               # internal sees dollars
+    assert "cost (USD)" in md
+    assert "monarch-lab" in md
     assert "src: workflowbench-synthetic@0.1" in md
     paired = [f for f in rep["figures"] if f["kind"] == "paired"]
     assert paired and all("mcnemar" in f for f in paired)
@@ -117,43 +109,30 @@ def test_report_internal_has_everything(seeded_store):
 
 def test_report_names_stop_reason(seeded_store):
     seeded_store.set_stop_reason("run-x", "cost_ceiling")
-    md = render_md(build_report(seeded_store, "run-x", audience="internal"))
+    md = render_md(build_report(seeded_store, "run-x"))
     assert "stopped: cost_ceiling" in md
 
 
-def test_report_public_strips_at_query_level(seeded_store):
-    rep = build_report(seeded_store, "run-x", audience="public-rung2")
-    assert rep["arms"] == ["monarch"]
-    assert sorted(rep["arms_stripped_by_gate"]) == ["kimi-k3/api", "monarch-lab"]
-    md = render_md(rep)
-    assert "kimi" not in md and "monarch-lab" not in md   # gated arms never named publicly
-    assert "2 arm(s) withheld" in md
-    assert "cost (USD)" not in md            # public: ratios only, no dollars
-
-
-def test_lab_never_renders_outside_internal_even_if_allowlisted(seeded_store, tmp_path):
-    leaky = tmp_path / "audiences.yaml"
-    leaky.write_text('internal:\n  - "*"\nleaky:\n  - "*"\n')
-    with pytest.raises(GateError, match="monarch-lab"):
-        build_report(seeded_store, "run-x", audience="leaky", audiences_path=leaky)
-
-
 def test_report_write_files(seeded_store, tmp_path):
-    paths = write_report(seeded_store, "run-x", tmp_path, audience="internal")
-    md = (tmp_path / "report-run-x-internal.md").read_text()
+    paths = write_report(seeded_store, "run-x", tmp_path)
+    md = (tmp_path / "report-run-x.md").read_text()
     assert "WorkflowBench report" in md
-    assert (tmp_path / "report-run-x-internal.html").exists()
+    assert (tmp_path / "report-run-x.html").exists()
     assert set(paths) == {"md", "html"}
 
 
-def test_gate_raises_when_nothing_renderable(tmp_path):
+def test_a_round_of_one_non_monarch_competitor_renders(tmp_path):
+    """This used to raise GateError: the public allowlist held `monarch` alone,
+    so a round without it had nothing left to render. There is one report now,
+    and a single model is a round like any other."""
     store = Store(tmp_path / "wb.sqlite3")
     store.create_run("run-b", "cfg", "workflowbench-synthetic@0.1",
                      {"suite_dir": "tasks", "arms": ["kimi-k3/api"], "k": 1,
                       "n_tasks": 1, "timeout_s": 600})
     store.record_episode(_row("t1", "kimi-k3/api", 0, True, run="run-b"))
-    with pytest.raises(GateError):
-        build_report(store, "run-b", audience="public-rung2")
+    rep = build_report(store, "run-b")
+    assert rep["arms"] == ["kimi-k3/api"]
+    assert "kimi-k3/api" in render_md(rep)
 
 
 # -- telemetry ----------------------------------------------------------------
@@ -209,7 +188,7 @@ def monarch_store(tmp_path):
 
 
 def test_source_line_carries_price_table_and_missing_cost(monarch_store):
-    md = render_md(build_report(monarch_store, "run-m", audience="internal"))
+    md = render_md(build_report(monarch_store, "run-m"))
     assert "price table monarch-team-bedrock@2026-09-03" in md
     assert "cost missing on 1/3 attempts" in md
 
@@ -220,7 +199,7 @@ def test_source_line_unchanged_without_price_tables_or_monarch(tmp_path):
                      {"suite_dir": "tasks", "arms": ["kimi-k3/api"], "k": 1,
                       "n_tasks": 1, "timeout_s": 600})
     store.record_episode(_row("t1", "kimi-k3/api", 0, True, run="run-n"))
-    md = render_md(build_report(store, "run-n", audience="internal"))
+    md = render_md(build_report(store, "run-n"))
     assert "price table" not in md and "cost missing" not in md
     assert "`src: workflowbench-synthetic@0.1 · v0.1 · n=1 · kimi-k3/api · run-n`" in md
 
@@ -246,11 +225,11 @@ def run_only_store(tmp_path):
 
 
 def test_run_only_source_line_states_the_exclusions_and_what_was_compared(run_only_store):
-    md = render_md(build_report(run_only_store, "run-r", audience="internal"))
+    md = render_md(build_report(run_only_store, "run-r"))
     assert "2 tasks excluded (checker_failed, not_attempted)" in md
     assert RUN_ONLY_SENTENCE in md
 
 
 def test_create_run_source_line_says_nothing_about_run_only(monarch_store):
-    md = render_md(build_report(monarch_store, "run-m", audience="internal"))
+    md = render_md(build_report(monarch_store, "run-m"))
     assert "excluded" not in md and RUN_ONLY_SENTENCE not in md

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -24,6 +24,8 @@ from wb_arms.api_loop import ArmResult
 from wb_arms.runtime_manifest import sha256_json
 from wb_orchestrator.budget import BudgetLedger, BudgetExceeded
 from wb_orchestrator.config import derive_langfuse_keys
+from wb_orchestrator.monarch_setup import front_door_path, front_door_secret
+from wb_studio.genesis_autonomy import background_wanted
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
 from wb_results.store import Store
@@ -104,6 +106,70 @@ def front_door_target(env, rest: str) -> str:
         return target.rstrip("/") + rest
     port = int(env.get("STUDIO_FRONT_DOOR_PORT") or 9105)
     return f"http://127.0.0.1:{port}{rest}"
+
+
+# The gate and the seed URL must agree, and the seeds are written by the orchestrator,
+# so both live there. The Studio already depends on wb_orchestrator; the reverse edge
+# is the one the benchmark must not grow.
+
+AGENT_NAMES = ("genesis", "studio")
+
+
+def human_operator(name) -> str:
+    """One launcher's name, refused when an agent is presenting itself as a person.
+
+    Decision D5 puts a person's name on every paid launch and says an agent never
+    approves its own round. `human:studio` and `human:genesis` are the fallback strings
+    the Studio writes when nobody is named, so accepting them as operators would put a
+    placeholder where the accountable person belongs (feature 024, FR-007).
+    """
+    who = str(name or "").strip()
+    if not who:
+        return ""
+    bare = who.split(":", 1)[1] if ":" in who else who
+    if bare.strip().lower() in AGENT_NAMES:
+        raise ValueError(f"{who!r} is not a person: a paid launch names the person who asked for it. "
+                         "A launch Genesis makes is recorded as Genesis's, not as a person's.")
+    return who
+
+
+def attempt_cap_for(maximum, attempts: int, explicit=None, floor=None):
+    """What one attempt may spend, below the whole run ceiling wherever that is possible.
+
+    The Studio passed no run config, so `attempt_cap_usd` stayed None and every arm was
+    handed the run's whole maximum as its scope limit: one attempt looping on task 1 of
+    50 could spend the lot before task 2 started, and every competitor comparison assumes
+    attempts are comparably bounded (feature 024, FR-008).
+
+    The default is a generous share — four times an even split — clamped to the run
+    ceiling. On a fifty-task round that bounds one attempt to roughly 8% of the money,
+    which is the case the cap exists for. On a round of three attempts the share exceeds
+    the ceiling and the cap is the ceiling: a three-attempt round sized for three
+    expensive requests genuinely cannot bound one of them below what it costs, and
+    pretending otherwise refuses every attempt instead of limiting it.
+
+    `floor` is the largest amount a single request reserves before it is admitted, which
+    `create` already computes to validate the run ceiling. A cap under it would refuse
+    every attempt rather than bound it, so the floor wins: on a run whose ceiling is only
+    just large enough for one request, the cap equals the ceiling and this bounds nothing.
+    That is the honest outcome — the run is one request wide — not a reason to set a cap
+    that cannot be paid.
+    """
+    maximum = Decimal(str(maximum))
+    floor = Decimal(str(floor)) if floor is not None else Decimal("0")
+    if explicit is not None and str(explicit).strip() != "":
+        cap = Decimal(str(explicit))
+        if cap <= 0:
+            raise ValueError("The attempt cap is an amount above zero.")
+        if cap > maximum:
+            raise ValueError(f"The attempt cap ${cap:.2f} is above the run ceiling ${maximum:.2f}; "
+                             "one attempt may not be allowed to spend the whole round.")
+        if cap < floor:
+            raise ValueError(f"The attempt cap ${cap:.2f} is below the ${floor:.2f} a single request "
+                             "reserves before it is admitted, so no attempt could run. Raise the cap.")
+        return cap
+    share = (maximum * 4 / max(1, int(attempts))).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    return min(maximum, max(Decimal("0.01"), floor, share))
 
 
 class Studio:
@@ -447,8 +513,19 @@ class Studio:
         title = payload.get("title", "Model comparison")
         if not isinstance(title, str) or not title.strip() or len(title) > 100:
             raise ValueError("Use a comparison name between 1 and 100 characters")
+        # FR-007: a paid launch names the person who asked for it. Scripted competitors
+        # (the answer key, the sloppy check) cost nothing, so they are not a paid launch.
+        paid = any(a.get("kind") != "scripted" and a.get("id") not in ("oracle", "sloppy", "null") for a in arms)
+        operator = human_operator(payload.get("operator") or os.environ.get("WB_OPERATOR"))
+        if paid and not operator:
+            raise ValueError("A paid launch names the person who asked for it. "
+                             "Set WB_OPERATOR, or send `operator` with the launch.")
+        # FR-008: one attempt may never be allowed to spend the whole round.
+        cap = attempt_cap_for(maximum, attempts=len(tasks) * max(1, len(arms)),
+                              explicit=payload.get("attempt_cap_usd"), floor=floor)
         settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks, "maximum_usd": str(maximum), "track": track,
-                    "architectures": [v["id"] for v in versions]}
+                    "architectures": [v["id"] for v in versions],
+                    "operator": operator, "attempt_cap_usd": str(cap)}
         concurrency = positive_int(payload.get("concurrency", 1), "Concurrent agents", self.runtime.max_agents)
         pins = self.components.pin(payload.get("components"))
         if any(a["kind"] == "enterprise" for a in arms) and any(pins[r]["id"] != self.components.defaults[r] for r in ("brain", "action_builder")):
@@ -564,8 +641,14 @@ class Studio:
             from wb_studio import workflows
             if job.get("workflow_contract", {}).get("runtime_sha256") != hashlib.sha256(Path(workflows.__file__).read_bytes()).hexdigest():
                 raise ValueError("The workflow artifact contract changed; create a new run with the current contract")
-        maximum = Decimal(job["settings"]["maximum_usd"])
-        config = job["settings"].get("configuration", {})
+        # What ONE attempt may spend, not what the round may. Every arm below takes this
+        # as its ledger scope limit, and it used to be the whole run ceiling, so a single
+        # looping attempt could consume the round before the next task started
+        # (feature 024, FR-008). A run recorded before the cap existed falls back to the
+        # ceiling, which is what it ran under.
+        settings = job["settings"]
+        maximum = Decimal(settings.get("attempt_cap_usd") or settings["maximum_usd"])
+        config = settings.get("configuration", {})
         if arm["kind"] == "version":
             version = load_version(self, arm["blueprint"], arm["number"])
             if arm.get("runner_override"):
@@ -860,20 +943,49 @@ def handler(studio):
         FRONT_DOOR = "/front-door"
 
         def is_front_door(self) -> bool:
-            return self.path == self.FRONT_DOOR or self.path.startswith(self.FRONT_DOOR + "/")
+            """True only for a front-door call carrying the current secret segment.
+
+            An address under /front-door without a valid secret is not "a front-door
+            call that fails auth" — it is not a front-door call at all, and falls
+            through to the normal authenticated routing, which 404s it. Saying so
+            here keeps every method's gate in one place.
+            """
+            return self.front_door_rest() is not None
+
+        def front_door_rest(self) -> str | None:
+            """The path the shim should see, or None when this is not a valid front-door call.
+
+            Fails closed: with no STUDIO_FRONT_DOOR_SECRET set there is no valid call,
+            because an absent secret must never mean "no gate" on a public address.
+            """
+            if self.path != self.FRONT_DOOR and not self.path.startswith(self.FRONT_DOOR + "/"):
+                return None
+            secret = front_door_secret(os.environ)
+            if not secret:
+                return None
+            prefix = self.FRONT_DOOR + "/" + secret
+            if self.path == prefix:
+                return "/"
+            if self.path.startswith(prefix + "/") or self.path.startswith(prefix + "?"):
+                return self.path[len(prefix):]
+            return None
 
         def front_door(self):
             """Forward one request to the attempt's front door: wherever its shim runs.
 
             A hosted Studio is the only address Monarch can reach, so the seeds name
-            `https://<studio>/front-door` and this handler relays to the shim the
-            Monarch attempt started — on this host by default (STUDIO_FRONT_DOOR_PORT,
-            9105), or at STUDIO_FRONT_DOOR_TARGET when the attempt runs elsewhere, as
-            a CLI round does. Like the tunnel it replaces there is no login and no
-            origin check on this path; the shim itself accepts only its episode's
-            world calls.
+            `https://<studio>/front-door/<secret>` and this handler relays to the shim
+            the Monarch attempt started — on this host by default
+            (STUDIO_FRONT_DOOR_PORT, 9105), or at STUDIO_FRONT_DOOR_TARGET when the
+            attempt runs elsewhere, as a CLI round does.
+
+            There is no login on this path because the competitor under test calls it
+            and holds no credentials. The gate is the secret segment, which rides in
+            the seed URL. Without it anyone holding the hosted address could write
+            into a running attempt's world, and the approval rule would read that
+            write as the competitor failing.
             """
-            rest = self.path[len(self.FRONT_DOOR):] or "/"
+            rest = self.front_door_rest() or "/"
             length = int(self.headers.get("Content-Length") or 0)
             if length > 8 * 1024 * 1024:
                 return self.send_json({"error": "Request too large"}, 413)
@@ -899,14 +1011,22 @@ def handler(studio):
             self.end_headers()
             self.wfile.write(data)
 
-        def do_PUT(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+        def write_method(self):
+            """PUT, PATCH and DELETE exist only to serve the front door.
 
-        def do_PATCH(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+            They took the relay before any authentication ran, so a write to a
+            running attempt's world needed nothing but the address. `is_front_door`
+            now requires the secret segment, and anything else is refused here.
+            """
+            if self.is_front_door():
+                return self.front_door()
+            if not self.authorised():
+                return self.challenge()
+            return self.send_json({"error": "Not found"}, 404)
 
-        def do_DELETE(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+        do_PUT = write_method
+        do_PATCH = write_method
+        do_DELETE = write_method
 
         def challenge(self):
             self.send_response(401)
@@ -939,8 +1059,9 @@ def handler(studio):
                 if url.path == "/api/budget":
                     return self.send_json(studio.budget())
                 if url.path == "/api/budget/ledger":
+                    from wb_studio import allowances
                     from wb_studio.usage import ledger_lines
-                    return self.send_json(ledger_lines(studio))
+                    return self.send_json({**ledger_lines(studio), "allowances": allowances.states(studio)})
                 if url.path == "/api/runtime":
                     state = studio.runtime.snapshot()
                     if studio.coordinator is not None:
@@ -1052,12 +1173,12 @@ def handler(studio):
                     return
                 if url.path == '/api/reports':
                     from wb_studio.report_data import index as report_index
-                    return self.send_json(report_index(studio, self.audience(url)))
+                    return self.send_json(report_index(studio))
                 report_match = re.fullmatch(r'/api/reports/(run|round)/([a-zA-Z0-9_-]+)', url.path)
                 if report_match:
                     from wb_studio.report_data import round_report, run_report
                     build = run_report if report_match[1] == 'run' else round_report
-                    return self.send_json(build(studio, report_match[2], self.audience(url)))
+                    return self.send_json(build(studio, report_match[2]))
                 if url.path == '/api/genesis':
                     person=self.person()
                     return self.send_json({**studio.genesis.state(),'me':('human:'+person['name']) if person else 'human:studio'})
@@ -1067,6 +1188,11 @@ def handler(studio):
                 if url.path == '/api/genesis/threads': return self.send_json({'threads':studio.genesis.threads()})
                 history_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/history',url.path)
                 if history_match: return self.send_json({'history':studio.genesis.card_history(history_match[1])})
+                figure_match=re.fullmatch(r'/api/genesis/figures/([a-zA-Z0-9]+)',url.path)
+                if figure_match:  # read-only: the drawing options the Studio computed, never anything a model wrote
+                    from wb_studio import figures
+                    try: return self.send_json(figures.read(studio.genesis,figure_match[1]))
+                    except ValueError as exc: return self.send_json({'error':str(exc)},404)
                 genesis_match=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)',url.path)
                 if genesis_match:
                     turn=studio.genesis.read('turns',genesis_match[1])
@@ -1096,9 +1222,9 @@ def handler(studio):
                     from wb_studio import genesis_people
                     return self.send_json(genesis_people.read(studio.genesis,person_file[1]))
                 if url.path == '/api/genesis/settings':
-                    from wb_studio.usage import ledger_lines
+                    from wb_studio import allowances
                     access=studio.genesis.access
-                    return self.send_json({**access.settings(),'envelope':access.envelope(ledger_lines(studio)['lines']),'channels':access.channels()})
+                    return self.send_json({**access.settings(),'allowance':allowances.state(studio,'genesis'),'channels':access.channels()})
                 if url.path == '/api/genesis/channels': return self.send_json(studio.genesis.access.channels())
                 if url.path == '/api/genesis/digest':
                     from wb_studio import genesis_channels
@@ -1164,11 +1290,6 @@ def handler(studio):
             self.end_headers()
             self.wfile.write(data)
 
-        def audience(self, url):
-            """Reports are public unless the reader asks for the internal view."""
-            from urllib.parse import parse_qs
-            return "internal" if parse_qs(url.query).get("audience", [""])[0] == "internal" else "public"
-
         def worker_request(self):
             token = os.environ.get("STUDIO_WORKER_TOKEN", "")
             header = self.headers.get("Authorization", "")
@@ -1219,7 +1340,11 @@ def handler(studio):
                         if person and person['role']!='admin' and person['name']!=person_file[1]: return self.send_json({'error':'A member edits only their own file.'},403)
                         return self.send_json(genesis_people.write(studio.genesis,person_file[1],payload.get('text',''),by=who))
                     if self.path == '/api/genesis/settings':
-                        out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out);return self.send_json(out)
+                        from wb_studio import allowances
+                        # The weekly ceiling is an allowance now; the field on the page keeps its name.
+                        if 'envelope_usd' in payload: allowances.set_limit(studio,'genesis',payload['envelope_usd'])
+                        out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out)
+                        return self.send_json({**out,'allowance':allowances.state(studio,'genesis')})
                 if self.path == '/api/genesis/chat': return self.send_json(studio.genesis.chat(payload),201)
                 schedule_run=re.fullmatch(r'/api/genesis/schedule/([a-z0-9-]+)/run',self.path)
                 if schedule_run: return self.send_json(studio.scheduler.run(schedule_run[1]))
@@ -1239,7 +1364,14 @@ def handler(studio):
                 if self.path == '/api/genesis/memory': return self.send_json(studio.genesis.memory.edit(payload))
                 if self.path == '/api/genesis/drop': return self.send_json(studio.genesis.drop(payload),201)
                 if self.path == '/api/genesis/watcher': studio.genesis.watcher.pause(payload.get('paused'));return self.send_json(studio.genesis.watcher.status())
-                if self.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.set(payload,by=payload.get('by') or 'human:studio'))
+                if self.path == '/api/genesis/autonomy':
+                    dials = studio.genesis.autonomy.set(payload, by=payload.get('by') or 'human:studio')
+                    # Turning a dial on is what starts the unattended work; the owner no
+                    # longer starts it unconditionally (feature 024, FR-002).
+                    if background_wanted(studio.genesis.autonomy):
+                        studio.scheduler.start()
+                        studio.genesis.watcher.start()
+                    return self.send_json(dials)
                 if self.path == '/api/genesis/config':
                     out=studio.genesis.config.set(payload);studio.genesis.autonomy.record('config',by=payload.get('by') or 'human:studio',models=out['models']);return self.send_json(out)
                 if self.path == '/api/genesis/skills':
@@ -1303,6 +1435,10 @@ def handler(studio):
                 if self.path == "/api/architectures/refresh":
                     from wb_studio.architectures import default_status
                     return self.send_json(default_status(studio, refresh=True))
+                if self.path == "/api/budget/allowances":
+                    from wb_studio import allowances
+                    allowances.set_limit(studio, payload.get("kind"), payload.get("limit_usd"))
+                    return self.send_json({"allowances": allowances.states(studio)})
                 if self.path == "/api/setups":
                     from wb_studio.setups import save_setup
                     return self.send_json(save_setup(studio, payload), 201)
@@ -1346,8 +1482,13 @@ def main(argv=None):
     with single_host_owner(directory):
         app = Studio()
         app.genesis.recover_interrupted()
-        app.scheduler.start()
-        app.genesis.watcher.start()
+        # The watcher and the daily jobs spend money without anyone watching, so the
+        # owner starts them only when a person has turned a dial on. A workspace nobody
+        # has configured stays quiet (feature 024, FR-002). Turning a dial on through
+        # the interface starts them; nothing is lost by not starting them here.
+        if background_wanted(app.genesis.autonomy):
+            app.scheduler.start()
+            app.genesis.watcher.start()
         server = ThreadingHTTPServer((args.host, args.port), handler(app))
         if app.coordinator is None:
             for job in app.jobs():

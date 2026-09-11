@@ -103,7 +103,7 @@ def _mock_site(site):
 
 def _resolve(site):
     return config.resolve(site / "config/products/simulated-apps.yaml",
-                          site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                          site / "config/plans/smoke-frontier.yaml")
 
 
 def _set_ceiling(site, value):

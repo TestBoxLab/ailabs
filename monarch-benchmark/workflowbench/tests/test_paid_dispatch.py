@@ -184,7 +184,7 @@ def mock_plan(site, extra="", repetitions=1, ceiling=5, competitors="  - {model:
 
 def resolve(site):
     return config.resolve(site / "config/products/simulated-apps.yaml",
-                          site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                          site / "config/plans/smoke-frontier.yaml")
 
 
 def test_attempt_cap_defaults_to_three_dollars_and_moves_the_hash_only_when_set(site, monkeypatch):

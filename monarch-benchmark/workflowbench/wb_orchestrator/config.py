@@ -156,7 +156,6 @@ class Plan:
     concurrency: int
     competitors: list[CompetitorSpec]
     baseline: str
-    audience: str
     cost_ceiling_usd: float
     # Kept so older plan files load; ignored since decision D5 (8 Sep 2026): an
     # approval is a record in the results store (`wb approvals`), not a word in a file.
@@ -438,9 +437,12 @@ def load_harness(path) -> Harness:
 
 def load_plan(path) -> Plan:
     c = _read(path, "plan")
+    # `audience` is accepted and ignored, like `approved_by`: there is one report,
+    # so an older plan file that still names an audience loads unchanged.
     c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
-            "baseline", "audience", "cost_ceiling_usd"),
-           ("approved_by", "description", "retry_on_fail", "track", "attempt_cap_usd"))
+            "baseline", "cost_ceiling_usd"),
+           ("approved_by", "audience", "description", "retry_on_fail", "track",
+            "attempt_cap_usd"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -461,7 +463,6 @@ def load_plan(path) -> Plan:
         concurrency=c.get("concurrency", int, minimum=1),
         competitors=competitors,
         baseline=c.get("baseline", str),
-        audience=c.get("audience", str),
         cost_ceiling_usd=c.get("cost_ceiling_usd", num, minimum=0, strict=True),
         approved_by=approved,
         description=c.get("description", str),
@@ -645,6 +646,12 @@ class RunConfig:
         """Everything the hash covers (research.md R2): guard fields out, secrets by name."""
         plan = asdict(self.plan)
         del plan["cost_ceiling_usd"], plan["approved_by"]
+        # `audience` was a plan field until 11 Sep 2026, when one report replaced
+        # the internal/public split. It chose how a round was rendered, never what
+        # was measured, so the value every plan carried stays in the hash: a stored
+        # run remains resumable and comparable instead of looking like a different
+        # measurement (PLAN.md §1, "config hash per run").
+        plan["audience"] = "internal"
         if not plan["retry_on_fail"]:
             # A plan that asks for no retry is the plan it was before the key
             # existed, and keeps the hash its stored runs were recorded under.
@@ -723,7 +730,7 @@ def _check_monarch_env(h, hpath, env) -> None:
             raise ConfigError(hpath, attr, f"environment variable {name} is not set")
 
 
-def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) -> RunConfig:
+def resolve(product_path, plan_path, config_dir=None, env=None) -> RunConfig:
     """Join a product and a plan; apply validation rules 3-10 (data-model.md).
 
     Models and harnesses are read from `config_dir` (default: the folder above
@@ -733,16 +740,11 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None) 
     product_path, plan_path = Path(product_path), Path(plan_path)
     config_dir = Path(config_dir) if config_dir else product_path.parent.parent
     env = os.environ if env is None else env
-    if audiences is None:
-        from wb_report.report import load_audiences
-        audiences = load_audiences()
     product, plan = load_product(product_path), load_plan(plan_path)
     c = _Checker(plan_path, {})
 
     if plan.mode not in product.modes:
         c.fail("mode", f"{plan.mode!r} is not in the modes of {product_path}: {', '.join(product.modes)}")
-    if plan.audience not in audiences:
-        c.fail("audience", f"unknown audience {plan.audience!r}; known: {', '.join(audiences)}")
 
     models, harnesses, competitors = {}, {}, []
     for i, spec in enumerate(plan.competitors):

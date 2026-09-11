@@ -90,7 +90,7 @@ def test_legacy_and_new_rows_side_by_side_never_pooled(tmp_path, legacy_tree):
         suite=LEGACY_SUITE, trial=0, passed=True, assertions_passed=True,
         invariant_passed=True, invariant_declared=False))
     with pytest.raises(GateError, match="pool"):
-        build_report(store, "run-new", audience="internal")
+        build_report(store, "run-new")
 
 
 def test_import_is_idempotent(tmp_path, legacy_tree):

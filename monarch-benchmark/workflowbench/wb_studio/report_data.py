@@ -6,9 +6,8 @@ cost, the caveats and the method. Numbers are always inserted by code; the
 model narrative (analysis.json, when a run has one) fills prose slots and every
 claim in it cites recorded events.
 
-Audience: reports render for the public audience by default. Lab competitors
-(names starting with `monarch-lab`, the same rule `wb report` enforces) never
-appear outside the internal view, which marks them.
+There is one report. Every setup that ran appears in it, and every reader sees
+the same page.
 """
 from __future__ import annotations
 
@@ -24,17 +23,41 @@ GRADES = ("Improvement", "Regression", "Tradeoff", "Tie", "Undecided", "Not comp
 FINISHED = ("completed", "failed", "cancelled", "interrupted")
 
 
+def setup_ids(job) -> list:
+    """Every setup the run recorded. A report hides none of them."""
+    settings = job.get("settings") or {}
+    return [arm["id"] for arm in settings.get("arms") or []] or list(settings.get("models") or [])
+
+
 def is_lab(name) -> bool:
+    """A lab build: Lucas's own experiment, not a released version.
+
+    This is now the only such predicate in the repository. The CLI had one, guarding which
+    competitors an audience could render; that gate and its audiences file went on 11 September,
+    when Lucas ruled there is one report and every reader sees it whole. What survived the ruling
+    is narrower and lives here: the report shows a lab build, and the interface refuses to let a
+    report carrying one leave the machine (`lab_setups` below, `labGate` in `static/reports.js`).
+    """
     return str(name or "").startswith("monarch-lab")
 
 
-def visible_setups(job, audience) -> tuple[list, list]:
-    arms = (job.get("settings") or {}).get("arms") or [{"id": m, "name": m, "kind": "runner"} for m in (job.get("settings") or {}).get("models") or []]
-    shown, hidden = [], []
-    for arm in arms:
-        lab = is_lab(arm.get("id")) or is_lab(arm.get("name")) or arm.get("kind") == "lab"
-        (hidden if lab and audience != "internal" else shown).append(arm["id"])
-    return shown, hidden
+def lab_setups(order, setups) -> list:
+    """Which setups in this report are lab builds, by id and by name.
+
+    The report shows them: Lucas's ruling of 11 September is one report with no differentiation
+    (display yes). What they may not do is leave the machine (export no) — the same rule the
+    retired audiences file stated as "a lab competitor can never reach an exportable artifact",
+    kept because that is the half about sharing rather than about who may look.
+
+    The list is computed here, once, rather than sniffed out of the rendered page, because a gate
+    that reads the DOM is a gate that misses a label in a chart.
+    """
+    found = []
+    for sid in order or []:
+        name = ((setups or {}).get(sid) or {}).get("name") or sid
+        if is_lab(sid) or is_lab(name):
+            found.append({"id": sid, "name": name})
+    return found
 
 
 def grade(setup, baseline) -> dict:
@@ -336,26 +359,24 @@ def task_set_id(job) -> str:
     return hashlib.sha256(json.dumps(sorted(hashes.items()), separators=(",", ":")).encode()).hexdigest()[:12]
 
 
-def run_report(studio, identity, audience="public") -> dict:
+def run_report(studio, identity) -> dict:
     from wb_studio.failure_analysis import analysis as failure_analysis
-    from wb_studio.narrative import run_story, without_reasoning
+    from wb_studio.narrative import run_story
     job = studio.job(identity)
     events = studio.events(identity)
     m = measures.run_measures(job, events)
-    shown, hidden = visible_setups(job, audience)
+    shown = setup_ids(job)
     baseline_id = m["baseline"] if m["baseline"] in shown else None
     baseline = m["setups"].get(baseline_id) if baseline_id else None
     fa = failure_analysis(studio, identity)
     fa_attempts = [a for a in fa["attempts"] if a["model"] in shown]
-    if audience != "internal":
-        fa_attempts = [{**a, "story": without_reasoning(a.get("story"))} for a in fa_attempts]
     candidates = [m["setups"][s] for s in shown if s in m["setups"] and s != baseline_id and m["setups"][s]["pass"]["attempts"]]
     subject = max(candidates, key=lambda s: (s["pass"]["rate"] or 0, s["name"])) if candidates else (baseline or (m["setups"][shown[0]] if shown and shown[0] in m["setups"] else None))
     reused = historical_baseline(studio, job, subject["id"]) if subject and baseline_id is None else None
     if reused:
         job = with_baseline(job, reused)
         m = measures.run_measures(job, events)
-        shown, hidden = visible_setups(job, audience)
+        shown = setup_ids(job)
         baseline_id = m["baseline"]
         baseline = m["setups"].get(baseline_id)
         subject = m["setups"][subject["id"]]
@@ -370,7 +391,7 @@ def run_report(studio, identity, audience="public") -> dict:
     settings = job.get("settings") or {}
     tasks = task_rows(job, studio.tasks)
     return {
-        "version": 1, "run": identity, "title": job.get("title"), "status": job.get("status"), "audience": audience,
+        "version": 1, "run": identity, "title": job.get("title"), "status": job.get("status"),
         "created_at": job.get("created_at"), "finished_at": job.get("finished_at"), "track": settings.get("track", "agentic-request"),
         "grade": g, "subject": subject["id"] if subject else None, "baseline": baseline_id,
         "baseline_source": {"run": reused["run"], "title": reused["title"], "finished_at": reused["finished_at"]} if reused else None,
@@ -381,11 +402,12 @@ def run_report(studio, identity, audience="public") -> dict:
         "narrative": {k: v for k, v in narrative.items() if k in ("status", "reason", "shortfall", "askable", "summary", "what_went_right", "what_went_wrong", "next_experiment", "limitations", "model", "effort", "basis")},
         "story": run_story(fa_attempts, {sid: m["setups"][sid]["name"] for sid in shown if sid in m["setups"]}),
         "hero": hero_rows(m, shown), "paired": paired_table(job, m, shown, baseline_id),
+        "lab_setups": lab_setups(shown, m["setups"]),
         "setups": {sid: {**m["setups"][sid], "short_name": short_name(m["setups"][sid]["name"])} for sid in shown if sid in m["setups"]}, "order": shown,
-        "hidden_setups": len(hidden), "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
+        "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown],
         "failures": {"summary": fa["summary"], "buckets": fa["buckets"], "attempts": fa_attempts, "limitations": fa["limitations"]},
         "tasks": tasks, "matrix": matrix_cells(job, shown, studio.tasks),
-        "caveats": caveats.for_run(job, m, narrative, hidden, audience, reused=reused),
+        "caveats": caveats.for_run(job, m, narrative, reused=reused),
         "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "task_hashes": job.get("task_hashes") or {},
                    "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "track": settings.get("track", "agentic-request"),
                    "judge": (job.get("component_manifest") or {}).get("judge"), "components": job.get("component_manifest"),
@@ -433,7 +455,7 @@ def pooled_job(studio, cohort) -> dict:
             "task_hashes": cohort["task_hashes"], "results": results, "events": events}
 
 
-def round_report(studio, cohort_id, audience="public") -> dict:
+def round_report(studio, cohort_id) -> dict:
     cohort = cohorts(studio).get(cohort_id)
     if cohort is None:
         raise ValueError("Unknown task set")
@@ -441,7 +463,7 @@ def round_report(studio, cohort_id, audience="public") -> dict:
     job = pooled_job(studio, cohort)
     m = measures.run_measures(job, job["events"])
     groups = measures.by_setup(job["results"])
-    shown, hidden = visible_setups(job, audience)
+    shown = setup_ids(job)
     baseline_id = m["baseline"] if m["baseline"] in shown else None
     baseline = m["setups"].get(baseline_id) if baseline_id else None
     standings = [m["setups"][s] for s in shown if s in m["setups"] and m["setups"][s]["pass"]["attempts"]]
@@ -465,31 +487,32 @@ def round_report(studio, cohort_id, audience="public") -> dict:
         for sid, s in rm["setups"].items():
             if sid in shown and "monarch" in (s["name"] or "").lower() and s["pass"]["attempts"]:
                 trend.append({"series": s["name"], "x": (entry["created_at"] or "")[:10], "run": entry["id"], "y": s["pass"]["rate"], "low": s["pass"]["low"], "high": s["pass"]["high"]})
-    return {"version": 1, "cohort": cohort_id, "audience": audience, "task_set": cohort["task_set"], "task_count": cohort["task_count"], "track": cohort["track"],
+    return {"version": 1, "cohort": cohort_id, "task_set": cohort["task_set"], "task_count": cohort["task_count"], "track": cohort["track"],
             "full_benchmark": cohort["full_benchmark"], "runs": cohort["runs"], "latest": cohort.get("latest"), "first": cohort.get("first"),
             "baseline": baseline_id, "standings": rows, "hero": hero_rows(m, shown),
+            "lab_setups": lab_setups(shown, m["setups"]),
             "pairings": pairings({sid: groups[sid] for sid in shown if sid in groups}),
             "excluded": [{"id": r["id"], "title": r.get("title"), "reason": exclusion_reason(studio.job(r["id"]))} for r in cohort["runs"] if not r["full_benchmark"]],
             "paired": paired_table(job, m, shown, baseline_id), "matrix": matrix_cells(job, shown, studio.tasks), "tasks": task_rows(job, studio.tasks),
             "overlap": [o for o in m["overlap"] if o["a"] in shown and o["b"] in shown], "setups": {sid: m["setups"][sid] for sid in shown if sid in m["setups"]}, "order": shown,
-            "trend": trend, "hidden_setups": len(hidden), "repetitions": m["repetitions"],
-            "caveats": caveats.for_round({**cohort, "baseline": baseline_id}, hidden),
+            "trend": trend, "repetitions": m["repetitions"],
+            "caveats": caveats.for_round({**cohort, "baseline": baseline_id}),
             "method": {"task_set": cohort["task_set"], "task_count": cohort["task_count"], "task_hashes": cohort["task_hashes"], "runs": [r["id"] for r in cohort["runs"]],
                        "repetitions": m["repetitions"], "fork": caveats.fork_version(), "benchmark": cohort.get("benchmark")}}
 
 
-def index(studio, audience="public") -> dict:
+def index(studio) -> dict:
     """The Reports front door: rounds newest first, each with its runs and grades."""
     groups = sorted(cohorts(studio).values(), key=lambda c: c["latest"] or "", reverse=True)
     rounds = []
     for cohort in groups:
         job = pooled_job(studio, cohort)
         m = measures.run_measures(job, [])
-        shown, hidden = visible_setups(job, audience)
+        shown = setup_ids(job)
         baseline_id = m["baseline"] if m["baseline"] in shown else None
         baseline = m["setups"].get(baseline_id) if baseline_id else None
         best = max([m["setups"][s] for s in shown if s in m["setups"] and s != baseline_id and m["setups"][s]["pass"]["attempts"]], key=lambda s: (s["pass"]["rate"] or 0), default=None)
         rounds.append({"id": cohort["id"], "task_count": cohort["task_count"], "track": cohort["track"], "full_benchmark": cohort["full_benchmark"], "latest": cohort["latest"],
                        "runs": cohort["runs"], "setups": len(shown), "best": {"name": best["name"], "rate": best["pass"]["rate"], "passed": best["pass"]["passed"], "attempts": best["pass"]["attempts"]} if best else None,
                        "grade": grade(best, baseline) if best else {"grade": "Not comparable", "reason": "no evaluated attempts"}})
-    return {"rounds": rounds, "audience": audience, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return {"rounds": rounds, "generated_at": datetime.now(timezone.utc).isoformat()}

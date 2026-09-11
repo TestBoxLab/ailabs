@@ -49,7 +49,7 @@ def test_build_summary(three_round_store):
     from wb_report.report import build_summary
 
     s = build_summary(three_round_store, ["run-r1", "run-r2", "run-r3"],
-                      audience="internal", baseline="oracle")
+                      baseline="oracle")
     assert [r["run_id"] for r in s["rounds"]] == ["run-r1", "run-r2", "run-r3"]
     assert [r["plan"] for r in s["rounds"]] == ["random-10", "tier-1", "tier-2"]
     for r in s["rounds"]:
@@ -57,7 +57,6 @@ def test_build_summary(three_round_store):
         assert {m["arm"] for m in r["metrics"]} == {"alpha", "beta", "oracle"}
         assert r["source"]
     assert s["arms"] == ["alpha", "beta", "oracle"]
-    assert s["audience"] == "internal"
 
     # alpha: 50% then 100% then 0% -> mean 50%
     alpha = _arm(s, "alpha")
@@ -88,7 +87,7 @@ def test_aggregate_counts_only_the_rounds_a_competitor_ran(three_round_store, tm
             store.record_episode(_row("t1", arm, 0, passes[arm], run=run_id))
         store.finish_run(run_id)
 
-    s = build_summary(store, ["run-a", "run-b", "run-c"], audience="internal")
+    s = build_summary(store, ["run-a", "run-b", "run-c"])
     beta = _arm(s, "beta")
     assert beta["n_rounds"] == 2                     # it did not run the third
     assert beta["mean_strict_pass"] == pytest.approx(1.0)
@@ -105,7 +104,7 @@ def test_no_pooled_paired_figures(three_round_store):
     from wb_report.report import NEVER_POOLED, build_summary, render_summary_html
 
     s = build_summary(three_round_store, ["run-r1", "run-r2", "run-r3"],
-                      audience="internal", baseline="oracle")
+                      baseline="oracle")
     blob = json.dumps(s)
     for banned in ("wins", "losses", "mcnemar", "both_pass", "neither_pass", "pairs"):
         assert banned not in blob, banned
@@ -126,8 +125,7 @@ def test_stratification_block(three_round_store, tmp_path):
     from wb_report.report import build_summary
     from wb_results.store import Store
 
-    s = build_summary(three_round_store, ["run-r1", "run-r2", "run-r3"],
-                      audience="internal")
+    s = build_summary(three_round_store, ["run-r1", "run-r2", "run-r3"])
     strat = {e["arm"]: e for e in s["stratification"]}
     # alpha: random draw 50%, tiers 100% and 0% -> mean 50%, difference 0 pp
     assert strat["alpha"]["random"] == pytest.approx(0.5)
@@ -146,8 +144,7 @@ def test_stratification_block(three_round_store, tmp_path):
                           "n_tasks": 1, "plan": f"tier-{run_id}"})
         store.record_episode(_row("t1", "alpha", 0, True, run=run_id))
         store.finish_run(run_id)
-    assert "stratification" not in build_summary(store, ["run-t1", "run-t2"],
-                                                 audience="internal")
+    assert "stratification" not in build_summary(store, ["run-t1", "run-t2"])
 
 
 def test_summary_page_shape(three_round_store):
@@ -156,7 +153,7 @@ def test_summary_page_shape(three_round_store):
     from wb_report.report import NEVER_POOLED, build_summary, render_summary_html
 
     s = build_summary(three_round_store, ["run-r1", "run-r2", "run-r3"],
-                      audience="internal", baseline="oracle")
+                      baseline="oracle")
     page = render_summary_html(s)
     assert page.startswith("<!doctype html>")
     for run_id in ("run-r1", "run-r2", "run-r3"):
@@ -176,9 +173,9 @@ def test_summary_refuses_bad_round_counts(three_round_store):
     from wb_report.report import build_summary
 
     with pytest.raises(ValueError, match="two to six"):
-        build_summary(three_round_store, ["run-r1"], audience="internal")
+        build_summary(three_round_store, ["run-r1"])
     with pytest.raises(ValueError, match="two to six"):
-        build_summary(three_round_store, ["run-r1"] * 7, audience="internal")
+        build_summary(three_round_store, ["run-r1"] * 7)
 
 
 def test_summary_refuses_an_unknown_run(three_round_store, tmp_path):
@@ -187,12 +184,11 @@ def test_summary_refuses_an_unknown_run(three_round_store, tmp_path):
     from wb_report.report import build_summary, write_summary
 
     with pytest.raises(KeyError, match="run-nope"):
-        build_summary(three_round_store, ["run-r1", "run-nope"], audience="internal")
+        build_summary(three_round_store, ["run-r1", "run-nope"])
 
     out = tmp_path / "summary.html"
     with pytest.raises(KeyError):
-        write_summary(three_round_store, ["run-r1", "run-nope"], out,
-                      audience="internal")
+        write_summary(three_round_store, ["run-r1", "run-nope"], out)
     assert not out.exists()          # nothing written
 
 
@@ -218,10 +214,10 @@ def test_resolve_plans_picks_the_most_recent(tmp_path):
         resolve_plans(store, ["no-such-plan"])
 
 
-def test_summary_applies_the_gate_per_round(tmp_path):
-    """T052 (FR-025): a public summary omits a lab competitor from every round,
-    and refuses when the gate leaves a round empty."""
-    from wb_report.report import GateError, build_summary
+def test_summary_carries_every_competitor_of_every_round(tmp_path):
+    """One report (11 Sep 2026): a summary names a lab competitor in the round
+    that ran it, and a round made only of lab competitors summarises normally."""
+    from wb_report.report import build_summary
     from wb_results.store import Store
 
     store = Store(tmp_path / "wb.sqlite3")
@@ -238,27 +234,26 @@ def test_summary_applies_the_gate_per_round(tmp_path):
     store.record_episode(_row("t1", "monarch", 0, True, run="run-2"))
     store.finish_run("run-2")
 
-    s = build_summary(store, ["run-1", "run-2"], audience="public-rung2")
-    assert s["arms"] == ["monarch"]
-    for rnd in s["rounds"]:
-        assert all(m["arm"] != "monarch-lab" for m in rnd["metrics"])
+    s = build_summary(store, ["run-1", "run-2"])
+    assert s["arms"] == ["monarch", "monarch-lab"]
+    assert any(m["arm"] == "monarch-lab" for m in s["rounds"][0]["metrics"])
     from wb_report.report import render_summary_html
-    assert "monarch-lab" not in render_summary_html(s)
+    assert "monarch-lab" in render_summary_html(s)
 
-    # a round the gate empties refuses the whole summary
+    # a round made only of lab competitors is a round like any other
     store.create_run("run-3", "cfg3", "workflowbench-synthetic@0.1",
                      {"suite_dir": "tasks", "arms": ["monarch-lab"], "k": 1,
                       "n_tasks": 1, "plan": "p3"})
     store.record_episode(_row("t1", "monarch-lab", 0, True, run="run-3"))
     store.finish_run("run-3")
-    with pytest.raises(GateError):
-        build_summary(store, ["run-2", "run-3"], audience="public-rung2")
+    lab_only = build_summary(store, ["run-2", "run-3"])
+    assert lab_only["arms"] == ["monarch", "monarch-lab"]
 
 
 def test_summary_cli(three_round_store, tmp_path, capsys):
     """T050 (contracts/cli.md): --runs writes the file; --plans prints the run
     it picked; the two together are refused; an unknown run is refused naming
-    it, and writes nothing; --out defaults to out/summary-<stamp>-<audience>."""
+    it, and writes nothing; --out defaults to out/summary-<stamp>."""
     from wb_orchestrator.cli import main
 
     db = str(three_round_store.path)
@@ -306,7 +301,7 @@ def test_summary_cli(three_round_store, tmp_path, capsys):
 
 
 def test_summary_cli_default_out_path(three_round_store, tmp_path, capsys):
-    """T050 (FR-017): the default file is out/summary-<timestamp>-<audience>."""
+    """T050 (FR-017): the default file is out/summary-<timestamp>."""
     import re
     from pathlib import Path
 
@@ -315,7 +310,7 @@ def test_summary_cli_default_out_path(three_round_store, tmp_path, capsys):
     assert main(["--db", str(three_round_store.path), "--out", str(tmp_path),
                  "summary", "--runs", "run-r1,run-r2"]) == 0
     written = capsys.readouterr().out.strip().removeprefix("wrote ")
-    assert re.search(r"summary-\d{8}-\d{6}-internal\.html$", written), written
+    assert re.search(r"summary-\d{8}-\d{6}\.html$", written), written
     assert (tmp_path / Path(written).name).exists()
 
 

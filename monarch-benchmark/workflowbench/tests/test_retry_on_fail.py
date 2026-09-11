@@ -175,8 +175,7 @@ def _oracle_plan(site, extra="", repetitions=2):
     plan += "competitors:\n  - {harness: oracle}\n" + extra
     write(site / "config/plans", plan)
     return config_mod.resolve(site / "config/products/simulated-apps.yaml",
-                              site / "config/plans/smoke-frontier.yaml",
-                              audiences={"internal": ["*"]})
+                              site / "config/plans/smoke-frontier.yaml")
 
 
 def test_plan_defaults_to_no_retry(tmp_path):

@@ -38,7 +38,7 @@ def test_from_config_runs_plan_with_competitor_names(site, tmp_path, mock_server
     plan += "competitors:\n  - {harness: oracle}\n  - {model: mock, harness: api}\n"
     write(site / "config/plans", plan)
     rc = config.resolve(site / "config/products/simulated-apps.yaml",
-                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                        site / "config/plans/smoke-frontier.yaml")
 
     store = Store(tmp_path / "wb.sqlite3")
     orch = Orchestrator.from_config(store, rc, tmp_path / "out")
@@ -61,11 +61,11 @@ def test_report_reads_k_from_file_driven_run(site, tmp_path, mock_server):
     plan += "competitors:\n  - {harness: oracle}\n"
     write(site / "config/plans", plan)
     rc = config.resolve(site / "config/products/simulated-apps.yaml",
-                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                        site / "config/plans/smoke-frontier.yaml")
     assert rc.plan.repetitions == 2
     store = Store(tmp_path / "wb.sqlite3")
     run_id = Orchestrator.from_config(store, rc, tmp_path / "out").run("run-k")
-    assert build_report(store, run_id, audience="internal")["k"] == rc.plan.repetitions
+    assert build_report(store, run_id)["k"] == rc.plan.repetitions
 
 
 # -- T016: the shipped smoke plan reproduces smoke-frontier-001 --------------
@@ -152,10 +152,10 @@ def test_banner_matches_contract(site):
     plan += "competitors:\n  - {harness: oracle}\n"
     write(site / "config/plans", plan)
     rc = config.resolve(site / "config/products/simulated-apps.yaml",
-                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                        site / "config/plans/smoke-frontier.yaml")
     assert _banner(rc).splitlines() == [
         "product   simulated-apps (simulated, mutable data)",
-        "plan      smoke-frontier  mode=create-run  audience=internal",
+        "plan      smoke-frontier  mode=create-run",
         f"tasks     2 in {(site / 'tasks').as_posix()}/",
         "prompts: 2; attempts per prompt and competitor: 2; "
         "attempts per competitor: 4 = 2 x 2",
@@ -222,7 +222,7 @@ def test_resolve_loads_monarch_kb_and_price_table(site):
 def test_resolve_without_monarch_has_no_kb_or_price_tables(site):
     rc = config.resolve(*(site / p for p in ("config/products/simulated-apps.yaml",
                                              "config/plans/smoke-frontier.yaml")),
-                        env=ENV, audiences={"internal": ["*"]})
+                        env=ENV)
     assert rc.monarch_kb is None and rc.price_tables == {}
     assert "monarch_kb" not in rc.config_json and "price_tables" not in rc.config_json
 
@@ -668,7 +668,7 @@ def test_banner_states_the_arithmetic(site):
     plan += "competitors:\n  - {harness: oracle}\n"
     write(site / "config/plans", plan)
     rc = config.resolve(site / "config/products/simulated-apps.yaml",
-                        site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                        site / "config/plans/smoke-frontier.yaml")
     out = _banner(rc)
 
     # 2 prompts x 2 repetitions = 4 per competitor, 1 competitor, 4 in the round
@@ -701,7 +701,7 @@ def _mock_plan(site, extra: str = "") -> str:
 
 def _resolve_smoke(site):
     return config.resolve(site / "config/products/simulated-apps.yaml",
-                          site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                          site / "config/plans/smoke-frontier.yaml")
 
 
 def test_plan_track_defaults_to_create_run_and_keeps_the_hash(site, monkeypatch):

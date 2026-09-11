@@ -1,10 +1,10 @@
 """The HTML pages: one per round, and the summary over several.
 
 This module renders a dictionary and nothing else. It never imports `Store` and
-never opens the database: the audience gate filters competitors out inside
-`build_report`, before any statistic exists, and a renderer that could re-query
-the store would be four new chances to re-admit a competitor the gate removed
-(plan design note 1, research R7). A test asserts this module's imports.
+never opens the database: every statistic is computed inside `build_report`, and
+a renderer that could re-query the store would be four new chances to put a
+number on the page that no figure stands behind (plan design note 1, research
+R7). A test asserts this module's imports.
 
 # ponytail: one _table() helper and f-strings, not a template engine. Ceiling:
 # if the page ever needs conditional layout beyond a table, revisit.
@@ -460,12 +460,10 @@ def _comparison_table(report: dict) -> str:
     if not report["comparisons"]:
         return ('<p class="note">Only one competitor ran this round, so there is '
                 "no paired comparison to make.</p>")
-    dollars = report["audience"] == "internal"
-    headers = ["competitor", "vs baseline", "strict pass diff (pp)", "pass rate ratio"]
-    if dollars:
-        headers.append("cost / passed ratio")
-    headers += ["W", "L", "both", "neither", "pairs", "infra-dropped", "McNemar p",
-                "verdict"]
+    headers = ["competitor", "vs baseline", "strict pass diff (pp)", "pass rate ratio",
+               "cost / passed ratio",
+               "W", "L", "both", "neither", "pairs", "infra-dropped", "McNemar p",
+               "verdict"]
     rows = []
     for c in report["comparisons"]:
         diff = c["strict_pass_diff_pp"]
@@ -478,9 +476,8 @@ def _comparison_table(report: dict) -> str:
             continue
         row = [c["arm"], c["baseline"],
                f"{diff:+.1f}" if diff is not None else "n/a",
-               _fmt(c["pass_rate_ratio"], "ratio")]
-        if dollars:
-            row.append(_fmt(c["cost_per_passed_ratio"], "ratio"))
+               _fmt(c["pass_rate_ratio"], "ratio"),
+               _fmt(c["cost_per_passed_ratio"], "ratio")]
         row += [_fmt(c["wins"]), _fmt(c["losses"]), _fmt(c["both"]), _fmt(c["neither"]),
                 _fmt(c["pairs"]), _fmt(c["dropped_infra"]),
                 f"{c['mcnemar']['p']:.3f}", c["verdict"]]
@@ -571,17 +568,10 @@ def _provenance_body(report: dict) -> str:
              ("task set", f"{p['suite']} (v{p['suite_version']})"),
              ("task hashes", ", ".join(p["task_hashes"]) or None),
              ("run started", p["started"]), ("run finished", p["finished"]),
-             ("stop reason", p["stop_reason"]), ("audience", p["audience"])]
+             ("stop reason", p["stop_reason"])]
     if p["missing_cost"]:
         items.append(("missing cost", f"{p['missing_cost']['missing']} of "
                                       f"{p['missing_cost']['total']} Monarch attempts"))
-    withheld = p["withheld"]
-    if withheld:
-        # A non-internal audience is given the count only: even the existence of
-        # a gated competitor is internal (FR-023).
-        items.append(("competitors withheld",
-                      ", ".join(withheld) if isinstance(withheld, list)
-                      else f"{withheld} withheld"))
     body = "<br>".join(f"{_esc(k)}: <b>{_esc(v)}</b>" for k, v in items if v is not None)
     # Source lines stay in the markdown report and on each table's tooltip;
     # the page itself does not list them (Carlos, 4 Sep).
@@ -608,12 +598,7 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
     toc = _toc_links([t for t in _TECH_TOC
                       if t[0] != "monarch-phases" or has_monarch])
     mode = MODE_WORDS.get(p.get("mode") or "")
-    dollars = report["audience"] == "internal"
     warn = ""
-    if report["audience"] == "internal" and any(a.startswith("monarch-lab")
-                                                for a in report["arms"]):
-        warn = ('<div class="callout crit"><span class="label">Internal only</span>'
-                "Contains lab competitors - do not export.</div>")
     hero = (f'<header class="hero"><div class="eyebrow">WorkflowBench &middot; '
             f'{_esc(p.get("plan") or "round")} &middot; '
             f'{_esc((p.get("started") or "")[:10])}</div>'
@@ -706,10 +691,6 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
     toc = _toc_links([(f"round-{i}", r["run_id"]) for i, r in enumerate(rounds, 1)]
                      + [("aggregate", "Aggregate")])
     warn = ""
-    if summary["audience"] == "internal" and any(
-            a.startswith("monarch-lab") for a in summary["arms"]):
-        warn = ('<div class="callout crit"><span class="label">Internal only</span>'
-                "Contains lab competitors - do not export.</div>")
     chips = "".join(
         f'<span class="chip"><strong>{_esc(r["run_id"])}</strong> {_esc(r["plan"])}</span>'
         for r in rounds)
@@ -722,7 +703,7 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
 
     parts = [warn]
     for i, rnd in enumerate(rounds, 1):
-        one = {"metrics": rnd["metrics"], "audience": summary["audience"],
+        one = {"metrics": rnd["metrics"],
                "baseline": rnd["baseline"], "provenance": rnd["source"],
                "arms": [m["arm"] for m in rnd["metrics"]], "size": rnd["size"],
                "run_id": rnd["run_id"], "source_suffix": rnd["source_suffix"],
@@ -976,8 +957,8 @@ def _has_retries(report: dict) -> bool:
 def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
     """The stakeholder page: Monarch first everywhere, the verdict in colour.
 
-    Same dictionary, same numbers and the same audience gate as the technical
-    page; it selects and colours, it never recomputes.
+    Same dictionary and the same numbers as the technical page; it selects and
+    colours, it never recomputes.
     """
     metrics = _ordered_metrics(report)
     monarch = next((m for m in metrics if is_monarch(m["arm"])), None)
@@ -1133,9 +1114,7 @@ def _overview_section(report: dict) -> str:
     if mode:
         lines.append(_esc(mode))
     lines.append(_size_line(size))
-    lines.append(f"total spend: {_fmt(totals['spend_usd'], 'money')}"
-                 if report["audience"] == "internal" else
-                 f"attempts: {totals['attempts']}")
+    lines.append(f"total spend: {_fmt(totals['spend_usd'], 'money')}")
     lines.append("competitors: " + ", ".join(_esc(a) for a in report["arms"]))
     if p.get("plan"):
         lines.append(f"plan {_esc(p['plan'])} on {_esc(p.get('product') or 'n/a')}")
@@ -1197,7 +1176,7 @@ def _success_section(report: dict) -> str:
 
 def _cost_section_table(report: dict) -> str:
     """The cost table, shared by the per-round page and the summary."""
-    dollars = report["audience"] == "internal"
+    dollars = True
     metrics = report["metrics"]
     base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
                 None)
@@ -1238,7 +1217,7 @@ def _cost_section_table(report: dict) -> str:
 def _cost_section(report: dict) -> str:
     """Section 3: what it cost, per competitor and - for Monarch - per phase and
     per model of its team."""
-    dollars = report["audience"] == "internal"
+    dollars = True
     metrics = report["metrics"]
     base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
                 None)

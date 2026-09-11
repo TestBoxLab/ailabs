@@ -32,7 +32,7 @@ the **test mode** (how much of Monarch is under test), and the **competitors**.
 ```
 trigger ──▶ run(config) ──▶ for each (task, competitor, trial):
                               prepare target ▶ snapshot before ▶ competitor works ▶ snapshot after ▶ check ▶ record
-                           ──▶ statistics ──▶ report(audience) ──▶ publish (Slack, Langfuse)
+                           ──▶ statistics ──▶ report ──▶ publish (Slack, Langfuse)
 ```
 
 ### 1.1 Fixed rules
@@ -51,7 +51,10 @@ trigger ──▶ run(config) ──▶ for each (task, competitor, trial):
 8. **Every figure carries its source** (task set · version · count · competitor · run). No hand-typed numbers.
 9. **Cost is complete.** Tokens split cached / not cached; dollars from a versioned price table;
    for Monarch, the sum over its whole model team. Wall-clock per stage.
-10. **Audience rules are code.** `audiences.yaml` decides which competitors may appear in a report.
+10. **One report.** Every competitor that ran appears in it and every reader sees the same page.
+    (Superseded rule, 11 Sep 2026: `audiences.yaml` decided which competitors may appear.
+    Retired by Lucas; a lab build is displayed like any other and the interface refuses to
+    export or print a report carrying one.)
 11. **Config hash per run.** Resume skips finished work and refuses if the config changed. Retries only on `infra:*`.
 12. **API-key billing only** for vendor competitors. Pinned versions. Non-default flags recorded in the row.
 
@@ -121,7 +124,7 @@ From 2 Sep 2026 competitor names in results are `model/harness` or the harness n
 wb doctor                                     # every provider reachable, cache hit proven
 wb corpus validate <task set>                 # tasks are frozen and non-empty
 wb run --product simulated-apps --plan <plan>  # resumable
-wb report <run_id> --audience internal --baseline claude-opus-4-8/api
+wb report <run_id> --baseline claude-opus-4-8/api
 post summary to Slack #benchmarks; link Langfuse traces
 ```
 
@@ -178,7 +181,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 
 - [ ] G1 One module for every figure of the page (`wb_report/metrics.py`), calling `wb_stats` rather than reimplementing it, so the page and the markdown report can never disagree. → feature 006 (`specs/006-html-report/`)
 - [ ] G2 The per-round page: metrics, comparison against the baseline with a plain-words verdict, task matrix, failures, provenance; real tables, standard library, no chart. → **D14**
-- [ ] G3 The audience gate proved across all four tables: the renderer receives a dictionary and cannot query the results store. → feature 006
+- [ ] G3 The renderer receives a dictionary and cannot query the results store, proved across all four tables. → feature 006
 - [ ] G4 `wb summary --runs | --plans`: two to six rounds on one page, a mean per competitor across rounds, the random draw beside the mean of the three tiers. Paired figures stay per round on identical sets, never pooled. → **D14**
 - [ ] G5 Slack post rendered from the page. → WS-D, D11 (not feature 006)
 
@@ -270,6 +273,7 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 4 Sep 2026 | Report pages are built with the standard library, no templating engine, CSS framework or chart library, and open from disk with no network. | Carlos |
 | 4 Sep 2026 | Across rounds, the aggregate is a mean of per-round rates; paired comparisons are never pooled across different task sets. | Carlos |
 | 9 Sep 2026 | Studio reports render for the public audience by default; the internal view is a filter with a visible mark, never a different report. | Lucas |
+| 11 Sep 2026 | There is one report, with no internal/public division, in the Studio and in `wb report` alike: `audiences.yaml`, the gate, `Plan.audience` and `--audience` are retired. A lab build is displayed like any other competitor; the interface refuses to export or print a report that carries one ("display yes, export no"). | Lucas |
 | 9 Sep 2026 | The narrative of a finished run is written automatically, reserved in the weekly ledger before the request and settled from the receipt, US$ 0.50 per run unless the plan says otherwise; no manual "Analyse" button. Every number in a report comes from code; the model fills prose slots only, and a claim without evidence renders as Unknown. | Lucas |
 | 9 Sep 2026 | The Studio's design system is composed, not adopted: Radix Colors (sage, green accent), IBM Plex, Lucide, Tufte-style report layer; square geometry; green means better than Bare and red worse; model families get hues that are neither green nor red. | Lucas |
 | 9 Sep 2026 | The weekly budget is a chip in the Studio's top bar, always visible; Budget leaves the main navigation. | Lucas |
@@ -319,9 +323,8 @@ or the offline implementation; all three are Monarch-side improvements, not bloc
   leaves the engine working and the next attempt waits it out (bounded, 60 s). A cancel route would
   replace the wait. Owner: Deyton.
 
-Note: Monarch attempts are named `monarch@<version>`; `wb_report/audiences.yaml`'s `public-rung2`
-today allows only the exact name `monarch`. A public report with the real Monarch competitor needs a
-`monarch@*` pattern (or equivalent) added there before publication.
+Note: Monarch attempts are named `monarch@<version>`. The audience allowlist that once had to name
+them is retired (11 Sep 2026), so no pattern needs adding before publication.
 
 **Feature 005 open questions** (`specs/005-task-tiers/spec.md`; only the first blocks committing the drawn task sets; none blocks the code or its tests):
 
@@ -332,6 +335,6 @@ today allows only the exact name `monarch`. A public report with the real Monarc
 **Feature 006 open questions** (`specs/006-html-report/spec.md`; none blocks the work):
 
 - Should the median wall-clock exclude attempts with no phase timing, or show `n/a` for the whole column? Proposed: exclude, stating how many attempts contributed. Also: the phase sum omits queueing and snapshot time; a separate column from `started_at`/`finished_at` would show real elapsed time. (Carlos)
-- Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>-<audience>.html`. (Carlos)
+- Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>.html`. (Carlos)
 - Are sortable columns worth their twelve lines of inline JavaScript, or should the page be pure markup? Proposed: keep them, with `--no-sort` to drop them. (Carlos)
 - Monarch's cost per model comes from the per-family breakdown the competitor writes to `turns.jsonl` (`{"cost": ...}`), not from phase keys; the report reads it from there. (Carlos)

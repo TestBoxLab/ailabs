@@ -5,8 +5,8 @@ read, computed by `wb_studio.measures`, `wb_studio.report_data` and `wb_studio.f
 Wilson intervals, pass^k, the paired sign test and the overlap are never reimplemented here.
 
 Every result carries `tags`, one `[rec:run:<id>]` per run it read, so a sentence Genesis writes
-can cite the run it came from. Results that can name lab competitors carry `audience: internal`,
-the same boundary `report_data.visible_setups` draws.
+can cite the run it came from. Results that carry a fact Genesis may not publish are marked
+`audience: internal`.
 """
 from __future__ import annotations
 
@@ -140,11 +140,11 @@ def failure_buckets_tool(genesis, payload) -> dict:
 
 
 def report_tool(genesis, payload) -> dict:
-    """The internal run report as data (`report_data.run_report`), without the model narrative:
+    """The run report as data (`report_data.run_report`), without the model narrative:
     the grade, verdict, code findings, figures, failures, tasks, caveats and method."""
     from wb_studio.report_data import run_report
     job = _job(genesis, payload)
-    found = run_report(genesis.studio, job['id'], 'internal')
+    found = run_report(genesis.studio, job['id'])
     data = {k: v for k, v in found.items() if k not in ('narrative', 'model_findings')}
     runs = [job['id']] + ([found['baseline_source']['run']] if found.get('baseline_source') else [])
     return _tagged(data, runs, internal=True)

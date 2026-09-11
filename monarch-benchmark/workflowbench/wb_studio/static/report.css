@@ -22,10 +22,6 @@
 .grade.tradeoff{color:var(--warn-text)}
 .grade.tie,.grade.none{color:var(--muted)}
 .report-actions{display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-top:var(--space-4);font-family:var(--font-ui);font-size:var(--text-2)}
-.audience-toggle{display:inline-flex;gap:var(--space-4);border:0}
-.audience-toggle button{border:0;border-bottom:2px solid transparent;background:transparent;padding:4px 0;font-size:var(--text-3);font-family:var(--font-ui);font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)}
-.audience-toggle button.active{color:var(--ink);border-bottom-color:var(--ink)}
-.internal-mark{font-family:var(--font-mono);font-size:var(--text-1);color:var(--warn-text);border:1px solid var(--warn-line);padding:4px 8px}
 .findings{padding-left:1.3em;margin:0}
 .findings li{margin:0 0 var(--space-3);text-wrap:pretty}
 .findings .evidence{font-family:var(--font-mono);font-size:var(--text-1);padding:0 4px;vertical-align:baseline}
@@ -54,7 +50,10 @@
 .method{font-family:var(--font-mono);font-size:var(--text-1);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;margin:0}
 .method dt{color:var(--muted);text-transform:none;letter-spacing:0;font-family:var(--font-ui)}
 .method dd{margin:0;overflow-wrap:anywhere;color:var(--ink)}
-.reports-toolbar{display:flex;justify-content:flex-end;margin:-66px 0 var(--space-6);height:36px;align-items:flex-end;pointer-events:none}.reports-toolbar>*{pointer-events:auto}.reports-table td{vertical-align:top;font-size:var(--text-3)}.reports-table .round-lead{display:grid;gap:6px;max-width:44ch}.reports-table .round-runs{list-style:none;margin:0;padding:0;display:grid;gap:6px}.reports-table .round-runs li{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.reports-table td.num .text-button{white-space:nowrap}
+.reports-table td{vertical-align:top;font-size:var(--text-3)}.reports-table .round-lead{display:grid;gap:6px;max-width:44ch}.reports-table .round-runs{list-style:none;margin:0;padding:0;display:grid;gap:6px}.reports-table .round-runs li{display:flex;gap:10px;align-items:baseline;flex-wrap:nowrap;min-width:0}
+.reports-table .round-runs a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.reports-table .round-runs .meta{white-space:nowrap;flex-shrink:0}
+.reports-table td.num .text-button{white-space:nowrap}
 .round-card{margin-bottom:var(--space-4)}
 .round-lead{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-3);font-size:var(--text-3)}
 .round-runs{list-style:none;margin:0;padding:0;font-family:var(--font-ui);font-size:var(--text-2)}
@@ -88,4 +87,9 @@ body.export main{max-width:1180px;margin:0 auto;padding:var(--space-5)}
 .model-findings{margin-top:var(--space-3)}
 }
 .round-date{white-space:nowrap;color:var(--muted)}
-.failed-attempts{margin:var(--space-3) 0}.attempt-fold{border-top:1px solid var(--line);padding:6px 0}.attempt-fold summary{display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap;cursor:pointer}.attempt-fold-task{font-weight:500}.attempt-fold p{margin:var(--space-2) 0}
+.failure-modes{margin:var(--space-4) 0;font-family:var(--font-ui);font-size:var(--text-3)}.mode-fold{border-top:1px solid var(--line);padding:6px 0}.mode-fold summary{display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap;cursor:pointer}.mode-fold-label{font-weight:500}
+.mode-tasks{list-style:none;margin:var(--space-2) 0 var(--space-3);padding:0}.mode-tasks>li{margin:0 0 var(--space-3);padding-left:var(--space-3);border-left:1px solid var(--line)}.mode-tasks p{margin:0}
+/* Display yes, export no (Lucas, 11 Sep): a report carrying a lab build shows on screen and does
+   not print, by the button or by Ctrl+P. Refusing beats thinning it silently — a reader of a
+   quietly shorter page cannot tell what is missing. */
+@media print{.report.lab-present>*{display:none}.report.lab-present::after{display:block;font-family:var(--font-prose);content:"This report includes a lab build, which may not leave the machine. Re-run without it to share this report."}}

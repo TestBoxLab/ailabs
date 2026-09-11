@@ -27,7 +27,7 @@ def finished_run(studio, request_id="report-1", models=("oracle", "sloppy"), tit
 def test_run_report_reads_verdict_first_with_findings_figures_caveats_and_method(studio):
     job = finished_run(studio)
     report = report_data.run_report(studio, job["id"])
-    assert list(report)[:6] == ["version", "run", "title", "status", "audience", "created_at"]
+    assert list(report)[:5] == ["version", "run", "title", "status", "created_at"]
     assert report["grade"]["grade"] == "Not comparable" and "Bare" in report["grade"]["reason"]
     assert report["verdict"].startswith("Scripted reference passed 2 of 2 tasks (100%")
     assert len(report["verdict"].split()) <= 120
@@ -42,18 +42,18 @@ def test_run_report_reads_verdict_first_with_findings_figures_caveats_and_method
     assert len(report["matrix"]) == 4 and all(cell["reps"] for cell in report["matrix"].values())
 
 
-def test_public_view_hides_lab_setups_and_internal_shows_them(studio, tmp_path):
+def test_one_report_shows_every_setup_including_lab_ones(studio, tmp_path):
+    """There is one report: a lab competitor is a setup like any other."""
     job = finished_run(studio)
     # Rename one setup to a lab competitor in the stored record.
     folder = studio.directory / job["id"]
     record = json.loads((folder / "job.json").read_text(encoding="utf-8"))
-    record["settings"]["arms"] = [{"id": "oracle", "name": "oracle", "kind": "scripted"}, {"id": "sloppy", "name": "monarch-lab-sloppy", "kind": "scripted"}]
+    record["settings"]["arms"] = [{"id": "oracle", "name": "oracle", "kind": "scripted"}, {"id": "sloppy", "name": "monarch-lab-sloppy", "kind": "lab"}]
     (folder / "job.json").write_text(json.dumps(record), encoding="utf-8")
-    public = report_data.run_report(studio, job["id"], audience="public")
-    internal = report_data.run_report(studio, job["id"], audience="internal")
-    assert public["order"] == ["oracle"] and public["hidden_setups"] == 1
-    assert any("internal-only" in c for c in public["caveats"])
-    assert internal["order"] == ["oracle", "sloppy"] and internal["hidden_setups"] == 0
+    report = report_data.run_report(studio, job["id"])
+    assert report["order"] == ["oracle", "sloppy"]
+    assert report["setups"]["sloppy"]["name"] == "monarch-lab-sloppy"
+    assert not any("internal" in c for c in report["caveats"])
 
 
 def test_grade_rules():
@@ -84,10 +84,10 @@ def test_caveats_come_from_data():
                     "b": {"name": "Bare", "pass": {"infrastructure": 0}, "cost": {"unknown_attempts": 0, "total": 1.0}}},
          "unrecorded_attempts": 3, "planned_attempts": 20, "baseline": "b", "repetitions": 2}
     job = {"settings": {"arms": [{"id": "a", "runner": {"effort": "high"}}, {"id": "b", "runner": {"effort": "low"}}]}}
-    out = caveats.for_run(job, m, {"status": "pending", "reason": "the weekly ledger cannot cover $0.50."}, hidden=["x"])
+    out = caveats.for_run(job, m, {"status": "pending", "reason": "the weekly ledger cannot cover $0.50."})
     text = "\n".join(out)
     assert "3 of 20 planned attempts" in text and "1 attempt stopped" in text and "Cost is unknown for Arch (2 attempts" in text
-    assert "Thinking settings differ" in text and "ran 2 times" in text and "1 setup is internal-only" in text
+    assert "Thinking settings differ" in text and "ran 2 times" in text
     assert "Analysis pending: the weekly ledger cannot cover $0.50." in text and "No Bare baseline" not in text
     assert caveats.fork_version().startswith("1.0.6")
 
@@ -128,7 +128,7 @@ def test_round_standings_carry_intervals_over_tasks_pairings_and_excluded_runs(s
 
 
 
-def test_public_reports_keep_the_timeline_but_not_the_reasoning(studio):
+def test_the_report_keeps_the_timeline_and_the_reasoning(studio):
     job = finished_run(studio)
     task = list(studio.tasks)[0]
     # Slip one model turn with a reasoning summary into the sloppy attempt's record, before it finished.
@@ -138,10 +138,7 @@ def test_public_reports_keep_the_timeline_but_not_the_reasoning(studio):
     events.insert(at, {"type": "model_finished", "at": events[at]["at"], "task": task, "model": "sloppy", "output": "I changed it.",
                        "reasoning": ["Private plan: patch the phone field."], "stop_reason": "end_turn"})
     log.write_text("".join(json.dumps({**e, "id": i + 1}) + "\n" for i, e in enumerate(events)), encoding="utf-8")
-    public = report_data.run_report(studio, job["id"], audience="public")
-    internal = report_data.run_report(studio, job["id"], audience="internal")
-    def turns(report):
-        return [t for a in report["failures"]["attempts"] if a["story"] for t in a["story"]["timeline"]]
-    assert turns(public) and all(t["reasoning"] == "" and "Private plan" not in t["sentence"] for t in turns(public))
-    assert any("Private plan" in t["reasoning"] for t in turns(internal))
-    assert "Private plan" not in json.dumps(public)
+    report = report_data.run_report(studio, job["id"])
+    turns = [t for a in report["failures"]["attempts"] if a["story"] for t in a["story"]["timeline"]]
+    assert turns and any("Private plan" in t["reasoning"] for t in turns)
+    assert any("Private plan" in t["sentence"] for t in turns)

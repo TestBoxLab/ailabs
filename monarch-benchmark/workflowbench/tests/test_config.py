@@ -388,7 +388,6 @@ command: codex exec
 TASKS = Path(__file__).resolve().parent.parent / "tasks"
 TASK_FILES = ("simple.sf_opp_closed_won.json", "simple.email_sf_contact_city_update.json")
 ENV = {"ANTHROPIC_API_KEY": "sk-ant-secret", "OPENAI_API_KEY": "sk-oai-secret", "MONARCH_TOKEN": "mon-secret"}
-AUDIENCES = {"internal": ["*"], "public-rung2": ["monarch"]}
 
 
 @pytest.fixture
@@ -412,8 +411,8 @@ def paths(site):
     return site / "config/products/simulated-apps.yaml", site / "config/plans/smoke-frontier.yaml"
 
 
-def resolve(site, env=ENV, audiences=AUDIENCES):
-    return config.resolve(*paths(site), env=env, audiences=audiences)
+def resolve(site, env=ENV):
+    return config.resolve(*paths(site), env=env)
 
 
 def rewrite(site, sub, text, key, value=None):
@@ -555,12 +554,6 @@ def test_resolve_rule8_names_task_service_and_product_file(site):
     msg = check_resolve_error(site, paths(site)[0], "services")
     assert "task simple.email_sf_contact_city_update" in msg and "service salesforce" in msg
     assert "simulated-apps.yaml" in msg and "does not list in services" in msg
-
-
-def test_resolve_rule10_unknown_audience(site):
-    write(site / "config/plans", edit(plan_text(site), "audience", "press"))
-    msg = check_resolve_error(site, paths(site)[1], "audience")
-    assert "'press'" in msg and "internal" in msg
 
 
 def test_resolve_missing_task_dir(site):
@@ -835,7 +828,6 @@ def test_tier_plans():
         assert pl.mode == "create-run"
         assert pl.repetitions == 1 and pl.retry_on_fail == 1
         assert pl.baseline == "claude-opus-5/api"
-        assert pl.audience == "internal"
         assert pl.approved_by is None                      # Carlos approves each round
         assert pl.timeout_s == 1800 and pl.concurrency == 4
         assert pl.cost_ceiling_usd == 60
@@ -874,7 +866,7 @@ def test_achievable_50_plans():
         assert pl.repetitions == 1 and pl.retry_on_fail == 1
         assert pl.timeout_s == 1800 and pl.concurrency == 4
         assert pl.cost_ceiling_usd == 220
-        assert pl.baseline == "claude-opus-5/api" and pl.audience == "internal"
+        assert pl.baseline == "claude-opus-5/api"
         assert pl.approved_by is None                      # Lucas approves (D5)
         assert [(c.model, c.harness) for c in pl.competitors] == [
             (None, "oracle"), ("claude-opus-5", "api"),

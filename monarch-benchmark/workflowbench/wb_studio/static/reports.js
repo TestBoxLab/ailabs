@@ -1,7 +1,7 @@
 'use strict';
 // Reports: the front door. A report reads verdict first, then the evidence.
 // Every number comes from the server (report_data.py); this file only lays it out.
-let reportAudience = 'public', currentReport = null, reportsSequence = 0;
+let currentReport = null, reportsSequence = 0;
 const fmtPct = v => v === null || v === undefined ? '—' : Math.round(v * 100) + '%';
 // Three significant figures below a dollar, cents above: $0.0284, $0.107, $1.26.
 const fmtMoney = v => v === null || v === undefined ? 'unknown' : v === 0 ? '$0.00' : v >= 1 ? '$' + v.toFixed(2) : '$' + Number(v.toPrecision(3)).toString();
@@ -22,15 +22,12 @@ const gradeBadge = g => '<span class="grade ' + gradeClass(g.grade) + '">' + esc
 const setupFamily = name => Charts.familyOf(name);
 
 function reportRoute(hash) {
-  const [path, query] = hash.split('?');
-  const audience = new URLSearchParams(query || '').get('audience');
-  if (audience === 'internal' || audience === 'public') reportAudience = audience;
+  const [path] = hash.split('?');
   if (path === '#reports' || path === '#leaderboard' || path === '' || path === '#') return openReports();
   if (path.startsWith('#report/')) { const [id, section] = path.slice(8).split('/').map(decodeURIComponent); return openReport(id, section); }
   if (path.startsWith('#round/')) { const [id, section] = path.slice(7).split('/').map(decodeURIComponent); return openRound(id, section); }
   return null;
 }
-const audienceQuery = () => reportAudience === 'internal' ? '?audience=internal' : '';
 // A report is a document: every section has an address, and the page is titled by the report.
 let permalinkBase = '';
 function goToSection(section) {
@@ -38,7 +35,7 @@ function goToSection(section) {
   if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function settle(kind, id, section, title) {
-  const base = '#' + kind + '/' + encodeURIComponent(id), want = (section ? base + '/' + encodeURIComponent(section) : base) + audienceQuery();
+  const base = '#' + kind + '/' + encodeURIComponent(id), want = section ? base + '/' + encodeURIComponent(section) : base;
   if (location.hash !== want && !location.hash.startsWith(base)) history.pushState(null, '', want);
   else if (location.hash !== want) history.replaceState(null, '', want);
   document.title = 'AI Labs — ' + title;
@@ -49,7 +46,7 @@ async function openReports() {
   const box = $('#reports-content'), sequence = ++reportsSequence;
   box.innerHTML = '<p class="meta">Loading</p>';
   try {
-    const data = await api('/api/reports?audience=' + reportAudience);
+    const data = await api('/api/reports');
     if (sequence !== reportsSequence) return;
     renderReportsIndex(data);
   } catch (e) {
@@ -68,38 +65,33 @@ function renderReportsIndex(data) {
   const row = round => {
     const best = round.best ? '<strong>' + esc(round.best.name) + '</strong> passed ' + round.best.passed + ' of ' + round.best.attempts + ' (' + fmtPct(round.best.rate) + ')' : 'No evaluated attempts';
     const comparable = round.grade && round.grade.grade !== 'Not comparable';
-    return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + (run.status === 'completed' ? '' : meta([run.status])) + '</li>').join('') + '</ul></td>' +
+    // A run name is one line here; the full name is on hover and as the report's own heading.
+    return '<tr class="round-card">' + '<td class="round-runs-cell"><ul class="round-runs">' + round.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + '" data-open-report="' + esc(run.id) + '" title="' + esc(run.title || run.id) + '">' + esc(run.title || run.id) + '</a>' + (run.status === 'completed' ? '' : meta([run.status])) + '</li>').join('') + '</ul></td>' +
       '<td class="round-date">' + esc(roundDates(round.runs)) + '</td>' +
       '<td class="round-lead">' + (comparable ? gradeBadge(round.grade) : '') + '<span>' + best + '</span>' + (comparable ? '<span class="meta">' + esc(round.grade.reason) + '</span>' : '') + '</td>' +
       '<td>' + round.task_count + ' ' + (round.task_count === 1 ? 'task' : 'tasks') + '<br><span class="meta">' + esc(trackWords(round.track)) + ' · ' + round.setups + (round.setups === 1 ? ' setup' : ' setups') + '</span></td>' +
-      '<td class="action"><a href="#round/' + encodeURIComponent(round.id) + audienceQuery() + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
+      '<td class="action"><a href="#round/' + encodeURIComponent(round.id) + '" data-open-round="' + esc(round.id) + '">Round report</a></td></tr>';
   };
   const table = rows => '<table class="table reports-table"><thead><tr><th>Runs</th><th>Date</th><th>Result</th><th>Task set</th><th class="num">Report</th></tr></thead><tbody>' + rows.map(row).join('') + '</tbody></table>';
   const benchmark = data.rounds.filter(r => r.full_benchmark), other = data.rounds.filter(r => !r.full_benchmark);
-  box.innerHTML = '<div class="reports-toolbar">' + audienceToggle() + '</div>' +
-    (benchmark.length ? '<h2 class="reports-group">Benchmark rounds</h2>' + table(benchmark) : '') +
+  box.innerHTML = (benchmark.length ? '<h2 class="reports-group">Benchmark rounds</h2>' + table(benchmark) : '') +
     (other.length ? (benchmark.length ? '<h2 class="reports-group">Other task sets</h2>' : '') + table(other) : '');
   bindReportLinks(box);
 }
 
-function audienceToggle() {
-  return '<div class="audience-toggle" role="group" aria-label="Audience"><button class="' + (reportAudience === 'public' ? 'active' : '') + '" data-audience="public">Public</button><button class="' + (reportAudience === 'internal' ? 'active' : '') + '" data-audience="internal">Internal</button></div>';
-}
-
 function bindReportLinks(root) {
-  $$('[data-open-report]', root).forEach(b => b.onclick = e => { e.preventDefault(); history.pushState(null, '', '#report/' + encodeURIComponent(b.dataset.openReport) + audienceQuery()); openReport(b.dataset.openReport); });
-  $$('[data-open-round]', root).forEach(b => b.onclick = e => { e.preventDefault(); history.pushState(null, '', '#round/' + encodeURIComponent(b.dataset.openRound) + audienceQuery()); openRound(b.dataset.openRound); });
-  $$('[data-audience]', root).forEach(b => b.onclick = () => { reportAudience = b.dataset.audience; const y = scrollY; const path = location.hash.split('?')[0] || '#reports'; history.replaceState(null, '', path + audienceQuery()); Promise.resolve(reportRoute(location.hash)).then(() => scrollTo(0, y)); });
+  $$('[data-open-report]', root).forEach(b => b.onclick = e => { e.preventDefault(); history.pushState(null, '', '#report/' + encodeURIComponent(b.dataset.openReport)); openReport(b.dataset.openReport); });
+  $$('[data-open-round]', root).forEach(b => b.onclick = e => { e.preventDefault(); history.pushState(null, '', '#round/' + encodeURIComponent(b.dataset.openRound)); openRound(b.dataset.openRound); });
 }
 
 async function openReport(id, section) {
   showWorkspaceSurface('report', false);
-  if (currentReport?.run === id && currentReport.audience === reportAudience && $('#report-article .report-head')) { settle('report', id, section, currentReport.title || 'Run report'); goToSection(section); return; }
+  if (currentReport?.run === id && $('#report-article .report-head')) { settle('report', id, section, currentReport.title || 'Run report'); goToSection(section); return; }
   settle('report', id, section, 'Report');
   const article = $('#report-article'), sequence = ++reportsSequence;
   article.innerHTML = '<p class="meta">Loading report</p>';
   try {
-    const data = await api('/api/reports/run/' + encodeURIComponent(id) + '?audience=' + reportAudience);
+    const data = await api('/api/reports/run/' + encodeURIComponent(id));
     if (sequence !== reportsSequence) return;
     currentReport = data; permalinkBase = '#report/' + encodeURIComponent(id); renderRunReport(data);
     document.title = 'AI Labs — ' + (data.title || 'Run report'); goToSection(section);
@@ -108,12 +100,12 @@ async function openReport(id, section) {
 
 async function openRound(id, section) {
   showWorkspaceSurface('report', false);
-  if (currentReport?.cohort === id && currentReport.audience === reportAudience && $('#report-article .report-head')) { settle('round', id, section, roundTitle(currentReport)); goToSection(section); return; }
+  if (currentReport?.cohort === id && $('#report-article .report-head')) { settle('round', id, section, roundTitle(currentReport)); goToSection(section); return; }
   settle('round', id, section, 'Round report');
   const article = $('#report-article'), sequence = ++reportsSequence;
   article.innerHTML = '<p class="meta">Loading report</p>';
   try {
-    const data = await api('/api/reports/round/' + encodeURIComponent(id) + '?audience=' + reportAudience);
+    const data = await api('/api/reports/round/' + encodeURIComponent(id));
     if (sequence !== reportsSequence) return;
     currentReport = data; permalinkBase = '#round/' + encodeURIComponent(id); renderRoundReport(data);
     document.title = 'AI Labs — ' + roundTitle(data); goToSection(section);
@@ -121,15 +113,14 @@ async function openRound(id, section) {
 }
 const roundTitle = r => (r.full_benchmark ? 'Benchmark standings, ' : 'Standings on ') + r.task_count + ' tasks' + (r.latest ? ', ' + (r.first && fmtDate(r.first) !== fmtDate(r.latest) ? fmtDate(r.first) + ' to ' + fmtDate(r.latest) : fmtDate(r.latest)) : '');
 
-const section = (id, title, body) => '<section class="report-section" id="report-' + id + '"><h2><a class="section-link" href="' + permalinkBase + '/' + id + audienceQuery() + '">' + esc(title) + '</a></h2>' + body + '</section>';
-const contents = ids => '<nav class="report-contents" aria-label="Contents"><ol>' + ids.map(([id, title]) => '<li><a href="' + permalinkBase + '/' + id + audienceQuery() + '">' + esc(title) + '</a></li>').join('') + '</ol></nav>';
+const section = (id, title, body) => '<section class="report-section" id="report-' + id + '"><h2><a class="section-link" href="' + permalinkBase + '/' + id + '">' + esc(title) + '</a></h2>' + body + '</section>';
+const contents = ids => '<nav class="report-contents" aria-label="Contents"><ol>' + ids.map(([id, title]) => '<li><a href="' + permalinkBase + '/' + id + '">' + esc(title) + '</a></li>').join('') + '</ol></nav>';
 const setupName = (r, id) => r.setups[id]?.short_name || r.setups[id]?.name || id;
 const setupFullName = (r, id) => r.setups[id]?.name || id;
 
 function reportActions(r, kind) {
-  return '<div class="report-actions">' + audienceToggle() + (kind === 'run' ? '<a class="button small" href="#run/' + encodeURIComponent(r.run) + '" data-open-run-evidence="' + esc(r.run) + '">Open run</a>' : '') +
-    '<button class="button small" id="report-print">Print</button><button class="button small" id="report-save">Save as HTML</button>' +
-    (reportAudience === 'internal' ? '<span class="internal-mark">Internal view' + (r.hidden_setups ? ' · ' + r.hidden_setups + ' lab ' + (r.hidden_setups === 1 ? 'setup' : 'setups') + ' shown only here' : '') + '</span>' : '') + '</div>';
+  return '<div class="report-actions">' + (kind === 'run' ? '<a class="button small" href="#run/' + encodeURIComponent(r.run) + '" data-open-run-evidence="' + esc(r.run) + '">Open run</a>' : '') +
+    '<button class="button small" id="report-print">Print</button><button class="button small" id="report-save">Save as HTML</button></div>';
 }
 
 function findingsList(findings, modelFindings, r) {
@@ -143,7 +134,7 @@ function evidenceLink(evidence, r) {
   if (evidence.kind === 'events' && evidence.event_ids?.length) return '<button class="text-button evidence" data-evidence-run="' + esc(r.run) + '" data-evidence-event="' + evidence.event_ids[0] + '">See event ' + evidence.event_ids[0] + (evidence.event_ids.length > 1 ? ' and ' + (evidence.event_ids.length - 1) + ' more' : '') + '</button>';
   const anchor = { hero: 'hero', matrix: 'failures', bucket: 'failures', attempts: 'failures', figure: 'cost', cost: 'cost', table: 'hero' }[evidence.kind] || 'hero';
   const words = { hero: 'See the pass-rate figure', matrix: 'See the task matrix', bucket: 'See the failures table', attempts: 'See the failures table', figure: 'See the cost figure', cost: 'See the cost table', table: 'See the pass-rate figure' };
-  return '<a class="evidence" href="' + permalinkBase + '/' + anchor + audienceQuery() + '" data-evidence-anchor="report-' + anchor + '" data-evidence-setup="' + esc(evidence.setup || '') + '">' + esc(words[evidence.kind] || 'See the evidence') + '</a>';
+  return '<a class="evidence" href="' + permalinkBase + '/' + anchor + '" data-evidence-anchor="report-' + anchor + '" data-evidence-setup="' + esc(evidence.setup || '') + '">' + esc(words[evidence.kind] || 'See the evidence') + '</a>';
 }
 
 function sourceText(r, what) { return 'Source: ' + (r.run ? 'run ' + String(r.run).slice(0, 12) : 'task set ' + String(r.task_set || '').slice(0, 12)); }
@@ -165,6 +156,69 @@ function heroFigure(r, title) {
   return Charts.dotWhisker({ title, rows, labelWidth: 220, source: sourceText(r, '') });
 }
 
+// The first sentence of a task's request is the name a person reads it by.
+// Named for the report: app.js already owns a global `taskTitle(id)` and these
+// scripts share one scope, so the shorter name here silently broke the run page.
+function reportTaskTitle(r, id) {
+  const t = (r.tasks || []).find(t => t.id === id)?.title || id;
+  const first = t.split(/(?<=\.)\s/)[0];
+  return first.length < t.length ? first : t;
+}
+
+// Failure modes as rows, setups as columns, counts in the cells. One glance
+// answers the run's first question: a row heavy in one column is that setup's
+// weakness; a row filled across every column points at the task, not the models.
+function failureModes(r) {
+  const failed = (r.failures?.attempts || []).filter(a => !a.passed && a.story);
+  if (!failed.length) return null;
+  const modes = new Map();
+  for (const a of failed) {
+    const m = modes.get(a.story.mode || 'unclassified') || { label: a.story.mode_label, attempts: 0, setups: {}, tasks: new Map() };
+    m.attempts++; m.setups[a.model] = (m.setups[a.model] || 0) + 1;
+    const t = m.tasks.get(a.task) || { counts: new Map(), example: a };
+    t.counts.set(a.model, (t.counts.get(a.model) || 0) + 1);
+    if (a.story.turning_point && !t.example.story.turning_point) t.example = a;
+    m.tasks.set(a.task, t); modes.set(a.story.mode || 'unclassified', m);
+  }
+  const rows = [...modes.values()].sort((a, b) => b.attempts - a.attempts || a.label.localeCompare(b.label));
+  // Three steps of one hue, cut against the heaviest cell: enough to find the eye, not a rainbow.
+  const peak = Math.max(1, ...rows.flatMap(m => r.order.map(id => m.setups[id] || 0)));
+  const level = n => !n ? 'n0' : n >= peak * 0.66 ? 'n3' : n >= peak * 0.34 ? 'n2' : 'n1';
+  const count = (n, cls) => '<td class="count ' + cls + '">' + (n || '·') + '</td>';
+  // The foot carries what the per-setup story table used to say: failures over attempts.
+  // Both come from r.failures.attempts, so an infrastructure attempt counts on both sides.
+  const recorded = r.failures?.attempts || [];
+  const tried = {};
+  for (const a of recorded) tried[a.model] = (tried[a.model] || 0) + 1;
+  const over = (n, total) => '<td>' + n + ' of ' + total + '</td>';
+  const table = document.createElement('table');
+  table.className = 'chart-matrix fail-modes';
+  table.innerHTML = '<thead><tr><th class="mode-head">How it failed</th>' + r.order.map(id => '<th class="setup">' + esc(setupName(r, id)) + '</th>').join('') +
+    '<th class="setup">Failures</th><th class="setup">Tasks</th></tr></thead><tbody>' +
+    rows.map(m => '<tr><th class="mode" scope="row">' + esc(m.label) + '</th>' + r.order.map(id => count(m.setups[id] || 0, level(m.setups[id] || 0))).join('') +
+      count(m.attempts, 'total') + count(m.tasks.size, 'total') + '</tr>').join('') +
+    '</tbody><tfoot><tr><th scope="row">Failed of attempts</th>' +
+    r.order.map(id => over(rows.reduce((s, m) => s + (m.setups[id] || 0), 0), tried[id] || 0)).join('') +
+    over(failed.length, recorded.length) + over(new Set(failed.map(a => a.task)).size, (r.tasks || []).length) + '</tr></tfoot>';
+  return { table, rows };
+}
+
+// Under the table, the tasks behind each mode: one line per task, not per attempt.
+function modeFolds(r, rows) {
+  return '<p class="chart-title">Open a failure mode for the tasks behind it</p>' + rows.map(m => {
+    const tasks = [...m.tasks.entries()].sort((a, b) => b[1].counts.size - a[1].counts.size || String(a[0]).localeCompare(String(b[0])));
+    return '<details class="mode-fold"><summary><span class="mode-fold-label">' + esc(m.label) + '</span><span class="meta">' +
+      m.attempts + (m.attempts === 1 ? ' attempt' : ' attempts') + ' · ' + m.tasks.size + (m.tasks.size === 1 ? ' task' : ' tasks') + '</span></summary>' +
+      '<ul class="mode-tasks">' + tasks.map(([task, t]) => {
+        const who = [...t.counts.entries()].map(([id, n]) => setupName(r, id) + (n > 1 ? ' ×' + n : '')).join(', ');
+        const tp = t.example.story.turning_point;
+        return '<li><p><a href="#run/' + encodeURIComponent(r.run) + '/' + encodeURIComponent(task) + '/' + encodeURIComponent(t.example.model) + '">' + esc(reportTaskTitle(r, task)) + '</a></p>' +
+          '<p class="meta">' + esc(who) + '</p>' +
+          (tp ? '<p>' + esc(tp.text) + ' ' + evidenceLink({ kind: 'events', event_ids: [tp.event_id] }, r) + '</p>' : '') + '</li>';
+      }).join('') + '</ul></details>';
+  }).join('');
+}
+
 function failuresBlock(r) {
   const summary = r.failures?.summary || {};
   const bars = (r.failures?.buckets || []).some(b => b.count)
@@ -174,17 +228,14 @@ function failuresBlock(r) {
   const matrix = Charts.matrix({ tasks: r.tasks, setups: r.order.map(id => ({ id, name: setupName(r, id), baseline: id === r.baseline, family: setupFamily(setupName(r, id)) })), cells: r.matrix });
   const wrap = document.createElement('div'); wrap.className = 'failures-block';
   if (bars) wrap.appendChild(bars); else { const p = document.createElement('p'); p.className = 'report-note'; p.textContent = 'No failed attempts.'; wrap.appendChild(p); }
-  const failed = (r.failures?.attempts || []).filter(a => !a.passed && a.story);
-  if (failed.length) {
-    const list = document.createElement('div'); list.className = 'failed-attempts';
-    const taskTitle = id => { const t = (r.tasks || []).find(t => t.id === id)?.title || id; const first = t.split(/(?<=\.)\s/)[0]; return first.length < t.length ? first : t; };
-    list.innerHTML = '<p class="chart-title">Each failed attempt, in one line; open one for what went wrong</p>' + failed.map(a => {
-      const s = a.story, facts = (s.went_wrong || []).slice(0, 4);
-      return '<details class="attempt-fold"><summary><span class="attempt-fold-task">' + esc(taskTitle(a.task)) + '</span><span class="meta">' + esc(setupName(r, a.model)) + ' · ' + esc(s.mode_label) + '</span></summary>' +
-        '<p>' + esc(s.verdict) + '</p>' + (s.turning_point ? '<p><strong>Where it turned.</strong> ' + esc(s.turning_point.text) + ' ' + evidenceLink({ kind: 'events', event_ids: [s.turning_point.event_id] }, r) + '</p>' : '') +
-        (facts.length ? '<ul class="story-facts">' + facts.map(f => '<li>' + esc(f.text) + ' ' + evidenceLink({ kind: 'events', event_ids: f.event_ids || [] }, r) + '</li>').join('') + '</ul>' : '') +
-        '<p><a class="text-button" href="#run/' + encodeURIComponent(r.run) + '/' + encodeURIComponent(a.task) + '/' + encodeURIComponent(a.model) + '">Open the attempt</a></p></details>';
-    }).join('');
+  const grouped = failureModes(r);
+  if (grouped) {
+    const cap = document.createElement('p'); cap.className = 'chart-title';
+    cap.textContent = 'How it failed, by setup; a row filled across every column points at the task';
+    wrap.appendChild(cap);
+    const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(grouped.table); wrap.appendChild(scroll);
+    const list = document.createElement('div'); list.className = 'failure-modes';
+    list.innerHTML = modeFolds(r, grouped.rows);
     wrap.appendChild(list);
   }
   const cap = document.createElement('p'); cap.className = 'chart-title'; cap.textContent = 'Tasks by setup, disagreements first' + (r.repetitions > 1 || r.method.repetitions > 1 ? '; cells show passes over repetitions' : ''); wrap.appendChild(cap);
@@ -251,10 +302,9 @@ function modelReadingSection(r) {
 function storySection(r) {
   const s = r.story;
   if (!s || !s.setups.length) return '';
-  const modes = s.setups.filter(x => x.failed).map(x => '<tr><th scope="row">' + esc(x.name) + '</th><td>' + x.failed + ' of ' + x.attempts + '</td><td>' + x.modes.map(m => esc(m.label) + ' (' + m.count + ')').join('; ') + '</td></tr>').join('');
-  const table = modes ? '<table class="table story-modes"><thead><tr><th scope="col">Setup</th><th scope="col">Failed</th><th scope="col">How it failed, most common first</th></tr></thead><tbody>' + modes + '</tbody></table>' : '';
+  // How each setup failed is the matrix in "Where it failed"; this section is the reading of it.
   const suspect = s.suspect_tasks.length ? '<p><strong>Suspect the task first.</strong> ' + s.suspect_tasks.map(t => esc(t.task) + ' (' + esc(t.mode_label.toLowerCase()) + ', every setup)').join('; ') + '.</p>' : '';
-  return section('story', 'What went right and wrong', s.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + table + suspect);
+  return section('story', 'What went right and wrong', s.paragraphs.map(p => '<p>' + esc(p) + '</p>').join('') + suspect);
 }
 function termsList(r) {
   const names = new Set(['Setup', 'Task', 'Attempt', 'Pass', '95% interval']);
@@ -309,7 +359,7 @@ function excludedTable(r) {
   // Every run in the round counts here; this names the ones the frozen benchmark leaderboard would not take, and only on a benchmark round.
   if (!r.excluded?.length || !r.full_benchmark) return '';
   return '<h3>Not eligible for the benchmark leaderboard</h3><div class="table-scroll"><table class="paired excluded"><thead><tr><th>Run</th><th>Reason</th></tr></thead><tbody>' +
-    r.excluded.map(e => '<tr><th scope="row"><a href="#report/' + encodeURIComponent(e.id) + audienceQuery() + '" data-open-report="' + esc(e.id) + '">' + esc(e.title || e.id) + '</a></th><td>' + esc(e.reason) + '</td></tr>').join('') + '</tbody></table></div>';
+    r.excluded.map(e => '<tr><th scope="row"><a href="#report/' + encodeURIComponent(e.id) + '" data-open-report="' + esc(e.id) + '">' + esc(e.title || e.id) + '</a></th><td>' + esc(e.reason) + '</td></tr>').join('') + '</tbody></table></div>';
 }
 
 function renderRoundReport(r) {
@@ -324,7 +374,7 @@ function renderRoundReport(r) {
     section('paired', 'By category', pairedTable(r)) +
     section('failures', 'Task matrix', '<div data-slot="matrix"></div>') +
     section('caveats', 'What to keep in mind', '<ul class="caveats">' + r.caveats.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>') +
-    section('method', 'How it was measured', methodList({ ...r, method: { ...r.method, track: r.track } }) + '<h3>Runs in this round</h3><ul class="round-runs">' + r.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + audienceQuery() + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status, run.full_benchmark ? 'full benchmark' : '']) + '</li>').join('') + '</ul>') + termsList(r);
+    section('method', 'How it was measured', methodList({ ...r, method: { ...r.method, track: r.track } }) + '<h3>Runs in this round</h3><ul class="round-runs">' + r.runs.map(run => '<li><a href="#report/' + encodeURIComponent(run.id) + '" data-open-report="' + esc(run.id) + '">' + esc(run.title || run.id) + '</a>' + meta([fmtDate(run.created_at), run.status === 'completed' ? '' : run.status, run.full_benchmark ? 'full benchmark' : '']) + '</li>').join('') + '</ul>') + termsList(r);
   $('[data-slot="hero"]', article).replaceWith(heroFigure(r, 'Pass rate per setup, pooled over ' + r.runs.length + ' ' + (r.runs.length === 1 ? 'run' : 'runs')));
   if (r.trend.length > 1) {
     const series = {};
@@ -344,8 +394,28 @@ function bindReportActions(article, r) {
   $$('[data-open-run-evidence]', article).forEach(b => b.onclick = e => { e.preventDefault(); openJob(b.dataset.openRunEvidence); });
   $$('[data-evidence-anchor]', article).forEach(b => b.onclick = e => { e.preventDefault(); history.replaceState(null, '', b.getAttribute('href')); const target = document.getElementById(b.dataset.evidenceAnchor); target?.scrollIntoView({ behavior: 'smooth', block: 'start' }); const setup = b.dataset.evidenceSetup; const row = setup && target ? [...target.querySelectorAll('[data-setup]')].find(n => n.dataset.setup === setup) : null; (row || target)?.classList.add('lit'); setTimeout(() => (row || target)?.classList.remove('lit'), 2400); });
   $$('[data-evidence-run]', article).forEach(b => b.onclick = async () => { await openJob(b.dataset.evidenceRun); setTimeout(() => $('[data-evidence="' + b.dataset.evidenceEvent + '"]')?.click(), 400); });
-  const print = $('#report-print', article); if (print) print.onclick = () => window.print();
-  const save = $('#report-save', article); if (save) save.onclick = () => saveReportHtml(article, r);
+  // The class carries the gate into the print stylesheet, so Ctrl+P cannot walk around the button.
+  article.classList.toggle('lab-present', !!(r.lab_setups || []).length);
+  const print = $('#report-print', article); if (print) print.onclick = () => { if (!labGate(r, 'print')) window.print(); };
+  const save = $('#report-save', article); if (save) save.onclick = () => { if (!labGate(r, 'save')) saveReportHtml(article, r); };
+}
+
+// Display yes, export no (Lucas, 11 September). The report shows every setup that ran, including a
+// lab build; what a lab build may not do is leave the machine, because `wb_report/audiences.yaml`
+// says it "can never reach an exportable artifact". Print is gated with Save: printing to PDF makes
+// the same artifact, and a gate one menu item can walk around is decoration.
+//
+// It refuses rather than stripping the lab rows out, which is the CLI's own behaviour — the gate
+// "raises GateError, never warns". A silently thinner export is a document whose reader cannot tell
+// what is missing. Returns true when it stopped something.
+function labGate(r, what) {
+  const lab = (r && r.lab_setups) || [];
+  if (!lab.length) return false;
+  const names = lab.map(s => s.name || s.id).join(', ');
+  toast('Not ' + (what === 'print' ? 'printed' : 'saved') + ': this report includes ' + lab.length +
+        ' lab build' + (lab.length === 1 ? '' : 's') + ' (' + names + '), which may not leave the machine. ' +
+        'Re-run without ' + (lab.length === 1 ? 'it' : 'them') + ' to share this report.');
+  return true;
 }
 
 // The export is one file, so its stylesheet travels inline; the served page never does.
