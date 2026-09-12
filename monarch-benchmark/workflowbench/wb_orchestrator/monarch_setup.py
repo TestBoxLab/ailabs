@@ -67,6 +67,9 @@ def expand(value: str | None, env: dict, field: str) -> str:
 
     return _VAR.sub(sub, value).rstrip("/")
 
+FRONT_DOOR_SECRET_ENV = "STUDIO_FRONT_DOOR_SECRET"
+
+
 def front_door_secret(env) -> str:
     """The segment the Studio's front door demands, or "" when it is not configured.
 
@@ -75,7 +78,22 @@ def front_door_secret(env) -> str:
     sends nothing it did not send before. Rotate it per round by changing the variable
     before `wb monarch setup` writes the seeds.
     """
-    return (env.get("STUDIO_FRONT_DOOR_SECRET") or "").strip().strip("/")
+    return (env.get(FRONT_DOOR_SECRET_ENV) or "").strip().strip("/")
+
+
+def recorded_front_door_url(url: str, env) -> str:
+    """The address as a tracked file may record it: the secret segment by name.
+
+    `config/products/<product>.monarch-kb.yaml` is committed and this repository is
+    public, so a secret written into it once is in history rather than in a file.
+    Nothing reads this field as an address -- `RunConfig.hash` is its only consumer --
+    so the name carries everything the record needs, and rotating the secret stops
+    moving the config hash as a consequence.
+    """
+    secret = front_door_secret(env)
+    if secret and url.endswith("/" + secret):
+        return url[: -len(secret)] + "${%s}" % FRONT_DOOR_SECRET_ENV
+    return url
 
 
 def front_door_path(base: str, env) -> str:
@@ -281,7 +299,7 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
         path, changed = _write_kb(Path(product_path), product.name, shim_public_url, kb,
                                   taught={"knowledge_source": taught.knowledge_source,
                                           "knowledge_sha256": taught.knowledge_sha256}
-                                  if taught else {})
+                                  if taught else {}, env=env)
         say("ok", "write", f"{path} ({'changed' if changed else 'unchanged'})")
         return 0
     except Stop as stop:
@@ -401,9 +419,16 @@ def _override_snippet(out: Path) -> str:
 
 
 def _write_kb(product_path: Path, name: str, shim_public_url: str,
-              kb: dict[str, str], taught: dict[str, str] | None = None) -> tuple[Path, bool]:
+              kb: dict[str, str], taught: dict[str, str] | None = None, *,
+              env: dict) -> tuple[Path, bool]:
     """The knowledge-base hash file; `taught` adds the knowledge catalog's name and sha256
-    when the seeds were the lab set, so the file says which knowledge the instance holds."""
+    when the seeds were the lab set, so the file says which knowledge the instance holds.
+
+    `env` is required rather than defaulted: this writes a tracked file in a public
+    repository, and the redaction below is the only thing standing between the front
+    door's secret and git history. A caller that forgot it should not silently leak.
+    """
+    shim_public_url = recorded_front_door_url(shim_public_url, env)
     path = product_path.with_name(f"{name}.monarch-kb.yaml")
     doc = {"product": name, "generated_at": "", "seeds_format": SEEDS_FORMAT,
            "shim_public_url": shim_public_url, "kb": dict(sorted(kb.items())), **(taught or {})}
