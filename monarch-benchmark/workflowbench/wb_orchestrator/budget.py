@@ -63,8 +63,23 @@ def default_ledger_path(repo: Path | None = None) -> Path:
     return root / 'research' / 'budget.sqlite3'
 
 
+# A round's admission envelope is a run reservation whose scope carries this marker
+# (`<run_id>#admission-000`). An attempt's own cap is also a run reservation, so the
+# refusal message is identical for both and the scope is the only thing that tells
+# them apart -- which decides whether a refusal stops the round or just the attempt.
+ROUND_ENVELOPE_MARKER = "#admission-"
+
+
 class BudgetExceeded(RuntimeError):
-    """Admission denied; no new reservation was written."""
+    """Admission denied; no new reservation was written.
+
+    `scope_id` is the scope that ran out, when the refusal came from one. Callers
+    classify on it rather than on the message: see `external_runtime._budget_failure`.
+    """
+
+    def __init__(self, *args, scope_id: str | None = None):
+        super().__init__(*args)
+        self.scope_id = scope_id
 
 
 class ReservationConflict(ValueError):
@@ -446,7 +461,7 @@ class BudgetLedger:
                 raise ReservationConflict('scope reservations already belong to another run')
             used = sum(r['maximum_microusd'] if r['actual_microusd'] is None else r['actual_microusd'] for r in children)
             if used > maximum:
-                raise BudgetExceeded('run budget exhausted')
+                raise BudgetExceeded('run budget exhausted', scope_id=scope_id)
             if any(datetime.fromisoformat(timestamp) < datetime.fromisoformat(r['created_at']) for r in children):
                 raise ValueError('run reservation cannot predate existing requests')
             status = self._status(connection, week)
@@ -529,7 +544,7 @@ class BudgetLedger:
                 if datetime.fromisoformat(timestamp) < datetime.fromisoformat(envelope['created_at']):
                     raise ValueError('request cannot be before run reservation')
                 if self._run_used(connection, envelope['scope_id']) + maximum > envelope['maximum_microusd']:
-                    raise BudgetExceeded('run budget exhausted')
+                    raise BudgetExceeded('run budget exhausted', scope_id=envelope['scope_id'])
             status = self._status(connection, week)
             if status.overrun_ids:
                 raise BudgetExceeded('recorded reservation overrun blocks further launches')
@@ -542,7 +557,7 @@ class BudgetLedger:
             costs = connection.execute('SELECT maximum_microusd, actual_microusd FROM budget_reservations WHERE scope_id=?', (scope_id,)).fetchall()
             used = sum(row['maximum_microusd'] if row['actual_microusd'] is None else row['actual_microusd'] for row in costs)
             if scope_limit is not None and used + maximum > scope_limit:
-                raise BudgetExceeded('scope budget exhausted')
+                raise BudgetExceeded('scope budget exhausted', scope_id=scope_id)
             result = Reservation(reservation_id, scope_id, maximum, None, week, timestamp, None, metadata_json)
             connection.execute('INSERT INTO budget_reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', tuple(result.__dict__.values()))
             if envelope is not None:

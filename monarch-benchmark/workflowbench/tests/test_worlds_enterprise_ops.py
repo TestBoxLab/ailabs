@@ -242,6 +242,60 @@ def test_search_does_not_surface_them_either():
     assert not any(h["path"].startswith("/api/") for h in hits)
 
 
+class _Recording:
+    """A server that records the target it was handed instead of sending it."""
+
+    def __init__(self):
+        self.target = None
+
+    def request(self, method, path, body=None, extra=None):
+        self.target = path
+        return b'{"ok": true}'
+
+
+def _with_location_route():
+    world = _Offline()
+    world._specs["gym-itsm-mcp"]["paths"]["/locations/name/{name}"] = {
+        "get": {"summary": "location by name", "operationId": "location_by_name"}}
+    world.servers["gym-itsm-mcp"] = _Recording()
+    return world, world.servers["gym-itsm-mcp"]
+
+
+def test_a_path_value_with_a_space_reaches_the_world_still_encoded():
+    """`/locations/name/TechCorp%20NYC%20Headquarters` is a route and a value the
+    shipped ITSM document and its seed data both contain.
+
+    The decoded path was sent as the request target. `urllib` refuses a space
+    outright -- `InvalidURL: URL can't contain control characters` -- and a server
+    that accepted it would read the target as `/locations/name/TechCorp`. Either way
+    a real EOG task fails, and the approval rule reads that as the competitor
+    failing rather than as our own bug.
+    """
+    world, server = _with_location_route()
+    out = world._call("GET", "/locations/name/TechCorp%20NYC%20Headquarters", None, None)
+    assert json.loads(out) == {"ok": True}, out
+    assert " " not in server.target, "a space in the request target is not sendable"
+    assert server.target == "/locations/name/TechCorp%20NYC%20Headquarters"
+
+
+def test_the_permission_check_reads_the_decoded_path():
+    """Decoding still has to happen, just not on the way to the wire: an encoded
+    separator must not slip past the published-surface check as one segment."""
+    world, server = _with_location_route()
+    out = json.loads(world._call("GET", "/locations/name/Tech%2FCorp", None, None))
+    assert out["error"]["code"] == 403
+    assert server.target is None, "a refused call must not reach the world"
+
+
+def test_an_encoded_administrative_path_is_refused_as_administrative():
+    """The admin guard read the raw path while everything after it read the decoded
+    one. Two forms of the same path in one function is how a guard gets walked past."""
+    out = json.loads(_Offline()._call("POST", "/api/%73ql-runner", None,
+                                      json.dumps({"query": "UPDATE incident SET state='closed'"})))
+    assert out["error"]["code"] == 403
+    assert "administrative operation" in out["error"]["message"]
+
+
 def test_a_call_to_no_known_server_is_refused_by_name():
     out = json.loads(_Offline(("gym-itsm-mcp", "gym-calendar"))._call("GET", "/nowhere/x", None, None))
     assert out["error"]["code"] == 404

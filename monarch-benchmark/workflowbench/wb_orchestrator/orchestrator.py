@@ -35,11 +35,22 @@ from wb_arms import providers
 from wb_results.store import Store
 from wb_results import evidence
 from wb_orchestrator import config as config_mod
+from wb_orchestrator.budget import ROUND_ENVELOPE_MARKER
 from wb_orchestrator.config import ConfigError
 from wb_world.episode import (  # noqa: F401  (Episode, contract_hash, load_suite re-exported)
     LEGACY_SUITE, Episode, contract_hash, load_suite, suite_id)
 
 MAX_INFRA_RETRIES = 2
+# Terminations that mean nothing further in this round can be paid for, mapped to the
+# stop reason each records. A round that hits one has to stop and be resumable: running
+# on to the last attempt collecting refusals and then finishing leaves a round that
+# reads as complete but measured only part of its work.
+#
+# `infra:budget` -- an attempt exhausting its own scope cap -- is deliberately absent.
+# That is one attempt's outcome and the round carries on, which is why the three cases
+# need three kinds (`external_runtime._budget_failure`). Stopping on it would kill a
+# whole round the first time any single attempt reached its per-attempt cap.
+STOPS_THE_ROUND = {"infra:weekly_budget": "weekly_budget", "infra:run_budget": "run_budget"}
 # The label of every set that records no world. A round's real suite id comes
 # from its tasks (wb_world.episode.suite_id): the world's version is in it.
 SUITE = LEGACY_SUITE
@@ -309,10 +320,13 @@ class Orchestrator:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         arms = self._arms()
         self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
-        self.store.create_run(run_id, self._hash(), self.suite, self._config())
-        if self.run_config and self.run_config.config_source:
-            evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
-        self._execute(run_id, skip=set(), arms=arms)
+        try:
+            self.store.create_run(run_id, self._hash(), self.suite, self._config())
+            if self.run_config and self.run_config.config_source:
+                evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
+            self._execute(run_id, skip=set(), arms=arms)
+        finally:
+            self._close_envelope()
         return run_id
 
     def cancel(self) -> None:
@@ -350,8 +364,11 @@ class Orchestrator:
         skip = self.store.completed_identities(run_id)
         arms = self._arms()
         self._admit(run_id, arms, skip)     # only what is left to run is counted
-        self.store.set_stop_reason(run_id, None)  # the run is going again
-        self._execute(run_id, skip=skip, arms=arms)
+        try:
+            self.store.set_stop_reason(run_id, None)  # the run is going again
+            self._execute(run_id, skip=skip, arms=arms)
+        finally:
+            self._close_envelope()
         return run_id
 
     def _arms(self) -> list:
@@ -483,18 +500,31 @@ class Orchestrator:
                 "(Monday 00:00 America/Sao_Paulo); nothing was reserved")
 
         if external:
-            prior_envelopes = [r for r in self.ledger.run_reservations() if r.scope_id.startswith(run_id + "#admission-")]
-            self._budget_run_id = run_id + f"#admission-{len(prior_envelopes):03d}"
+            marker = run_id + ROUND_ENVELOPE_MARKER
+            prior_envelopes = [r for r in self.ledger.run_reservations() if r.scope_id.startswith(marker)]
+            self._budget_run_id = marker + f"{len(prior_envelopes):03d}"
             self.ledger.reserve_run(self._budget_run_id, liability, metadata={"product":self.run_config.product.name,
                 "configuration":self.run_config.hash, "includes_infrastructure_retries":MAX_INFRA_RETRIES,
                 "participants":[p.role + ":" + p.model for p in self.run_config.product.participants]})
+
+    def _close_envelope(self) -> None:
+        """Release the round's unallocated capacity. Idempotent; child holds survive.
+
+        Every path out of a round that opened an envelope has to reach this. It used to
+        hang off `_execute` alone, which left everything between `_admit` and `_execute`
+        -- `create_run`, the config-source evidence, `set_stop_reason` -- able to leak
+        the round's whole liability against the week with nothing spent. A duplicate
+        `--run-id` was enough to do it, and no command can release a run envelope
+        afterwards, so the capacity was gone until someone edited the ledger by hand.
+        """
+        if self.ledger and getattr(self, "_budget_run_id", None):
+            self.ledger.finish_run(self._budget_run_id)
 
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         try:
             return self._execute_inner(run_id, skip, arms)
         finally:
-            if self.ledger and getattr(self, "_budget_run_id", None):
-                self.ledger.finish_run(self._budget_run_id)
+            self._close_envelope()
 
     def _execute_inner(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         arms = arms if arms is not None else self._arms()
@@ -544,6 +574,14 @@ class Orchestrator:
                 f"run {run_id} stopped: spend US$ {self._spent:.2f} exceeds ceiling "
                 f"US$ {self.run_config.plan.cost_ceiling_usd:.2f} after {self._recorded} attempts; "
                 f"raise cost_ceiling_usd in the plan and run: wb resume {run_id}")
+        if self._stop_reason == "run_budget":
+            self.store.set_stop_reason(run_id, "run_budget")
+            raise RunKilled(
+                f"run {run_id} stopped: this round's admission envelope is exhausted after "
+                f"{self._recorded} attempts (US$ {self._spent:.2f} settled; unsettled holds occupy "
+                f"their full maximum); the attempts it cut are recorded as infra:run_budget and run "
+                f"again on resume. Raise cost_ceiling_usd in the plan, or wait for the holds to "
+                f"settle, and run: wb resume {run_id}")
         if self._stop_reason == "weekly_budget":
             self.store.set_stop_reason(run_id, "weekly_budget")
             raise RunKilled(
@@ -890,10 +928,10 @@ class Orchestrator:
                     and self._stop_reason is None):
                 self._stop_reason = "cost_ceiling"
                 self._abort.set()
-            if termination == "infra:weekly_budget" and self._stop_reason is None:
-                # The ledger refused a request: nothing else can be paid for this
-                # week. Stop scheduling; the cut attempts run again on resume.
-                self._stop_reason = "weekly_budget"
+            if termination in STOPS_THE_ROUND and self._stop_reason is None:
+                # The ledger refused a request and nothing else in this round can be
+                # paid for. Stop scheduling; the cut attempts run again on resume.
+                self._stop_reason = STOPS_THE_ROUND[termination]
                 self._abort.set()
         return self._earns_a_retry(row.passed, termination)
 

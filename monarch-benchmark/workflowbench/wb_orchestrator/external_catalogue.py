@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -19,6 +19,14 @@ BODYLESS = {"get", "head", "delete"}
 PARAM_TYPES = {"string", "integer", "number", "boolean", "array", "object"}
 
 
+class Unrepresentable(ValueError):
+    """One source operation Monarch's contract cannot express.
+
+    Its own type so `generate` can exclude it and report it without swallowing any
+    other ValueError -- a malformed document should still refuse the whole catalogue.
+    """
+
+
 @dataclass
 class CatalogueSummary:
     operations_in_spec: int
@@ -26,6 +34,10 @@ class CatalogueSummary:
     folders: list[str]
     service_slugs: dict[str, str]
     sha256: str
+    # Operations left out because Monarch's contract cannot express them, each as
+    # {service, method, path, reason}. Reported rather than fatal, and recorded in the
+    # pack: what Monarch was not taught belongs in the evidence beside what it was.
+    excluded: list[dict] = field(default_factory=list)
 
 
 def _slug(value):
@@ -184,7 +196,7 @@ def _action(product, service, server, path, method, op, public_url):
     if root_body:
         body_fields = {}
     if method in BODYLESS and (body_fields or root_body):
-        raise ValueError(f"{method.upper()} {path}: source body cannot be represented by Monarch's bodyless contract")
+        raise Unrepresentable(f"{method.upper()} {path}: source body cannot be represented by Monarch's bodyless contract")
     specs = list(op.get("parameters") or [])
     if any(spec.get("in") not in ("path", "query") for spec in specs):
         raise ValueError(f"{method.upper()} {path}: unsupported source parameter location")
@@ -277,7 +289,7 @@ def generate(product, task_dir, out_dir, public_url):
     missing = world_type.prerequisites()
     if missing:
         raise ValueError("; ".join(missing))
-    actions, seen_docs = {}, {}
+    actions, seen_docs, excluded = {}, {}, {}
     selected = set(product.services)
     found = set()
     for task in tasks:
@@ -301,8 +313,14 @@ def generate(product, task_dir, out_dir, public_url):
                         op["parameters"] = list(merged.values())
                         if op.get("servers"):
                             raise ValueError("operation-specific server overrides are not supported by this front door")
+                        try:
+                            action = _action(product,service,server,path,method,op,public_url)
+                        except Unrepresentable as exc:
+                            # Excluded, not fatal, and never published: an operation with
+                            # no action must not reach the document Monarch reads either.
+                            excluded[(service, method, path)] = str(exc)
+                            continue
                         public_doc["paths"].setdefault(path,{})[method] = op
-                        action = _action(product,service,server,path,method,op,public_url)
                         key = (service, method, path)
                         if key in actions and actions[key] != action:
                             raise ValueError(f"published operation changed between frozen tasks: {service} {method} {path}")
@@ -339,6 +357,8 @@ def generate(product, task_dir, out_dir, public_url):
         if relative in files:
             raise ValueError("source operations collided in a seed filename")
         files[relative] = _dump(action)
+    left_out = [{"service":service, "method":method, "path":path, "reason":reason}
+                for (service, method, path), reason in sorted(excluded.items())]
     digest = hashlib.sha256()
     for name, text in sorted(files.items()):
         digest.update(name.encode("utf-8")); digest.update(text.encode("utf-8"))
@@ -346,6 +366,7 @@ def generate(product, task_dir, out_dir, public_url):
     manifest = {"format":"workflowbench-external-catalogue@1", "product":product.name, "source":pin,
         "task_contracts":[t["contract_sha256"] for t in tasks], "front_door":public_url,
         "service_slugs":service_slugs,"products":len(service_slugs),"actions":len(actions),"sha256":sha,
+        **({"excluded_operations":left_out} if left_out else {}),
         "parameter_translation":"Published names, source required flags and declared defaults/examples only; all front-door bodies use JSON.",
         "response_translation":"Lowest declared numeric 2xx status; complete published response alternatives retained in source-contracts.yaml."}
     files["ok.txt"] = _dump(manifest)
@@ -362,4 +383,4 @@ def generate(product, task_dir, out_dir, public_url):
         target = out / name
         target.parent.mkdir(parents=True,exist_ok=True)
         if not target.exists(): target.write_bytes(text.encode("utf-8"))
-    return CatalogueSummary(len(actions),len(actions),sorted(service_slugs.values()),service_slugs,sha)
+    return CatalogueSummary(len(actions),len(actions),sorted(service_slugs.values()),service_slugs,sha,left_out)

@@ -149,7 +149,7 @@ def test_source_setup_refuses_import_with_unverified_result(source_setup, monkey
 
 def test_external_kb_rejects_legacy_service_slug(source_setup):
     path = source_setup.product.with_name("enterprise-ops-gym.monarch-kb.yaml")
-    monarch_setup._write_kb(source_setup.product, "enterprise-ops-gym", URL, {"bench-gym-itsm-mcp": "old"})
+    monarch_setup._write_kb(source_setup.product, "enterprise-ops-gym", URL, {"bench-gym-itsm-mcp": "old"}, env={})
     with pytest.raises(config.ConfigError, match=SLUG):
         config.load_monarch_kb(path, config.load_product(source_setup.product))
 

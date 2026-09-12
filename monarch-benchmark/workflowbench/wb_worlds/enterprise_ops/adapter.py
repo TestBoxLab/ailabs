@@ -197,21 +197,28 @@ class EnterpriseOpsWorld:
         if name is None:
             return _error(404, f"no server of this product serves {url!r}; "
                                f"the services are {', '.join(sorted(self.servers))}")
+        # Decode once, up front. Every check below reads the decoded path and the
+        # target sent on the wire is re-encoded from it. Mixing the two forms is what
+        # broke: the admin guard read the raw path while the surface check read the
+        # decoded one, and the decoded one was then sent as the request target --
+        # `/locations/name/TechCorp%20NYC%20Headquarters` became a space in the
+        # request line, which urllib refuses outright.
+        path = urllib.parse.unquote(path)
         if any(path.startswith(a) for a in ADMIN_PATHS):
             # Refused here as well as at the front door: a world reached by any other
             # route is still the same world.
             return _error(403, f"{path} is an administrative operation of the product "
                                f"under test, not part of the task")
-        path = urllib.parse.unquote(path)
         if method.upper() == "GET" and path == "/openapi.json":
             return json.dumps(self._public_spec(name))
         public = self._public_spec(name)
-        route = path.split("?", 1)[0]
+        route, separator, query = path.partition("?")
         permitted = any(method.lower() in ops and
                         re.fullmatch(re.sub(r"\{[^}]+\}", "[^/]+", p), route)
                         for p, ops in public.get("paths", {}).items())
         if not permitted:
             return _error(403, f"{method.upper()} {route} is outside this task's published tool mode")
+        path = urllib.parse.quote(route, safe="/") + separator + query
         if params:
             path = f"{path}?{urllib.parse.urlencode(json.loads(params))}"
         try:

@@ -23,8 +23,9 @@ from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 
 import pytest
+import yaml
 
-from wb_orchestrator.monarch_setup import front_door_path
+from wb_orchestrator.monarch_setup import _write_kb, front_door_path
 from wb_studio.app import ROOT, Studio, front_door_target, handler
 from wb_world.episode import load_suite
 
@@ -142,3 +143,31 @@ def test_the_secret_segment_is_built_into_the_seed_url():
 
 def test_a_seed_url_without_a_secret_is_unchanged():
     assert front_door_path("https://studio.example.dev/front-door", {}) == "https://studio.example.dev/front-door"
+
+
+def test_the_tracked_knowledge_base_records_the_secret_by_name(tmp_path):
+    """`config/products/<product>.monarch-kb.yaml` is git-tracked and this repo is
+    public, so a secret written into it once is in history, not just in a file.
+    Only the config hash reads this field, and never as an address, so the name
+    carries everything the record needs."""
+    env = {"STUDIO_FRONT_DOOR_SECRET": SECRET}
+    live = front_door_path("https://studio.example.dev/front-door", env)
+    assert SECRET in live, "the address Monarch is handed must carry the secret"
+    path, _ = _write_kb(tmp_path / "tau2-retail.yaml", "tau2-retail", live,
+                        {"bench-gym-itsm-mcp": "sha"}, env=env)
+    text = path.read_text(encoding="utf-8")
+    assert SECRET not in text, "the secret reached a tracked file"
+    assert "${STUDIO_FRONT_DOOR_SECRET}" in text
+
+
+def test_rotating_the_secret_leaves_the_configuration_unchanged(tmp_path):
+    """Rotating per round is what the docstring tells an operator to do. Recording
+    the value made that read as a different configuration and moved the hash."""
+    written = []
+    for secret in ("round-47", "round-48"):
+        env = {"STUDIO_FRONT_DOOR_SECRET": secret}
+        live = front_door_path("https://studio.example.dev/front-door", env)
+        path, _ = _write_kb(tmp_path / "tau2-retail.yaml", "tau2-retail", live,
+                            {"bench-gym-itsm-mcp": "sha"}, env=env)
+        written.append(yaml.safe_load(path.read_text(encoding="utf-8"))["shim_public_url"])
+    assert written[0] == written[1]

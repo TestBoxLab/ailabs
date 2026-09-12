@@ -175,15 +175,20 @@ def test_attach_customer_failure_closes_budget_and_preserves_customer_billing(mo
     assert ledger.status().held_usd == ledger.reservations()[0].maximum_usd > 0
 
 
-@pytest.mark.parametrize("reason,kind", [
-    ("scope budget exhausted", "infra:budget"), ("run budget exhausted", "infra:budget"),
-    ("shared weekly budget exhausted", "infra:weekly_budget"),
-    ("recorded reservation overrun blocks further launches", "infra:weekly_budget")])
-def test_direct_arm_budget_refusal_is_infrastructure_with_partial_cost(monkeypatch, tmp_path, reason, kind):
+@pytest.mark.parametrize("reason,scope,kind", [
+    # Both budget refusals say `run budget exhausted`, because an attempt's own cap is
+    # a run reservation too. The scope separates them: the round's envelope stops the
+    # round, one attempt reaching its cap does not. See STOPS_THE_ROUND.
+    ("scope budget exhausted", "task/arm/t0#attempt-000", "infra:budget"),
+    ("run budget exhausted", "task/arm/t0#attempt-000", "infra:budget"),
+    ("run budget exhausted", "run-7#admission-000", "infra:run_budget"),
+    ("shared weekly budget exhausted", None, "infra:weekly_budget"),
+    ("recorded reservation overrun blocks further launches", None, "infra:weekly_budget")])
+def test_direct_arm_budget_refusal_is_infrastructure_with_partial_cost(monkeypatch, tmp_path, reason, scope, kind):
     config, ledger, calls = setup(monkeypatch, tmp_path, [], participant=False)
 
     def action(ep):
-        exc = BudgetExceeded(reason)
+        exc = BudgetExceeded(reason, scope_id=scope)
         exc.partial = ArmResult(cost_usd=0.2, tokens_output=4)
         raise exc
 
@@ -224,3 +229,83 @@ def test_customer_tool_only_reply_preserves_source_schema_and_arguments(monkeypa
     assert result.tokens_prompt == 1000 and result.flags == []
     assert calls[0][1] == [{"type": "function", **schema}]
     assert ledger.status().held_usd == 0
+
+
+def test_an_agent_timeout_keeps_its_verdict_when_the_customer_hit_the_same_deadline(monkeypatch, tmp_path):
+    """An expired episode deadline is a scored `timeout` verdict by deliberate rule
+    (`wb_arms/api_loop.py:670-673`), not an infrastructure retry.
+
+    The simulated customer is cut at that same deadline and records `infra:timeout`.
+    Letting the customer's sticky copy overwrite the arm's verdict dropped a real
+    agent timeout out of the pass denominator, so tau2 pass rates came out inflated
+    by exactly the attempts that ran out of time -- whenever the agent's last turn
+    happened to call the customer.
+    """
+    config, ledger, calls = setup(monkeypatch, tmp_path, [])
+    ep = Episode()
+
+    def action(ep):
+        assert "deadline" in fetch(ep)["error"]
+        return ArmResult(cost_usd=0.25, termination="timeout", final_text="ran out of time")
+
+    result = run(config, ledger, ep, action, deadline=time.monotonic() - 1)
+    assert result.termination == "timeout", "the customer overwrote the arm's scored verdict"
+    assert calls == [], "the deadline was already gone; no provider call should be made"
+    rows = [dict(task_id="task", arm="native", model="native", trial=0, passed=False,
+                 termination=result.termination, flags=result.flags, cost_usd=result.cost_usd)]
+    metrics = competitor_metrics(rows, 1)
+    assert metrics["strict_pass_denominator"] == 1 and metrics["infra"] == 0
+
+
+def test_a_customer_failure_that_is_not_the_deadline_still_wins(monkeypatch, tmp_path):
+    """The guard's own purpose, kept: a swallowed customer break must not be scored,
+    even when the arm goes on to finish and hand back a verdict."""
+    config, ledger, calls = setup(monkeypatch, tmp_path, [RuntimeError("provider disconnected")])
+    ep = Episode()
+
+    def action(ep):
+        assert "provider disconnected" in fetch(ep)["error"]
+        return ArmResult(cost_usd=0.25, termination="timeout", final_text="finished anyway")
+
+    with pytest.raises(InfraError) as caught:
+        run(config, ledger, ep, action)
+    assert caught.value.kind == "infra:customer"
+
+
+def test_only_the_round_wide_refusals_stop_the_round():
+    """The rule the kinds exist to carry, stated where it can be broken.
+
+    Stopping on `infra:budget` too would be a worse defect than the one the third kind
+    fixes: that kind is the correct, tested outcome of an attempt exhausting its own
+    scope cap (see the parametrized case above), so a round would die the first time
+    any single attempt reached its per-attempt cap.
+    """
+    from wb_orchestrator.orchestrator import STOPS_THE_ROUND
+    assert STOPS_THE_ROUND == {"infra:weekly_budget": "weekly_budget",
+                               "infra:run_budget": "run_budget"}
+    assert "infra:budget" not in STOPS_THE_ROUND
+
+
+def test_the_scope_tells_a_round_envelope_from_an_attempt_cap(tmp_path):
+    """The two refusals are word-for-word identical, so the scope is the discriminator.
+
+    An attempt's own cap is a run reservation too -- that is why matching on the
+    message classified every capped attempt as a round-wide stop. The round's envelope
+    is the one whose scope carries `ROUND_ENVELOPE_MARKER`.
+    """
+    from wb_orchestrator.budget import ROUND_ENVELOPE_MARKER, BudgetLedger
+    ledger = BudgetLedger(tmp_path / "ledger.sqlite", weekly_limit_usd="100")
+    refusals = {}
+    for scope in ("round-7" + ROUND_ENVELOPE_MARKER + "000", "task/arm/t0#attempt-000"):
+        ledger.reserve_run(scope, "1.00")
+        ledger.reserve(scope + "/first", "0.80", scope_id=scope, run_id=scope)
+        with pytest.raises(BudgetExceeded) as caught:
+            ledger.reserve(scope + "/second", "0.80", scope_id=scope, run_id=scope)
+        refusals[scope] = caught.value
+
+    messages = {str(exc) for exc in refusals.values()}
+    assert messages == {"run budget exhausted"}, "identical wording is the whole problem"
+    kinds = {scope: runtime._budget_failure(exc).kind for scope, exc in refusals.items()}
+    assert sorted(kinds.values()) == ["infra:budget", "infra:run_budget"]
+    assert kinds["round-7" + ROUND_ENVELOPE_MARKER + "000"] == "infra:run_budget"
+    assert ledger.status().available_usd > 0, "the week had room; only these scopes did not"
