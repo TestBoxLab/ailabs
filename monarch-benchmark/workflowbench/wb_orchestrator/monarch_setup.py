@@ -250,6 +250,11 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
             say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
                 f"files_written={summary.files_written} folders={len(summary.folders)} "
                 f"source_catalogue_sha256={summary.sha256}")
+            for item in summary.excluded:
+                # Named one per line rather than counted: this is an operation the
+                # competitor is not taught, so it belongs in the round's evidence.
+                say("warn", "generate", f"excluded {item['service']} {item['method'].upper()} "
+                                        f"{item['path']}: {item['reason']}")
         else:
             _generate(out, shim_public_url, stdout)
             taught = _enrich(out, product_path, knowledge, knowledge_map, stdout) if knowledge else None

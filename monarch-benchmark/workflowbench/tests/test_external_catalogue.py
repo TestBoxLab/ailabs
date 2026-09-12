@@ -153,3 +153,51 @@ def test_mixed_scalar_union_remains_exact_inside_root_json_payload(source,tmp_pa
     assert payload["type"] == "object"
     assert json.loads(payload["constraints"]["helper_text"].split("Source JSON Schema: ",1)[1]) == schema
     assert payload["required"] is True
+
+
+BULK_DELETE = {"delete": {"operationId": "bulk_delete", "summary": "Delete several messages",
+    "requestBody": {"required": True, "content": {"application/json": {
+        "schema": {"type": "object", "properties": {"ids": {"type": "string"}}, "required": ["ids"]}}}},
+    "responses": {"200": {"content": {"application/json": {
+        "schema": {"type": "object", "properties": {"ok": {"type": "string"}}, "required": ["ok"]}}}}}}}
+
+
+def test_an_operation_monarch_cannot_represent_is_excluded_and_reported(source, tmp_path):
+    """One unrepresentable operation used to abort the whole product's catalogue.
+
+    `_action` raised, nothing caught it, `monarch_setup` turned it into
+    `Stop(2, "generate", ...)` and no seed file was written -- so a task set naming any
+    of the four bodyless-body DELETEs in the real EnterpriseOps-Gym ITSM document could
+    not set Monarch up on that product at all. Being unable to express one operation is
+    not a reason to teach Monarch nothing.
+    """
+    product, tasks, doc, closed = source
+    doc["paths"]["/messages/bulk"] = copy.deepcopy(BULK_DELETE)
+    result = catalog.generate(product, tasks, tmp_path / "seeds", PUBLIC)
+    out = tmp_path / "seeds"
+    assert result.operations_in_spec == result.files_written == 1, "the representable operation is still taught"
+    assert [(e["service"], e["method"], e["path"]) for e in result.excluded] == [("gmail", "delete", "/messages/bulk")]
+    assert "bodyless" in result.excluded[0]["reason"]
+
+    # The pack says what Monarch was not taught, and never advertises it either.
+    assert json.loads((out / "ok.txt").read_text())["excluded_operations"] == result.excluded
+    assert "/messages/bulk" not in (out / "source-contracts.yaml").read_text()
+
+
+def test_a_catalogue_with_nothing_excluded_is_byte_for_byte_what_it_was(source, tmp_path):
+    """The manifest gains the field only when there is something to report, so every
+    pack frozen before this change still regenerates identically -- `generate` refuses
+    to replace a frozen catalogue file, so a new key on every pack would break setup
+    for anyone holding one."""
+    product, tasks, doc, closed = source
+    catalog.generate(product, tasks, tmp_path / "seeds", PUBLIC)
+    manifest = json.loads((tmp_path / "seeds" / "ok.txt").read_text())
+    assert "excluded_operations" not in manifest
+
+
+def test_an_unrepresentable_operation_is_the_only_thing_excluded(source, tmp_path):
+    """Excluding on any ValueError would hide real structural faults in a document."""
+    product, tasks, doc, closed = source
+    doc["paths"]["/messages/{message_id}"]["patch"]["servers"] = [{"url": "https://elsewhere.test"}]
+    with pytest.raises(ValueError, match="server overrides"):
+        catalog.generate(product, tasks, tmp_path / "seeds", PUBLIC)
