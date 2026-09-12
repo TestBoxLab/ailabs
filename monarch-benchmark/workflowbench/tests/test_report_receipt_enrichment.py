@@ -42,7 +42,9 @@ def test_exact_receipt_restores_scope_and_requirements_and_retains_event_citatio
     original = deepcopy(rows)
     studio, database = saved_studio(tmp_path, rows, [receipt('first', invariant_passed=True, unexpected_changes=[], count_violations=[]), receipt('retry')])
     before = hashlib.sha256(database.read_bytes()).hexdigest()
-    monkeypatch.setattr('wb_studio.reports.Store', lambda *a, **k: pytest.fail('Read-only reporting must not open Store'))
+    # Patched at the source, not on `wb_studio.reports`: the read path now goes
+    # through `report_inputs.saved_rows`, so naming one module would guard nothing.
+    monkeypatch.setattr('wb_results.store.Store', lambda *a, **k: pytest.fail('Read-only reporting must not open Store'))
     found = analysis(studio, 'run')['attempts']
     assert [(c['name'], c['passed']) for c in found[0]['checks']] == [('invoice_total_equals', False), ('allowed_changes_only', False)]
     assert [(c['name'], c['passed']) for c in found[1]['checks']] == [('invoice_total_equals', False), ('allowed_changes_only', True)]

@@ -47,6 +47,29 @@ def _http(method: str, url: str, body: dict | None = None):
         return e.code, json.loads(e.read())
 
 
+def test_published_gmail_routes_read_and_modify_the_frozen_world():
+    task = load_task_file(ROOT / "tasks/check-collateral/simple.email_airtable_lead.json")
+    ep = Episode(task, episode_id="gmail-route-regression")
+    direct = Episode(task, episode_id="gmail-route-reference")
+    original_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+    expected = json.loads(direct.api_fetch("GET", original_url))
+    assert expected["messages"]
+    message_id = expected["messages"][0]["id"]
+    shim = EpisodeHTTPShim(ep).start()
+    try:
+        status, listed = _http("GET", f"{shim.url}/gmail/v1/users/me/messages")
+        assert (status, listed) == (200, expected)
+        body = {"removeLabelIds": ["UNREAD"]}
+        expected = json.loads(direct.api_fetch("POST", f"{original_url}/{message_id}/modify",
+                                              body=json.dumps(body)))
+        assert "error" not in expected
+        status, modified = _http("POST", f"{shim.url}/gmail/v1/users/me/messages/{message_id}/modify", body)
+        assert (status, modified) == (200, expected)
+        assert ep.snapshot() == direct.snapshot()
+    finally:
+        shim.stop()
+
+
 @pytest.fixture
 def shim():
     ep = Episode(load_task_file(TASK), episode_id="shim-test")

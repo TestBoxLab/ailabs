@@ -61,7 +61,7 @@ def lab_setups(order, setups) -> list:
     return found
 
 
-def grade(setup, baseline) -> dict:
+def grade(setup, baseline, baseline_name="Bare") -> dict:
     """One word for the whole comparison, with its reason."""
     if not baseline or not setup or not setup.get("paired") or not setup["paired"]["comparable"]:
         reason = "no Bare baseline to compare against" if not baseline else ((setup or {}).get("paired") or {}).get("reason") or "no paired attempts"
@@ -71,16 +71,16 @@ def grade(setup, baseline) -> dict:
     cost_worse = cost_a is not None and cost_b is not None and cost_b > 0 and cost_a > cost_b * 1.25
     cost_better = cost_a is not None and cost_b is not None and cost_a > 0 and cost_b > cost_a * 1.25
     better, worse = p["wins"] > p["losses"], p["losses"] > p["wins"]
-    tally = f"better than Bare on {p['wins']} {'task' if p['wins'] == 1 else 'tasks'}, worse on {p['losses']}, the same on {p['ties']}"
+    tally = f"better than {baseline_name} on {p['wins']} {'task' if p['wins'] == 1 else 'tasks'}, worse on {p['losses']}, the same on {p['ties']}"
     p_value = p.get("p_value")
     if (better or worse) and p_value is not None and p_value >= 0.05:
         # The word carries the same certainty as the sentence: a direction the sign test cannot support is not a grade.
-        cost_note = ", and each attempt cost more than 1.25 times what Bare's did" if cost_worse else (", and each attempt cost less than 0.8 times what Bare's did" if cost_better else "")
+        cost_note = f", and each attempt cost more than 1.25 times what {baseline_name}'s did" if cost_worse else (f", and each attempt cost less than 0.8 times what {baseline_name}'s did" if cost_better else "")
         return {"grade": "Undecided", "reason": f"{tally}; too few tasks differ to tell them apart (sign test p = {p_value:.2f}){cost_note}"}
     if better and cost_worse:
-        return {"grade": "Tradeoff", "reason": f"{tally}, but each attempt cost more than 1.25 times what Bare's did"}
+        return {"grade": "Tradeoff", "reason": f"{tally}, but each attempt cost more than 1.25 times what {baseline_name}'s did"}
     if worse and cost_better:
-        return {"grade": "Tradeoff", "reason": f"{tally}, but each attempt cost less than 0.8 times what Bare's did"}
+        return {"grade": "Tradeoff", "reason": f"{tally}, but each attempt cost less than 0.8 times what {baseline_name}'s did"}
     if better:
         return {"grade": "Improvement", "reason": tally}
     if worse:
@@ -581,9 +581,9 @@ def run_report(studio, identity) -> dict:
     if subject and baseline and subject["id"] == baseline["id"]:
         # Only the Bare baseline ran: nothing to compare it with, least of all itself.
         baseline = None
-        g = {"grade": "Not comparable", "reason": "only the Bare baseline ran"}
+        g = {"grade": "Not comparable", "reason": "only the baseline ran" if job.get("settings", {}).get("plan_semantics") else "only the Bare baseline ran"}
     else:
-        g = grade(subject, baseline) if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
+        g = grade(subject, baseline, baseline["name"] if baseline and job.get("settings", {}).get("plan_semantics") else "Bare") if subject else {"grade": "Not comparable", "reason": "no evaluated attempts"}
     narrative = narrative_status(studio.directory / identity)
     aliases_back = {alias: m["setups"].get(real, {}).get("name", real) for real, alias in (narrative.get("aliases") or {}).items()}
     tasks = task_rows(job, studio.tasks)
@@ -625,10 +625,10 @@ def run_report(studio, identity) -> dict:
         "performance": performance_report(job, events),
         "caveats": caveats.for_run(job, m, narrative, reused=reused),
         "method": {"task_set": task_set_id(job), "task_count": len(settings.get("tasks") or []), "live_task_count": len(live_tasks), "task_hashes": job.get("task_hashes") or {},
-                   "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "track": settings.get("track", "agentic-request"),
+                   "benchmark": (job.get("benchmark") or {}).get("id"), "repetitions": m["repetitions"], "retry_on_fail": settings.get("retry_on_fail"), "configured_plan": bool(settings.get("plan_semantics")), "track": settings.get("track", "agentic-request"),
                    "judge": (job.get("component_manifest") or {}).get("judge"), "components": job.get("component_manifest"),
                    "world": job.get("world_manifest"), "configuration": settings.get("configuration"), "concurrency": settings.get("concurrency", 1),
-                   "maximum_usd": settings.get("maximum_usd"), "fork": caveats.fork_version(), "runs": [identity],
+                   "maximum_usd": settings.get("maximum_usd"), "fork": job.get("recorded_world_version") or caveats.fork_version(), "runs": [identity],
                    "planned_attempts": m["planned_attempts"], "recorded_attempts": m["recorded_attempts"]},
     }
 

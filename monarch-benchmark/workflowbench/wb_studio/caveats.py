@@ -40,7 +40,10 @@ def efforts_by_setup(job) -> dict:
 
 def for_run(job, m, narrative=None, reused=None) -> list[str]:
     """Sentences about one run: what the numbers rest on and what they leave out."""
-    out = comparison_notes(product_of(job)) or [FORK_NOTE.format(version=fork_version())]
+    recorded = job.get("recorded_world_version")
+    out = (comparison_notes(product_of(job))
+           or ([f"Recorded world: AutomationBench {recorded}. Task data and recorded verdicts are preserved; WorkflowBench applies its own complete approval rule."]
+               if recorded else [FORK_NOTE.format(version=fork_version())]))
     setups = m.get("setups", {})
     names = {sid: s.get("name", sid) for sid, s in setups.items()}
     if m.get("unrecorded_attempts"):
@@ -64,7 +67,10 @@ def for_run(job, m, narrative=None, reused=None) -> list[str]:
     elif not m.get("baseline"):
         out.append("No Bare baseline ran in this run, and no earlier run recorded one with the same model, thinking setting and tasks, so paired deltas and the grade are not available.")
     k = m.get("repetitions") or 1
-    if k > 1:
+    if job.get("settings", {}).get("plan_semantics"):
+        retry = job["settings"].get("retry_on_fail", 0)
+        out.append(f"The frozen plan requests {k} initial attempt(s) per task and competitor, plus up to {retry} retry attempt(s) on failure. Retry rows are attempts, not independent tasks.")
+    elif k > 1:
         out.append(f"Each task ran {k} times per setup; the \"passed all {k} times\" column counts a task only when every try passed.")
     else:
         out.append("Each task ran once per setup, so nothing here says how consistent a setup is from one try to the next.")

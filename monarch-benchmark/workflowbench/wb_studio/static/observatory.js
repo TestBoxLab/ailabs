@@ -7,16 +7,16 @@ function renderWorkstreams(){
  if(observatoryRun!==job.id){observatoryRun=job.id;root.replaceChildren();}
  if(!root.firstChild)root.innerHTML='<div class="observatory-heading"><h3></h3><span class="observatory-count"></span></div><div class="workstreams"></div>';
  const tasks=job.settings.tasks,pairs=[];for(const task of tasks)for(const model of job.settings.models)pairs.push({task,model,events:events.filter(e=>e.task===task&&e.model===model)});
- const started=pairs.filter(p=>p.events.some(e=>['model_started','step_started','attempt_started'].includes(e.type)));
- const active=started.filter(p=>!p.events.some(e=>e.type==='attempt_finished')),complete=started.filter(p=>!active.includes(p));
- const live=['queued','running','cancelling'].includes(job.status),ordered=[...active,...complete];
+ const started=pairs.filter(p=>p.events.some(e=>['model_started','step_started','attempt_started','result'].includes(e.type)));
+ const active=started.filter(p=>!p.events.some(e=>['attempt_finished','result'].includes(e.type))),complete=started.filter(p=>!active.includes(p));
+ const live=['queued','running','pausing','cancelling'].includes(job.status),displayed=[...active,...complete];
  root.querySelector('h3').textContent=runStatus(job)==='paused'?'Paused':live?'Live':'';
  root.querySelector('.observatory-count').textContent=complete.length+' / '+pairs.length+' finished'+(live?' · '+active.length+' active':'');
- const streams=root.querySelector('.workstreams'),keys=new Set(ordered.map(p=>JSON.stringify([p.task,p.model])));
+ const streams=root.querySelector('.workstreams'),keys=new Set(displayed.map(p=>JSON.stringify([p.task,p.model])));
  for(const child of Array.from(streams.children))if(!keys.has(child.dataset.stream))child.remove();
- if(!ordered.length){streams.innerHTML='<p class="board-empty">Waiting for the first task to start.</p>';return;}
- for(const p of ordered){
-  const key=JSON.stringify([p.task,p.model]),es=p.events,last=es.at(-1),done=es.findLast(e=>e.type==='attempt_finished');
+ if(!displayed.length){streams.innerHTML='<p class="board-empty">Waiting for the first task to start.</p>';return;}
+ for(const p of displayed){
+  const key=JSON.stringify([p.task,p.model]),es=p.events,last=es.at(-1),done=es.findLast(e=>['attempt_finished','result'].includes(e.type));
   let card=Array.from(streams.children).find(c=>c.dataset.stream===key);
   if(!card){
    card=document.createElement('article');card.className='block workstream';card.dataset.stream=key;

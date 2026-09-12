@@ -29,10 +29,18 @@ key_env: WB_MOCK_KEY
 """
 
 
+def mock_model():
+    """Configured runs resolve their transport from YAML, including the local test server."""
+    from wb_arms import providers
+    provider = providers.REGISTRY.get("mock")
+    base_url = provider.base_url if provider else "http://127.0.0.1:1"
+    return MODEL_MOCK + f"adapter: openai\nbase_url: {base_url}\n"
+
+
 # -- T013: from_config runs a plan end to end ---------------------------------
 
 def test_from_config_runs_plan_with_competitor_names(site, tmp_path, mock_server):
-    write(site / "config/models", MODEL_MOCK)
+    write(site / "config/models", mock_model())
     plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
     plan = edit(plan, "baseline", "oracle").replace("repetitions: 2", "repetitions: 1")
     plan += "competitors:\n  - {harness: oracle}\n  - {model: mock, harness: api}\n"
@@ -55,7 +63,7 @@ def test_from_config_runs_plan_with_competitor_names(site, tmp_path, mock_server
 
 def test_report_reads_k_from_file_driven_run(site, tmp_path, mock_server):
     from wb_report.report import build_report
-    write(site / "config/models", MODEL_MOCK)
+    write(site / "config/models", mock_model())
     plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
     plan = edit(plan, "baseline", "oracle")
     plan += "competitors:\n  - {harness: oracle}\n"
@@ -692,7 +700,7 @@ MOCK_COMPETITORS = """competitors:
 
 
 def _mock_plan(site, extra: str = "") -> str:
-    write(site / "config/models", MODEL_MOCK)
+    write(site / "config/models", mock_model())
     plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
     plan = edit(plan, "baseline", "oracle") + MOCK_COMPETITORS + extra
     write(site / "config/plans", plan)

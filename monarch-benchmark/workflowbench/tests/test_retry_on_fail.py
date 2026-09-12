@@ -164,6 +164,39 @@ def test_resume_does_not_re_retry_a_recorded_retry(tmp_path, patched):
     assert len(_rows(store2, "run-done", "failer")) == 4    # nothing added
 
 
+@pytest.mark.parametrize("termination, rerun", [("infra:weekly_budget", True),
+                                               ("infra:attempt_cap", False)])
+def test_resume_retries_infrastructure_refusal_but_preserves_spent_cap(tmp_path, patched, monkeypatch,
+                                                                     termination, rerun):
+    class RefusedRetry(_FailArm):
+        calls = 0
+
+        def run(self, ep, deadline=None):
+            self.calls += 1
+            if self.calls > 1:
+                raise InfraError(termination, "reservation refused", retryable=False)
+            return super().run(ep, deadline)
+
+    arm = RefusedRetry()
+    monkeypatch.setitem(_REGISTRY, "failer", arm)
+    store, orch = _orch(tmp_path, arm)
+    orch.tasks = orch.tasks[:1]
+    if termination == "infra:weekly_budget":
+        with pytest.raises(RunKilled, match="budget"):
+            orch.run("run-refusal")
+    else:
+        orch.run("run-refusal")
+    before = _rows(store, "run-refusal", "failer")
+    assert [r["termination"] for r in before] == ["completed", termination]
+    monkeypatch.setitem(_REGISTRY, "failer", _FailArm())
+    _, resumed = _orch(tmp_path, arm, store=store)
+    resumed.tasks = orch.tasks
+    resumed.resume("run-refusal")
+    after = _rows(store, "run-refusal", "failer")
+    assert after[::2] == before[::2]
+    assert [r["termination"] for r in after[1::2]] == ["completed" if rerun else termination]
+
+
 # -- the plan key --------------------------------------------------------------
 
 def _oracle_plan(site, extra="", repetitions=2):
@@ -223,5 +256,3 @@ def test_size_line_is_unchanged_without_retries(site):
     rc = _oracle_plan(site)
     assert ("prompts: 10; attempts per prompt and competitor: 2; "
             "attempts per competitor: 20 = 10 x 2") in _banner(rc)
-
-

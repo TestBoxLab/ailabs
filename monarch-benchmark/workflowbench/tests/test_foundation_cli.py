@@ -112,6 +112,7 @@ def test_run_repetitions_flag_overrides_plan(tmp_path, monkeypatch):
         excluded_tasks={},
         monarch_kb=None,
         monarch_recipes=None,
+        config_source={},
     )
     monkeypatch.setattr(cli.config, "resolve", lambda *args: config_obj)
     monkeypatch.setattr(cli.approvals, "is_paid", lambda rc: False)

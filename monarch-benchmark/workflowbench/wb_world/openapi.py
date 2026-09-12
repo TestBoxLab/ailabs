@@ -84,6 +84,10 @@ def world_url(service: str, rest: str, schemas: dict[str, dict[str, Any]]) -> st
     it cannot do is match a literal `{companyDomain}`.
     """
     base = (schemas.get(service) or {}).get("baseUrl", "").rstrip("/")
+    # Gmail's router requires this path prefix; its schema baseUrl omits it.
+    # real_path removes the prefix when publishing the front-door route.
+    if service == "gmail" and not rest.startswith("gmail/"):
+        rest = "gmail/" + rest
     var = base_var(service, schemas)
     if var:
         # The first published segment IS the tenant: it fills the baseUrl's slot
@@ -251,7 +255,9 @@ class SchemaInterfaces:
         return build_spec(service, self.schemas[service], public_url)
 
     def rest_url(self, service: str, rest: str) -> str:
-        return f"{self.schemas[service].get('baseUrl', '').rstrip('/')}/{rest}"
+        # Delegate: a copy of world_url here silently missed the tenant
+        # substitution and, later, Gmail's path prefix.
+        return world_url(service, rest, self.schemas)
 
 
 def build_all(server_url: str, schema_dir: Path = SCHEMAS_DIR) -> dict[str, dict[str, Any]]:

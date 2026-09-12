@@ -223,6 +223,10 @@ class Studio:
         # A restart never replays potentially paid work.
         for path in self.directory.glob("*/job.json"):
             job = json.loads(path.read_text(encoding="utf-8"))
+            if job.get("config_source"):
+                from wb_studio.configured_controls import recover_startup
+                recover_startup(self, path, job)
+                continue
             if job["status"] in ("queued", "running", "cancelling"):
                 if self.coordinator is not None and job.get("worker"):
                     continue  # Durable remote claims survive coordinator restarts.
@@ -311,13 +315,17 @@ class Studio:
             "week_start": value.week_start, "timezone": "America/Sao_Paulo", "blocked": value.blocked}
 
     def jobs(self):
-        return sorted([json.loads(p.read_text(encoding="utf-8")) for p in self.directory.glob("*/job.json")],
-                      key=lambda j: j["created_at"], reverse=True)
+        with self.lock:
+            return sorted([json.loads(p.read_text(encoding="utf-8")) for p in self.directory.glob("*/job.json")],
+                          key=lambda j: j["created_at"], reverse=True)
 
     def job(self, identity):
         if not ID.fullmatch(identity):
             raise ValueError("Invalid comparison ID")
-        return json.loads((self.directory / identity / "job.json").read_text(encoding="utf-8"))
+        from wb_studio.report_inputs import configured_job
+        with self.lock:
+            return configured_job(json.loads((self.directory / identity / "job.json").read_text(encoding="utf-8")),
+                                  self.directory / identity)
 
     def save(self, job):
         with self.lock:
@@ -336,6 +344,9 @@ class Studio:
                   active_attempts=job.get("active_attempts", 0))
 
     def pause(self, identity):
+        if self.job(identity).get("config_source"):
+            from wb_studio.configured_controls import pause
+            return pause(self, identity)
         with self.lock:
             job = self.job(identity)
             if job["status"] not in ("queued", "running"):
@@ -345,7 +356,10 @@ class Studio:
                 self._save_control(job)
             return job
 
-    def resume(self, identity):
+    def resume(self, identity, preview_id=None):
+        if self.job(identity).get("config_source"):
+            from wb_studio.configured_controls import resume
+            return resume(self, identity, preview_id=preview_id)
         with self.lock:
             job = self.job(identity)
             if job["status"] not in ("queued", "running"):
@@ -660,6 +674,9 @@ class Studio:
         return job
 
     def cancel(self, identity):
+        if self.job(identity).get("config_source"):
+            from wb_studio.configured_controls import cancel
+            return cancel(self, identity)
         with self.lock:
             job = self.job(identity)
             if job["status"] in ("queued", "running"):
@@ -750,6 +767,9 @@ class Studio:
 
     def _execute(self, identity):
         job = self.job(identity)
+        if job.get("config_source"):
+            from wb_studio.benchmark_config import execute
+            return execute(self, identity)
         if job["status"] not in ("queued", "cancelling") or (job.get("pause_requested") and job["status"] == "queued"):
             return
         try:
@@ -1105,6 +1125,16 @@ def handler(studio):
                     who = 'human:' + person['name'] if person else 'human:studio'
                     known = parse_qs(url.query).get('known', [''])[0].split(',')[:12]
                     return self.send_json(self.voice_service().status(voice_match[1], who, known=known))
+                if url.path == "/api/benchmark-config":
+                    from wb_studio.benchmark_config import catalog
+                    try:
+                        return self.send_json(catalog(studio))
+                    except ValueError as exc:
+                        return self.send_json({"error": str(exc)}, getattr(exc, "status", 400))
+                recovery_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/resume-preview", url.path)
+                if recovery_match:
+                    from wb_studio.configured_controls import preview
+                    return self.send_json(preview(studio, recovery_match[1]))
                 diagnostics_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/diagnostics", url.path)
                 if diagnostics_match:
                     from wb_studio.failure_analysis import analysis
@@ -1226,7 +1256,7 @@ def handler(studio):
                             cursor = event["id"]
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
-                        if studio.job(identity)["status"] not in ("queued", "running", "cancelling"):
+                        if studio.job(identity)["status"] not in ("queued", "running", "pausing", "cancelling"):
                             break
                         time.sleep(.4)
                     return
@@ -1456,11 +1486,20 @@ def handler(studio):
                 return self.send_json(found)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 131072:
+                limit = 16_777_216 if self.path.startswith("/api/benchmark-config/") else 131072
+                if not 0 < length <= limit:
                     raise ValueError("Request too large")
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("Expected an object")
+                if self.path.startswith("/api/benchmark-config/"):
+                    from wb_studio.benchmark_config import dispatch
+                    try:
+                        return self.send_json(dispatch(studio, self.path.rsplit("/", 1)[-1], payload, self.person()))
+                    except PermissionError as exc:
+                        return self.send_json({"error": str(exc)}, 403)
+                    except ValueError as exc:
+                        return self.send_json({"error": str(exc)}, getattr(exc, "status", 400))
                 if self.path.startswith('/api/genesis/'):
                     person=self.person();access=studio.genesis.access
                     admin_only=self.path in ('/api/genesis/config','/api/genesis/autonomy','/api/genesis/settings','/api/genesis/people','/api/genesis/skills') or self.path.endswith('/remove')
@@ -1626,6 +1665,12 @@ def handler(studio):
                     return self.send_json(studio.create(payload), 201)
                 match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/(pause|resume|cancel)", self.path)
                 if match:
+                    if studio.job(match[1]).get("config_source"):
+                        allowed, why = studio.genesis.access.may_write(self.person())
+                        if not allowed:
+                            return self.send_json({"error": why}, 403)
+                    if match[2] == "resume":
+                        return self.send_json(studio.resume(match[1], preview_id=payload.get("preview_id")))
                     return self.send_json(getattr(studio, match[2])(match[1]))
                 return self.send_json({"error": "Not found"}, 404)
             except PermissionError as exc:

@@ -9,7 +9,7 @@ import pytest
 
 import wb_orchestrator.orchestrator as orch_mod
 from tests.test_config import MODEL, edit, site, write  # noqa: F401  (site is a fixture)
-from tests.test_run_config import MODEL_MOCK
+from tests.test_run_config import mock_model
 from wb_orchestrator import config
 from wb_orchestrator.cli import main
 from wb_orchestrator.config import ConfigError
@@ -94,7 +94,7 @@ def test_stop_reason_column_added_to_old_schema(tmp_path):
 # -- T029: cost ceiling stops the run; resume needs a raised ceiling ----------
 
 def _mock_site(site):
-    write(site / "config/models", MODEL_MOCK)
+    write(site / "config/models", mock_model())
     plan = edit((site / "config/plans/smoke-frontier.yaml").read_text(), "competitors")
     plan = edit(plan, "baseline", "mock/api").replace("concurrency: 4", "concurrency: 1")
     plan += "competitors:\n  - {model: mock, harness: api}\n"

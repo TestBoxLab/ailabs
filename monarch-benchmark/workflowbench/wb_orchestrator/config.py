@@ -7,6 +7,7 @@ Environment variables are referenced by name only; values are never stored.
 """
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import json
@@ -722,6 +723,8 @@ class RunConfig:
     excluded_tasks: dict[str, str] = field(default_factory=dict)  # task id -> why it was dropped
     price_tables: dict[str, PriceTable] = field(default_factory=dict)
     config_dir: str = ""                     # where models/ and harnesses/ were read from
+    runtime_root: str = ""                   # installed tasks and Monarch checkout references
+    config_source: dict = field(default_factory=dict)  # additive evidence; never changes legacy hashes
 
     native_runtimes: dict = field(default_factory=dict)
 
@@ -804,13 +807,19 @@ class RunConfig:
                 "attempts_total": self.attempts_total,
                 "cost_ceiling_usd": self.plan.cost_ceiling_usd,  # not hashed; wb status reads it
                 "suite_dir": self.tasks_dir,  # ponytail: old readers (wb grade) key on suite_dir
-                "k": self.plan.repetitions}  # ponytail: old readers (wb report) key on k
+                "k": self.plan.repetitions,
+                **({"config_source": copy.deepcopy(self.config_source),
+                    "runtime_root": self.runtime_root} if self.config_source else {})}
 
 
-def from_workflowbench(p, config_dir=DEFAULT_CONFIG_DIR) -> Path:
-    """Absolute stays; relative is rooted at the folder above `config_dir` (the workflowbench dir)."""
+def from_workflowbench(p, config_dir=DEFAULT_CONFIG_DIR, runtime_root=None) -> Path:
+    """Config references stay in the revision; other relative paths use the runtime."""
     p = Path(p)
-    return p if p.is_absolute() else Path(config_dir).parent / p
+    if p.is_absolute():
+        return p
+    if runtime_root and p.parts and p.parts[0] == "config":
+        return Path(config_dir).joinpath(*p.parts[1:])
+    return Path(runtime_root or Path(config_dir).parent) / p
 
 
 def known(folder) -> str:
@@ -839,12 +848,14 @@ def _check_monarch_env(h, hpath, env) -> None:
             raise ConfigError(hpath, attr, f"environment variable {name} is not set")
 
 
-def resolve(product_path, plan_path, config_dir=None, env=None) -> RunConfig:
+def resolve(product_path, plan_path, config_dir=None, env=None,
+            runtime_root=None, source=None) -> RunConfig:
     """Join a product and a plan; apply validation rules 3-10 (data-model.md).
 
     Models and harnesses are read from `config_dir` (default: the folder above
-    the product file). `env` is only asked whether a name is set. A relative `plan.tasks` is
-    taken from the folder above `config_dir`; the hash keeps the string as written.
+    the product file). `env` is only asked whether a name is set. Relative task
+    paths use `runtime_root`, defaulting to the folder above `config_dir`;
+    the hash keeps the string as written.
     """
     product_path, plan_path = Path(product_path), Path(plan_path)
     config_dir = Path(config_dir) if config_dir else product_path.parent.parent
@@ -937,7 +948,7 @@ def resolve(product_path, plan_path, config_dir=None, env=None) -> RunConfig:
     if plan.baseline not in names:
         c.fail("baseline", f"{plan.baseline!r} is not a competitor; have: {', '.join(names)}")
 
-    tasks_dir = from_workflowbench(plan.tasks, config_dir)  # whatever the cwd
+    tasks_dir = from_workflowbench(plan.tasks, config_dir, runtime_root)
     try:
         tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:
@@ -1013,7 +1024,47 @@ def resolve(product_path, plan_path, config_dir=None, env=None) -> RunConfig:
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
                      monarch_kb=monarch_kb, monarch_recipes=monarch_recipes,
                      excluded_tasks=excluded_tasks, price_tables=price_tables,
-                     config_dir=str(config_dir), native_runtimes=native_runtimes)
+                     config_dir=str(config_dir), native_runtimes=native_runtimes,
+                     runtime_root=str(runtime_root or config_dir.parent),
+                     config_source=copy.deepcopy(source or {}))
+
+
+def resolve_snapshot(snapshot, product, plan, runtime_root=None, env=None) -> RunConfig:
+    """Resolve selected names from one complete immutable repository revision."""
+    directory = Path(snapshot["directory"]) / "config"
+    selected = []
+    for kind, name in (("product", product), ("plan", plan)):
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            raise ConfigError(directory, kind, "select a name within the configuration revision")
+        selected.append(directory / f"{kind}s" / f"{name}.yaml")
+    source = {key: copy.deepcopy(snapshot[key]) for key in ("repository", "branch", "commit", "files")}
+    if not re.fullmatch(r"[0-9a-f]{40}", source["commit"]):
+        raise ConfigError(directory, "commit", "an immutable 40-character commit is required")
+    return resolve(*selected, config_dir=directory, env=env,
+                   runtime_root=runtime_root or DEFAULT_CONFIG_DIR.parent, source=source)
+
+
+def resolve_selection(product, plan, revision=None, repository=None, runtime_root=None, env=None):
+    """Shared CLI/Studio selection; a configured remote never falls back locally."""
+    from wb_orchestrator.config_repository import Repository
+    repository = repository if repository is not None else Repository.from_env()
+    if repository is not None:
+        return resolve_snapshot(repository.snapshot(revision), product, plan, runtime_root, env)
+    if revision:
+        raise ConfigError("configuration", "revision", "WB_CONFIG_REPOSITORY is not configured")
+    return resolve(resolve_name_or_path(product, "product"),
+                   resolve_name_or_path(plan, "plan"), env=env, runtime_root=runtime_root)
+
+
+def resume_config(recorded, env=None):
+    """Recover remote bytes from evidence without depending on a cache or floating main."""
+    if not recorded.get("config_source"):
+        return resolve(recorded["product_path"], recorded["plan_path"], env=env)
+    from wb_orchestrator.config_repository import restore_snapshot
+    snapshot = restore_snapshot(recorded["config_source"])
+    return resolve_snapshot(snapshot, recorded["product"]["name"], recorded["plan"]["name"],
+                            runtime_root=recorded.get("runtime_root") or DEFAULT_CONFIG_DIR.parent,
+                            env=env)
 
 
 def resolve_name_or_path(value, kind, config_dir=DEFAULT_CONFIG_DIR) -> Path:
