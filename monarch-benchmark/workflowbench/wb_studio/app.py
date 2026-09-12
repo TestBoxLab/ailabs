@@ -730,7 +730,11 @@ class Studio:
         try:
             result = start(self.genesis, {'run': identity, 'maximum_usd': str(ceiling)})
             write_json(pending, {"reason": result.get('reason'), "ceiling_usd": str(ceiling), "askable": False})
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, BudgetExceeded) as exc:
+            # BudgetExceeded is a RuntimeError, so it used to escape this handler, travel out
+            # of execute()'s finally, skip store.close() and kill the execution thread -- and
+            # the page showed no reason at all. An exhausted week is exactly the case this
+            # pending record exists to explain.
             write_json(pending, {"reason": str(exc), "ceiling_usd": str(ceiling), "askable": "no recorded attempts" not in str(exc)})
 
     def _narrative(self, identity, ceiling):
@@ -1555,8 +1559,20 @@ def handler(studio):
                     # The open editor says whether it is holding unsaved edits. Only Genesis
                     # reads it, and only to refuse its own commit; it grants nothing.
                     with studio.lock:
-                        studio.editors["architecture"] = {"id": payload.get("id"), "dirty": bool(payload.get("dirty")),
-                                                          "at": time.time()}
+                        held = studio.editors.get("architecture")
+                        # An editor only speaks for the architecture it names. A second tab
+                        # (or a second person on the hosted Studio) entering ANY other
+                        # architecture posts {id: <other or null>, dirty: false}, and that
+                        # used to overwrite the one record -- clearing the first tab's
+                        # unsaved-work flag and letting Genesis commit over it, which is the
+                        # single thing this record exists to prevent (FR-049).
+                        speaks_for_another = (not payload.get("dirty") and isinstance(held, dict)
+                                              and held.get("dirty") and held.get("id")
+                                              and held["id"] != payload.get("id"))
+                        if not speaks_for_another:
+                            studio.editors["architecture"] = {"id": payload.get("id"),
+                                                              "dirty": bool(payload.get("dirty")),
+                                                              "at": time.time()}
                     return self.send_json({"recorded": True})
                 if self.path == "/api/product-graphs/draft":
                     from wb_studio.product_graphs import save_draft as save_graph_draft
