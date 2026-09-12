@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from wb_arms.api_loop import ArmResult, InfraError, _OpenAIResponsesAdapter
 from wb_arms import providers, reservations
 from wb_studio.runtime import Runtime
-from wb_orchestrator.budget import BudgetExceeded
+from wb_orchestrator.budget import ROUND_ENVELOPE_MARKER, BudgetExceeded
 
 
 class AttemptBudget:
@@ -78,9 +78,31 @@ def customer_input(messages):
 
 
 def _budget_failure(exc):
-    # The ledger distinguishes per-attempt/round admission from shared-week stops.
-    weekly = "weekly" in str(exc) or "overrun" in str(exc)
-    return InfraError("infra:weekly_budget" if weekly else "infra:budget", str(exc), retryable=False)
+    """Which refusal the ledger gave, as a termination the orchestrator can act on.
+
+    Three outcomes, not two, and the difference decides whether the round continues.
+    `infra:budget` is the attempt's own scope cap: that attempt is over, the round is
+    not. `infra:run_budget` (the round's admission envelope) and `infra:weekly_budget`
+    both mean nothing further can be paid for at all.
+
+    Collapsing the envelope case into `infra:budget` is what let a round run on to its
+    last attempt recording refusals, then finish and report as though it had measured
+    them. See `orchestrator.STOPS_THE_ROUND`.
+
+    The message cannot tell the first two apart: an attempt's cap is itself a run
+    reservation, so both say `run budget exhausted`. The scope that ran out is the
+    discriminator -- a round's envelope carries `ROUND_ENVELOPE_MARKER`, an attempt's
+    does not.
+    """
+    message = str(exc)
+    scope = getattr(exc, "scope_id", None) or ""
+    if "weekly" in message or "overrun" in message:
+        kind = "infra:weekly_budget"
+    elif ROUND_ENVELOPE_MARKER in scope:
+        kind = "infra:run_budget"
+    else:
+        kind = "infra:budget"
+    return InfraError(kind, message, retryable=False)
 
 
 class Customer:

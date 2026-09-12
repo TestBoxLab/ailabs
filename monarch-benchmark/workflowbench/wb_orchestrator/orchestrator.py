@@ -34,11 +34,22 @@ from wb_arms import providers
 from wb_results.store import Store
 from wb_results import evidence
 from wb_orchestrator import config as config_mod
+from wb_orchestrator.budget import ROUND_ENVELOPE_MARKER
 from wb_orchestrator.config import ConfigError
 from wb_world.episode import (  # noqa: F401  (Episode, contract_hash, load_suite re-exported)
     LEGACY_SUITE, Episode, contract_hash, load_suite, suite_id)
 
 MAX_INFRA_RETRIES = 2
+# Terminations that mean nothing further in this round can be paid for, mapped to the
+# stop reason each records. A round that hits one has to stop and be resumable: running
+# on to the last attempt collecting refusals and then finishing leaves a round that
+# reads as complete but measured only part of its work.
+#
+# `infra:budget` -- an attempt exhausting its own scope cap -- is deliberately absent.
+# That is one attempt's outcome and the round carries on, which is why the three cases
+# need three kinds (`external_runtime._budget_failure`). Stopping on it would kill a
+# whole round the first time any single attempt reached its per-attempt cap.
+STOPS_THE_ROUND = {"infra:weekly_budget": "weekly_budget", "infra:run_budget": "run_budget"}
 # The label of every set that records no world. A round's real suite id comes
 # from its tasks (wb_world.episode.suite_id): the world's version is in it.
 SUITE = LEGACY_SUITE
@@ -477,8 +488,9 @@ class Orchestrator:
                 "(Monday 00:00 America/Sao_Paulo); nothing was reserved")
 
         if external:
-            prior_envelopes = [r for r in self.ledger.run_reservations() if r.scope_id.startswith(run_id + "#admission-")]
-            self._budget_run_id = run_id + f"#admission-{len(prior_envelopes):03d}"
+            marker = run_id + ROUND_ENVELOPE_MARKER
+            prior_envelopes = [r for r in self.ledger.run_reservations() if r.scope_id.startswith(marker)]
+            self._budget_run_id = marker + f"{len(prior_envelopes):03d}"
             self.ledger.reserve_run(self._budget_run_id, liability, metadata={"product":self.run_config.product.name,
                 "configuration":self.run_config.hash, "includes_infrastructure_retries":MAX_INFRA_RETRIES,
                 "participants":[p.role + ":" + p.model for p in self.run_config.product.participants]})
@@ -531,6 +543,14 @@ class Orchestrator:
                 f"run {run_id} stopped: spend US$ {self._spent:.2f} exceeds ceiling "
                 f"US$ {self.run_config.plan.cost_ceiling_usd:.2f} after {self._recorded} attempts; "
                 f"raise cost_ceiling_usd in the plan and run: wb resume {run_id}")
+        if self._stop_reason == "run_budget":
+            self.store.set_stop_reason(run_id, "run_budget")
+            raise RunKilled(
+                f"run {run_id} stopped: this round's admission envelope is exhausted after "
+                f"{self._recorded} attempts (US$ {self._spent:.2f} settled; unsettled holds occupy "
+                f"their full maximum); the attempts it cut are recorded as infra:run_budget and run "
+                f"again on resume. Raise cost_ceiling_usd in the plan, or wait for the holds to "
+                f"settle, and run: wb resume {run_id}")
         if self._stop_reason == "weekly_budget":
             self.store.set_stop_reason(run_id, "weekly_budget")
             raise RunKilled(
@@ -877,10 +897,10 @@ class Orchestrator:
                     and self._stop_reason is None):
                 self._stop_reason = "cost_ceiling"
                 self._abort.set()
-            if termination == "infra:weekly_budget" and self._stop_reason is None:
-                # The ledger refused a request: nothing else can be paid for this
-                # week. Stop scheduling; the cut attempts run again on resume.
-                self._stop_reason = "weekly_budget"
+            if termination in STOPS_THE_ROUND and self._stop_reason is None:
+                # The ledger refused a request and nothing else in this round can be
+                # paid for. Stop scheduling; the cut attempts run again on resume.
+                self._stop_reason = STOPS_THE_ROUND[termination]
                 self._abort.set()
         return self._earns_a_retry(row.passed, termination)
 
