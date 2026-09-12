@@ -215,8 +215,17 @@ def run_attempt(arm, ep, run_config, ledger, run_id, deadline):
         result = scoped_arm.run(ep, deadline=deadline)
         # Harness tool wrappers may have converted the callback's exception into
         # a normal tool response. That must never become a scored agent failure.
+        #
+        # One exception, and only one: the arm's own `timeout` verdict and a customer
+        # call cut at the same deadline are one event, not two. `api_loop.py:670-673`
+        # makes an expired episode deadline a scored verdict on purpose, and the
+        # customer's `infra:timeout` is that same clock. Raising the customer's copy
+        # moved a real agent timeout out of the pass denominator, inflating the rate
+        # by exactly the attempts that ran out of time.
         if customer is not None and customer.failure is not None:
-            raise customer.failure
+            if not (getattr(result, "termination", None) == "timeout"
+                    and getattr(customer.failure, "kind", None) == "infra:timeout"):
+                raise customer.failure
     except Exception as exc:
         failure = customer.failure if customer is not None and customer.failure is not None else exc
         if isinstance(failure, BudgetExceeded):
