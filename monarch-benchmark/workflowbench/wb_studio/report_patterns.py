@@ -10,8 +10,10 @@ from wb_studio.reports import CATEGORIES
 BEHAVIOR = {"passed": "Passed", **SHORT_LABELS}
 CHECKS = {"passed": "Passed", "scope": "Scope check failed", "requirements": "Requirements unmet",
           "scope_and_requirements": "Scope and requirements failed", "unfinished": "Did not finish normally",
-          "infrastructure": "Infrastructure", "unclassified": "Unknown from retained checks"}
-DENOMINATOR = "All recorded attempts for this setup, including passes, infrastructure and unknown outcomes. Unrecorded attempts are excluded."
+          "infrastructure": "Infrastructure", "ungraded": "Not graded",
+          "unclassified": "Unknown from retained checks"}
+DENOMINATOR = ("All recorded attempts for this setup, including passes, infrastructure, attempts our "
+               "own checker could not grade, and unknown outcomes. Unrecorded attempts are excluded.")
 
 
 def behavior(attempt):
@@ -19,8 +21,19 @@ def behavior(attempt):
         return "infrastructure"
     if attempt.get("passed") is True:
         return "passed"
+    # Named before the story is read. An ungraded attempt carries `completed` and an empty
+    # checks list, so both readings below fell through to "unclassified" and published our
+    # checker's crash as a competitor failure of unknown cause -- in the report, and in the
+    # evidence the model that writes the report reads.
+    if _ungraded(attempt):
+        return "ungraded"
     mode = (attempt.get("story") or {}).get("mode")
     return mode if mode in MODES else "unclassified"
+
+
+def _ungraded(attempt):
+    from wb_studio.measures import is_ungraded
+    return is_ungraded(attempt)
 
 
 def checked_outcome(attempt):
@@ -28,6 +41,8 @@ def checked_outcome(attempt):
         return "infrastructure"
     if attempt.get("passed") is True:
         return "passed"
+    if _ungraded(attempt):
+        return "ungraded"
     failed = {c.get("name") or c.get("type") for c in attempt.get("checks") or [] if c.get("passed") is False}
     scope, unmet = "allowed_changes_only" in failed, bool(failed - {"allowed_changes_only"})
     if scope and unmet:

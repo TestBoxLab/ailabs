@@ -7,11 +7,11 @@ from wb_studio.report_patterns import patterns
 
 
 def attempt(index, *, model="a", task="sales.contact", mode="missing_action", passed=False,
-            checks=(), termination="completed", run="run-1", events=None):
+            checks=(), termination="completed", run="run-1", events=None, flags=()):
     return {"id": f"attempt-{index + 1}", "run": run, "task": task, "model": model,
             "passed": passed, "termination": termination, "infrastructure": termination.startswith("infra:"),
             "story": {"mode": mode, "verdict": "Recorded explanation."},
-            "checks": [{"name": k, "passed": v} for k, v in checks],
+            "checks": [{"name": k, "passed": v} for k, v in checks], "flags": list(flags),
             "event_ids": events if events is not None else [index + 1]}
 
 
@@ -48,12 +48,23 @@ def test_checker_partition_includes_both_failure_types_normal_finish_infra_and_u
             attempt(2, checks=(("field_equals", False),)),
             attempt(3, checks=(("field_equals", False), ("allowed_changes_only", False))),
             attempt(4, termination="timeout"), attempt(5, termination="infra:network"),
-            attempt(6)]
+            attempt(6), attempt(7, flags=["grading=ungraded"])]
     column = patterns(rows, {"a": "Monarch"})["setups"][0]
     assert {s["id"]: s["count"] for s in column["checks"]} == {
         "passed": 1, "scope": 1, "requirements": 1, "scope_and_requirements": 1,
-        "unfinished": 1, "infrastructure": 1, "unclassified": 1}
+        "unfinished": 1, "infrastructure": 1, "ungraded": 1, "unclassified": 1}
     assert sum(s["percent"] for s in column["checks"]) == pytest.approx(100)
+
+
+def test_an_attempt_our_checker_could_not_grade_is_not_a_competitor_failure():
+    """It arrives looking like an ordinary completed failure -- `completed`, no checks --
+    so both readings called it 'Unknown from retained checks' and published our own
+    crash as something the competitor did."""
+    rows = [attempt(0, passed=True), attempt(1, flags=["grading=ungraded"])]
+    column = patterns(rows, {"a": "Monarch"})["setups"][0]
+    assert slices(column)["ungraded"]["count"] == 1
+    assert slices(column)["unclassified"]["count"] == 0
+    assert {s["id"]: s["count"] for s in column["checks"]}["ungraded"] == 1
 
 
 def test_drilldowns_distinguish_repetitions_and_runs_with_same_event_ids():
