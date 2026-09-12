@@ -6,8 +6,14 @@ from wb_studio.reports import outcome_report
 
 
 BUCKETS = dict(MODES)
+# Our own checker could not answer. That is a fact about our run, not an outcome the
+# competitor produced, and it must not sit in the same list as "missing action": the
+# engineer loop reads these buckets to choose what to write a spec against, and a
+# grader crash bucketed as `unclassified` becomes a round's headline failure mode.
+BUCKETS["ungraded"] = "Not graded (our checker could not answer)"
 # The same buckets in the two or three words a chart axis can hold.
 SHORT_LABELS = {
+    "ungraded": "Not graded",
     "missing_action": "Missing action",
     "wrong_result": "Wrong result",
     "forbidden_action": "Forbidden action",
@@ -39,6 +45,12 @@ def _percentages(counts, denominator):
 def _bucket(result, report):
     if result.get("passed"):
         return "success"
+    from wb_studio.measures import is_ungraded
+    # Before any outcome mode: the attempt has no measured outcome to classify. It reaches
+    # here looking like a normal completed failure -- termination is `completed` and the
+    # checks list is empty -- so the story fell through to `unclassified`.
+    if is_ungraded(result):
+        return "ungraded"
     story = report.get("story") or {}
     mode = story.get("mode")
     if mode in MODES:

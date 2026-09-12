@@ -137,8 +137,15 @@ class Watcher:
         """Why no turn can start now, in plain words, or None."""
         from wb_studio.genesis_harness import model_routes
         ceiling = self.card_usd
-        if not any(r['available'] for r in model_routes()):
+        routes = model_routes()
+        if not any(r['available'] for r in routes):
             return 'Waiting: no model route is available'
+        # Ask for the step the work will actually use, not merely whether some route
+        # exists. `reading` resolves the partner model exactly and does not fall back, so
+        # a lab with another provider's key passed this gate, reported no blocker, and
+        # then threw inside work() on every wake -- forever, with the page showing none.
+        if self.genesis.config.route_for('reading', routes=routes) is None:
+            return 'Waiting: the model this step is set to use is not available'
         if self.today_usd() + ceiling > self.cap_usd:
             return f"Waiting: today's cap of ${self.cap_usd:.2f} is reached"
         status = self.studio.ledger.status()

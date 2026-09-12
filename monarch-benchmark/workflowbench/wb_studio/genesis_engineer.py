@@ -54,7 +54,11 @@ VERIFY_ALLOWED = re.compile(
     r'^(uv run --directory monarch-benchmark/workflowbench python -m pytest (?!.*\.\.)tests/[\w./-]{1,110}(?: -q)?'
     r'|node tests/browser/suite\.cjs)$')
 # A bucket that names the task, the data or the harness is not a defect in anyone's code.
-SETUP_BUCKETS = ('setup', 'task-setup', 'harness', 'infrastructure', 'budget', 'cancelled')
+#: Buckets that describe our own machine rather than the competitor's work, so the loop
+#: does not spend a paid turn writing a spec against them. `ungraded` belongs here for the
+#: same reason `harness` does: our checker could not answer, so there is no measured
+#: failure to explain -- and it arrives looking like an ordinary completed failure.
+SETUP_BUCKETS = ('setup', 'task-setup', 'harness', 'infrastructure', 'budget', 'cancelled', 'ungraded')
 # Reasoning first, then the conclusion: a schema that asks for the verdict first gets a verdict and
 # a rationalisation of it. `analysis` also sorts first alphabetically, because at least one provider
 # returns structured output with its keys sorted rather than in the order they were asked for.
