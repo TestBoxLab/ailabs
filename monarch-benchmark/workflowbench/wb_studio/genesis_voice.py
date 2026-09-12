@@ -212,8 +212,15 @@ class VoiceSessions:
         unresolved = any(s['status'] == 'disconnected' and s['billing'] != 'final' for s in self.sessions.values())
         if unresolved:
             holds = {r.reservation_id: r for r in self.genesis.studio.ledger.reservations()}
+            # `released` is the way out. A call that drops without a `session.closed`
+            # settles with no actual, and nothing ever sets one afterwards -- `billing`
+            # becomes 'final' only in the closed handler that can no longer run -- so this
+            # gate used to disable voice for good, with hand-deleting the record the only
+            # remedy. A hold a named person released is answered for: the cost stays
+            # unknown and reconcile still counts it, but it no longer blocks.
             unresolved = any(s['status'] == 'disconnected' and s['billing'] != 'final' and
-                (s['reservation'] not in holds or holds[s['reservation']].actual_usd is None)
+                (s['reservation'] not in holds or
+                 (holds[s['reservation']].actual_usd is None and not holds[s['reservation']].released))
                 for s in self.sessions.values())
         if unresolved or getattr(self, 'recovery_error', None):
             reason = getattr(self, 'recovery_error', None) or 'A previous voice session needs billing reconciliation.'

@@ -448,7 +448,9 @@ def _dispatch(genesis, state, stage):
     state["reason"] = {
         "analysis": "The analysis subagent is reading every attempt.",
         "author": "Genesis is writing the explanation.",
-        "review": "A separate reviewer is checking the draft and evidence.",
+        # Not "a separate reviewer": by default this resolves to the same route as the
+        # author, and the publication now records which. Say what is true of both cases.
+        "review": "A reviewer is checking the draft and evidence in a fresh context.",
         "repair": "Genesis is addressing the review findings.",
         "review_again": "The revised draft is being reviewed.",
     }[stage]
@@ -1309,12 +1311,31 @@ def ON_TURN(genesis, turn):
                 state["review"] = judged
                 state["review_revision"] = state["revision"]
                 write_json(folder / (stage + ".json"), judged)
-                if judged["verdict"] == "revise" and stage == "review":
+                # An `accept` carrying notes is not a rejection. It used to be treated as
+                # one -- cycle failed, nothing published, and at the first review not even
+                # the repair round that `revise` gets -- so a reviewer that accepted and
+                # added "consider naming the denominator" threw away the analysis, author
+                # and review turns already paid for, recoverable only by re-running and
+                # re-paying all five stages. Nothing in the dispatch message or review.md
+                # ever told it that `issues` had to be empty.
+                accept_with_notes = judged["verdict"] == "accept" and judged["issues"]
+                if stage == "review" and (judged["verdict"] == "revise" or accept_with_notes):
                     _dispatch(genesis, state, "repair")
-                elif judged["verdict"] != "accept" or judged["issues"]:
+                elif judged["verdict"] != "accept":
                     raise ValueError("Report review is unresolved: " + judged["reason"])
                 else:
                     rows = _read(folder / "attempts.json")
+                    # Who actually checked this. With no per-step model configured -- the
+                    # shipped default -- `report_author` and `review` both resolve through
+                    # DEFAULT_STRONG to the strongest route and come back identical, so the
+                    # draft was reviewed by the model that wrote it. Nothing computed that,
+                    # while `basis` said "separately reviewed" and the page said "a separate
+                    # reviewer", presenting self-review as corroboration. The weekly critic
+                    # already discloses exactly this (genesis_critic.same_family); a report
+                    # that publishes a model's reading of the benchmark owes the same.
+                    wrote = (state["turns"].get("author") or {}).get("model")
+                    checked = (state["turns"].get(stage) or {}).get("model")
+                    independent = bool(wrote and checked and wrote != checked)
                     publication = {
                         **data,
                         "status": "completed",
@@ -1327,7 +1348,18 @@ def ON_TURN(genesis, turn):
                         "turns": state["turns"],
                         "workflow": state["id"],
                         "source": "#report/" + identity,
-                        "basis": "Genesis interpretation, separately reviewed; deterministic verdicts remain authoritative.",
+                        "author_model": wrote,
+                        "reviewer_model": checked,
+                        "independent_review": independent,
+                        "basis": (
+                            "Genesis interpretation, reviewed by a different model; "
+                            "deterministic verdicts remain authoritative."
+                            if independent else
+                            "Genesis interpretation, reviewed in a fresh context by the same "
+                            "model that wrote it (" + str(wrote or "unknown") + "); the review "
+                            "is not independent corroboration. Deterministic verdicts remain "
+                            "authoritative."
+                        ),
                     }
                     write_json(folder / "publication.json", publication)
                     write_json(

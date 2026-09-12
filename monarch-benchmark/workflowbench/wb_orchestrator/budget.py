@@ -154,6 +154,23 @@ class Reservation:
     def metadata(self) -> dict[str, Any]:
         return json.loads(self.metadata_json)
 
+    @property
+    def released(self) -> bool:
+        """Whether a named person released this unsettled hold (see `release_hold`).
+
+        The cost is still unknown and `wb budget reconcile` still counts it; what a
+        release settles is that it no longer occupies capacity. A gate that asks only
+        `actual_usd is None` therefore has no way out, because nothing ever sets an
+        actual on a cost the provider never reported. Unreadable metadata is not a
+        release, the same rule `_released` applies to the row form.
+        """
+        if self.actual_microusd is not None:
+            return False
+        try:
+            return bool(json.loads(self.metadata_json).get('hold_released'))
+        except (ValueError, TypeError):
+            return False
+
 
 @dataclass(frozen=True)
 class RunReservation:
