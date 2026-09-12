@@ -314,10 +314,13 @@ class Orchestrator:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         arms = self._arms()
         self._admit(run_id, arms, skip=set())   # a refused round leaves no run row
-        self.store.create_run(run_id, self._hash(), self.suite, self._config())
-        if self.run_config and self.run_config.config_source:
-            evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
-        self._execute(run_id, skip=set(), arms=arms)
+        try:
+            self.store.create_run(run_id, self._hash(), self.suite, self._config())
+            if self.run_config and self.run_config.config_source:
+                evidence.write_json(self._run_dir(run_id) / "config-source.json", self.run_config.config_source)
+            self._execute(run_id, skip=set(), arms=arms)
+        finally:
+            self._close_envelope()
         return run_id
 
     def cancel(self) -> None:
@@ -355,8 +358,11 @@ class Orchestrator:
         skip = self.store.completed_identities(run_id)
         arms = self._arms()
         self._admit(run_id, arms, skip)     # only what is left to run is counted
-        self.store.set_stop_reason(run_id, None)  # the run is going again
-        self._execute(run_id, skip=skip, arms=arms)
+        try:
+            self.store.set_stop_reason(run_id, None)  # the run is going again
+            self._execute(run_id, skip=skip, arms=arms)
+        finally:
+            self._close_envelope()
         return run_id
 
     def _arms(self) -> list:
@@ -495,12 +501,24 @@ class Orchestrator:
                 "configuration":self.run_config.hash, "includes_infrastructure_retries":MAX_INFRA_RETRIES,
                 "participants":[p.role + ":" + p.model for p in self.run_config.product.participants]})
 
+    def _close_envelope(self) -> None:
+        """Release the round's unallocated capacity. Idempotent; child holds survive.
+
+        Every path out of a round that opened an envelope has to reach this. It used to
+        hang off `_execute` alone, which left everything between `_admit` and `_execute`
+        -- `create_run`, the config-source evidence, `set_stop_reason` -- able to leak
+        the round's whole liability against the week with nothing spent. A duplicate
+        `--run-id` was enough to do it, and no command can release a run envelope
+        afterwards, so the capacity was gone until someone edited the ledger by hand.
+        """
+        if self.ledger and getattr(self, "_budget_run_id", None):
+            self.ledger.finish_run(self._budget_run_id)
+
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         try:
             return self._execute_inner(run_id, skip, arms)
         finally:
-            if self.ledger and getattr(self, "_budget_run_id", None):
-                self.ledger.finish_run(self._budget_run_id)
+            self._close_envelope()
 
     def _execute_inner(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         arms = arms if arms is not None else self._arms()

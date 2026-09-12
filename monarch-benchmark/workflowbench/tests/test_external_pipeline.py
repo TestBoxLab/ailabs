@@ -316,3 +316,37 @@ def test_budget_capability_status_uses_fresh_exact_harness_verification(tmp_path
     record['checked_at'] = (datetime.now(timezone.utc)-timedelta(hours=3)).isoformat()
     monarch_probe.probe_path(site).write_text(json.dumps(record))
     assert approvals.capabilities([harness], env)['monarch'] == approvals.MONARCH_REASON
+
+
+def test_a_failure_after_admission_releases_the_round_envelope(tmp_path, monkeypatch):
+    """The envelope was closed by `_execute`'s finally alone, so anything raising
+    between `_admit` and `_execute` left the round's whole liability held against the
+    week with nothing spent.
+
+    A duplicate `--run-id` is enough: `_admit` reserves the envelope, `create_run`
+    raises on the unique constraint, and `_execute` is never entered. Nothing can
+    release a run envelope afterwards -- `wb budget release` only looks in
+    `budget_reservations` -- and the scope never appears in `status.unknown_ids`, so
+    the operator cannot even name what is holding the money.
+    """
+    from types import SimpleNamespace
+    from wb_orchestrator.budget import ROUND_ENVELOPE_MARKER, BudgetLedger
+    pp, pl = product_plan(tmp_path, external_task())
+    rc = config.resolve(pp, pl, env={})
+    ledger = BudgetLedger(tmp_path / 'ledger.sqlite3', weekly_limit_usd='100')
+    store = Store(tmp_path / 'wb.sqlite3')
+    engine = orchestrator.Orchestrator.from_config(store, rc, tmp_path / 'out', ledger=ledger)
+    # A paid competitor, so admission opens an envelope at all, and a world that needs
+    # no container: this test is about the round's lifecycle, not about either of those.
+    paid = SimpleNamespace(name='paid', provider_key='mock', run=lambda ep, deadline=None: None)
+    monkeypatch.setattr(engine, '_arms', lambda: [paid])
+    monkeypatch.setattr(engine, 'world', SimpleNamespace(prerequisites=lambda: []))
+
+    store.create_run('run-x', engine._hash(), engine.suite, engine._config())
+    with pytest.raises(Exception):
+        engine.run('run-x')                       # UNIQUE constraint on runs.run_id
+
+    envelopes = [r for r in ledger.run_reservations() if ROUND_ENVELOPE_MARKER in r.scope_id]
+    assert envelopes, 'admission should have opened one, or this proves nothing'
+    assert all(r.closed_at is not None for r in envelopes), 'the round envelope leaked'
+    assert ledger.status().held_usd == 0
