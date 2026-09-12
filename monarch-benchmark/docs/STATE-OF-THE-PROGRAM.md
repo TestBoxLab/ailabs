@@ -66,7 +66,8 @@ Features merged into `main`, each with spec, plan and tasks under `specs/`:
 |---|---|---|
 | 001 | Declarative benchmark configuration — a run is one product × one plan, inputs as YAML under `workflowbench/config/` | merged |
 | 002 | Monarch as a competitor in create + run mode; cost from Langfuse | merged |
-| 004 | Monarch in run-only mode (one known-correct recipe per task) | specified, not built |
+| 004 | Monarch in run-only mode (one known-correct recipe per task) | built; `wb monarch recipes` refused until milestone M5 verifies an instance |
+| 024 | The search loop: dev/held-out split, the report repairs, the money gates, cost and time split at the authoring boundary, the break-even curve and the gap list | built on branch `genesis-loop`; T093 blocked, see below |
 | 005 | Task sets by difficulty tier; `wb corpus tiers` | built, sets frozen |
 | 006 | HTML report and `wb summary` across rounds | built |
 | 007 | Lab foundation: budget ledger, evidence journals, regrade, runtime manifests, the Studio | built on branch `007-benchmark-foundations` |
@@ -74,6 +75,14 @@ Features merged into `main`, each with spec, plan and tasks under `specs/`:
 
 Capabilities that exist today, with where to check each:
 
+- **Cost and time split at the authoring boundary** (feature 024). `measures.cost_by_phase`
+  and `time_by_phase` read what the Monarch arm has recorded since feature 002 — nothing
+  new is measured, and the reader that was missing now exists. `measures.curve` turns the
+  split into the break-even point between configuring once and paying per request, and the
+  round report opens with it. Anything the named phases do not claim is reported as
+  `unattributed` rather than dropped, and an unpriced phase stays unknown: it holds its
+  whole ceiling against the week, so rendering it as zero says the round was cheap while
+  the ledger is still holding the money.
 - **Frozen task sets of any size**, drawn by rule (`wb corpus tiers`) or listed
   by id (`wb corpus slate`), hashed before any competitor runs.
   `workflowbench/tasks/` holds `tier-simple`, `tier-medium`, `tier-complex`,

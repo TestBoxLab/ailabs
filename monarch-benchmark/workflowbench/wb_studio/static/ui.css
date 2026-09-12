@@ -104,15 +104,16 @@ label{font-size:var(--text-2)}
 .tabs button.active,.tabs button[aria-selected=true]{border-color:var(--ink);color:var(--ink)}
 .tabs button span{font-family:var(--font-mono);font-size:var(--text-1);margin-left:6px;color:var(--faint);font-weight:400}
 
-/* Status: a word with a square mark; the mark carries the meaning colour. */
+/* Status: a word with a square mark; the mark carries the meaning colour.
+   The mark does not animate. A pulse here auto-started, ran for the length of a run
+   beside fully interactive content, and had no pause control — WCAG 2.2.2 Level A —
+   while adding nothing the word "Running" next to it did not already say. */
 .status{display:inline-flex;align-items:center;gap:7px;font-size:var(--text-2);font-weight:500;letter-spacing:0;text-transform:none;padding:0;background:transparent;color:var(--ink);border:0;white-space:nowrap}
 .status:before{content:"";width:7px;height:7px;background:var(--faint);flex-shrink:0}
 .status.running:before,.status.queued:before,.status.cancelling:before{background:var(--info)}
-.status.running:before{animation:status-pulse 1.4s ease-in-out infinite}
 .status.completed:before{background:var(--accent)}
 .status.failed:before,.status.interrupted:before{background:var(--fail)}
 .status.paused:before,.status.pausing:before,.status.cancelled:before{background:var(--warn)}
-@keyframes status-pulse{0%,100%{opacity:1}50%{opacity:.25}}
 .pass{color:var(--accent-text)}
 .fail{color:var(--fail-text)}
 .neutral{color:var(--muted)}
@@ -209,6 +210,12 @@ details[open]>summary:before{transform:rotate(45deg)}
 @layer utilities{
 .hidden{display:none}
 [hidden]{display:none}
+/* Anything an address can name must clear the sticky 52px running head when it is
+   scrolled to, or the destination lands underneath it and the reader sees the wrong
+   row. `:target` marks it on arrival so "it moved" and "here is why" are the same
+   fact (feature 024, FR-015 navigation). */
+[id]{scroll-margin-top:var(--space-7)}
+:target{box-shadow:-3px 0 0 0 var(--signal)}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none;transition:none;scroll-behavior:auto}}
 }
 .story-reasoning{color:var(--muted);font-style:italic}

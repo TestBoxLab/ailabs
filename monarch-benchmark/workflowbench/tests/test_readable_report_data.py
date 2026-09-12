@@ -87,21 +87,16 @@ def test_reading_accepts_cited_diagnosis_and_retains_analysis_revision(studio):
     assert revised["status"] == "completed"
 
 
-def test_hidden_competitors_cannot_leak_through_new_reading(studio):
+def test_reading_shows_lab_builds_in_the_single_report(studio):
     job, folder = subject_run(studio)
     record = json.loads((folder / "job.json").read_text(encoding="utf-8"))
-    record["settings"]["arms"][0]["name"] = "monarch-lab-secret"
+    record["settings"]["arms"][0]["name"] = "monarch-lab-experiment"
     (folder / "job.json").write_text(json.dumps(record), encoding="utf-8")
-    (folder / "analysis.json").write_text(json.dumps({"status": "completed", "summary": "SECRET hidden findings",
-        "headline": "SECRET", "why": "SECRET", "limitations": "SECRET", "next_actions": [{"text": "SECRET"}]}), encoding="utf-8")
     report = report_data.run_report(studio, job["id"])
-    reading = report["reading"]
-    assert "SECRET" not in json.dumps(reading) and "monarch-lab-secret" not in json.dumps(reading)
-    assert [r["id"] for r in reading["comparison"]] == ["sloppy"]
-    assert reading["status"] == "pending" and reading["actions"] == []
-    assert "SECRET" not in json.dumps(report["narrative"])
-    assert report["failures"]["summary"]["recorded_attempts"] == 2
-    assert report["method"]["recorded_attempts"] == report["method"]["planned_attempts"] == 2
+    assert [r["id"] for r in report["reading"]["comparison"]] == ["oracle", "sloppy"]
+    assert report["lab_setups"] == [{"id": "oracle", "name": "monarch-lab-experiment"}]
+    assert report["failures"]["summary"]["recorded_attempts"] == 4
+    assert report["method"]["recorded_attempts"] == report["method"]["planned_attempts"] == 4
 
 
 def test_invalid_citations_never_become_a_diagnosis(studio):
@@ -177,3 +172,48 @@ def test_reused_baseline_keeps_its_own_initial_repetition_count(studio):
     row = next(r for r in report["reading"]["comparison"] if r["id"] == "without-monarch")
     assert row["initial_solved"] == row["solved"] == 1 and row["retries"] == 0 and row["retry_cost"] == 0
     assert report["matrix"][f"{task} without-monarch"]["state"] == "initial_pass"
+
+
+def test_task_progress_distinguishes_ungraded_infrastructure_and_missing():
+    rows = [result("ungraded", "m", False, flags=["grading=ungraded"]),
+            result("infra", "m", False, termination="infra:timeout")]
+    progress = measures.task_progress(rows, ["ungraded", "infra", "missing"])
+    assert progress["states"] == {"ungraded": "ungraded", "infra": "infrastructure", "missing": "missing"}
+    assert progress["ungraded_tasks"] == progress["infrastructure_tasks"] == progress["missing_tasks"] == 1
+
+
+def test_reading_excludes_retired_tasks_without_losing_attempt_identity(studio, monkeypatch):
+    job, folder = subject_run(studio)
+    job = studio.job(job["id"])
+    retired, live = job["settings"]["tasks"]
+    for row in job["results"]:
+        row["cost_usd"] = 2 if row["task"] == retired else 3
+    monkeypatch.setattr(studio, "job", lambda identity: job)
+    studio.tasks.pop(retired)
+    report = report_data.run_report(studio, job["id"])
+    row = next(r for r in report["reading"]["comparison"] if r["id"] == "sloppy")
+    assert row["tasks"] == row["attempts"] == 1 and row["cost"] == 3
+    assert len(report["reading"]["cases"]) == 1
+    case = report["reading"]["cases"][0]
+    assert case["task"] == live and case["cost"] == 3
+    expected = next(i for i, row in enumerate(job["results"], 1) if row["task"] == live and row["model"] == "sloppy")
+    assert case["attempt_ids"] == [f"attempt-{expected}"]
+    assert report["matrix"][f"{retired} sloppy"]["comparable"] is False
+    assert report["method"]["live_task_count"] == 1
+    assert "performance" in report and "authored" in report and "patterns" in report
+
+
+def test_retired_only_recorded_version_remains_visible_without_live_credit(studio, monkeypatch):
+    job, folder = subject_run(studio)
+    job = studio.job(job["id"])
+    retired = job["settings"]["tasks"][0]
+    for row in job["results"]:
+        if row["model"] == "sloppy" and row["task"] == retired:
+            row["model"] = "monarch@old"
+    monkeypatch.setattr(studio, "job", lambda identity: job)
+    studio.tasks.pop(retired)
+    report = report_data.run_report(studio, job["id"])
+    assert "monarch@old" in report["order"]
+    old = next(r for r in report["reading"]["comparison"] if r["id"] == "monarch@old")
+    assert old["attempts"] == old["solved"] == 0
+    assert report["matrix"][f"{retired} monarch@old"]["comparable"] is False

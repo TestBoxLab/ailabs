@@ -92,7 +92,7 @@ def monarch_site(site, kb=KB, monarch_repo=None, port=None):
 def resolve_monarch(site, env=MONARCH_ENV):
     return config.resolve(site / "config/products/simulated-apps.yaml",
                           site / "config/plans/smoke-frontier.yaml",
-                          env=env, audiences={"internal": ["*"]})
+                          env=env)
 
 
 def arm_against(site, fake, port, repo, fd=None, kb=KB, env=None, langfuse=None):

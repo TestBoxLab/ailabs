@@ -1,4 +1,5 @@
 # Free checks: no API keys, no model calls.
+# - every wb_* import resolves to a file git tracks
 # - unit/integration tests against the simulated world
 # - corpus validation: contract hashes unchanged, every check fails on the
 #   untouched world (no-op), scripted oracle passes where one exists
@@ -25,6 +26,11 @@ jobs:
       - name: Vendor AutomationBench (upstream 1.0.6, pinned)
         run: git clone -q https://github.com/zapier/AutomationBench.git vendor/automation-bench && git -C vendor/automation-bench checkout -q 4a8e106
       - run: uv sync --frozen
+      # Runs before the tests because it catches what the tests cannot: a tracked
+      # file importing a module nobody committed passes every test in the author's
+      # working tree and raises on a clean checkout. Four shipped on 11 Sep 2026.
+      - name: Imports resolve to tracked files
+        run: uv run python scripts/check_imports.py
       - name: Tests
         run: uv run python -m pytest tests -q
       - name: Corpus validation (pilot tasks + imported corpus)

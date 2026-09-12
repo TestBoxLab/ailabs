@@ -1,7 +1,8 @@
 """wb corpus declare: derive the dual-invariant contract for imported tasks.
 
 AutomationBench tasks carry assertions only. Two mechanical rules give the
-invariant without judgment calls:
+invariant, deterministically, so re-running is idempotent (the contract hash
+moves, and tasks that ran under the old contract will not regrade):
 
   expected_changes  <- one matcher per assertion, from its type:
       *_field_equals / *_has_property / *_field_contains with a record id
@@ -10,38 +11,22 @@ invariant without judgment calls:
           -> op "added" on <service>.<collection>[*]  (collection from the
              world model; "*" when the service only logs actions)
   allowed_changes   <- the product's side-effect file (config/side-effects.yaml
-      for simulated-apps): housekeeping a real platform performs alongside
-      the asked-for write (read markers, thread updates, the Salesforce
-      is_closed/is_won pair when a stage closes). Kept short; the next run's
-      unexpected_changes is the review queue for additions.
+      for simulated-apps). Kept short; the next run's unexpected_changes is the
+      review queue for additions.
 
-Derivation is deterministic, so re-running is idempotent. The contract hash
-changes; tasks that already ran under the old contract will not regrade.
-
-The scored domains (6 Sep 2026)
--------------------------------
-The six scored AutomationBench domains use 335 assertion types, 203 of them
-positive. `_TYPES` below was hand-written for the `simple` domain and covered
-none of the rest, so 218 of the 600 scored tasks derived no matcher at all and
-every real change a competitor made landed in `unexpected_changes`: in the Hard
-round every competitor scored 0% for this reason alone.
-
-Hand-listing 203 types would rot the moment the vendor adds one, so the
-mapping is derived instead, from two sources that are already ground truth:
-
-  * the service and collection come from the vendor's own world model
-    (`WorldState`'s fields and each service's collections), matched against the
-    assertion type's name, which is `<service>_<noun>_<verb>` throughout;
-  * whether an assertion demands a change at all comes from the vendor's
-    `negative_assertion` marker: a "not sent" / "not exists" assertion is
-    satisfied by doing nothing, so it grants nothing.
+The type mapping is derived, not hand-listed: 335 assertion types across the six
+scored domains would rot the moment the vendor adds one (hand-listing covered only
+`simple`, so 218 of 600 scored tasks derived no matcher and every real change
+landed in unexpected_changes -- every competitor scored 0% in the Hard round for
+that reason alone). Service and collection come from the vendor's own world model
+matched against the type's `<service>_<noun>_<verb>` name; whether an assertion
+demands a change at all comes from the vendor's `negative_assertion` marker, since
+"not sent" is satisfied by doing nothing.
 
 `_COLLECTION_ALIAS` names the two dozen types whose noun is not its collection
-(`gmail_email_*` reads `gmail.messages`, `zoom_action_exists` reads
-`zoom.meetings`), each one read off the handler's source in
-`vendor/automation-bench`. `_ID_KEYS` names the payload keys that point at a
-record that already exists, which is what separates "change this record's
-field" from "a new record must appear".
+(`gmail_email_*` reads `gmail.messages`), each read off the handler's source in
+`vendor/automation-bench`. `_ID_KEYS` names the payload keys pointing at an
+existing record -- what separates "change this field" from "a record must appear".
 """
 from __future__ import annotations
 

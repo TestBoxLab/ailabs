@@ -108,7 +108,7 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
     writes = [a for a in report.get("actions", []) if a.get("method") not in (None, "GET")]
     reads = [a for a in report.get("actions", []) if a.get("method") == "GET"]
     errors = [a for t in timeline for a in t["actions"] if a["status"] == "error"]
-    finish = [e["id"] for e in trace if e["type"] == "attempt_finished"]
+    finish = [e["id"] for e in trace if e["type"] in ("attempt_finished", "result")]
     last = timeline[-1] if timeline else None
     reqs = report.get("requirements", [])
     met = [r for r in reqs if r["passed"] is True]
@@ -145,7 +145,7 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
     for r in unmet:
         svc = service_for(r)
         hits = [w for w in writes if _on(svc, w)]
-        if negative(r):
+        if negative(r) and hits:
             wrong.append({"text": "The task ruled this out and it happened anyway: " + r["title"] + "."
                           + (" The write that did it: " + "; ".join(f'{w["method"]} {w["url"]}' for w in hits[:3]) + "." if hits else ""),
                           "event_ids": [w["event_id"] for w in hits] or finish})
@@ -174,10 +174,17 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
     # One failure mode, in the order a reader would rule them out.
     if result.get("passed"):
         mode = "passed"
-    elif infra or (termination.startswith("infra:") and termination not in RAN_OUT):
-        mode = "infrastructure"
     elif termination in RAN_OUT or "turn limit" in str(result.get("error", "")).lower():
         mode = "ran_out"
+    elif infra or termination.startswith("infra:"):
+        mode = "infrastructure"
+    # A result receipt supports checker facts, so the modes below that rest on the checker —
+    # a ruled-out state reached, a change outside the request, a world nothing changed — still
+    # classify without a trajectory. The two that claim what the agent did are already out of
+    # reach without one: `wrong_result` needs a write on the requirement's own service, and
+    # `missing_action` is only reached past `not writes`. An absent trajectory never proves an
+    # absent write here; do not add a blanket `not actions` guard, which only buries the three
+    # the checker proved.
     elif errors and (last_action := next((a for t in reversed(timeline) for a in reversed(t["actions"])), None)) and last_action["status"] == "error":
         mode = "tool_error"
     elif any(negative(r) for r in unmet):
@@ -221,13 +228,6 @@ def story(result: dict, trace: list[dict], report: dict, assertions: list[dict] 
             "turning_point": turning, "limits": LIMITS}
 
 
-def without_reasoning(s: dict | None) -> dict | None:
-    """The same story for readers outside the lab: the provider's reasoning
-    summaries stay internal, the observed timeline does not."""
-    if not s:
-        return s
-    timeline = [{**t, "reasoning": ""} for t in s.get("timeline", [])]
-    return {**s, "timeline": [{**t, "sentence": _sentence(t)} for t in timeline]}
 
 
 def run_story(attempts: list[dict], names: dict[str, str] | None = None) -> dict:
@@ -257,7 +257,7 @@ def run_story(attempts: list[dict], names: dict[str, str] | None = None) -> dict
             clean.append(task)
         elif passed_by:
             separating.append({"task": task, "passed": passed_by, "failed": failed_by})
-        elif len(failed_by) >= 2 and len(modes) == 1 and next(iter(modes)) not in (None, "infrastructure", "ran_out"):
+        elif len(failed_by) >= 2 and len(modes) == 1 and next(iter(modes)) not in (None, "infrastructure", "ran_out", "unclassified"):
             suspect.append({"task": task, "mode_label": MODES[next(iter(modes))], "setups": failed_by})
     paragraphs = []
     for s in by_setup:

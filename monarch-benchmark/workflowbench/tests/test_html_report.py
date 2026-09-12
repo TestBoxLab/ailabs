@@ -260,6 +260,61 @@ def test_wall_clock_is_the_phase_sum(four_arm_store, phase_store):
     assert nothing["n_with"] == 0 and nothing["n_total"] == 1
 
 
+def test_attempt_seconds_does_not_add_the_run_phase_to_its_own_parts():
+    """A real Monarch row carries `run` AND the phases it is made of (FR-025).
+
+    The orchestrator composes `{**arm_phases, "run": ...}` (orchestrator.py:655), so
+    every stored row has a `run` phase that is the whole attempt. Summing it with
+    `authoring` and `execution` reports roughly double the true duration — and the
+    "faster than a harness" claim is read straight off this number. The fixtures above
+    never caught it because none of them carries `run` beside real phases.
+    """
+    from runner.schema import PhaseMetrics
+
+    from wb_report.metrics import attempt_seconds
+
+    real = _row("t1", "monarch", 0, True, phases={
+        "run": PhaseMetrics(turns=1, wall_clock_s=100.0, cost_usd=0.30),
+        "authoring": PhaseMetrics(turns=2, wall_clock_s=60.0, cost_usd=0.20),
+        "execution": PhaseMetrics(wall_clock_s=40.0, cost_usd=0.10),
+        # The same money cut by model. It carries no clock, so it never reached the
+        # sum — but it must stay excluded by name, not by luck.
+        "model:opus": PhaseMetrics(cost_usd=0.30, wall_clock_s=None),
+    }).model_dump()
+    assert attempt_seconds(real) == pytest.approx(100.0)
+
+
+def test_a_phase_nobody_could_price_is_unknown_and_not_zero():
+    """FR-026. `PhaseMetrics.cost_usd` is already None when unpriced; the reader lost it.
+
+    An attempt whose Langfuse read failed holds its full ceiling against the week
+    rather than settling — up to US$ 25.00 apiece. Rendering that phase as US$ 0.00
+    tells a reader the round was cheap while the ledger is still holding the money.
+    """
+    from runner.schema import PhaseMetrics
+
+    from wb_report.metrics import _phase_block
+
+    blind = _row("t1", "monarch", 0, True, phases={
+        "run": PhaseMetrics(wall_clock_s=100.0, cost_usd=None),
+        "authoring": PhaseMetrics(wall_clock_s=60.0, cost_usd=None),
+        "execution": PhaseMetrics(wall_clock_s=40.0, cost_usd=0.10),
+    }).model_dump()
+    phases, _ = _phase_block([blind])
+    assert phases["authoring"]["cost_usd"] is None
+    assert phases["authoring"]["cost_unknown"] == 1
+    # The phase that WAS priced keeps its number; one blind phase does not blind the row.
+    assert phases["execution"]["cost_usd"] == pytest.approx(0.10)
+    assert phases["execution"]["cost_unknown"] == 0
+    # A genuine zero stays zero — it is a reading, not a gap.
+    free = _row("t2", "monarch", 0, True, phases={
+        "run": PhaseMetrics(wall_clock_s=1.0, cost_usd=0.0),
+        "authoring": PhaseMetrics(wall_clock_s=1.0, cost_usd=0.0),
+    }).model_dump()
+    assert _phase_block([free])[0]["authoring"] == {"wall_clock_s": pytest.approx(1.0),
+                                                    "cost_usd": 0.0, "cost_unknown": 0}
+
+
 def test_phase_and_monarch_fields(phase_store, four_arm_store):
     """T014: the phase split, cost per model, questions asked and declined to
     build; and all four empty or zero on a round with only a `run` phase."""
@@ -267,9 +322,9 @@ def test_phase_and_monarch_fields(phase_store, four_arm_store):
 
     m = competitor_metrics(_rows(phase_store, "run-p", "monarch"), k=1)
     assert m["phases"]["authoring"] == {"wall_clock_s": pytest.approx(10.0),
-                                        "cost_usd": pytest.approx(0.35)}
+                                        "cost_usd": pytest.approx(0.35), "cost_unknown": 0}
     assert m["phases"]["execution"] == {"wall_clock_s": pytest.approx(2.0),
-                                        "cost_usd": pytest.approx(0.15)}
+                                        "cost_usd": pytest.approx(0.15), "cost_unknown": 0}
     assert m["cost_per_model"] == {"opus-4.8": pytest.approx(0.35)}
     assert m["questions_asked"] == 2
     assert m["declined_to_build"] == 1
@@ -343,7 +398,7 @@ def test_matrix_block(four_arm_store):
     task carries them."""
     from wb_report.report import build_report
 
-    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    rep = build_report(four_arm_store, "run-h", baseline_arm="oracle")
     m = rep["matrix"]
     assert m["arms"] == ["alpha", "beta", "gamma", "oracle"]
     assert m["has_domain"] is False and m["has_tier"] is False
@@ -382,7 +437,7 @@ def test_matrix_cell_all_infra(tmp_path):
         store.record_episode(_row("t1", "beta", trial, False, run="run-i",
                                   termination="infra:model_unavailable"))
     store.finish_run("run-i")
-    cell = build_report(store, "run-i", audience="internal")["matrix"]["rows"][0]["cells"]["beta"]
+    cell = build_report(store, "run-i")["matrix"]["rows"][0]["cells"]["beta"]
     assert cell["passed"] == 0 and cell["attempted"] == 0 and cell["infra"] == 2
     assert cell["category"] == "infra"
 
@@ -392,7 +447,7 @@ def test_failures_block(four_arm_store, phase_store):
     competitor, then repetition; an empty list when nothing failed."""
     from wb_report.report import build_report
 
-    f = build_report(four_arm_store, "run-h", audience="internal")["failures"]
+    f = build_report(four_arm_store, "run-h")["failures"]
     assert [(e["task_id"], e["arm"], e["trial"]) for e in f] == [
         ("t2", "alpha", 0),
         ("t2", "beta", 0), ("t2", "beta", 1),
@@ -409,7 +464,7 @@ def test_failures_block(four_arm_store, phase_store):
     assert gamma["error"] == "<script>alert(1)</script>"     # raw here; escaped at render
 
     # a competitor that failed nothing contributes nothing
-    only_alpha = build_report(phase_store, "run-p", audience="internal")["failures"]
+    only_alpha = build_report(phase_store, "run-p")["failures"]
     assert [e["arm"] for e in only_alpha] == ["monarch"]
 
 
@@ -418,7 +473,7 @@ def test_size_and_provenance_blocks(four_arm_store):
     block of contracts section 5."""
     from wb_report.report import build_report
 
-    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    rep = build_report(four_arm_store, "run-h", baseline_arm="oracle")
     assert rep["size"] == {"prompts": 2, "repetitions": 2, "per_competitor": 4,
                            "competitors": 4, "total": 16}
 
@@ -432,8 +487,6 @@ def test_size_and_provenance_blocks(four_arm_store):
     assert p["task_hashes"] == ["abc123de"]        # first 8 characters, distinct
     assert p["started"] and p["finished"]
     assert p["stop_reason"] is None
-    assert p["audience"] == "internal"
-    assert p["withheld"] == []                     # internal names them; none here
     assert p["mode"] is None
 
 
@@ -469,14 +522,12 @@ def test_markdown_table_is_pinned(m4_store):
     """
     from wb_report.report import build_report, render_md
 
-    md = render_md(build_report(m4_store, "run-x", audience="internal",
+    md = render_md(build_report(m4_store, "run-x",
                                 baseline_arm="kimi-k3/api"))
     assert md == (
         '# WorkflowBench report — run-x\n'
         '\n'
-        'audience: **internal** · suite `workflowbench-synthetic@0.1` · config `cfg123` · k=2\n'
-        '\n'
-        '> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**\n'
+        'suite `workflowbench-synthetic@0.1` · config `cfg123` · k=2\n'
         '\n'
         '## Per-arm results\n'
         '\n'
@@ -530,7 +581,7 @@ def test_page_has_the_four_tables(four_arm_store):
     """T025: four tables, the header size line, and a source line under each."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     assert page.count("<table") >= 4
     for caption in ("Strict pass rate per competitor", "Comparisons against the baseline",
@@ -552,7 +603,7 @@ def test_matrix_details_table_repeats_the_reasons(four_arm_store):
     details table below it, so nothing is available only on hover."""
     from wb_report.report import build_report, render_html
 
-    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
+    rep = build_report(four_arm_store, "run-h", baseline_arm="oracle")
     page = render_html(rep)
     assert "<caption>Task matrix, the reason behind every cell</caption>" in page
     for row in rep["matrix"]["rows"]:
@@ -573,24 +624,24 @@ def test_no_inf_or_nan(zero_pass_store):
 
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(zero_pass_store, "run-z", audience="internal"))
+    page = render_html(build_report(zero_pass_store, "run-z"))
     assert "n/a" in page
     assert not re.search(r"\binf\b", page, re.IGNORECASE)
     assert not re.search(r"\bnan\b", page, re.IGNORECASE)
 
 
-def test_sort_script_present_and_optional(four_arm_store):
-    """T030 (research R5): the sorting script by default, absent with
-    sortable=False."""
+def test_only_the_scrollspy_script_is_on_the_page(four_arm_store):
+    """T030 (research R5): the table-of-contents scrollspy and nothing else.
+
+    Column sorting went away with the redesign, so the page ships one script.
+    """
     from wb_report.html import render_page
     from wb_report.report import build_report
 
-    rep = build_report(four_arm_store, "run-h", audience="internal", baseline_arm="oracle")
-    # The page carries the reference's table-of-contents scrollspy and nothing
-    # else; column sorting went away with the redesign, and `sortable` is
-    # accepted only so `wb report --no-sort` keeps working.
-    assert "IntersectionObserver" in render_page(rep)
-    assert render_page(rep, sortable=False) == render_page(rep)
+    rep = build_report(four_arm_store, "run-h", baseline_arm="oracle")
+    page = render_page(rep)
+    assert "IntersectionObserver" in page
+    assert page.count("<script") == 1
 
 
 def test_single_competitor_round(phase_store, tmp_path):
@@ -605,33 +656,28 @@ def test_single_competitor_round(phase_store, tmp_path):
         store.record_episode(_row(task, "alpha", 0, True, run="run-s"))
     store.finish_run("run-s")
 
-    page = render_html(build_report(store, "run-s", audience="internal"))
+    page = render_html(build_report(store, "run-s"))
     assert "<caption>Comparisons against the baseline</caption>" not in page
     assert "no paired comparison to make" in page
     assert "no attempt failed" in page
     assert "<caption>Failures</caption>" not in page
 
 
-def test_report_cli_no_sort(four_arm_store, tmp_path, monkeypatch, capsys):
-    """T031 (contracts/cli.md): `wb report --no-sort` writes a page with no
-    script; without the flag the script is there."""
+def test_report_cli_writes_the_real_page(four_arm_store, tmp_path, monkeypatch, capsys):
+    """T031 (contracts/cli.md): `wb report` writes the page, not a markdown blob."""
     from wb_orchestrator.cli import main
 
     db = str(four_arm_store.path)
     out = tmp_path / "reports"
     assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle", "--no-sort"]) == 0
-    page = (out / "report-run-h-internal.html").read_text(encoding="utf-8")
-    assert "<table" in page                       # still the real page, not the blob
-
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle"]) == 0
+    assert "<table" in (out / "report-run-h.html").read_text(encoding="utf-8")
 
 
 def test_renderer_cannot_query_the_store():
     """T040 (plan design note 1, research R7): wb_report/html.py imports neither
     Store nor sqlite3, so no table on the page can re-read the database and
-    re-admit a competitor the audience gate removed."""
+    put a number on the page that no figure stands behind."""
     import ast
     from pathlib import Path
 
@@ -657,7 +703,7 @@ def test_phase_columns_render(phase_store):
     and declined to build."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(phase_store, "run-p", audience="internal",
+    page = render_html(build_report(phase_store, "run-p",
                                     baseline_arm="alpha"))
     for header in ("builder cost", "dispatch cost", "builder s", "dispatch s",
                    "cost by model"):
@@ -672,7 +718,7 @@ def test_phase_columns_absent_without_phases(four_arm_store):
     shows those column headers at all - an empty column is worse than none."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     for header in ("builder cost", "dispatch cost", "builder s", "dispatch s",
                    "cost by model", "Monarch phases"):
@@ -709,7 +755,7 @@ def test_absent_authoring_is_na(tmp_path):
                                       turns=1, cost_usd=0.05, wall_clock_s=4.0)}))
     store.finish_run("run-ro")
 
-    rep = build_report(store, "run-ro", audience="internal", baseline_arm="monarch")
+    rep = build_report(store, "run-ro", baseline_arm="monarch")
     run_only = {m["arm"]: m for m in rep["metrics"]}["monarch-run-only"]
     assert "authoring" not in run_only["phases"]
     assert "execution" in run_only["phases"]
@@ -737,7 +783,7 @@ def test_missing_cost_share_on_the_source_line(tmp_path):
         store.record_episode(_row(task, "monarch", 0, True, run="run-mc", flags=flags))
     store.finish_run("run-mc")
 
-    rep = build_report(store, "run-mc", audience="internal")
+    rep = build_report(store, "run-mc")
     page = render_html(rep)
     assert "cost missing on 1/3 attempts" in page
     assert rep["provenance"]["missing_cost"] == {"missing": 1, "total": 3}
@@ -747,8 +793,7 @@ def test_missing_cost_share_on_the_source_line(tmp_path):
 
 @pytest.fixture()
 def lab_store(tmp_path):
-    """A round with `monarch` and `monarch-lab`, so the gate has something to
-    strip for a non-internal audience."""
+    """A round with `monarch` and `monarch-lab`: one report shows both."""
     store = Store(tmp_path / "wb.sqlite3")
     store.create_run("run-g", "cfgg", "workflowbench-synthetic@0.1",
                      {"suite_dir": "tasks", "arms": ["monarch", "monarch-lab"],
@@ -765,30 +810,24 @@ def lab_store(tmp_path):
     return store
 
 
-def test_gate_in_every_table(lab_store):
-    """T038 (FR-023, SC-003): rendered for public-rung2, the string monarch-lab
-    appears nowhere in the file - not in a table, a title attribute, a caption,
-    a source line or the provenance block."""
+def test_every_table_carries_every_competitor(lab_store):
+    """One report (11 Sep 2026): a lab competitor is rendered like any other —
+    in the tables, the matrix, the failures and the metrics."""
     from wb_report.report import build_report, render_html
 
-    rep = build_report(lab_store, "run-g", audience="public-rung2")
-    assert rep["arms"] == ["monarch"]
-    assert rep["arms_stripped_by_gate"] == ["monarch-lab"]
+    rep = build_report(lab_store, "run-g")
+    assert rep["arms"] == ["monarch", "monarch-lab"]
 
     page = render_html(rep)
-    assert "monarch-lab" not in page
-    # the count is public; the name is not
-    assert "1 withheld" in page
-    # and the gated competitor is in none of the new blocks
-    for row in rep["matrix"]["rows"]:
-        assert "monarch-lab" not in row["cells"]
-    assert all(f["arm"] != "monarch-lab" for f in rep["failures"])
-    assert all(m["arm"] != "monarch-lab" for m in rep["metrics"])
+    assert "monarch-lab" in page
+    assert "withheld" not in page
+    assert any("monarch-lab" in row["cells"] for row in rep["matrix"]["rows"])
+    assert any(m["arm"] == "monarch-lab" for m in rep["metrics"])
 
 
-def test_public_audience_shows_ratios_not_dollars(four_arm_store, tmp_path):
-    """T039 (FR-024): no dollar figure reaches a non-internal audience; the cost
-    columns are ratios against the baseline."""
+def test_the_report_shows_dollars_not_ratios(tmp_path):
+    """One report: cost is the exact figure. The ratio-only cost columns the
+    public audience used to get are gone with it."""
     from wb_report.report import build_report, render_html
 
     store = Store(tmp_path / "wb.sqlite3")
@@ -799,22 +838,10 @@ def test_public_audience_shows_ratios_not_dollars(four_arm_store, tmp_path):
             store.record_episode(_row(task, "monarch", trial, True, run="run-pub"))
     store.finish_run("run-pub")
 
-    page = render_html(build_report(store, "run-pub", audience="public-rung2"))
-    assert "US$" not in page
-    assert '<th title="cost vs baseline">' in page
-    assert '<th title="cost total">' not in page
-    assert '<th title="cost / passed">' not in page
-
-
-def test_internal_watermark_survives(lab_store):
-    """T042: an internal page carrying a lab competitor still says DO NOT
-    EXPORT, as the markdown report already does."""
-    from wb_report.report import build_report, render_html, render_md
-
-    rep = build_report(lab_store, "run-g", audience="internal", baseline_arm="monarch")
-    assert "DO NOT EXPORT" in render_md(rep)
-    assert "do not export" in render_html(rep).lower()
-    assert "monarch-lab" in render_html(rep)      # internal names it, and warns
+    page = render_html(build_report(store, "run-pub"))
+    assert '<th title="cost total">' in page
+    assert '<th title="cost / passed">' in page
+    assert '<th title="cost vs baseline">' not in page
 
 
 # -- spec review of 68e9eb3 ---------------------------------------------------
@@ -828,7 +855,7 @@ def test_provenance_names_plan_and_product_not_the_mapping(tmp_path):
     store.create_run("run-cfg", "cfgc", "workflowbench-synthetic@0.1",
                      {"suite_dir": "tasks", "arms": ["alpha"], "k": 1, "n_tasks": 1,
                       # the real shape, as out/wb.sqlite3 records it
-                      "plan": {"name": "railway-round-001", "audience": "internal",
+                      "plan": {"name": "railway-round-001",
                                "baseline": "alpha", "competitors": ["alpha"],
                                "description": "a plan with a long description " * 20},
                       "product": {"name": "simulated-apps", "kind": "simulated",
@@ -836,10 +863,10 @@ def test_provenance_names_plan_and_product_not_the_mapping(tmp_path):
     store.record_episode(_row("t1", "alpha", 0, True, run="run-cfg"))
     store.finish_run("run-cfg")
 
-    p = build_report(store, "run-cfg", audience="internal")["provenance"]
+    p = build_report(store, "run-cfg")["provenance"]
     assert p["plan"] == "railway-round-001"
     assert p["product"] == "simulated-apps"
-    page = render_html(build_report(store, "run-cfg", audience="internal"))
+    page = render_html(build_report(store, "run-cfg"))
     assert "a plan with a long description" not in page   # no configuration dump
     assert "'baseline'" not in page and '"baseline"' not in page
     assert "simulated-apps" in page and "railway-round-001" in page
@@ -851,7 +878,7 @@ def test_provenance_names_plan_and_product_not_the_mapping(tmp_path):
                        "plan": "smoke-006", "product": "simulated-apps"})
     store2.record_episode(_row("t1", "alpha", 0, True, run="run-str"))
     store2.finish_run("run-str")
-    p2 = build_report(store2, "run-str", audience="internal")["provenance"]
+    p2 = build_report(store2, "run-str")["provenance"]
     assert p2["plan"] == "smoke-006" and p2["product"] == "simulated-apps"
 
 
@@ -860,7 +887,7 @@ def test_matrix_cell_carries_the_reason_as_a_title(four_arm_store):
     attribute AND repeated in the details table."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     assert 'title="unexpected change' in page
     assert 'title="assertion failed"' in page
@@ -881,7 +908,7 @@ def test_failures_table_keeps_the_full_error_in_the_title(tmp_path):
                               error=long_error))
     store.finish_run("run-e")
 
-    page = render_html(build_report(store, "run-e", audience="internal"))
+    page = render_html(build_report(store, "run-e"))
     assert long_error.strip() in page.replace("&quot;", '"')   # the full text, in title
     assert f'title="{long_error}"' in page or f"title='{long_error}'" in page or \
         long_error in page
@@ -892,7 +919,7 @@ def test_matrix_details_table_has_the_repetition(four_arm_store):
     detail."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     details = page[page.index("Task matrix, the reason behind every cell"):]
     header = details[:details.index("</tr>")]
@@ -905,7 +932,7 @@ def test_metrics_table_shows_the_strict_pass_denominator(four_arm_store):
     the infrastructure exclusion is visible where the rate is read."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     header = page[page.index('id="success"'):]
     header = header[:header.index("</tr>")]
@@ -920,7 +947,7 @@ def test_comparison_carries_its_own_source(four_arm_store):
     across unrelated rows."""
     from wb_report.report import build_report, render_html
 
-    rep = build_report(four_arm_store, "run-h", audience="internal",
+    rep = build_report(four_arm_store, "run-h",
                        baseline_arm="oracle")
     for c in rep["comparisons"]:
         assert c["source"]["denominator"] == c["pairs"]
@@ -1022,7 +1049,7 @@ def test_recorded_run_renders_four_tables():
 
     store = _ReadOnlyStore(_RECORDED_DB)
     try:
-        rep = build_report(store, _RECORDED_RUN, audience="internal",
+        rep = build_report(store, _RECORDED_RUN,
                            baseline_arm="claude-opus-5/api")
         page = render_html(rep)
     finally:
@@ -1064,13 +1091,12 @@ def test_page_and_markdown_agree(four_arm_store, phase_store):
     from `metrics`, the markdown from `figures` - so this is what catches them
     drifting apart.
     """
-    import re
 
     from wb_report.report import build_report, render_html, render_md
 
     for store, run_id, baseline in ((four_arm_store, "run-h", "oracle"),
                                     (phase_store, "run-p", "alpha")):
-        rep = build_report(store, run_id, audience="internal", baseline_arm=baseline)
+        rep = build_report(store, run_id, baseline_arm=baseline)
         page, md = render_html(rep), render_md(rep)
 
         for m in rep["metrics"]:
@@ -1212,7 +1238,7 @@ def test_page_has_the_seven_sections(four_arm_store):
     source line."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     for section in SECTIONS:
         assert f'<section class="part" id="{section.lower()}">' in page, section
@@ -1230,7 +1256,7 @@ def test_overview_section_says_the_mode_in_plain_words(phase_store, four_arm_sto
     the competitor list are all in the overview."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(phase_store, "run-p", audience="internal",
+    page = render_html(build_report(phase_store, "run-p",
                                     baseline_arm="alpha"))
     assert "create + run: Monarch builds the workflow (builder) and runs it (dispatch)" in page
     assert "prompts: 2" in page
@@ -1238,7 +1264,7 @@ def test_overview_section_says_the_mode_in_plain_words(phase_store, four_arm_sto
     assert "monarch" in page and "alpha" in page
 
     # a round with no mode recorded says nothing about one rather than guessing
-    plain = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    plain = render_html(build_report(four_arm_store, "run-h",
                                      baseline_arm="oracle"))
     assert "run-only: dispatch only" not in plain
 
@@ -1248,7 +1274,7 @@ def test_success_section_has_chart_matrix_and_comparison(four_arm_store):
     comparison with its plain-words verdict."""
     from wb_report.report import build_report, render_html
 
-    rep = build_report(four_arm_store, "run-h", audience="internal",
+    rep = build_report(four_arm_store, "run-h",
                        baseline_arm="oracle")
     page = render_html(rep)
     success = page[page.index('id="success"'):page.index('id="cost"')]
@@ -1264,7 +1290,7 @@ def test_cost_section(four_arm_store):
     """Cost carries the three cost figures, the token columns and its chart."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     cost = page[page.index('id="cost"'):page.index('id="time"')]
     assert "<svg" in cost
@@ -1277,7 +1303,7 @@ def test_time_section(four_arm_store):
     """Time carries the wall-clock mean and median, turns and tool calls."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     time_s = page[page.index('id="time"'):page.index('id="failures"')]
     assert "<svg" in time_s
@@ -1290,7 +1316,7 @@ def test_monarch_phases_section(phase_store, four_arm_store):
     section is absent when no Monarch competitor ran."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(phase_store, "run-p", audience="internal",
+    page = render_html(build_report(phase_store, "run-p",
                                     baseline_arm="alpha"))
     assert '<section class="part" id="monarch-phases">' in page
     assert "<h2>Monarch phases</h2>" in page
@@ -1310,7 +1336,7 @@ def test_monarch_phases_section(phase_store, four_arm_store):
     assert "opus-4.8" in cost
 
     # and none of it on a round without Monarch
-    plain = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    plain = render_html(build_report(four_arm_store, "run-h",
                                      baseline_arm="oracle"))
     assert "Monarch phases" not in plain
 
@@ -1319,7 +1345,7 @@ def test_failures_section_category_vocabulary(four_arm_store):
     """The failures table keeps its columns and the category vocabulary."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(four_arm_store, "run-h", audience="internal",
+    page = render_html(build_report(four_arm_store, "run-h",
                                     baseline_arm="oracle"))
     failures = page[page.index('id="failures"'):page.index('id="provenance"')]
     for header in ("task", "competitor", "repetition", "termination", "error",
@@ -1327,13 +1353,13 @@ def test_failures_section_category_vocabulary(four_arm_store):
         assert f'<th title="{header}">' in failures, header
 
 
-def test_sections_keep_the_gate(lab_store):
-    """Every section is built from the gated competitor list: a public render
-    names the lab competitor nowhere, in any of the seven."""
+def test_sections_carry_every_competitor(lab_store):
+    """One report: every section is built from the full competitor list, so a
+    lab competitor appears in all seven."""
     from wb_report.report import build_report, render_html
 
-    page = render_html(build_report(lab_store, "run-g", audience="public-rung2"))
-    assert "monarch-lab" not in page
+    page = render_html(build_report(lab_store, "run-g"))
+    assert "monarch-lab" in page
     for section in SECTIONS:
         assert f'<section class="part" id="{section.lower()}">' in page, section
 
@@ -1363,140 +1389,6 @@ def test_questions_asked_deduplicates_by_request(tmp_path):
 
     # no flag and no log: nobody asked anything
     assert _questions_asked(_row("t1", "monarch", 0, True).model_dump()) == 0
-
-
-# -- the executive page -------------------------------------------------------
-
-def test_executive_page_shape(phase_store, tmp_path):
-    """Monarch first everywhere, five sections, and the design system's markup."""
-    from wb_report.report import build_report, render_executive
-
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
-                                         baseline_arm="alpha"),
-                            tasks_dir=tmp_path)
-    for ident in ("headline", "charts", "tasks", "verdict"):
-        assert f'<section class="part" id="{ident}">' in page, ident
-    assert page.count('class="mcard"') == 5   # four headline cards + changes nobody asked for
-    assert page.count('class="bars"') == 5           # one chart per metric
-    assert "Success, first try" in page
-    assert "Success after one retry" in page
-    assert "Monarch benchmark" in page
-    # the design system, not our own styling
-    assert "--paper: #FAF9F5" in page and "--crit: #B3423A" in page
-    assert 'class="part-eyebrow"' in page
-    # the stakeholder page carries no chips, no source lines and no provenance
-    assert 'class="chip"' not in page and 'class="src"' not in page
-    assert 'id="provenance"' not in page
-    # Monarch leads every bar chart
-    for chart in page.split('<div class="bars">')[1:]:
-        first = chart[:chart.index("</div>", chart.index('class="nm"'))]
-        assert "monarch" in first, first[:80]
-
-
-def test_executive_task_rows_are_monarch_only(phase_store, tmp_path):
-    """One full-width row per task with a single Monarch verdict; the other
-    competitors are deliberately absent from this section."""
-    import re
-
-    from wb_report.report import build_report, render_executive
-
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
-                                         baseline_arm="alpha"),
-                            tasks_dir=tmp_path)
-    assert "taskgrid" not in page                    # no grid: stacked rows
-    rows = re.findall(r'<div class="taskrow">(.*?)</div></div>', page, re.S)
-    assert len(rows) == 2                            # one per task
-    for row in rows:
-        assert "alpha" not in row                    # no other competitor
-        assert row.count('class="badge') == 1        # exactly one verdict
-
-
-def test_executive_verdict_colours(four_arm_store, phase_store, tmp_path):
-    """Monarch at or above the best model is good, below it is crit, and an
-    undefined figure is crit with its reason."""
-    from wb_report.html import _verdict_class
-
-    # success: higher is better
-    assert _verdict_class(0.9, 0.8, lower_is_better=False) == "good"
-    assert _verdict_class(0.7, 0.8, lower_is_better=False) == "crit"
-    assert _verdict_class(0.8, 0.8, lower_is_better=False) == "good"   # "at or above"
-    # cost and time: lower is better
-    assert _verdict_class(0.5, 1.0, lower_is_better=True) == "good"
-    assert _verdict_class(2.0, 1.0, lower_is_better=True) == "crit"
-    # a figure we cannot compute is not a pass
-    assert _verdict_class(None, 1.0, lower_is_better=True) == "crit"
-
-    from wb_report.report import build_report, render_executive
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
-                                         baseline_arm="alpha"), tasks_dir=tmp_path)
-    assert 'class="big crit"' in page or 'class="big good"' in page
-
-
-def test_report_cli_format_executive(four_arm_store, tmp_path):
-    """`wb report --format executive` writes the stakeholder page beside the
-    markdown; the default still writes the technical one."""
-    from wb_orchestrator.cli import main
-
-    db, out = str(four_arm_store.path), tmp_path / "r"
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle", "--format", "executive"]) == 0
-    exe = out / "report-run-h-internal-executive.html"
-    assert exe.exists()
-    assert 'id="headline"' in exe.read_text(encoding="utf-8")
-
-    assert main(["--db", db, "--out", str(out), "report", "run-h",
-                 "--baseline", "oracle"]) == 0
-    tech = out / "report-run-h-internal.html"
-    assert 'id="overview"' in tech.read_text(encoding="utf-8")
-
-    # an unknown format is refused by argparse before anything is written
-    with pytest.raises(SystemExit):
-        main(["--db", db, "--out", str(out), "report", "run-h", "--format", "nope"])
-
-
-def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
-    """Technical and executive are siblings: same tokens, same fonts, same
-    themes, and no external resource other than the font stylesheet."""
-    import re
-
-    from wb_report.report import build_report, render_executive, render_html
-
-    rep = build_report(four_arm_store, "run-h", audience="internal",
-                       baseline_arm="oracle")
-    for page in (render_html(rep), render_executive(rep, tasks_dir=tmp_path)):
-        assert "--paper: #FAF9F5" in page and "--accent: #A66A1E" in page
-        assert '<link rel="stylesheet" href="https://fonts.googleapis.com' in page
-        assert ':root[data-theme="dark"]' in page
-        assert "Bricolage Grotesque" in page and "JetBrains Mono" in page
-        # the font stylesheet is the only external reference on either page
-        others = [u for u in re.findall(r'https?://[^"\')\s]+', page)
-                  if "fonts.googleapis.com" not in u and "fonts.gstatic.com" not in u]
-        assert others == [], others
-
-
-def test_chart_text_and_bars_use_theme_tokens(tmp_path):
-    """4 Sep: unstyled SVG text rendered black on the dark theme; unreadable."""
-    from wb_report.html import _bar_chart, CSS
-    assert "svg.chart text" in CSS and "fill: var(--ink)" in CSS
-    assert 'class="cv"' in _bar_chart([("a", 0.5, 0.1)])
-
-
-def test_value_label_sits_past_the_error_bar():
-    """4 Sep: the label was drawn under the error line and looked struck through."""
-    import re
-    from wb_report.html import _bar_chart
-    svg = _bar_chart([("a", 0.5, 0.3)])
-    band = re.search(r'<rect class="ce" x="([\d.]+)" y="\d+" width="([\d.]+)"', svg)
-    hi = float(band.group(1)) + float(band.group(2))
-    label_x = float(re.search(r'class="cv" x="([\d.]+)"', svg).group(1))
-    assert label_x > hi
-
-
-def test_long_chart_labels_are_shortened_with_the_full_name_in_a_tooltip():
-    from wb_report.html import _bar_chart
-    svg = _bar_chart([("monarch@797a8e5d1+feat/railway-dev-deploy", 0.0, None)])
-    assert "<title>monarch@797a8e5d1+feat/railway-dev-deploy</title>" in svg
-    assert "monarch@797a8e5d1+fe…</text>" in svg
 
 
 # -- first try, after retry, retries -----------------------------------------
@@ -1578,7 +1470,7 @@ def test_executive_page_shape(phase_store, tmp_path):
     """Monarch first everywhere, five sections, and the design system's markup."""
     from wb_report.report import build_report, render_executive
 
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+    page = render_executive(build_report(phase_store, "run-p",
                                          baseline_arm="alpha"),
                             tasks_dir=tmp_path)
     for ident in ("headline", "charts", "tasks", "verdict"):
@@ -1607,7 +1499,7 @@ def test_executive_task_rows_are_monarch_only(phase_store, tmp_path):
 
     from wb_report.report import build_report, render_executive
 
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+    page = render_executive(build_report(phase_store, "run-p",
                                          baseline_arm="alpha"),
                             tasks_dir=tmp_path)
     assert "taskgrid" not in page                    # no grid: stacked rows
@@ -1634,7 +1526,7 @@ def test_executive_verdict_colours(four_arm_store, phase_store, tmp_path):
     assert _verdict_class(None, 1.0, lower_is_better=True) == "crit"
 
     from wb_report.report import build_report, render_executive
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+    page = render_executive(build_report(phase_store, "run-p",
                                          baseline_arm="alpha"), tasks_dir=tmp_path)
     assert 'class="big crit"' in page or 'class="big good"' in page
 
@@ -1647,13 +1539,13 @@ def test_report_cli_format_executive(four_arm_store, tmp_path):
     db, out = str(four_arm_store.path), tmp_path / "r"
     assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle", "--format", "executive"]) == 0
-    exe = out / "report-run-h-internal-executive.html"
+    exe = out / "report-run-h-executive.html"
     assert exe.exists()
     assert 'id="headline"' in exe.read_text(encoding="utf-8")
 
     assert main(["--db", db, "--out", str(out), "report", "run-h",
                  "--baseline", "oracle"]) == 0
-    tech = out / "report-run-h-internal.html"
+    tech = out / "report-run-h.html"
     assert 'id="overview"' in tech.read_text(encoding="utf-8")
 
     # an unknown format is refused by argparse before anything is written
@@ -1668,7 +1560,7 @@ def test_both_pages_carry_the_design_system(four_arm_store, tmp_path):
 
     from wb_report.report import build_report, render_executive, render_html
 
-    rep = build_report(four_arm_store, "run-h", audience="internal",
+    rep = build_report(four_arm_store, "run-h",
                        baseline_arm="oracle")
     for page in (render_html(rep), render_executive(rep, tasks_dir=tmp_path)):
         assert "--paper: #FAF9F5" in page and "--accent: #A66A1E" in page
@@ -1724,7 +1616,7 @@ def test_task_row_says_pass_on_retry(tmp_path):
     store.record_episode(_row("t2", "monarch", 1, True, run="run-r", flags=["retry=1"]))
     store.finish_run("run-r")
 
-    rep = build_report(store, "run-r", audience="internal")
+    rep = build_report(store, "run-r")
     cells = {r["task_id"]: r["cells"]["monarch"] for r in rep["matrix"]["rows"]}
     assert cells["t1"]["on_retry"] is False
     assert cells["t2"]["on_retry"] is True
@@ -1753,7 +1645,7 @@ def test_task_row_says_asked_for_input(tmp_path):
         phases={"authoring": PhaseMetrics(turns=1, cost_usd=0.05, wall_clock_s=2.0)}))
     store.finish_run("run-i")
 
-    rep = build_report(store, "run-i", audience="internal")
+    rep = build_report(store, "run-i")
     page = render_executive(rep, tasks_dir=tmp_path)
     assert "fail &middot; asked for input" in page
 
@@ -1775,7 +1667,7 @@ def test_executive_with_monarch_sentence_counts_needs_input(tmp_path):
     store.record_episode(_row("t2", "alpha", 0, True, run="run-ai"))
     store.finish_run("run-ai")
 
-    page = render_executive(build_report(store, "run-ai", audience="internal",
+    page = render_executive(build_report(store, "run-ai",
                                          baseline_arm="alpha"), tasks_dir=tmp_path)
     assert "1 asked for user input." in page
 
@@ -1883,7 +1775,7 @@ def test_technical_page_shows_the_answer_key_as_na(tmp_path):
 
     store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
                                                  _cannot_act("t2", run=run)])
-    rep = build_report(store, "run-na", audience="internal", baseline_arm="alpha")
+    rep = build_report(store, "run-na", baseline_arm="alpha")
     page = render_html(rep)
     # the sentence under the success table, and the reason on every oracle cell
     assert NA_REASON in page
@@ -1910,7 +1802,7 @@ def test_executive_page_shows_the_answer_key_bar_as_na(tmp_path):
 
     store = _oracle_store(tmp_path, lambda run: [_cannot_act("t1", run=run),
                                                  _cannot_act("t2", run=run)])
-    rep = build_report(store, "run-na", audience="internal", baseline_arm="alpha")
+    rep = build_report(store, "run-na", baseline_arm="alpha")
     page = render_executive(rep, tasks_dir=tmp_path)
     assert "best model: alpha" in page
     assert "best model: oracle" not in page
@@ -1932,7 +1824,7 @@ def test_real_round_renders_the_answer_key_as_na():
     store = _Store(db)
     if store.run("run-20260905-004921") is None:
         pytest.skip("run-20260905-004921 not in the store")
-    rep = build_report(store, "run-20260905-004921", audience="internal")
+    rep = build_report(store, "run-20260905-004921")
     oracle = next((m for m in rep["metrics"] if m["arm"] == "oracle"), None)
     if oracle is None:
         pytest.skip("no answer key in that round")
@@ -2009,7 +1901,7 @@ def test_monarch_section_shows_the_assumptions_as_a_tooltip(phase_store):
     table stays readable and the reader can still see what it assumed."""
     from wb_report.report import build_report, render_html
 
-    report = build_report(phase_store, "run-p", audience="internal", baseline_arm="alpha")
+    report = build_report(phase_store, "run-p", baseline_arm="alpha")
     for attempts in report["monarch_attempts"].values():
         attempts[0]["assumptions"] = ["assumed <Denver>", "used the first contact",
                                       "kept the owner", "ignored the note"]
@@ -2057,7 +1949,7 @@ def test_front_door_counts_come_from_the_access_log(tmp_path):
 def test_front_door_columns_and_failure_detail(phase_store, tmp_path):
     from wb_report.report import build_report, render_html
 
-    report = build_report(phase_store, "run-p", audience="internal", baseline_arm="alpha")
+    report = build_report(phase_store, "run-p", baseline_arm="alpha")
     for attempts in report["monarch_attempts"].values():
         for a in attempts:
             a["front_door_calls"], a["front_door_errors"] = 7, 1
@@ -2073,7 +1965,7 @@ def test_the_executive_page_shows_collateral_damage(phase_store):
     """Two competitors can share a pass rate and differ entirely in how much
     they touched that nobody asked for; the stakeholder page has to say so."""
     from wb_report.report import build_report, render_executive
-    page = render_executive(build_report(phase_store, "run-p", audience="internal",
+    page = render_executive(build_report(phase_store, "run-p",
                                          baseline_arm=None))
     text = re.sub(r"<[^>]+>", " ", page).lower()
     # Plain words on purpose: the stakeholder page says what the number counts,

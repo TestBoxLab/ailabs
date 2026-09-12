@@ -135,7 +135,9 @@ def test_genesis_embedding_history_uses_receipt_never_token_estimate(tmp_path, m
     from wb_studio import genesis_harness, genesis_memory_suite
     from unittest.mock import Mock
     ledger = BudgetLedger(tmp_path / "budget.sqlite3")
+    # Embedding passes the weekly allowance gate before it reserves; this test is about the receipt.
     genesis = SimpleNamespace(studio=SimpleNamespace(ledger=ledger),
+        allowance_allows=lambda amount: (True, None),
         config=SimpleNamespace(route_for=lambda *args, **kwargs: {"id": "gpt-5.6-sol", "available": True}))
     result = SimpleNamespace(data=[SimpleNamespace(embedding=[.1, .2])],
         usage=None if tokens is None else SimpleNamespace(prompt_tokens=tokens))

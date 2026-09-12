@@ -1,0 +1,29 @@
+# Build from a source-only context at repository root; no local credentials or runtime data.
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+COPY --from=node:22-bookworm-slim /usr/local/ /usr/local/
+ARG CODEX_VERSION=0.153.4
+ARG PLAYWRIGHT_VERSION=1.62.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers PLAYWRIGHT_MODULE=/usr/local/lib/node_modules/playwright BROWSER_CHANNEL=chromium
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @openai/codex@${CODEX_VERSION} playwright@${PLAYWRIGHT_VERSION} && codex --version
+RUN playwright install --with-deps chromium
+WORKDIR /app/monarch-benchmark/workflowbench
+COPY monarch-benchmark/workflowbench/pyproject.toml monarch-benchmark/workflowbench/uv.lock ./
+COPY monarch-benchmark/workflowbench/wb_repair ./wb_repair
+COPY monarch-benchmark/workflowbench/wb_studio ./wb_studio
+COPY monarch-benchmark/workflowbench/wb_arms ./wb_arms
+COPY monarch-benchmark/workflowbench/wb_orchestrator ./wb_orchestrator
+COPY monarch-benchmark/workflowbench/wb_results ./wb_results
+COPY monarch-benchmark/workflowbench/wb_stats ./wb_stats
+COPY monarch-benchmark/workflowbench/wb_report ./wb_report
+COPY monarch-benchmark/workflowbench/wb_world ./wb_world
+COPY monarch-benchmark/workflowbench/wb_worlds ./wb_worlds
+COPY monarch-benchmark/workflowbench/ingester ./ingester
+COPY monarch-benchmark/workflowbench/grader ./grader
+COPY monarch-benchmark/workflowbench/runner ./runner
+COPY monarch-benchmark/workflowbench/legacy ./legacy
+COPY monarch-benchmark/workflowbench/config/models ./config/models
+COPY monarch-benchmark/workflowbench/vendor/automation-bench ./vendor/automation-bench
+RUN uv sync --frozen --no-dev
+ENV PYTHONUNBUFFERED=1 GENESIS_REPAIR_WORKER_DATA=/data
+CMD ["uv", "run", "--no-sync", "python", "-m", "wb_repair.worker"]

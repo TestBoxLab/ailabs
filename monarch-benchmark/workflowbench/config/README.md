@@ -141,8 +141,8 @@ Rows for other providers or other weeks in the same file are ignored.
 ## plans/pilot-monarch-create-run.yaml
 
 The paired pilot plan for feature 002: `create-run` mode, the 10 pilot tasks, 2
-repetitions, competitors {answer key, Claude Opus 4.8 raw, Monarch}, internal
-audience, a cost ceiling; approval is a record made at launch (decision D5).
+repetitions, competitors {answer key, Claude Opus 4.8 raw, Monarch},
+a cost ceiling; approval is a record made at launch (decision D5).
 Full example: `specs/002-monarch-create-run/contracts/config-files.md`.
 
 ## products/<name>.monarch-recipes.yaml
@@ -194,7 +194,7 @@ today; making the builder read it is a Monarch-side change.
 
 The paired pilot plan for feature 004: `run-only` mode, the same 10 tasks, 2
 repetitions and competitor set as `pilot-monarch-create-run` so the two modes
-read side by side, internal audience, a cost ceiling; approval is a record made
+read side by side, a cost ceiling; approval is a record made
 at launch (decision D5). Full example:
 `specs/004-monarch-run-only/contracts/config-files.md`.
 
@@ -202,8 +202,8 @@ at launch (decision D5). Full example:
 
 Four pilot plans for feature 005: `create-run` mode, the same seven
 competitors and baseline as `pilot-monarch-create-run`, one attempt per prompt
-plus one retry on failure (`repetitions: 1`, `retry_on_fail: 1`), internal
-audience; each round is approved at launch as a record (decision D5). Each
+plus one retry on failure (`repetitions: 1`, `retry_on_fail: 1`);
+each round is approved at launch as a record (decision D5). Each
 `tasks:` points at one of the drawn task sets below. Every
 description states the size the same way: "prompts: 10; attempts per prompt: 1
 plus 1 retry on failure; attempts per competitor: 10 to 20". The four move as a
@@ -381,7 +381,7 @@ once and acts on it) and `track: create-run` (it builds a workflow and runs
 it). Everything else is identical: `tasks: tasks/achievable-50`, `create-run`
 mode, one attempt per prompt plus one retry on failure, four competitors
 (answer key, `claude-opus-5/api` as the baseline, `monarch-stock`,
-`monarch-lab`), internal audience, a US$ 220 ceiling, `approved_by` left empty
+`monarch-lab`), a US$ 220 ceiling, `approved_by` left empty
 (Lucas approves, decision D5). The two Monarch harness files arrive with
 milestone M5, so until then the plans load but do not resolve; the Claude Code
 competitor joins with M7. Results are never pooled across the two tracks.

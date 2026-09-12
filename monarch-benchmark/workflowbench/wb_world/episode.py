@@ -28,7 +28,23 @@ class EvidenceWriteError(OSError):
 
 
 class Episode:
-    """One arm attempt on one task, over its own private world."""
+    """One arm attempt on one task, over its own private world.
+
+    Also the AutomationBench implementation of the world-adapter contract
+    (feature 026, `wb_world/adapter.py`). The contract was read from what this class
+    already does, so nothing below changed to satisfy it except the four class-level
+    defaults -- which make the contract checkable without constructing a world -- and
+    the three members at the end.
+    """
+
+    # Contract defaults. Rebound per instance; declared here so `adapter.unsatisfied`
+    # can check a class without building a world (building an external one starts a
+    # container). `artifacts_dir` was previously set only by the orchestrator, so an
+    # arm that read it outside a run raised AttributeError.
+    artifacts_dir: Any = None
+    snapshot0: dict[str, Any] | None = None
+    tool_calls: tuple = ()
+    events: tuple = ()
 
     def __init__(self, task: dict[str, Any], episode_id: str, frozen_time: str | None = None):
         info = task["info"]
@@ -118,6 +134,63 @@ class Episode:
         self.snapshot1 = self.snapshot()
         return self.snapshot1
 
+    # -- the world-adapter contract (feature 026) -----------------------------
+    def close(self) -> None:
+        """Nothing to release: this world is a Python object. Idempotent, because
+        an external world's close is called from a `finally` that may run twice."""
+
+    def interfaces(self):
+        """What the front door publishes for this world."""
+        from wb_world.openapi import SchemaInterfaces
+        return SchemaInterfaces()
+
+    @classmethod
+    def service_names(cls) -> list[str]:
+        """The top-level keys a snapshot of this world carries. A product's declared
+        `services` is checked against this, because an approval rule addresses a
+        service by name and a typo would match nothing."""
+        from wb_world.openapi import load_schemas
+        return list(load_schemas())
+
+    @classmethod
+    def prerequisites(cls) -> list[str]:
+        """What is missing before this world can run here; empty when it can.
+
+        AutomationBench is vendored and a hard dependency, so the only way this is
+        not empty is an environment where the vendored copy was never restored.
+        """
+        try:
+            import automationbench  # noqa: F401
+        except ImportError:
+            return ["the vendored AutomationBench package "
+                    "(workflowbench/vendor/automation-bench; re-clone it)"]
+        return []
+
+    @classmethod
+    def positive_check(cls, task: dict[str, Any], snapshot0: dict[str, Any],
+                       snapshot1: dict[str, Any], artifacts=None):
+        """AutomationBench's own assertions, run from stored state.
+
+        A task with no assertions does not pass. That is deliberate and predates
+        this feature: an imported row that never had its approval rule declared must
+        not read as a success because there was nothing to check.
+        """
+        import automationbench.rubric.assertions  # noqa: F401  (registers handlers)
+        from automationbench.rubric.registry import AssertionRegistry
+
+        from wb_world.adapter import PositiveResult
+
+        world1 = WorldState(**strip_none_values({k: v for k, v in snapshot1.items() if k != "meta"}))
+        results = [{"type": a.get("type"), "passed": bool(AssertionRegistry.check(world1, a)),
+                    "assertion": a}
+                   for a in task["info"].get("assertions", [])]
+        return PositiveResult(
+            passed=all(r["passed"] for r in results) if results else False,
+            detail={"assertion_results": results},
+            source="AutomationBench assertions",
+            side_effects=None,
+        )
+
 
 def _resolve_clock(frozen_time: str | None, initial: dict[str, Any]) -> datetime:
     if frozen_time:
@@ -142,7 +215,7 @@ def _resolve_clock(frozen_time: str | None, initial: dict[str, Any]) -> datetime
 
 
 def load_task_file(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 @lru_cache(maxsize=1)
@@ -185,8 +258,10 @@ def contract_hash(task: dict) -> str:
     info = task.get("info")
     if isinstance(info, dict):
         info = {k: v for k, v in info.items() if k not in _HASH_IGNORED_INFO_KEYS}
-    blob = json.dumps({"task": task.get("task"), "prompt": task.get("prompt"),
-                       "info": info}, sort_keys=True, default=str)
+    payload = {"task": task.get("task"), "prompt": task.get("prompt"), "info": info}
+    if is_external(task):
+        payload["source_ref"] = task.get("source_ref")
+    blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -226,6 +301,23 @@ def world_of(task: dict[str, Any]) -> dict[str, Any] | None:
     return world if isinstance(world, dict) else None
 
 
+def is_external(task: dict[str, Any]) -> bool:
+    return (world_of(task) or {}).get("package", WORLD_PACKAGE) != WORLD_PACKAGE
+
+
+def source_identity(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Refuse mixed sources even when their package versions happen to match."""
+    pins = {}
+    for task in tasks:
+        pin = world_of(task) if is_external(task) else None
+        key = json.dumps(pin, sort_keys=True) if pin else "automation-bench"
+        pins.setdefault(key, (pin, []))[1].append(task.get("task"))
+    if len(pins) > 1:
+        raise ValueError("the task set mixes worlds/sources: " + "; ".join(
+            f"{key}: {names[:3]}" for key, (_, names) in pins.items()))
+    return next(iter(pins.values()), (None, []))[0]
+
+
 def recorded_world_version(tasks: list[dict[str, Any]]) -> str:
     """The one world version a task set records; UPSTREAM_WORLD_VERSION when it
     records none. A set that mixes worlds is refused, naming the versions and
@@ -246,5 +338,8 @@ def recorded_world_version(tasks: list[dict[str, Any]]) -> str:
 def suite_id(tasks: list[dict[str, Any]]) -> str:
     """The suite every row of a round on `tasks` records: the legacy label for a
     set that records no world, `workflowbench-synthetic@<version>` otherwise."""
+    pin = source_identity(tasks)
+    if pin:
+        return f"{pin['package']}@{pin['version']}/{pin.get('split', 'unspecified')}"
     version = recorded_world_version(tasks)
     return LEGACY_SUITE if version == UPSTREAM_WORLD_VERSION else f"{SUITE_NAME}@{version}"

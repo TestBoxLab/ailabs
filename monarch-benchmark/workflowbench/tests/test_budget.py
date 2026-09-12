@@ -429,3 +429,280 @@ def test_week_of_uses_the_ledger_calendar(tmp_path):
     sunday_night_utc = datetime(2026, 9, 14, 2, 59, tzinfo=timezone.utc)   # still Sunday in Sao Paulo
     assert ledger.week_of(sunday_night_utc) == '2026-09-07'
     assert ledger.week_of(NEXT_MONDAY) == '2026-09-14'
+
+
+def test_absent_envelope_means_zero_not_unlimited(tmp_path):
+    from wb_studio.genesis_access import Envelope
+    env = Envelope(tmp_path / 'genesis')
+    rec = env.read(now=MONDAY)
+    assert rec['amount_usd'] == '0.00'
+    assert rec['per_experiment_ceiling_usd'] == '0.00'
+    assert rec['is_set'] is False
+    assert env.available_usd(now=MONDAY) == Decimal('0.00')
+
+
+def test_envelope_set_read_and_expiration(tmp_path):
+    from wb_studio.genesis_access import Envelope
+    env = Envelope(tmp_path / 'genesis')
+    saved = env.set(amount_usd='200.00', per_experiment_ceiling_usd='45.00', by='Lucas', now=MONDAY)
+    assert saved['week_start'] == '2026-09-07'
+    assert saved['amount_usd'] == '200.00'
+    assert saved['per_experiment_ceiling_usd'] == '45.00'
+    assert saved['set_by'] == 'human:lucas'
+    assert 'T' in saved['set_at']
+
+    # Read back in the same week
+    rec = env.read(now=MONDAY)
+    assert rec['is_set'] is True
+    assert rec['amount_usd'] == '200.00'
+    assert rec['per_experiment_ceiling_usd'] == '45.00'
+    assert rec['set_by'] == 'human:lucas'
+
+    # Next week it is expired (treated as zero)
+    rec_next = env.read(now=NEXT_MONDAY)
+    assert rec_next['is_set'] is False
+    assert rec_next['amount_usd'] == '0.00'
+    assert rec_next['per_experiment_ceiling_usd'] == '0.00'
+    assert env.available_usd(now=NEXT_MONDAY) == Decimal('0.00')
+
+
+def test_envelope_validation_rules(tmp_path):
+    from wb_studio.genesis_access import Envelope
+    env = Envelope(tmp_path / 'genesis')
+
+    # Weekly ceiling is 300: amount must be strictly below 300
+    with pytest.raises(ValueError, match='strictly below the lab weekly ceiling'):
+        env.set('300.00', '50.00', by='lucas', now=MONDAY)
+    with pytest.raises(ValueError, match='strictly below the lab weekly ceiling'):
+        env.set('300.01', '50.00', by='lucas', now=MONDAY)
+
+    # Non-negative
+    with pytest.raises(ValueError, match='nonnegative'):
+        env.set('-10.00', '5.00', by='lucas', now=MONDAY)
+
+    # Per-experiment ceiling cannot exceed envelope amount
+    with pytest.raises(ValueError, match='cannot exceed'):
+        env.set('50.00', '60.00', by='lucas', now=MONDAY)
+
+    # Must name a person
+    with pytest.raises(ValueError, match='named person'):
+        env.set('50.00', '10.00', by='', now=MONDAY)
+
+
+def test_envelope_accounting_with_ledger(tmp_path):
+    from wb_studio.genesis_access import Envelope
+    genesis_dir = tmp_path / 'genesis'
+    env = Envelope(genesis_dir)
+    env.set('100.00', '25.00', by='lucas', now=MONDAY)
+
+    ledger = BudgetLedger(tmp_path / 'budget.sqlite3')
+    # Reserving a genesis experiment
+    ledger.reserve('r1', '20.00', scope_id='genesis-exp-1', metadata={'by': 'genesis', 'purpose': 'Genesis experiment'}, now=MONDAY)
+    # Available = 100 - 20 = 80
+    assert env.available_usd(ledger=ledger, now=MONDAY) == Decimal('80.00')
+
+    # Settling part of it
+    ledger.settle('r1', '5.50', now=MONDAY)
+    # Now settled = 5.50, held = 0, available = 100 - 5.50 = 94.50
+    assert env.available_usd(ledger=ledger, now=MONDAY) == Decimal('94.50')
+
+    # Status dictionary
+    st = env.status(ledger=ledger, now=MONDAY)
+    assert st['amount_usd'] == '100.00'
+    assert st['settled_usd'] == '5.50'
+    assert st['held_usd'] == '0.00'
+    assert st['left_usd'] == '94.50'
+
+
+def test_budget_envelope_cli(tmp_path, capsys):
+    from wb_orchestrator.cli import main
+    genesis_dir = tmp_path / 'genesis'
+    ledger_path = tmp_path / 'budget.sqlite3'
+    BudgetLedger(ledger_path)
+
+    # 1. Missing arguments for set
+    code = main(['budget', 'envelope', '--set', '200.00', '--genesis-dir', str(genesis_dir)])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert '--set, --per-experiment and --by are all required' in err
+
+    # 2. Exceeding weekly ceiling (300)
+    code = main(['budget', 'envelope', '--set', '300.00', '--per-experiment', '50.00', '--by', 'Lucas', '--genesis-dir', str(genesis_dir)])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert 'strictly below the lab weekly ceiling' in err
+
+    # 3. Successful set
+    code = main(['budget', 'envelope', '--set', '200.00', '--per-experiment', '45.00', '--by', 'Lucas', '--genesis-dir', str(genesis_dir)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert 'research envelope set to $200.00 (per-experiment ceiling $45.00) by Lucas for week of' in out
+
+    # 4. Status
+    code = main(['budget', 'envelope', 'status', '--genesis-dir', str(genesis_dir), '--ledger', str(ledger_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert 'week of ' in out
+    assert '(America/Sao_Paulo)' in out
+    assert 'research envelope   $200.00 set by Lucas' in out
+    assert 'reserved $0.00' in out
+    assert 'settled $0.00' in out
+    assert 'left $200.00' in out
+    assert 'lab weekly ceiling  $300.00' in out
+    assert 'experiments this week: 0 admitted, 0 refused' in out
+
+    # 5. Status with empty genesis dir (not set)
+    empty_genesis = tmp_path / 'empty_genesis'
+    code = main(['budget', 'envelope', 'status', '--genesis-dir', str(empty_genesis), '--ledger', str(ledger_path)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert 'research envelope   $0.00 (not set)' in out
+
+
+
+
+def test_the_envelope_gate_finds_the_shared_ledger_it_was_not_given(tmp_path, monkeypatch):
+    """`background_wanted` and `may_launch` read the envelope without passing a ledger.
+    Looking only beside the genesis folder found nothing in a real Studio, so the gate
+    read nothing spent and reported the whole envelope available (FR-035)."""
+    from wb_studio.genesis_access import Envelope
+    shared = tmp_path / 'research' / 'budget.sqlite3'
+    monkeypatch.setenv('STUDIO_LEDGER_PATH', str(shared))
+    ledger = BudgetLedger(shared)
+    ledger.reserve('genesis-held-1', '40.00', scope_id='genesis-held',
+                   metadata={'purpose': 'Genesis'}, now=MONDAY)
+
+    env = Envelope(tmp_path / 'out' / 'studio' / 'genesis')
+    env.set(amount_usd='50.00', per_experiment_ceiling_usd='10.00', by='Lucas', now=MONDAY)
+    assert env.available_usd(ledger=ledger, now=MONDAY) == Decimal('10.00')
+    assert env.available_usd(now=MONDAY) == Decimal('10.00')      # the gate agrees
+
+    monkeypatch.setenv('STUDIO_LEDGER_PATH', str(tmp_path / 'gone.sqlite3'))
+    assert env.available_usd(now=MONDAY) == Decimal('0.00')       # no accounting: fails closed
+
+
+# --- A hold whose cost the provider never reported --------------------------------------
+#
+# An attempt whose cost cannot be read settles with no actual and keeps its whole
+# reservation held, in this week and in every week after it. That is deliberate: the
+# money may well have been spent, and the ledger must not forget it. What was missing
+# is the way out. Ten Monarch attempts during a Langfuse outage hold US$ 250 of a
+# US$ 300 week for ever, with no cent proven spent and nothing in the CLI to release
+# it — `wb budget acknowledge` answers for overruns only (found by ailabs-9c, feature
+# 024 US4, 11 Sep 2026; `docs/rounds/2026-09-11-recipes.md`).
+#
+# The release is a person's, not a clock's: an expiry at the week boundary would drop a
+# real charge nobody has read yet. So the hold survives rollover exactly as before, and
+# one named person with a reason releases it — the same shape as acknowledging an overrun.
+
+def _stale_hold(path, amount='250'):
+    """One attempt that ran and whose cost the provider never reported."""
+    ledger = BudgetLedger(path)
+    ledger.reserve('outage-1', amount, scope_id='ep-1',
+                   metadata={'harness': 'monarch', 'billing_provider': 'monarch'}, now=MONDAY)
+    ledger.claim('outage-1', now=MONDAY)
+    ledger.settle('outage-1', None, now=MONDAY)
+    return ledger
+
+
+def test_a_released_hold_stops_blocking_the_weeks_after_it(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    assert ledger.status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')   # the defect
+    ledger.release_hold('outage-1', by='human:lucas',
+                        reason='Langfuse outage; the attempt failed and no cost was ever reported.',
+                        now=NEXT_MONDAY)
+    after = ledger.status(now=NEXT_MONDAY)
+    assert after.available_usd == Decimal('300')
+    assert after.carried_held_usd == Decimal('0') and after.held_usd == Decimal('0')
+    ledger.reserve('next-week', '300', scope_id='ep-2', now=NEXT_MONDAY)
+
+
+def test_status_shows_unknown_holds_as_their_own_line(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    blocked = ledger.status(now=NEXT_MONDAY)
+    # Not spending: nothing is proven paid, and the ids say what to look at.
+    assert blocked.actual_usd == Decimal('0')
+    assert blocked.unknown_ids == ('outage-1',) and blocked.released_usd == Decimal('0')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    freed = ledger.status(now=NEXT_MONDAY)
+    assert freed.unknown_ids == () and freed.released_usd == Decimal('250')
+
+
+def test_a_released_hold_keeps_its_unknown_cost_on_the_record(tmp_path):
+    from wb_orchestrator import reconcile
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    row = next(r for r in BudgetLedger(path).reservations() if r.reservation_id == 'outage-1')
+    assert row.actual_usd is None and row.maximum_usd == Decimal('250')
+    note = row.metadata['hold_released']
+    assert note['by'] == 'human:lucas' and 'Langfuse' in note['reason'] and note['at']
+    # `wb budget reconcile` still finds it against the provider's own export.
+    monarch = reconcile.ledger_totals(ledger, '2026-09-07')['monarch']
+    assert monarch['unsettled'] == 1 and monarch['held'] == Decimal('250')
+
+
+def test_a_cost_that_arrives_after_the_release_is_still_charged(tmp_path):
+    ledger = _stale_hold(tmp_path / 'budget.sqlite')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    ledger.settle('outage-1', '31.50', now=NEXT_MONDAY)
+    state = ledger.status(now=NEXT_MONDAY)
+    assert state.actual_usd == Decimal('31.50') and state.released_usd == Decimal('0')
+    assert state.available_usd == Decimal('268.50')
+
+
+def test_a_released_hold_can_never_be_dispatched(tmp_path):
+    path = tmp_path / 'budget.sqlite'
+    ledger = BudgetLedger(path)
+    ledger.reserve('pending', '25', scope_id='ep-3', now=MONDAY)
+    ledger.release_hold('pending', by='human:lucas', reason='The run died before it started.', now=MONDAY)
+    assert ledger.status(now=MONDAY).held_usd == Decimal('0')
+    with pytest.raises(ReservationConflict, match='released'):
+        ledger.claim('pending', now=MONDAY)
+
+
+def test_releasing_a_hold_needs_a_person_a_reason_and_an_unsettled_hold(tmp_path):
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    for by, reason in (('', 'r'), ('human:lucas', ''), ('', '')):
+        with pytest.raises(ValueError):
+            ledger.release_hold('outage-1', by=by, reason=reason, now=NEXT_MONDAY)
+    with pytest.raises(ValueError, match='no reservation'):
+        ledger.release_hold('nope', by='human:lucas', reason='x', now=NEXT_MONDAY)
+    ledger.reserve('paid', '10', scope_id='ep-9', now=MONDAY)
+    ledger.settle('paid', '4', now=MONDAY)
+    with pytest.raises(ValueError, match='settled'):
+        ledger.release_hold('paid', by='human:lucas', reason='x', now=NEXT_MONDAY)
+    assert ledger.status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')
+    ledger.release_hold('outage-1', by='human:lucas', reason='Langfuse outage.', now=NEXT_MONDAY)
+    with pytest.raises(ValueError, match='already released'):
+        ledger.release_hold('outage-1', by='human:carlos', reason='again', now=NEXT_MONDAY)
+
+
+def test_metadata_that_cannot_be_read_never_releases_capacity(tmp_path):
+    import sqlite3
+    path = tmp_path / 'budget.sqlite'
+    ledger = _stale_hold(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE budget_reservations SET metadata_json='not json' WHERE reservation_id='outage-1'")
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')
+
+
+def test_the_command_releases_one_hold_and_reports_the_week(tmp_path, capsys):
+    from wb_orchestrator.cli import main
+    path = tmp_path / 'budget.sqlite'
+    _stale_hold(path)
+    assert main(['--ledger', str(path), 'budget', 'release', 'outage-1',
+                 '--because', 'Langfuse outage; no cost was ever reported.', '--by', 'human:lucas']) == 0
+    out = capsys.readouterr().out
+    assert 'released outage-1' in out and 'human:lucas' in out and '250' in out
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('0')
+
+
+def test_the_command_refuses_without_a_person(tmp_path, monkeypatch, capsys):
+    from wb_orchestrator.cli import main
+    monkeypatch.delenv('WB_OPERATOR', raising=False)
+    path = tmp_path / 'budget.sqlite'
+    _stale_hold(path)
+    assert main(['--ledger', str(path), 'budget', 'release', 'outage-1', '--because', 'x']) == 2
+    assert BudgetLedger(path).status(now=NEXT_MONDAY).carried_held_usd == Decimal('250')

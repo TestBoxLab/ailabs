@@ -19,7 +19,7 @@ from wb_arms import providers
 from wb_arms.api_loop import ArmResult, InfraError, _exec_tool, build_tools_anthropic
 from wb_arms.cli_claude_code import parse_result
 from wb_arms.native_sandbox import DockerRuntime, NATIVE_VERSIONS
-from wb_arms.reservations import receipt_cost
+from wb_arms.reservations import invocation_token, receipt_cost
 from wb_studio.gateways import ceiling_cost, resolve_effort
 
 MAX_BODY = 4 * 1024 * 1024
@@ -104,6 +104,34 @@ def _unsupported_content(value):
     return isinstance(value, list) and any(_unsupported_content(item) for item in value)
 
 
+def _client_tools_only(tools):
+    """Validate tool declarations, recursing through client namespaces only."""
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            return False
+        kind = tool.get("type")
+        if kind == "namespace":
+            if not _client_tools_only(tool.get("tools")):
+                return False
+        elif kind not in (None, "function", "custom"):
+            return False
+    return True
+
+
+def _additional_client_tools_only(value):
+    # Codex code mode declares additional_tools inside Responses input. A server
+    # tool hidden there must not reach the provider or incur unreserved charges.
+    if isinstance(value, dict):
+        if value.get("type") == "additional_tools" and not _client_tools_only(value.get("tools")):
+            return False
+        return all(_additional_client_tools_only(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_additional_client_tools_only(item) for item in value)
+    return True
+
+
 def _reply(status, value):
     return {"status": status, "content_type": "application/json", "body": base64.b64encode(json.dumps(value).encode()).decode()}
 
@@ -135,8 +163,8 @@ class NativeBroker:
                 return _reply(403, {"error": "Provider endpoint or model is outside the frozen attempt"})
             # No server-side tools or background jobs may create unbounded charges.
             tool_list = body.get("tools", [])
-            if (body.get("background") or _unsupported_content(body) or not isinstance(tool_list, list)
-                    or any(not isinstance(t, dict) or t.get("type") not in (None, "function", "custom") for t in tool_list)):
+            if (body.get("background") or _unsupported_content(body)
+                    or not _client_tools_only(tool_list) or not _additional_client_tools_only(body.get("input", []))):
                 return _reply(403, {"error": "Only native client-executed tools are permitted"})
             cap_field = "max_tokens" if self.provider.adapter == "anthropic" else "max_output_tokens"
             body = dict(body)
@@ -252,12 +280,14 @@ class NativeArm:
         current = runtime.verify()
         if current["image"] != self.manifest["image"]:
             raise ValueError("Native image changed since this attempt was frozen")
+        observed = []
         def observe(entry):
+            observed.append(entry)
             ep.record_agent_event(entry)
             self.studio.emit(self.identity, "native_event", task=self.task_id, model=self.name, event=entry)
         settings = self.studio.job(self.identity)["settings"].get("configuration", {})
         broker = NativeBroker(ep, self.studio.ledger, scope_id=self.identity, maximum=self.maximum,
-                              model_key=self.provider_key, prefix=ep.episode_id, observe=observe, cancel=self.cancel,
+                              model_key=self.provider_key, prefix=f"{ep.episode_id}#{invocation_token(ep)}", observe=observe, cancel=self.cancel,
                               transport=admitted_transport(self.studio, self.cancel, deadline), max_requests=settings.get("max_turns", 20))
         tools = [{"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]} for t in build_tools_anthropic()]
         settings = self.studio.job(self.identity)["settings"].get("configuration", {})
@@ -266,26 +296,43 @@ class NativeArm:
             prompt += "\n\nExperiment instructions:\n" + settings["prompt"]
         config = {"harness": self.manifest["harness"], "model": self.manifest["model"], "effort": self.manifest["effort"],
                   "tools": tools, "max_turns": settings.get("max_turns", 20), "prompt": prompt}
-        events = runtime.execute(config, broker, observe, cancel=self.cancel, deadline=deadline)
-        stdout = "".join(e["text"] for e in events if e.get("type") == "native_output" and e.get("stream") == "stdout")
-        terminal = next((e for e in reversed(events) if e.get("type") == "native_exit"), None)
-        if terminal is None:
-            raise InfraError("infra:harness_crash", "Native terminal event is missing", retryable=False)
-        if self.manifest["harness"] == "claude-code":
-            result = parse_result(stdout, terminal["returncode"])
-        else:
-            parsed = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-            completed = terminal["returncode"] == 0 and any(e.get("type") == "turn.completed" for e in parsed)
-            final = [e["item"]["text"] for e in parsed if e.get("type") == "item.completed" and e.get("item", {}).get("type") == "agent_message"]
-            result = ArmResult(termination="completed" if completed else "agent_error", final_text=final[-1] if final else None,
-                               turn_log=[{"source": "codex_stream", "event": e} for e in parsed])
+        try:
+            events = runtime.execute(config, broker, observe, cancel=self.cancel, deadline=deadline)
+            stdout = "".join(e["text"] for e in events if e.get("type") == "native_output" and e.get("stream") == "stdout")
+            terminal = next((e for e in reversed(events) if e.get("type") == "native_exit"), None)
+            if terminal is None:
+                raise InfraError("infra:harness_crash", "Native terminal event is missing", retryable=False)
+            if self.manifest["harness"] == "claude-code":
+                result = parse_result(stdout, terminal["returncode"])
+            else:
+                parsed = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+                completed = terminal["returncode"] == 0 and any(e.get("type") == "turn.completed" for e in parsed)
+                final = [e["item"]["text"] for e in parsed if e.get("type") == "item.completed" and e.get("item", {}).get("type") == "agent_message"]
+                result = ArmResult(termination="completed" if completed else "agent_error", final_text=final[-1] if final else None,
+                                   turn_log=[{"source": "codex_stream", "event": e} for e in parsed])
+        except Exception as exc:
+            partial = getattr(exc, "partial", None) or ArmResult()
+            partial.termination = getattr(exc, "kind", "infra:harness_crash")
+            partial.error = str(exc)
+            partial.turn_log.extend({"source": "native_stream", "event": event} for event in observed)
+            exc.partial = self._bill_result(partial, broker, ep)
+            raise
+        return self._bill_result(result, broker, ep)
+
+    def _bill_result(self, result, broker, ep):
+        """Return provider-backed billing even when execution or parsing failed."""
         result.flags = [flag for flag in result.flags if flag != "billing=unknown"]
         result.cost_usd = float(sum((r["cost"] for r in broker.receipts if r["cost"] is not None), Decimal(0)))
         if any(r["cost"] is None for r in broker.receipts) or not broker.receipts:
             result.flags.append("billing=unknown")
         for field, key in (("tokens_prompt", "prompt_tokens"), ("tokens_cached", "cached_tokens"),
                            ("tokens_cache_write", "cache_write_tokens"), ("tokens_output", "output_tokens")):
-            setattr(result, field, sum(r["usage"][key] for r in broker.receipts if r["usage"] is not None))
+            setattr(result, field, sum(r["usage"][key] for r in broker.receipts
+                if isinstance(r.get("usage"), dict) and type(r["usage"].get(key)) is int and r["usage"][key] >= 0))
+        result.turn_log.extend({"source": "native_billing", "billing": {
+            "reservation_id": receipt["id"], "actual_usd": None if receipt["cost"] is None else str(receipt["cost"]),
+            "usage_receipt": receipt["usage"], "status": "unknown_hold" if receipt["cost"] is None else "estimated_from_usage"}}
+            for receipt in broker.receipts)
         result.tool_calls = len(ep.tool_calls)
         self.output = result.final_text or ""
         return result
@@ -403,7 +450,7 @@ def require_acceptance(studio, harness):
     return {**current, "acceptance": record}
 
 
-def _scripted_reply(harness, model, tool_name, complete):
+def _scripted_reply(harness, model, tool_name, complete, *, code_mode=False):
     if harness == "claude-code":
         content = [{"type": "text", "text": "READY"}] if complete else [{"type": "tool_use", "id": "call_boundary", "name": tool_name, "input": {"text": "boundary"}}]
         data = {"id": "msg_boundary", "type": "message", "role": "assistant", "model": model, "content": content,
@@ -419,6 +466,10 @@ def _scripted_reply(harness, model, tool_name, complete):
         content = {"type": "output_text", "text": "READY", "annotations": []}
         item = ({"type": "message", "id": "msg_boundary", "role": "assistant", "status": "completed", "content": [content]} if complete else
                 {"type": "function_call", "id": "fc_boundary", "call_id": "call_boundary", "name": tool_name, "arguments": '{"text":"boundary"}', "status": "completed"})
+        if code_mode and not complete:
+            item = {"type": "custom_tool_call", "id": "ct_boundary", "call_id": "call_boundary",
+                    "namespace": "functions", "name": "exec",
+                    "input": 'const tool = ALL_TOOLS.find(t => t.name.endsWith("base64_encode")); if (!tool) throw new Error("Application tool missing"); text(await tools[tool.name]({text:"boundary"}));'}
         data = {"id": "resp_boundary" + ("2" if complete else "1"), "object": "response", "created_at": 1, "status": "completed", "model": model,
                 "output": [item], "usage": {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}}
         events = [{"type": "response.created", "response": {**data, "status": "in_progress", "output": []}},
@@ -428,6 +479,8 @@ def _scripted_reply(harness, model, tool_name, complete):
                        {"type": "response.output_text.delta", "item_id": item["id"], "output_index": 0, "content_index": 0, "delta": "READY"},
                        {"type": "response.output_text.done", "item_id": item["id"], "output_index": 0, "content_index": 0, "text": "READY"},
                        {"type": "response.content_part.done", "item_id": item["id"], "output_index": 0, "content_index": 0, "part": content}]
+        elif code_mode:
+            events += [{"type": "response.custom_tool_call_input.done", "item_id": item["id"], "output_index": 0, "input": item["input"]}]
         else:
             events += [{"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": 0, "arguments": item["arguments"]}]
         events += [{"type": "response.output_item.done", "output_index": 0, "item": item}, {"type": "response.completed", "response": data}]
@@ -466,6 +519,14 @@ def verify_runtime(studio):
             tools = body.get("tools", [])
             candidates = [t.get("name") or t.get("function", {}).get("name") for t in tools if isinstance(t, dict)]
             tool = next((name for name in candidates if name and name.endswith("base64_encode")), None)
+            code_mode = harness == "codex" and any(
+                item.get("type") == "additional_tools" and any(
+                    tool.get("type") == "namespace" and tool.get("name") == "functions"
+                    and any(child.get("name") == "exec" for child in tool.get("tools", []))
+                    for tool in item.get("tools", []))
+                for item in body.get("input", []) if isinstance(item, dict))
+            if code_mode:
+                return _scripted_reply(harness, model, "", seen["application_tool_observed"], code_mode=True)
             if not tool:
                 # Native auxiliary requests may precede MCP initialization. They
                 # still count toward the fixture bound and cannot satisfy acceptance.

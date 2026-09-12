@@ -138,3 +138,28 @@ def test_application_error_bodies_count_as_tool_errors():
     assert s["mode"] == "tool_error" and s["turning_point"]["event_id"] == 3
     assert not any(f["text"].startswith("Every tool call succeeded") for f in s["went_right"])
     assert any("404 Unknown API URL" in f["text"] for f in s["went_wrong"])
+
+
+def test_result_only_receipts_do_not_invent_a_behavior_pattern():
+    """Without a trajectory the checker's own facts still name the mode, and nothing else is claimed:
+    no timeline, no turning point, no write named as the one that did it, and never a mode that
+    asserts what the agent did (`missing_action`, `wrong_result`)."""
+    for negative_ok, mode in ((True, 'stopped_short'), (False, 'forbidden_action')):
+        saved = result_for('bare', negative_ok=negative_ok)
+        s = account([saved], [ev(10, 'result')])['attempts'][0]['story']
+        assert s['mode'] == mode
+        assert s['turning_point'] is None
+        assert s['timeline'] == []
+        assert all(f['event_ids'] == [10] for f in s['went_wrong'])
+        assert any('Not met:' in f['text'] for f in s['went_wrong'])
+        assert not any('happened anyway' in f['text'] for f in s['went_wrong'])
+
+
+def test_unclassified_failures_do_not_suggest_a_shared_task_defect():
+    """Every check passed and nothing changed, yet the verdict failed: the record does not show why,
+    so two setups agreeing on `unclassified` agree on nothing and cannot implicate the task."""
+    rows = [result_for('bare', phone_ok=True), result_for('monarch', phone_ok=True)]
+    events = [ev(10, 'result', 'bare'), ev(20, 'result', 'monarch')]
+    story = run_story(account(rows, events)['attempts'])
+    assert [a['story']['mode'] for a in account(rows, events)['attempts']] == ['unclassified', 'unclassified']
+    assert story['suspect_tasks'] == []

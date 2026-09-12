@@ -24,8 +24,8 @@ class FakeAdapter:
         self.provider, self.tools, self.timeout = provider, tools, timeout
         FakeAdapter.made.append(self)
 
-    def start(self, system, brief):
-        self.system, self.brief = system, brief
+    def start(self, system, brief, images=None):
+        self.system, self.brief, self.images = system, brief, images
         self.captured = [{'role': 'user', 'content': brief}]
         return self.captured
 
@@ -102,7 +102,7 @@ def test_a_tool_refusal_reaches_the_model_as_a_sentence(genesis):
     harness.start_turn(genesis, turn)
     adapter = FakeAdapter.made[0]
     messages = [m for m in adapter.captured if m.get('role') == 'tool']
-    assert json.loads(messages[0]['content']) == {'error': "Missing or wrong field 'id' for read_run."}
+    assert json.loads(messages[0]['content']) == {'error': 'Name the run to read, as run.'}
     assert json.loads(messages[1]['content']) == {'error': 'Give the research card a short title'}
     assert genesis.read('turns', 't1')['status'] == 'completed'
 
@@ -123,7 +123,7 @@ def test_the_landing_tells_the_model_when_two_requests_remain_and_a_turn_that_ru
 
 
 def test_a_person_stopping_the_turn_records_one_failure(genesis, monkeypatch):
-    def stop_during_tool(name, payload):
+    def stop_during_tool(name, payload, turn=None):
         genesis.stop_turn('t1')
         return {'ok': True}
     monkeypatch.setattr(genesis, 'tool', stop_during_tool)
@@ -166,7 +166,7 @@ def test_every_action_has_a_typed_tool_in_every_shape():
         assert expected in names
     defs = tool_defs()
     assert all(d['parameters']['type'] == 'object' for d in defs)
-    assert next(d for d in defs if d['name'] == 'read_run')['parameters']['required'] == ['id']
+    assert next(d for d in defs if d['name'] == 'read_run')['parameters']['required'] == ['run']
     assert [t['name'] for t in shaped(defs, 'anthropic')] == names and shaped(defs, 'anthropic')[-1]['cache_control'] == {'type': 'ephemeral'}
     assert shaped(defs, 'openai')[0]['function']['name'] == names[0]
     assert shaped(defs, 'openai_responses')[0]['type'] == 'function' and 'function' not in shaped(defs, 'openai_responses')[0]
@@ -187,8 +187,8 @@ def test_sdk_message_objects_do_not_break_the_size_estimate(genesis):
         def model_dump(self, mode='json', exclude_none=True): return {'text': self.text}
 
     class ObjectAdapter(FakeAdapter):
-        def start(self, system, brief):
-            self.system, self.brief = system, brief
+        def start(self, system, brief, images=None):
+            self.system, self.brief, self.images = system, brief, images
             self.captured = [Content(brief)]
             return self.captured
 
@@ -199,3 +199,24 @@ def test_sdk_message_objects_do_not_break_the_size_estimate(genesis):
     FakeAdapter.script = [{'tool_calls': [{'id': 'c1', 'name': 'skill_list', 'args': {}}]}, {'text': 'Fine.'}]
     harness.start_turn(genesis, turn_record(genesis))
     assert genesis.read('turns', 't1')['status'] == 'completed'
+
+
+def test_a_stop_while_waiting_for_provider_capacity_releases_the_hold(genesis):
+    """The capacity wait can block for minutes. A turn stopped inside it never claims its
+    reservation, and an unclaimed hold no one settles keeps its ceiling of the week for ever."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def blocked(*args, **kwargs):
+        record = genesis.read('turns', 't1'); record['stop_requested'] = True
+        write_json(genesis.path('turns', 't1'), record)
+        yield
+
+    genesis.studio.runtime.provider = blocked
+    FakeAdapter.script = [{'text': 'never sent'}]
+    harness.start_turn(genesis, turn_record(genesis))
+    ledger = genesis.studio.ledger
+    ledger.reserve.assert_called_once()
+    ledger.claim.assert_not_called()
+    ledger.settle.assert_called_once_with('genesis-t1-1', '0', outcome='cancelled')
+    assert genesis.read('turns', 't1')['status'] == 'failed'

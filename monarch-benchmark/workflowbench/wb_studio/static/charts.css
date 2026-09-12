@@ -60,7 +60,27 @@
 .chart-matrix td.missing:before{display:none}
 .chart-matrix td.missing{color:var(--faint)}
 .chart-matrix td.infra{text-decoration:line-through;color:var(--muted)}
+
+/* Failure modes by setup: counts in one hue, three steps, heaviest darkest.
+   The tint carries the signal; the type stays ink, so both themes read. */
+.chart-matrix th.mode-head{min-width:22ch}
+.chart-matrix th.mode{font-family:var(--font-ui);font-size:var(--text-2);text-transform:none;letter-spacing:0;color:var(--ink);font-weight:400;padding:6px 10px;border-bottom:1px solid var(--line);white-space:normal;vertical-align:middle}
+.chart-matrix td.count{font-family:var(--font-mono);font-size:var(--text-1);text-align:center;padding:6px 10px;border-bottom:1px solid var(--line);border-left:1px solid var(--line);color:var(--ink)}
+.chart-matrix td.n0{color:var(--faint)}
+.chart-matrix td.n2{background:var(--fail-soft)}
+.chart-matrix td.n3{background:var(--fail-line);font-weight:500}
+.chart-matrix td.total{color:var(--muted)}
+.chart-matrix tfoot th,.chart-matrix tfoot td{border-top:1px solid var(--line-strong);border-bottom:0;padding:6px 10px;color:var(--muted);font-family:var(--font-mono);font-size:var(--text-1);text-align:center}
+.chart-matrix tfoot th{font-family:var(--font-ui);font-size:var(--text-2);text-align:left;font-weight:400}
 }
 
 .chart-take{font-family:var(--font-ui);font-size:var(--text-1);color:var(--muted);margin:2px 0 0}.chart-take a{color:var(--muted);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--faint)}.chart-take a:hover{color:var(--ink)}.chart-take .sep{margin:0 .5em;color:var(--line)}
 @media print{.chart-take{display:none}}
+
+/* The break-even curve. The crossing is the one thing a reader is looking for, so it
+   takes the signal colour; the two lines take their series colours like every other
+   figure. Nothing here is drawn where no crossing was measured. */
+.chart.break-even .crossing .rule{stroke:var(--signal);stroke-width:1;stroke-dasharray:3 3}
+.chart.break-even .crossing .point-label{fill:var(--signal)}
+.chart.break-even .series.baseline{color:var(--muted)}
+.chart.break-even .series.baseline .line{stroke-dasharray:5 3}

@@ -242,6 +242,13 @@ def test_fake_api_control_streams_tool_output_and_final_text_with_usage(studio, 
     assert result["cost_usd"] == pytest.approx(.02)
     assert result["tool_calls"] == 1
     assert result["passed"] is False  # Prose and a harmless tool call do not complete the business task.
+    # FR-024/FR-025: the phase block reaches the Studio, which is the only input
+    # `measures` ever gets. A bare model records `run` and nothing else — so its
+    # authoring cost is not applicable rather than zero, and the split says so.
+    assert set(result["phases"]) == {"run"}
+    assert result["seconds"] == result["phases"]["run"]["wall_clock_s"]
+    from wb_studio import measures
+    assert measures.is_not_applicable(measures.phase_cost(result, "authoring"))
     assert len(requests) == 2
     assert requests[0]["bounds"]["scope_id"] == job["id"]
     assert requests[0]["bounds"]["scope_limit_usd"] == "2.00"
@@ -360,29 +367,41 @@ def _echo_server():
 
 
 def test_front_door_path_relays_to_the_shim_without_login(studio, monkeypatch):
+    """The competitor under test still reaches the world with no credentials.
+
+    Feature 024 FR-001 added a secret segment to the address, because Basic Auth
+    cannot gate a path the competitor calls. Monarch sends nothing new: the segment
+    rides in the seed URL. The login still guards the Studio itself.
+    """
     monkeypatch.setenv("STUDIO_AUTH_USER", "admin")
     monkeypatch.setenv("STUDIO_AUTH_PASSWORD", "pw")
+    monkeypatch.setenv("STUDIO_FRONT_DOOR_SECRET", "door-secret")
     with _echo_server() as (port, seen):
         monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", str(port))
         with server_for(studio) as studio_port:
-            status, _, body = request(studio_port, "GET", "/front-door/salesforce/services/data?q=1",
+            status, _, body = request(studio_port, "GET", "/front-door/door-secret/salesforce/services/data?q=1",
                                       headers={"Host": "evil.example"})
             assert status == 200 and json.loads(body)["path"] == "/salesforce/services/data?q=1"
-            status, _, body = request(studio_port, "POST", "/front-door/fetch", "{\"a\": 1}",
+            status, _, body = request(studio_port, "POST", "/front-door/door-secret/fetch", "{\"a\": 1}",
                                       {"Content-Type": "application/json", "X-Bench-Episode-Id": "ep-1"})
             assert status == 201 and json.loads(body)["body"] == "{\"a\": 1}"
-            assert request(studio_port, "PATCH", "/front-door/x/1", "{}", {"Content-Type": "application/json"})[0] == 200
-            assert request(studio_port, "DELETE", "/front-door/x/1")[0] == 200
+            assert request(studio_port, "PATCH", "/front-door/door-secret/x/1", "{}", {"Content-Type": "application/json"})[0] == 200
+            assert request(studio_port, "DELETE", "/front-door/door-secret/x/1")[0] == 200
             assert request(studio_port, "GET", "/api/state")[0] == 401, "the Studio itself still needs the login"
-            assert request(studio_port, "PUT", "/api/state", "{}")[0] == 404
+            # and the same calls without the segment never reach the shim
+            assert request(studio_port, "DELETE", "/front-door/x/1")[0] in (401, 403, 404)
+            # PUT exists only to serve the front door. It used to answer 404 without
+            # authenticating at all; it now challenges first (feature 024, FR-001).
+            assert request(studio_port, "PUT", "/api/state", "{}")[0] == 401
         assert [s[0] for s in seen] == ["GET", "POST", "PATCH", "DELETE"]
         assert seen[1][3] == "ep-1"
 
 
 def test_front_door_without_a_running_shim_says_so(studio, monkeypatch):
     monkeypatch.setenv("STUDIO_FRONT_DOOR_PORT", "1")   # nothing listens there
+    monkeypatch.setenv("STUDIO_FRONT_DOOR_SECRET", "door-secret")
     with server_for(studio) as port:
-        status, _, body = request(port, "GET", "/front-door/salesforce/x")
+        status, _, body = request(port, "GET", "/front-door/door-secret/salesforce/x")
         assert status == 502 and "front door is not running" in body
 
 
@@ -423,3 +442,25 @@ def test_an_unexpected_defect_answers_500_as_json(studio, monkeypatch):
         assert "RuntimeError" in json.loads(body)["error"] and "corrupt" not in body
         status, _, body = request(port, "POST", "/api/jobs", "{}", {"X-Studio-Token": studio.token, "Origin": f"http://127.0.0.1:{port}"})
         assert status in (400, 500) and json.loads(body)["error"]
+
+
+def test_a_benchmark_studio_does_not_list_the_scripted_fixture_runs():
+    """It refuses to launch the scripted checks, so it does not list old ones
+    either. The fixture Studio, whose runs are all scripted, keeps them."""
+    from types import SimpleNamespace
+    from wb_studio.app import listed_jobs
+    runs = [{"id": "fixture", "settings": {"models": ["oracle", "sloppy"]}},
+            {"id": "real", "settings": {"models": ["glm-5.3-fireworks"]}}]
+    assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=None), runs)] == ["real"]
+    assert [j["id"] for j in listed_jobs(SimpleNamespace(gateway_factory=lambda *a: None), runs)] == ["fixture", "real"]
+
+
+def test_launch_carries_explicit_repetitions_into_settings(studio):
+    # Default without explicit repetitions is 1
+    job_default = studio.create(payload(studio), start=False)
+    assert job_default["settings"]["repetitions"] == 1
+
+    # Explicit repetitions carried into settings
+    job_rep = studio.create(payload(studio, request_id="comparison-rep", repetitions=3), start=False)
+    assert job_rep["settings"]["repetitions"] == 3
+

@@ -13,9 +13,12 @@ own link: a link found inside a fetched page is never followed.
 from __future__ import annotations
 
 import html
+import ipaddress
 import os
 import re
-from urllib.request import Request, urlopen
+import socket
+from urllib.parse import urlsplit
+from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 from wb_studio import library
 from wb_studio.genesis_reviewer import json_answer
@@ -42,9 +45,19 @@ def cap() -> str:
 
 # -- fetching ---------------------------------------------------------------------
 
+class _PublicRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_public(newurl)
+        if urlsplit(newurl).scheme not in ('http', 'https'):
+            raise ValueError('Source redirects must use http or https.')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _read(url, timeout=20) -> str:
     """One URL as text. The only network call in this module; faked in tests."""
-    with urlopen(Request(url, headers={'User-Agent': 'AILabs-Genesis/1.0 (research intake)'}), timeout=timeout) as response:
+    _check_public(url)
+    opener = build_opener(ProxyHandler({}), _PublicRedirect())
+    with opener.open(Request(url, headers={'User-Agent': 'AILabs-Genesis/1.0 (research intake)'}), timeout=timeout) as response:
         return response.read(MAX_BYTES).decode(response.headers.get_content_charset() or 'utf8', 'replace')
 
 
@@ -114,13 +127,61 @@ def _page(url, timeout) -> dict:
             'note': 'Fetched the visible text of ' + url + ': ' + size + '.'}
 
 
+def is_public_address(address: str) -> bool:
+    """Whether one resolved IP is on the public internet.
+
+    Everything else — loopback, link-local (the cloud metadata endpoint lives at
+    169.254.169.254), private ranges, unspecified, reserved — is inside the network the
+    Studio runs in, and Genesis has no business reading it (feature 024, FR-009).
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.is_global and not (ip.is_private or ip.is_loopback or ip.is_link_local
+                                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _resolve(host: str) -> list:
+    """Every address a host resolves to. Separate so a test can stand in for DNS."""
+    try:
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    except (OSError, UnicodeError):
+        return []
+
+
+def _check_public(url: str) -> None:
+    """Refuse a URL that resolves anywhere inside this network, before anything is fetched.
+
+    The check is on the resolved addresses, not the spelling, so a public-looking name
+    pointed at 127.0.0.1 is refused too. A host that resolves to nothing is refused
+    rather than attempted. This is not a defence against a host that changes its answer
+    between this call and the fetch; it is the gate that stops the reachable cases —
+    a dropped metadata link, the Studio's own API, a sibling service.
+    """
+    host = urlsplit(url).hostname
+    if not host:
+        raise ValueError('Give the source as an http or https link.')
+    if urlsplit(url).username is not None or urlsplit(url).password is not None:
+        raise ValueError('Source links must not contain credentials.')
+    addresses = _resolve(host)
+    if not addresses:
+        raise ValueError(f'{host} does not resolve, so it is not reachable.')
+    bad = [a for a in addresses if not is_public_address(a)]
+    if bad:
+        raise ValueError(f'{host} resolves to {bad[0]}, which is not a public address. '
+                         'Genesis reads published sources, never the inside of this network.')
+
+
 def fetch_source(url, timeout=20) -> dict:
     """`{title, text, kind, note}` for one source link. arXiv abs and pdf links go to the HTML
     rendering and fall back to the abstract page; a GitHub repository goes to its README; anything
-    else to its visible text. Only URLs derived from this link are ever fetched."""
+    else to its visible text. Only URLs derived from this link are ever fetched, and only when they
+    resolve to a public address."""
     url = str(url or '').strip()
     if not re.fullmatch(r'https?://\S{1,2000}', url):
         raise ValueError('Give the source as an http or https link.')
+    _check_public(url)
     paper = ARXIV.search(url)
     if paper:
         return _arxiv(paper[1], timeout)

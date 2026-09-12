@@ -274,7 +274,7 @@ def test_identity_file_starts_from_the_default_and_leads_every_prompt(genesis, m
     assert memory.soul.read_text(encoding='utf8').startswith('# Genesis') and memory.read()['budgets']['SOUL.md']['budget'] == 2500
     monkeypatch.setattr(harness, 'freshness', lambda now=None: 'FRESHNESS')
     prompt = harness.prompt_text(genesis, {'message': 'hello'})
-    assert 'Core memory' not in prompt and prompt.index('Identity (SOUL.md') < prompt.index('## Never') < prompt.index('# Genesis scientist protocol') < prompt.index('FRESHNESS')
+    assert 'Core memory' not in prompt and prompt.index('Identity (SOUL.md') < prompt.index('## Judgment and evidence') < prompt.index('# Genesis scientist protocol') < prompt.index('FRESHNESS')
     memory.add('Lab fact', 'turn:t1', now=T0)
     prompt = harness.prompt_text(genesis, {'message': 'hello'})
     assert prompt.index('Identity (SOUL.md') < prompt.index('Core memory') < prompt.index('Lab fact')

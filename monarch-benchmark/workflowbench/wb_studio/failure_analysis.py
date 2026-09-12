@@ -1,29 +1,29 @@
 """Read-only, deterministic outcome diagnostics; never a causal model review."""
 from collections import Counter, defaultdict
 
-from wb_studio.narrative import run_story
+from wb_studio.narrative import MODES, run_story
 from wb_studio.reports import outcome_report
 
 
-BUCKETS = {
-    "infrastructure": "Infrastructure interruption",
-    "budget_limit": "Recorded budget limit",
-    "timeout": "Recorded timeout or cancellation",
-    "unintended_changes": "Changes outside permitted scope",
-    "requirement_unmet": "Recorded requirements unmet",
-    "unclassified": "Insufficient evidence to classify",
-}
+BUCKETS = dict(MODES)
+# Our own checker could not answer. That is a fact about our run, not an outcome the
+# competitor produced, and it must not sit in the same list as "missing action": the
+# engineer loop reads these buckets to choose what to write a spec against, and a
+# grader crash bucketed as `unclassified` becomes a round's headline failure mode.
+BUCKETS["ungraded"] = "Not graded (our checker could not answer)"
 # The same buckets in the two or three words a chart axis can hold.
 SHORT_LABELS = {
+    "ungraded": "Not graded",
+    "missing_action": "Missing action",
+    "wrong_result": "Wrong result",
+    "forbidden_action": "Forbidden action",
+    "scope_violation": "Out of scope",
+    "tool_error": "Tool error",
+    "stopped_short": "Stopped short",
+    "ran_out": "Ran out",
     "infrastructure": "Infrastructure",
-    "budget_limit": "Budget",
-    "timeout": "Timeout",
-    "unintended_changes": "Out of scope",
-    "requirement_unmet": "Requirement unmet",
     "unclassified": "Unclassified",
 }
-BUDGET_TERMINATIONS = {"infra:attempt_cap", "infra:weekly_budget"}
-TIMEOUT_TERMINATIONS = {"timeout", "infra:timeout"}
 LIMITATION = (
     "Buckets describe recorded outcomes, not proven causes. The earliest cited error is an "
     "observation, not the first causal mistake. Missing trace events do not prove missing actions."
@@ -43,19 +43,18 @@ def _percentages(counts, denominator):
 
 
 def _bucket(result, report):
-    termination = result["termination"]
-    if result["passed"]:
+    if result.get("passed"):
         return "success"
-    if termination in BUDGET_TERMINATIONS:
-        return "budget_limit"
-    if termination in TIMEOUT_TERMINATIONS:
-        return "timeout"
-    if report["infrastructure"]:
-        return "infrastructure"
-    if report["scope_respected"] is False or report["unexpected_changes"]:
-        return "unintended_changes"
-    if any(check["passed"] is False for check in report["requirements"]):
-        return "requirement_unmet"
+    from wb_studio.measures import is_ungraded
+    # Before any outcome mode: the attempt has no measured outcome to classify. It reaches
+    # here looking like a normal completed failure -- termination is `completed` and the
+    # checks list is empty -- so the story fell through to `unclassified`.
+    if is_ungraded(result):
+        return "ungraded"
+    story = report.get("story") or {}
+    mode = story.get("mode")
+    if mode in MODES:
+        return mode
     return "unclassified"
 
 
@@ -65,7 +64,7 @@ def _attempt(result, trace, report, index):
     checks = [{"name": check["type"], "title": titles.get(i, check["type"]),
                "passed": check["passed"], "check_index": i}
               for i, check in enumerate(result.get("checks", []))]
-    finish_ids = [e["id"] for e in trace if e["type"] == "attempt_finished"]
+    finish_ids = [e["id"] for e in trace if e["type"] in ("attempt_finished", "result")]
     facts = [{"text": "Recorded termination: " + result["termination"] + ".",
               "event_ids": finish_ids, "check_names": [], "source": "result.termination"}]
     for check in checks:
@@ -84,10 +83,10 @@ def _attempt(result, trace, report, index):
                           "source": "trace.api_fetch"})
     errors = [e for e in trace if e["type"] == "attempt_error" or
               (e["type"] in ("node_finished", "model_finished", "step_finished") and e.get("status") == "error")]
-    first = errors[0] if errors else next((e for e in trace if e["type"] == "attempt_finished" and not result["passed"]), None)
+    first = errors[0] if errors else next((e for e in trace if e["type"] in ("attempt_finished", "result") and not result["passed"]), None)
     earliest = None if first is None else {
         "event_id": first["id"], "type": first["type"],
-        "text": "Recorded failure verdict." if first["type"] == "attempt_finished" else "Recorded error event; its causal connection to the final outcome is unverified.",
+        "text": "Recorded failure verdict." if first["type"] in ("attempt_finished", "result") else "Recorded error event; its causal connection to the final outcome is unverified.",
     }
     unmet = [c["title"] for c in checks if c["passed"] is False and c["name"] != "allowed_changes_only"]
     passed = [c["title"] for c in checks if c["passed"] is True and c["name"] != "allowed_changes_only"]
@@ -95,19 +94,23 @@ def _attempt(result, trace, report, index):
         headline = "Task passed its recorded evaluator checks"
         narrative = "Satisfied: " + "; ".join(passed) + "." if passed else "The recorded overall verdict passed; no individual requirement checks were retained."
     else:
-        headline = BUCKETS[bucket]
-        narrative = {
-            "infrastructure": "Execution ended with " + result["termination"] + "; this attempt is not a valid model-quality measurement.",
-            "budget_limit": "Execution stopped at the recorded " + result["termination"] + " admission limit.",
-            "timeout": "Execution recorded " + result["termination"] + ". The record does not by itself distinguish deadline exhaustion from cancellation.",
-            "unintended_changes": "The evaluator recorded changes outside permitted scope.",
-            "requirement_unmet": "Unmet: " + "; ".join(unmet) + ".",
-            "unclassified": "The overall verdict failed, but retained checks and termination do not support a more specific outcome category.",
-        }[bucket]
-        if bucket == "unintended_changes" and report["change_summaries"]:
-            narrative += " " + " ".join(report["change_summaries"])
-        if unmet and bucket not in ("requirement_unmet", "infrastructure", "budget_limit", "timeout"):
-            narrative += " Unmet: " + "; ".join(unmet) + "."
+        headline = BUCKETS.get(bucket, "Failed")
+        story = report.get("story") or {}
+        story_verdict = story.get("verdict")
+        if bucket == "infrastructure":
+            narrative = "Execution ended with " + str(result.get("termination", "")) + "; this attempt is not a valid model-quality measurement."
+        elif bucket == "ran_out":
+            narrative = story_verdict or ("Execution stopped at the recorded limit: " + str(result.get("termination", "")) + ".")
+        elif bucket == "scope_violation":
+            narrative = story_verdict or "The evaluator recorded changes outside permitted scope."
+            if report.get("change_summaries"):
+                narrative += " " + " ".join(report["change_summaries"])
+            if unmet:
+                narrative += " Unmet: " + "; ".join(unmet) + "."
+        elif bucket in ("missing_action", "wrong_result", "forbidden_action", "stopped_short", "tool_error"):
+            narrative = story_verdict or ("Unmet: " + "; ".join(unmet) + "." if unmet else BUCKETS[bucket])
+        else:
+            narrative = "The overall verdict failed, but retained checks and termination do not support a more specific outcome category."
     if result.get("error"):
         facts.append({"text": "Recorded error message: " + str(result["error"]), "event_ids": finish_ids,
                       "check_names": [], "source": "result.error"})
@@ -115,23 +118,29 @@ def _attempt(result, trace, report, index):
             "passed": result["passed"], "infrastructure": report["infrastructure"], "bucket": bucket,
             "headline": headline, "narrative": narrative, "termination": result["termination"],
             "checks": checks, "observed_facts": facts, "earliest_supported_evidence": earliest, "story": report.get("story"),
-            "event_ids": [e["id"] for e in trace], "causal_hypotheses": [], "limitations": LIMITATION}
+            "event_ids": [e["id"] for e in trace], "causal_hypotheses": [], "limitations": LIMITATION,
+            **{key: result[key] for key in ("invariant_passed", "unexpected_changes", "count_violations", "receipt_source") if key in result}}
 
 
 def analysis(studio, identity):
     """Analyze only saved completed attempts, including failures; never dispatch or write."""
     job = studio.job(identity)
     events = studio.events(identity)
-    results = job["results"]
+    from wb_studio.report_receipts import enrich
+    results = enrich(studio, identity, job["results"])
     # Separate repeated task/model attempts at journal completion boundaries. A partial
     # later attempt must never lend its errors to an earlier completed result.
-    grouped, pending = defaultdict(list), defaultdict(list)
+    grouped, pending, episodes = defaultdict(list), defaultdict(list), defaultdict(list)
+    identified_pairs = set()
     for event in events:
         key = (event.get("task"), event.get("model"))
+        if event.get("episode_id"):
+            episodes[event["episode_id"]].append(event)
+            identified_pairs.add(key)
         if None in key:
             continue
         pending[key].append(event)
-        if event["type"] == "attempt_finished":
+        if event["type"] in ("attempt_finished", "result"):
             grouped[key].append(pending.pop(key))
     counts = Counter((r["task"], r["model"]) for r in results)
     occurrences, attempts = Counter(), []
@@ -140,8 +149,15 @@ def analysis(studio, identity):
         occurrence = occurrences[key]
         occurrences[key] += 1
         segments = grouped[key]
-        trace = segments[occurrence] if occurrence < len(segments) else pending[key] if counts[key] == 1 and not segments else []
-        # Job results already retain the evaluator checks and scope changes. Avoid
+        episode = result.get("episode_id")
+        if episode and (episode in episodes or key in identified_pairs):
+            # Imported/resumed receipts may repeat or arrive out of order. An
+            # explicit episode identity always takes precedence over chronology.
+            trace = [event for event in episodes[episode]
+                     if event.get("task", key[0]) == key[0] and event.get("model", key[1]) == key[1]]
+        else:
+            trace = segments[occurrence] if occurrence < len(segments) else pending[key] if counts[key] == 1 and not segments else []
+        # Missing legacy fields were filled from exact read-only receipts. Avoid
         # opening Store here: its initialization can migrate/write the results DB.
         report = outcome_report({"id": identity, "results": [result]}, trace, studio.tasks)["attempts"][0]
         attempts.append(_attempt(result, trace, report, index))

@@ -38,7 +38,7 @@ stored snapshots, `wb grade`); pass = expected result present AND nothing else
 changed AND normal finish; every task frozen by hash before any competitor runs;
 paired comparisons only on identical sets, with error bars; every figure carries
 its source line; cost is complete (cached vs not, versioned price table);
-audience rules are code; config hash per run; API-key billing only.
+one report, with no internal/public division; config hash per run; API-key billing only.
 
 **Where things stand (2026-09-03, evening):** repo at
 `C:\Users\cgmat\Desktop\TestBox\ailabs` (off OneDrive; moved twice on 3 Sep, see
@@ -90,7 +90,6 @@ names. Code identifiers may keep the internal ones.
 | contract, invariant | approval rule: what must change, what must not (regra de aprovação) |
 | oracle | answer key (gabarito) |
 | target | product under test (produto sob teste) |
-| audience | who reads the report: internal or public |
 | smoke | small run to test the machine, not to draw conclusions |
 | WS-B, WS-C… | frente de trabalho B, C… — always say what it is |
 
@@ -100,26 +99,27 @@ names. Code identifiers may keep the internal ones.
 
 This workspace runs the same standard as `data-generator-2.0`: **Superpowers**
 for Socratic discovery + workflow-enforced execution, **Spec Kit** for
-artifact-driven planning in between, **Graphify** as the knowledge layer. The
-governing contract is the constitution at `.specify/memory/constitution.md`.
+artifact-driven planning in between, and **Graphify** as the intended knowledge
+layer — intended because it has never been initialised here; see the last section.
+The governing contract is the constitution at `.specify/memory/constitution.md`.
 
 **The front door is always Superpowers brainstorming — never Spec Kit cold.**
 Mental model: *Superpowers brainstorming figures out what we're actually doing;
-Spec Kit writes that up as spec + plan + tasks; Superpowers executes it;
-Graphify grounds all of it in the existing code.*
+Spec Kit writes that up as spec + plan + tasks; Superpowers executes it; and the
+code itself grounds all of it, since the graph that was meant to does not exist.*
 
 For any non-trivial feature, bug fix, or behavior change, follow the pipeline —
 each stage hands its artifact to the next:
 
 | Stage | Owner | Command / skill | Artifact |
 |-------|-------|-----------------|----------|
-| 0. Ground | Graphify | read `graphify-out/GRAPH_REPORT.md` | context |
+| 0. Ground | the code | file map below; `HOW-WORKFLOWBENCH-WORKS.md` (Graphify is not built) | context |
 | 1. Brainstorm | Superpowers | `superpowers:brainstorming` | shared understanding |
 | 2. Specify | Spec Kit | `/speckit-specify` (+ `/speckit-clarify`) | `specs/<id>/spec.md` |
 | 3. Plan + Tasks | Spec Kit | `/speckit-plan`, `/speckit-tasks` | `plan.md`, `tasks.md` |
 | 4. (optional) Validate | Spec Kit | `/speckit-analyze`, `/speckit-checklist` | consistency report |
 | 5. Execute | Superpowers | `executing-plans` / `subagent-driven-development` (worktree → TDD → review → finish-branch) | branch, tests, code |
-| 6. Refresh | Graphify | rebuild code graph | updated `graphify-out/` |
+| 6. Refresh | — | nothing to rebuild until Graphify is initialised | — |
 
 **Handoff rules:**
 - **Brainstorm first, always.** Do not open `/speckit-specify` on a cold
@@ -177,10 +177,9 @@ each stage hands its artifact to the next:
   The repo is public; the specs carry vendor legal notes.
 - **Language.** Conversation with Carlos in Portuguese. Every file in the repo
   in English, plain language, no internal jargon in shared docs.
-- **Graphify grounds everything.** Read `graphify-out/GRAPH_REPORT.md` before
-  architecture or codebase questions and before specs that touch existing
-  code; refresh the graph after code changes. The vendored
-  `workflowbench/vendor/automation-bench` is excluded from the graph.
+- **Graphify is not built** (checked 11 September 2026; see the section at the end
+  of this file). Ground architecture questions in the code and the file map, not in
+  `graphify-out/`, which does not exist. Never claim a refresh that did not happen.
 - **Stack:** Python 3.13 managed by `uv`. Environment:
   `cd monarch-benchmark/workflowbench && uv sync && uv run python -m pytest tests -q`.
   Always `uv run`, never bare Python. On Windows run the full suite detached
@@ -225,7 +224,7 @@ and actual configuration rather than treating those examples as runtime pins.
 | `workflowbench/config/products/` | What is under test: app set, data, supported test modes (`simulated-apps`); plus what Monarch was taught (`*.monarch-kb.yaml`) and, for run-only, the known-correct recipe per task (`*.monarch-recipes.yaml`). |
 | `workflowbench/config/models/` | One language model per file: provider, prices, API key name. |
 | `workflowbench/config/harnesses/` | How a competitor is driven: API loop, CLI agent, scripted check, Monarch. |
-| `workflowbench/config/plans/` | Task set, test mode, repetitions, competitors, baseline, audience, cost ceiling, `approved_by`. |
+| `workflowbench/config/plans/` | Task set, test mode, repetitions, competitors, baseline, cost ceiling, `approved_by`. |
 | `workflowbench/config/side-effects.yaml` | Reviewed per-service side-effect list used by `wb corpus declare`. |
 | `workflowbench/wb_orchestrator/orchestrator.py` | Attempt state machine, config hash, resume. |
 | `workflowbench/wb_orchestrator/declare.py` | Approval-rule derivation and the side-effect list. |
@@ -237,27 +236,35 @@ and actual configuration rather than treating those examples as runtime pins.
 | `docs/AI-LABS-DESIGN-AUDIT-2026-09-10.md` | The interaction audit of 10 Sep: every feature compared with named products, what was built the same day, what stays open (a free test on one task, the lanes graph, an attempt as a page, the editor at phone width). Read it before touching a view. |
 | `workflowbench/wb_studio/usage.py` | Usage by model from stored results, and `ledger_lines`: the week's reservations as a person audits them (who, what, ceiling, settled, state) behind the read-only `GET /api/budget/ledger`; the Budget page shows it first (pass 7, 10 Sep). Genesis routes added the same day: `POST /api/genesis/cards/<id>/decline`, `POST /api/genesis/cards/<id>/work` (a person works a queued card now, under the watcher's allowances) and `POST /api/genesis/turns/<id>/stop`; feature 022 lane B added threads (`GET /api/genesis/threads`, `/threads/<id>`; `chat` takes `thread`) and `GET /api/genesis/cards/<id>/history`. |
 | `workflowbench/wb_studio/measures.py`, `static/charts.js` | Measures computed once on the server from stored results and events (pass rate with Wilson interval, pass^k, objective share, violations, false completion, overlap, turns, paired delta, cost) and the chart kit that draws them as SVG styled by CSS classes. |
+| `workflowbench/tasks/development/`, `held-out/`, `tasks/split-manifest.yaml` | The two slates feature 024 draws with `wb corpus split`: development is where the search happens, held-out is spent once per lineage. The manifest records the difficulty measure, the domain balance, the seed and every drawn task's hash. `wb_orchestrator/slate.py` writes both or neither. |
+| `workflowbench/wb_studio/genesis_access.py` (`Envelope`) | Genesis's standing weekly research allowance (feature 024, FR-035), read against the shared ledger through `budget.default_ledger_path`. It fails closed: a ledger it cannot find is nothing available, never everything. |
+| `workflowbench/wb_orchestrator/monarch_setup.py` (`front_door_secret`, `front_door_path`) | The secret segment in the Monarch front door's path. Without it the shim answered on a guessable URL on a public host. |
+| `workflowbench/wb_studio/measures.py` (`cost_by_phase`, `time_by_phase`, `per_execution`, `curve`) | The fitness function (feature 024, FR-024 to FR-030). Cost and time split at the moment the workflow is saved, and the break-even point between configuring once and paying per request. `n/a`, `unknown` and `no passes` are three different answers and never collapse to zero. |
+| `workflowbench/wb_studio/report_data.py` (`gap_item`, `gap_list`, `break_even_block`) | The gap list: one evidence base, three renderings, and a `code-reading` never rendered as a peer of a `confirmed-result`. There is no flat list to render by accident. |
 | `workflowbench/wb_studio/narrative.py` | The story of an attempt, written from the record by fixed rules (10 Sep): a turn-by-turn timeline with the provider's reasoning summary, what went right and wrong with the events each fact rests on, the turning point (earliest recorded step after which the outcome could not change), and one failure mode from a fixed list of nine; `run_story` says how each setup failed and which tasks every setup failed the same way (suspect the task first). Shown on the attempt sheet as What happened and in the run report as What went right and wrong; the paid Model reading follows the same shape. |
-| `workflowbench/wb_studio/report_data.py`, `caveats.py`, `static/reports.js` | Reports, the Studio's front door: run and round reports that read verdict first, Standings in the round report, caveats written from data only, the public audience by default with an internal view for Carlos and Lucas, print and single-file HTML export. The narrative is written automatically for every finished run and reserved in the weekly ledger (`schedule_narrative` in `wb_studio/app.py`). |
+| `workflowbench/wb_studio/report_data.py`, `caveats.py`, `static/reports.js` | Reports, the Studio's front door: run and round reports that read verdict first, Standings in the round report, caveats written from data only, one report with no internal/public division (11 Sep 2026), print and single-file HTML export which refuse while a lab build is on the page. The narrative is written automatically for every finished run and reserved in the weekly ledger (`schedule_narrative` in `wb_studio/app.py`). |
 | `workflowbench/wb_studio/live_graph.py` | The live Product Graph Monarch Enterprise uses, read from the Feature Discovery service (`fd_url` of the Monarch harness, `x-fd-api-key` gate) over GET only and cached for a minute; the Studio's Graph view in the product graph panel shows it, or any bench version, as products with their stored business actions. Nothing here can write to Monarch. |
 | `workflowbench/wb_studio/scheduler.py` | Daily jobs for the owning Studio process: a module offers `DAILY = (name, hour, fn)`, the scheduler runs it once a day after its hour on the São Paulo clock and stamps it; `GET /api/genesis/schedule`, `POST /api/genesis/schedule/<name>/run`. |
 | `workflowbench/wb_studio/code_index.py` | Genesis's code awareness (feature 019): a daily index of the Monarch checkout named by `MONARCH_REPO` (else `../monarch`) at the ref of the declared build, a change record since the previous commit filed in the library, Graphify when installed, a `MONARCH.md` of at most 2,500 characters written by code, and read-only tools `code_status`, `code_search`, `code_explain`, `code_read`, `code_changes` (internal-only facts). `wb genesis index` runs it by hand. |
 | `workflowbench/wb_studio/memory.py`, `genesis_sleep.py` | Genesis's three-tier memory (feature 019): `SOUL.md`, the identity file (feature 020: voice, priorities, what Genesis never does; a starter text on first start, edited only by a person from the Memory tab, 2,500 characters, the first block of every prompt, no Genesis tool reaches it), `LAB.md` (2,500 characters, Pinned, Known, Recent, every entry tagged `[rec:kind:id]`), `MONARCH.md` from the code index, notes per card (4,000), an FTS5 record over turns, analyses, cards and sources; injection scan, seven-day probation, thirty-day decay, pinned entries never decay; the nightly job writes the Daily brief card and, when a model route and the ledger allow, one consolidation turn under `STUDIO_GENESIS_NIGHT_USD` (0.50). |
+| `workflowbench/wb_studio/genesis_build.py` | Genesis builds an architecture a step at a time and one save commits it (feature 025, `specs/025-genesis-voice-live-build/plan.md`): `edit_architecture` adds a node, connects two nodes or sets a prompt; **an operation is not a durable write** — the only record is the turn's own `tool_completed` event, and the graph is replayed from those events, so a repeat cannot double it and a reload before the commit leaves nothing behind. The open editor applies each operation off the turn stream it already has (`static/graph.js` `applyArchitectureOperation`, provisional until saved); `save_architecture` with no `graph` commits the whole build as one revision. A commit is refused while a browser holds unsaved edits to that draft (`POST /api/studio/editor`). Its own autonomy dial, `edit`, the one that ships on. |
 | `workflowbench/wb_studio/genesis_autonomy.py` | Genesis autonomy (feature 021): three dials (reading always on; cards act or off; runs smoke scale by itself, propose only, or off) and the Pause switch in `genesis/autonomy.json`, `may_launch` with the plain reason, `plan_lines` computed by the Studio, and the activity record `genesis/activity.jsonl`; in `genesis.py`, `propose_experiment` (a smoke plan within the allowances launches by itself, anything else waits in Approval), `ask_question` and `answer_question` (question cards in Your review with a suggested default; the blocked card resumes on the answer); routes `/api/genesis/autonomy`, `/api/genesis/activity`, `/api/genesis/cards/<id>/answer`; `genesis_skills.py` holds the procedures Genesis writes for itself (twelve at most, injected by card kind, `/api/genesis/skills`); a finished run that Genesis planned re-queues its card for the verdict (the debrief); the nightly brief is a fact list. Design of record `docs/superpowers/specs/2026-09-09-genesis-autonomy-reports-journeys-design.md`. |
 | `workflowbench/wb_studio/genesis_access.py` | Feature 022, lane B: the people of the lab and their keys (`genesis/people.json`, sha256 of each key, member or admin), Genesis's weekly envelope, the brief hour and the digest day. A person's key travels as `X-Person-Key` beside the Studio token and names them (`by: human:<name>`) on every write; before anyone is listed the token alone opens writes. The configuration page under Settings › Genesis (`renderGenesisConfig` in `static/genesis.js`) and the digest page `#genesis/digest` read from it. |
 | `workflowbench/wb_studio/genesis_config.py`, `genesis_plugins.py` | Feature 022 (design of record `docs/superpowers/specs/2026-09-10-genesis-team-scientist-design.md`): the model each step of Genesis's work uses (`genesis/config.json`, cheapest available route by default, `GET/POST /api/genesis/config`), and the seam through which new modules add tools, protocol text, prompt blocks, turn hooks and launch gates without editing the shared files. Review and patch default to the strongest keyed route, the rest to the cheapest (10 Sep). |
 | `workflowbench/wb_studio/genesis_harness.py`, `genesis_schemas.py` | The Genesis loop (deep dive of 10 Sep 2026, `docs/AI-LABS-GENESIS-DEEP-DIVE-2026-09-10.md`): a turn is an in-process loop over the benchmark's four provider adapters (`wb_arms/api_loop.py`), one typed tool per lab action, SOUL.md first then the protocol as the system prompt, one ledger reservation per request at an output cap the turn can still pay, tool refusals returned as sentences, tool results and reasoning kept in the turn record, a landing two requests before the cap of 24, and a turn that runs out saves its last text to the card's notes. The Codex subprocess, its loopback broker and the MCP bridge are gone. |
 | `workflowbench/wb_studio/static/genesis.js`, `genesis.css` | Genesis as a colleague (feature 022, lane B, 10 Sep): chat first in three columns, routes `#genesis`, `#genesis/t/<thread>`, `#genesis/board`, `/library`, `/memory`, `/activity`; the tracking pane (Cards, Sources, Trace); the card as a document; live tool steps from the turn's events. Lane briefs and receipts under `.tmp/genesis-lane-*.md`. |
 | `workflowbench/wb_studio/genesis_watcher.py` | Cards as inputs (feature 019): `Genesis.drop` turns a link, a run id or a sentence into a card with a question; the watcher works queued cards one at a time under `STUDIO_GENESIS_CARD_USD` (2.00) per card and `STUDIO_GENESIS_DAILY_USD` (6.00) per day, only for runs and sources that arrive after it first ran, never launching anything; pause, stop and status routes under `/api/genesis/watcher`. |
+| `workflowbench/wb_studio/genesis_engineer.py` | The daily engineer loop (feature 023, design of record `docs/superpowers/specs/2026-09-11-genesis-engineer-loop-design.md`): at 08:00 São Paulo it reads the runs it has not settled, computes their failure buckets for free, and asks Genesis for one typed spec on the worst bucket that points at code. A Codex agent implements the spec in a throwaway git worktree; **the Studio runs the verify command itself** (an allowlist, never a string a model chose) and files a `fix` (lab) or `patch` (monarch) card with the diff, the test result and the cost. Nothing is applied, merged or pushed. Money: `STUDIO_GENESIS_ENGINEER_USD` (3.00) for the spec turn, `STUDIO_GENESIS_CODEX_USD` (1.00) reserved before the agent starts and settled from its reported token usage — usage that cannot be read leaves the ceiling held. The `engineer` dial starts **off**. |
+| `workflowbench/wb_studio/genesis_critic.py`, `rubrics/` | The weekly adversary (feature 023): on the lab's digest day a *different* model than the one that writes reviews what the lab publishes. It sees the rendered pages (`tests/browser/shot.cjs` — a full page, a crop, and a measured layout record: overflow, clipping, smallest text, WCAG contrast, tables, heading order), the newest run's report data, and the Studio's own source. It judges against rubric files a person edits — `prose.md` (Wikipedia's *Signs of AI writing*), `figures.md` (the design system as rules), `accuracy.md` (`PLAN.md` §1) — and may only cite a line id that exists in them. Output: one enhancement card per finding, six at most, with at most one carrying a Codex-written diff. The numeric rules are decided by the browser, not by the critic. |
+| `workflowbench/wb_studio/figures.py` | Figures Genesis can put in a card (feature 023): it names a kind and a run, and nothing else. The Studio computes the figure from `report_data.run_report` — the same numbers the report shows — and `static/charts.js` draws it in the design system's own classes; a forged `chart`, `options` or `source` in the payload is dropped. Kinds: `pass_rate`, `failures`, `cost_against_pass_rate`, `tasks`, read from `figures.KINDS` so the tool's schema enum never drifts. `[figure:<id>]` in a card body is where it is drawn (`drawFigures` in `static/genesis.js`), and every figure carries its source line (rubric F6). Read-only over `GET /api/genesis/figures/<id>`. |
 | `workflowbench/wb_studio/library.py` | Genesis research library: sources with publication and discovery dates, Saved or Analyzed only, one fixed topic list (`TOPICS`, keyword classification with Other as the fallback; Genesis or a person can reclassify), "Used in" as version metadata, import from `research/search-log.jsonl`; the hypothesis record (green, white, red) with its written rules. |
-| `workflowbench/tests/browser/` | The browser suite: `node tests/browser/suite.cjs` starts the offline fixture Studio (`server.py`, three recorded runs by the scripted checks) and checks every view in both themes; `snapshots/` holds the screenshots for review, not for pixel diffing. |
+| `workflowbench/tests/browser/` | The browser suite: `node tests/browser/suite.cjs` starts the offline fixture Studio (`server.py`, three recorded runs by the scripted checks) and checks every view in both themes; `snapshots/` holds the screenshots for review, not for pixel diffing. `shot.cjs` is separate and single-purpose: one view, a full-page PNG, a crop and a measured layout record, for the weekly critic — it must never write into `snapshots/`. |
 | `docs/AI-LABS-IMPLEMENTATION-PLAN-2026-09-09.md` | The Studio plan of 9 Sep: seven phases mapped to features 012 to 018, the design-system choice, and the decisions assumed. The design direction and the benchmark landscape research sit beside it under `docs/`. |
 | `workflowbench/wb_world/openapi.py`, `wb_arms/http_shim.py` | OpenAPI documents + HTTP front door for Monarch. |
-| `workflowbench/wb_report/audiences.yaml` | Which competitors may appear in which report. |
 | `workflowbench/tasks/`, `workflowbench/corpus/` | 10 pilot tasks (manual rules); 200-task corpus (derived rules). |
 | `workflowbench/deferred.md` | Deferred items of the bench: the sandbox for competitor harnesses (future), `wb doctor --record`, and smaller items carried from features 002 to 006. |
 | `workflowbench/out/` | Run outputs and reports (gitignored where large). |
-| `graphify-out/` | Knowledge graph (read before code questions; refresh after). |
+| `graphify-out/` | **Does not exist.** Planned on 2 September, never initialised; see the last section of this file. |
 | `.github/workflows/` | `ci.yml` (PRs to main or manual; free) and `smoke.yml` (manual; ~US$ 2). |
 | `../monarch` | Sibling clone of Monarch; `feature-discovery/docs/public-api-seeds-runbook.md` for the OpenAPI path. |
 
@@ -265,7 +272,7 @@ and actual configuration rather than treating those examples as runtime pins.
 
 - **PLAN.md** — `monarch-benchmark/PLAN.md`. The single tracking surface.
 - **State of the program** — `monarch-benchmark/docs/STATE-OF-THE-PROGRAM.md`.
-- **Smoke report** — `workflowbench/out/report-smoke-frontier-001-internal.md`.
+- **Smoke report** — `workflowbench/out/report-smoke-frontier-001-internal.md` (written before 11 Sep 2026, when reports carried the audience in the filename; `wb report` now writes `report-<run_id>.md`).
 - **Monarch authoring endpoint** — `POST /api/workflows/recipe/runs {goal}`,
   session auth; knowledge base via Feature Discovery's `api_spec` handler.
 - **Slack** — `#benchmarks` is the destination for round summaries; Langfuse the backend behind it.
@@ -284,13 +291,22 @@ and actual configuration rather than treating those examples as runtime pins.
   authorized corrections are limited to WorkflowBench's own rule translation,
   keeping AutomationBench's world, routes, seeds and assertions unchanged.
 
-## graphify
+## graphify — not built, 11 September 2026
 
-This project has a graphify knowledge graph at graphify-out/.
+**There is no knowledge graph in this repository.** `graphify-out/` does not exist
+and never has. `HANDOFF-2026-09-02.md:49` listed "Initialize Graphify on the repo
+(`/graphify-init`)" as a to-do; it was never carried out, and this section went on
+describing the result as an existing asset for nine days. Graphify is also not
+installed on this machine: no distribution, no plugin, no binary, no skill.
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files, refresh the graph through the installed Graphify
-  skill using its `uv`-managed environment; do not invoke bare `python3` or
-  silently claim a refresh if Graphify is unavailable.
+Until someone runs `/graphify-init` and builds it, **read the code**. The entry
+points are the file map above, `monarch-benchmark/docs/HOW-WORKFLOWBENCH-WORKS.md`
+for what an attempt is, and `docs/STATE-OF-THE-PROGRAM.md` for where things stand.
+
+The rule that survives, because it is about honesty rather than about the tool:
+**never claim a graph refresh that did not happen**, and never invoke bare
+`python3` to fake one. If the graph is built later, these are its rules — read
+`graphify-out/GRAPH_REPORT.md` before architecture questions, prefer
+`graphify-out/wiki/index.md` over raw files when it exists, refresh through the
+installed Graphify skill in its `uv`-managed environment after changing code, and
+keep the vendored `workflowbench/vendor/automation-bench` out of the graph.

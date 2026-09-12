@@ -38,10 +38,14 @@ def _timestamp() -> str:
 
 
 def _long(path: Path) -> Path:
-    """Windows refuses paths past 260 characters unless they carry the extended prefix; evidence folders are deep."""
+    """Apply Windows extended syntax based on the resolved absolute length."""
     text = str(path)
-    if os.name == "nt" and len(text) > 230 and not text.startswith("\\\\?\\"):
-        return Path("\\\\?\\" + os.path.abspath(text))
+    if os.name == "nt" and not text.startswith('\\\\?\\'):
+        absolute = os.path.abspath(text)
+        if len(absolute) > 230:
+            if absolute.startswith('\\\\'):
+                return Path('\\\\?\\UNC\\' + absolute[2:])
+            return Path('\\\\?\\' + absolute)
     return path
 
 
@@ -50,6 +54,11 @@ def _plain(path: Path) -> str:
     text = str(path)
     if text.startswith("\\\\?\\"):
         text = text[4:]
+        # `_long` writes a UNC path as \\?\UNC\server\share; dropping only the four
+        # characters leaves "UNC\server\share", which is not the same path and made
+        # write_attempt reject its own journal on a network --out.
+        if text.upper().startswith("UNC\\"):
+            text = "\\\\" + text[4:]
     return os.path.normcase(os.path.abspath(text))
 
 
@@ -98,7 +107,9 @@ def provenance() -> dict:
             "automation_bench_version": importlib.metadata.version("automation-bench"),
             "dependency_identity_scope": "installed_version_only",
             "source_sha256": {name: hashlib.sha256((SOURCE_ROOT / name).read_bytes()).hexdigest()
-                              for name in ("grader/grade.py", "grader/invariant.py", "wb_world/episode.py")}}
+                              for name in ("grader/grade.py", "grader/invariant.py", "wb_world/episode.py",
+                                           "wb_orchestrator/external_runtime.py", *sorted(p.relative_to(SOURCE_ROOT).as_posix()
+                                               for p in (SOURCE_ROOT / "wb_worlds").rglob("*.py")))}}
 
 
 class AttemptJournal:
@@ -163,7 +174,12 @@ def write_attempt(root: Path, index: int, ep, result, termination: str, error: s
         write_json(directory / "snapshot0.json", ep.snapshot0)
     elif _plain(journal.directory) != _plain(directory) or journal.closed:
         raise EvidenceIntegrityError("attempt finalization does not match its open journal")
-    write_json(directory / "snapshot1.json", ep.snapshot())
+    snapshot_error = None
+    try:
+        write_json(directory / "snapshot1.json", ep.snapshot())
+    except Exception as exc:
+        snapshot_error = f"{type(exc).__name__}: {exc}"
+        result.flags.append("evidence_incomplete")
     write_events(directory / "events.jsonl", ep.events)
     write_events(directory / "turns.jsonl", result.turn_log)
     phases = {name: metrics.model_dump(mode="json") if hasattr(metrics, "model_dump")
@@ -173,7 +189,8 @@ def write_attempt(root: Path, index: int, ep, result, termination: str, error: s
     # even if a snapshot1 file was already atomically installed.
     write_json(directory / "attempt.json", {
         "schema": "workflowbench-attempt@1", "index": index,
-        "status": "finalized", "completion": "complete", "final_world_state": "recorded",
+        "status": "finalized", "completion": "incomplete" if snapshot_error else "complete",
+        "final_world_state": "unavailable" if snapshot_error else "recorded", "snapshot_error":snapshot_error,
         "journal": journal is not None, "finished_at": _timestamp(),
         "termination": termination, "error": error,
         "cost_usd": result.cost_usd, "flags": result.flags,
@@ -201,6 +218,10 @@ def write_manifest(root: Path, *, episode_id: str, contract_sha256: str,
         if metadata.get("journal") or any((directory / name).exists() for name in LIVE_ARTIFACTS):
             journaled_attempts.append(directory.name)
             paths.extend(directory / name for name in LIVE_ARTIFACTS)
+    # Source evaluators may require their trajectory/database artifact in addition
+    # to the universal snapshots. Bind every retained source artifact to this manifest.
+    paths.extend(path for path in sorted(root.rglob("*"))
+                 if path.is_file() and path.name != "manifest.json" and path not in paths)
     artifacts, missing = [], []
     for path in paths:
         relative = path.relative_to(root).as_posix()

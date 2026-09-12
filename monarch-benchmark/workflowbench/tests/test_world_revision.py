@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.test_config import AUDIENCES, ENV, site  # noqa: F401  (site is a fixture)
+from tests.test_config import ENV, site  # noqa: F401  (site is a fixture)
 from tests.test_corpus import _row, stub_vendor  # noqa: F401  (stub_vendor is a fixture)
 from wb_orchestrator import config, corpus as corpus_mod
 from wb_orchestrator.config import ConfigError
@@ -197,7 +197,7 @@ def test_cli_import_ab_defaults_are_unchanged(stub_vendor, tmp_path, capsys, mon
 def _resolve(site):
     return config.resolve(site / "config/products/simulated-apps.yaml",
                           site / "config/plans/smoke-frontier.yaml",
-                          env=ENV, audiences=AUDIENCES)
+                          env=ENV)
 
 
 def test_resolve_refuses_a_set_recorded_under_another_world(site, monkeypatch):
@@ -313,11 +313,11 @@ def test_summary_refuses_rounds_of_different_suites(tmp_path):
     _run(store, "run-new-2", f"workflowbench-synthetic@{NEW}", "achievable-50-b")
 
     with pytest.raises(GateError) as e:
-        build_summary(store, ["run-old", "run-new"], audience="internal")
+        build_summary(store, ["run-old", "run-new"])
     assert "workflowbench-synthetic@0.1" in str(e.value) and NEW in str(e.value)
 
     # rounds of one suite still summarise
-    s = build_summary(store, ["run-new", "run-new-2"], audience="internal")
+    s = build_summary(store, ["run-new", "run-new-2"])
     assert [r["run_id"] for r in s["rounds"]] == ["run-new", "run-new-2"]
 
 
@@ -347,7 +347,7 @@ def test_report_refuses_a_run_whose_rows_span_suites(tmp_path):
         suite="workflowbench-synthetic@0.1", task_id="t2", arm="alpha", trial=0,
         passed=True, assertions_passed=True, invariant_passed=True, invariant_declared=True))
     with pytest.raises(GateError, match="refusing to pool"):
-        build_report(store, "run-mixed", audience="internal")
+        build_report(store, "run-mixed")
 
 
 # --- "seeded" under a world that spells out every app's empty default ------------

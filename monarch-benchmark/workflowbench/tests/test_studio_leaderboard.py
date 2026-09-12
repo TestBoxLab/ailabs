@@ -311,3 +311,33 @@ def test_cohorts_carry_task_aware_intervals_and_pairings():
     assert {pair['a'], pair['b']} == {ids['arm-a'], ids['arm-b']}
     assert (pair['tasks'], pair['wins'], pair['losses'], pair['ties'], pair['unique_a'], pair['unique_b']) == (2, 1, 1, 0, 1, 1)
 
+
+def test_report_data_uses_leaderboard_exclusion_reason(tmp_path):
+    import json
+    from wb_studio import report_data
+    from wb_studio.leaderboard import exclusion_reason
+    assert report_data.exclusion_reason is exclusion_reason
+
+    pilot = job('pilot')
+    pilot['title'] = 'Pilot'
+    pilot_dir = tmp_path / "pilot"
+    pilot_dir.mkdir(parents=True, exist_ok=True)
+    (pilot_dir / "job.json").write_text(json.dumps(pilot), encoding="utf-8")
+    (pilot_dir / "events.jsonl").write_text("", encoding="utf-8")
+
+    mock_studio = SimpleNamespace(
+        directory=tmp_path,
+        jobs=lambda: [pilot],
+        job=lambda identity: pilot,
+        events=lambda identity: [],
+        tasks={},
+    )
+    cohort_id = list(report_data.cohorts(mock_studio).keys())[0]
+    rep = report_data.round_report(mock_studio, cohort_id)
+    assert rep["excluded"] == [{"id": "pilot", "title": "Pilot", "reason": exclusion_reason(pilot)}]
+
+    run_rep = report_data.run_report(mock_studio, "pilot")
+    assert run_rep["exclusion_reason"] == exclusion_reason(pilot) == "not the frozen 50-task benchmark"
+    assert run_rep["full_benchmark"] is False
+
+

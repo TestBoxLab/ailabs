@@ -28,20 +28,34 @@ BINARY = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".woff", ".w
 MAX_FILE = 1_000_000
 MONARCH_MD_LIMIT = 2500
 INTERNAL = {"audience": "internal"}
+TARGETS = ("monarch", "lab")  # the product under test, and the lab's own checkout (feature 023)
 
 
 # -- settings and git -------------------------------------------------------------
 
-def settings(studio) -> dict:
+def target(value) -> str:
+    """The repository a call means: Monarch, the product under test, or the lab's own checkout."""
+    name = str(value or "monarch").strip().lower()
+    if name not in TARGETS:
+        raise ValueError("repo is " + " or ".join(repr(t) for t in TARGETS))
+    return name
+
+
+def settings(studio, repo: str = "monarch") -> dict:
+    which = target(repo)
+    if which == "lab":
+        # The lab's own checkout at whatever is checked out now; there is no declared build to pin to.
+        return {"repo": REPO, "ref": "HEAD", "out": Path(studio.directory) / "genesis" / "code-index-lab",
+                "build": None, "target": "lab"}
     from wb_studio.enterprise import environment
     env = environment(studio)
-    repo = Path(env.get("MONARCH_REPO") or REPO.parent / "monarch")
+    path = Path(env.get("MONARCH_REPO") or REPO.parent / "monarch")
     ref = (env.get("MONARCH_BUILD_COMMIT") or "").strip()
     if not ref:
         declared = re.fullmatch(r"monarch@[0-9a-fA-F]+\+(.+)", (env.get("MONARCH_BUILD") or "").strip())
         ref = declared[1] if declared else "main"
-    return {"repo": repo, "ref": ref, "out": Path(studio.directory) / "genesis" / "code-index",
-            "build": (env.get("MONARCH_BUILD") or "").strip() or None}
+    return {"repo": path, "ref": ref, "out": Path(studio.directory) / "genesis" / "code-index",
+            "build": (env.get("MONARCH_BUILD") or "").strip() or None, "target": "monarch"}
 
 
 def git(repo, *args, timeout=120) -> str:
@@ -139,7 +153,7 @@ def paragraph(record: dict | None) -> str:
 # -- Graphify ---------------------------------------------------------------------
 
 def _graphify(repo, out: Path, commit: str, previous: dict) -> dict:
-    report, graph = out / "GRAPH_REPORT.md", out / "graph.json"
+    report = out / "GRAPH_REPORT.md"
     have = report.exists()
     status = {"available": False, "report": str(report) if have else None,
               "built_from": previous.get("built_from") if have else None}
@@ -218,19 +232,27 @@ def _monarch_md(cfg, index, record, nodes) -> str:
     return text if len(text) <= MONARCH_MD_LIMIT else text[:MONARCH_MD_LIMIT - 4].rstrip() + "...\n"
 
 
-def refresh(studio) -> dict:
-    """The daily job. Never raises: a failure is returned in the summary."""
+def _safe(studio, repo: str) -> dict:
     try:
-        return _refresh(studio)
+        return _refresh(studio, repo)
     except Exception as exc:  # the scheduler would catch this too; the summary is friendlier
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _refresh(studio) -> dict:
-    cfg = settings(studio)
-    repo, out = cfg["repo"], cfg["out"]
+def refresh(studio) -> dict:
+    """The daily job: Monarch's index, then the lab's own. Never raises. The top-level keys stay
+    Monarch's, so a caller that reads `status` reads the product under test; `lab` carries the other."""
+    summary = _safe(studio, "monarch")
+    summary["lab"] = _safe(studio, "lab")
+    return summary
+
+
+def _refresh(studio, which: str = "monarch") -> dict:
+    cfg = settings(studio, which)
+    repo, out, lab = cfg["repo"], cfg["out"], cfg["target"] == "lab"
     if not (repo / ".git").exists():
-        return {"status": "skipped", "reason": f"No Monarch checkout at {repo}. Set MONARCH_REPO or clone it there."}
+        return {"status": "skipped", "reason": f"No {'lab' if lab else 'Monarch'} checkout at {repo}."
+                                               + ("" if lab else " Set MONARCH_REPO or clone it there.")}
     out.mkdir(parents=True, exist_ok=True)
     index_path, changes_path = out / "index.json", out / "changes.json"
     previous = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
@@ -254,10 +276,11 @@ def _refresh(studio) -> dict:
     index["graphify"] = _graphify(repo, out, commit, previous.get("graphify") or {})
     write_json(index_path, index)
     nodes = god_nodes(out / "GRAPH_REPORT.md") if index["graphify"]["report"] else []
-    (out / "MONARCH.md").write_text(_monarch_md(cfg, index, record, nodes), encoding="utf-8")
+    if not lab:  # MONARCH.md describes the product under test; the lab's own code has no such summary
+        (out / "MONARCH.md").write_text(_monarch_md(cfg, index, record, nodes), encoding="utf-8")
     summary = {"status": "completed", "commit": commit, "previous_commit": index["previous_commit"], "fetch": fetch,
                "tracked_files": len(files), "changed": changed, "graphify": index["graphify"]["available"]}
-    if changed and record and record.get("total"):
+    if changed and record and record.get("total") and not lab:
         today = now_sao_paulo().date().isoformat()
         entry = studio.genesis.library.add({
             "title": f"Monarch changes {today}: {record['total']} files in {', '.join(list(record['by_area'])[:3])}",
@@ -284,12 +307,12 @@ def _lines(repo, path: str):
 
 
 def code_status(studio, payload=None) -> dict:
-    cfg = settings(studio)
+    cfg = settings(studio, (payload or {}).get("repo"))
     index_path, md = cfg["out"] / "index.json", cfg["out"] / "MONARCH.md"
     if not index_path.exists():
-        return {"indexed": False, "repo": str(cfg["repo"]), "ref": cfg["ref"],
-                "message": "The Monarch code index has not been built yet. Run wb genesis index or wait for the daily job.", **INTERNAL}
-    return {"indexed": True, **json.loads(index_path.read_text(encoding="utf-8")),
+        return {"indexed": False, "repo": str(cfg["repo"]), "ref": cfg["ref"], "target": cfg["target"],
+                "message": f"The {cfg['target']} code index has not been built yet. Run wb genesis index or wait for the daily job.", **INTERNAL}
+    return {"indexed": True, "target": cfg["target"], **json.loads(index_path.read_text(encoding="utf-8")),
             "monarch_md": md.read_text(encoding="utf-8") if md.exists() else "", **INTERNAL}
 
 
@@ -298,7 +321,7 @@ def code_search(studio, payload) -> dict:
     if len(query) < 2:
         raise ValueError("Give a search of at least 2 characters")
     limit = max(1, min(100, int(payload.get("limit") or 30)))
-    cfg = settings(studio)
+    cfg = settings(studio, payload.get("repo"))
     repo, needle = cfg["repo"], query.lower()
     graph = _graph(cfg["out"])
     graph_hits = []
@@ -319,14 +342,14 @@ def code_search(studio, payload) -> dict:
                         break
             if len(hits) >= limit:
                 break
-    return {"query": query, "graph": graph_hits, "hits": hits, "limit": limit, **INTERNAL}
+    return {"query": query, "target": cfg["target"], "graph": graph_hits, "hits": hits, "limit": limit, **INTERNAL}
 
 
 def code_explain(studio, payload) -> dict:
     symbol = str(payload.get("symbol") or "").strip()
     if not re.fullmatch(r"[A-Za-z_$][\w$]{0,199}", symbol):
         raise ValueError("Give one symbol name, such as a class or function")
-    cfg = settings(studio)
+    cfg = settings(studio, payload.get("repo"))
     repo = cfg["repo"]
     graph = _graph(cfg["out"])
     matches = []
@@ -352,46 +375,48 @@ def code_explain(studio, payload) -> dict:
                         break
             if len(definitions) >= 30:
                 break
-    return {"symbol": symbol, "graph": matches, "definitions": definitions, **INTERNAL}
+    return {"symbol": symbol, "target": cfg["target"], "graph": matches, "definitions": definitions, **INTERNAL}
 
 
 def code_read(studio, payload) -> dict:
+    cfg = settings(studio, payload.get("repo"))
+    inside = "Give a path inside the " + cfg["target"] + " checkout, relative to its root"
     raw = str(payload.get("path") or "").strip().replace("\\", "/")
     parts = Path(raw).parts
     if not raw or Path(raw).is_absolute() or raw.startswith("/") or ".." in parts or (parts and parts[0].endswith(":")):
-        raise ValueError("Give a path inside the Monarch checkout, relative to its root")
-    repo = settings(studio)["repo"].resolve()
+        raise ValueError(inside)
+    repo = cfg["repo"].resolve()
     full = (repo / raw).resolve()
     if not full.is_relative_to(repo) or not full.is_file():
-        raise ValueError("Give a path inside the Monarch checkout, relative to its root")
+        raise ValueError(inside)
     path = full.relative_to(repo).as_posix()
     if path not in set(tracked(repo)):
-        raise ValueError("That file is not tracked in the Monarch checkout")
+        raise ValueError("That file is not tracked in the " + cfg["target"] + " checkout")
     if not _readable(repo, path):
         raise ValueError("That file is binary or over 1 MB")
     lines = _lines(repo, path)
     start = max(1, int(payload.get("start") or 1))
     end = min(int(payload.get("end") or start + 199), start + 199, len(lines))
-    return {"path": path, "start": start, "end": end, "total_lines": len(lines),
+    return {"path": path, "target": cfg["target"], "start": start, "end": end, "total_lines": len(lines),
             "lines": [{"line": n, "text": lines[n - 1]} for n in range(start, end + 1)], **INTERNAL}
 
 
 def code_changes(studio, payload) -> dict:
-    cfg = settings(studio)
+    cfg = settings(studio, payload.get("repo"))
     since = str(payload.get("since") or "").strip()
     if not since:
         path = cfg["out"] / "changes.json"
         record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-        return {"record": record, "summary": paragraph(record), **INTERNAL}
+        return {"record": record, "target": cfg["target"], "summary": paragraph(record), **INTERNAL}
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", since):
         raise ValueError("since is a commit (7 to 40 hex characters)")
     repo = cfg["repo"]
     try:
         base = git(repo, "rev-parse", "--verify", "--quiet", since + "^{commit}").strip()
     except RuntimeError:
-        raise ValueError("That commit is not in the Monarch checkout") from None
+        raise ValueError("That commit is not in the " + cfg["target"] + " checkout") from None
     record = changes(repo, base, git(repo, "rev-parse", "HEAD").strip())
-    return {"record": record, "summary": paragraph(record), **INTERNAL}
+    return {"record": record, "target": cfg["target"], "summary": paragraph(record), **INTERNAL}
 
 
 TOOLS = {"code_status": code_status, "code_search": code_search, "code_explain": code_explain,

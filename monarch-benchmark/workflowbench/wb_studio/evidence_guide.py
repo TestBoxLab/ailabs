@@ -6,11 +6,11 @@ from wb_world.episode import contract_hash
 from wb_studio.measures import initial_repetitions
 
 
-def download(studio, identity, audience):
-    from wb_studio.report_data import visible_setups
+def download(studio, identity):
+    from wb_studio.report_downloads import export_setups
     from wb_studio.report_inputs import saved_rows
     job = studio.job(identity)
-    shown, _ = visible_setups(job, audience)
+    shown = export_setups(job)
     rows = saved_rows(studio.directory / identity / "results.sqlite3", identity)
     rows = [r for r in rows if r["arm"] in shown]
     return build(job, rows, studio.tasks)

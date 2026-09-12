@@ -10,7 +10,7 @@ import pytest
 
 from wb_arms import providers
 from wb_studio import genesis_harness as harness
-from wb_studio.genesis_config import Config, STEPS, cheapest, list_price
+from wb_studio.genesis_config import Config, EFFORTS, STEPS, cheapest, list_price
 
 
 OPUS = providers.get('claude-opus-4-8')
@@ -35,20 +35,21 @@ def test_tool_events_carry_a_short_credential_free_summary():
     assert harness.summary('y' * 500).endswith('...') and len(harness.summary('y' * 500)) == 243
 
 
-def test_route_for_prefers_the_configured_route_then_the_cheapest_available(tmp_path):
+def test_route_for_preserves_partner_choice_and_specialist_defaults(tmp_path):
     config = Config(tmp_path)
     routes = [{'id': 'claude-opus-4-8', 'available': True}, {'id': 'glm-5.3', 'available': True}, {'id': 'gpt-5.6-sol', 'available': False}]
-    assert config.read() == {'models': {s: None for s in STEPS}, 'steps': list(STEPS)}
+    assert config.read() == {'models': {s: None for s in STEPS}, 'effort': {s: None for s in STEPS},
+                             'steps': list(STEPS), 'efforts': list(EFFORTS)}
     assert list_price('glm-5.3') < list_price('claude-opus-4-8')
-    assert config.route_for('reading', routes)['id'] == 'glm-5.3'            # cheapest available, never the first in file order
+    assert config.route_for('reading', routes) is None  # Astra is unavailable; never substitute
     assert cheapest([{'id': 'm', 'available': True}])['id'] == 'm'         # an unpriced route is still a route
     assert config.set({'models': {'reading': 'claude-opus-4-8'}}, routes)['models']['reading'] == 'claude-opus-4-8'
     assert config.route_for('reading', routes)['id'] == 'claude-opus-4-8'
     assert config.route_for('ranking', routes)['id'] == 'glm-5.3'            # other steps keep the default
     assert config.route_for('review', routes)['id'] == 'claude-opus-4-8'     # review and patch take the strongest route by default (Lucas, 10 Sep)
-    config.set({'models': {'reading': 'gpt-5.6-sol'}}, routes)              # known but unavailable today: the cheapest stands in
-    assert config.route_for('reading', routes)['id'] == 'glm-5.3'
-    assert config.effective(routes)['reading'] == 'glm-5.3'
+    config.set({'models': {'reading': 'gpt-5.6-sol'}}, routes)              # known but unavailable today: preserve the choice
+    assert config.route_for('reading', routes) is None
+    assert config.effective(routes)['reading'] is None
     with pytest.raises(ValueError):
         config.set({'models': {'bogus': 'glm-5.3'}}, routes)
     with pytest.raises(ValueError):
@@ -90,7 +91,10 @@ def test_a_plugin_gate_holds_a_smoke_launch_and_a_persons_approval(tmp_path, mon
     monkeypatch.setattr('wb_studio.runtime_registry.check_launch', lambda studio, architectures, selected, track='agentic-request': [{'id': 'without-monarch', 'name': 'API control'}])
     studio = SimpleNamespace(directory=tmp_path / 'studio', create=Mock(return_value={'id': 'run-1'}), jobs=Mock(return_value=[]), job=Mock(), events=Mock(return_value=[]), ledger=Mock())
     (tmp_path / 'studio').mkdir()
+    # Feature 024 FR-002 turns every dial off by default; these tests are about
+    # what Genesis does once a person has turned it on.
     genesis = Genesis(studio)
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
     proposal = {'title': 'Smoke', 'tasks': ['t1', 't2'], 'models': ['gpt-5.6-sol'], 'maximum_usd': '1.00', 'track': 'agentic-request'}
     # Within every allowance, so the autonomy gate says yes; the plugin gate holds it in Plan with the reason.
     result = genesis.propose_experiment(proposal)

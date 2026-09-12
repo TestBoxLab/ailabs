@@ -55,6 +55,22 @@ def test_run_now_ignores_the_clock_and_unknown_jobs_are_refused(scheduler):
         scheduler.run("nope")
 
 
+def test_settings_that_cannot_be_read_stop_the_jobs_instead_of_running_them(tmp_path):
+    """The dials are a spending gate; a gate that crashes must not read as open."""
+    class Broken:
+        def read(self):
+            raise KeyError("initiative")
+    studio = SimpleNamespace(directory=tmp_path, genesis=SimpleNamespace(autonomy=Broken()))
+    scheduler = Scheduler(studio, tmp_path / "schedule.json")
+    ran = []
+    scheduler.daily("index", 4, lambda studio: ran.append(1))
+    entries = scheduler.run_due(at(9, 5))
+    assert ran == []
+    assert [e["status"] for e in entries] == ["skipped"]
+    assert "KeyError" in entries[0]["reason"]
+    assert scheduler.due(at(9, 6))          # not stamped: it runs once the settings read again
+
+
 def test_discover_registers_modules_that_offer_a_daily_job(scheduler, monkeypatch):
     import types, sys
     module = types.ModuleType("wb_studio.fake_daily")

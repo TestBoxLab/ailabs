@@ -17,7 +17,7 @@ import yaml
 
 from wb_orchestrator import declare
 from wb_world.episode import (WORLD_PACKAGE, contract_hash, load_task_file,
-                              recorded_world_version, seeded_services)
+                              recorded_world_version)
 
 SET_NAMES = ("tier-simple", "tier-medium", "tier-complex", "random-10")
 TIER_ORDER = ("simple", "medium", "complex")
@@ -34,19 +34,7 @@ MEASURE = (
 
 # --- the measure --------------------------------------------------------------
 
-def score_task(task: dict[str, Any]) -> int:
-    """services seeded + expected changes + tools needed (data-model.md §2).
-
-    Seeded means the task's data says something about the service. Under the
-    repaired world every scored task lists all 48 apps' empty defaults, so
-    counting keys would give every one of them 48 and the measure would say
-    nothing (unblock plan M1, 8 Sep 2026); an empty default is not a seed.
-    """
-    info = task.get("info", {})
-    services = seeded_services(info.get("initial_state", {}))
-    return (len(services)
-            + len(info.get("expected_changes", []))
-            + len(info.get("zapier_tools", [])))
+from wb_orchestrator.corpus import score_task
 
 
 def tier_cuts(scores: Iterable[int]) -> dict[str, int]:

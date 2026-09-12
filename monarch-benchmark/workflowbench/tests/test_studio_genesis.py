@@ -169,7 +169,12 @@ def test_existing_analysis_is_reused_with_evidence_without_paid_work(genesis, mo
     assert state['analyzed'] == [{'run': 'completed-run', 'title': 'Completed run', 'status': 'completed'}]
     first = genesis.tool('read_run', {'id': 'completed-run'})
     second = genesis.tool('read_run', {'id': 'completed-run'})
-    assert first == second == {'job': jobs[0], 'events': [{'id': 7, 'type': 'task_completed'}], 'analysis': analysis, 'genesis_analyses': [], 'next_after': None, 'remaining_events': 0}
+    assert first == second  # reading twice is the same read: nothing is recomputed and nothing is spent
+    # The evidence this test is about, named rather than matched whole: read_run also carries the
+    # authored report and its progress, which belong to the report cycle's own tests.
+    assert {k: first[k] for k in ('job', 'events', 'analysis', 'genesis_analyses', 'next_after', 'remaining_events')} == {
+        'job': jobs[0], 'events': [{'id': 7, 'type': 'task_completed'}], 'analysis': analysis,
+        'genesis_analyses': [], 'next_after': None, 'remaining_events': 0}
     assert genesis.tool('read_run', {'id': 'pending-run'})['analysis'] is None
     assert path.read_bytes() == before
     genesis.studio.create.assert_not_called()

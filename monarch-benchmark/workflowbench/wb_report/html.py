@@ -1,10 +1,10 @@
 """The HTML pages: one per round, and the summary over several.
 
 This module renders a dictionary and nothing else. It never imports `Store` and
-never opens the database: the audience gate filters competitors out inside
-`build_report`, before any statistic exists, and a renderer that could re-query
-the store would be four new chances to re-admit a competitor the gate removed
-(plan design note 1, research R7). A test asserts this module's imports.
+never opens the database: every statistic is computed inside `build_report`, and
+a renderer that could re-query the store would be four new chances to put a
+number on the page that no figure stands behind (plan design note 1, research
+R7). A test asserts this module's imports.
 
 # ponytail: one _table() helper and f-strings, not a template engine. Ceiling:
 # if the page ever needs conditional layout beyond a table, revisit.
@@ -299,6 +299,11 @@ svg.chart .cb { fill: var(--accent); }
 svg.chart .ce { fill: var(--accent); opacity: 0.28; }
 figure.diagram figcaption { font-size: 13px; color: var(--muted); padding: 10px 18px 14px; border-top: 1px solid var(--line-soft); }
 
+.prov, .source-grading { overflow-wrap: anywhere; }
+.source-grading { margin-block: 1rem; }
+.source-grading summary { cursor: pointer; }
+.source-grading summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
 .callout {
   border: 1px solid var(--line); border-left: 3px solid var(--blue);
   background: var(--blue-wash); border-radius: 8px; padding: 14px 18px;
@@ -460,12 +465,10 @@ def _comparison_table(report: dict) -> str:
     if not report["comparisons"]:
         return ('<p class="note">Only one competitor ran this round, so there is '
                 "no paired comparison to make.</p>")
-    dollars = report["audience"] == "internal"
-    headers = ["competitor", "vs baseline", "strict pass diff (pp)", "pass rate ratio"]
-    if dollars:
-        headers.append("cost / passed ratio")
-    headers += ["W", "L", "both", "neither", "pairs", "infra-dropped", "McNemar p",
-                "verdict"]
+    headers = ["competitor", "vs baseline", "strict pass diff (pp)", "pass rate ratio",
+               "cost / passed ratio",
+               "W", "L", "both", "neither", "pairs", "infra-dropped", "ungraded-dropped",
+               "McNemar p", "verdict"]
     rows = []
     for c in report["comparisons"]:
         diff = c["strict_pass_diff_pp"]
@@ -478,11 +481,10 @@ def _comparison_table(report: dict) -> str:
             continue
         row = [c["arm"], c["baseline"],
                f"{diff:+.1f}" if diff is not None else "n/a",
-               _fmt(c["pass_rate_ratio"], "ratio")]
-        if dollars:
-            row.append(_fmt(c["cost_per_passed_ratio"], "ratio"))
+               _fmt(c["pass_rate_ratio"], "ratio"),
+               _fmt(c["cost_per_passed_ratio"], "ratio")]
         row += [_fmt(c["wins"]), _fmt(c["losses"]), _fmt(c["both"]), _fmt(c["neither"]),
-                _fmt(c["pairs"]), _fmt(c["dropped_infra"]),
+                _fmt(c["pairs"]), _fmt(c["dropped_infra"]), _fmt(c.get("dropped_ungraded", 0)),
                 f"{c['mcnemar']['p']:.3f}", c["verdict"]]
         rows.append(row)
     return _table(headers, rows, _source_line_for(report, "comparisons"),
@@ -571,17 +573,10 @@ def _provenance_body(report: dict) -> str:
              ("task set", f"{p['suite']} (v{p['suite_version']})"),
              ("task hashes", ", ".join(p["task_hashes"]) or None),
              ("run started", p["started"]), ("run finished", p["finished"]),
-             ("stop reason", p["stop_reason"]), ("audience", p["audience"])]
+             ("stop reason", p["stop_reason"])]
     if p["missing_cost"]:
         items.append(("missing cost", f"{p['missing_cost']['missing']} of "
                                       f"{p['missing_cost']['total']} Monarch attempts"))
-    withheld = p["withheld"]
-    if withheld:
-        # A non-internal audience is given the count only: even the existence of
-        # a gated competitor is internal (FR-023).
-        items.append(("competitors withheld",
-                      ", ".join(withheld) if isinstance(withheld, list)
-                      else f"{withheld} withheld"))
     body = "<br>".join(f"{_esc(k)}: <b>{_esc(v)}</b>" for k, v in items if v is not None)
     # Source lines stay in the markdown report and on each table's tooltip;
     # the page itself does not list them (Carlos, 4 Sep).
@@ -593,27 +588,21 @@ _TECH_TOC = [("overview", "Overview"), ("success", "Success"), ("cost", "Cost"),
              ("failures", "Failures"), ("provenance", "Provenance")]
 
 
-def render_page(report: dict[str, Any], sortable: bool = True) -> str:
+def render_page(report: dict[str, Any]) -> str:
     """The per-round technical page, in Monarch's design system.
 
     Seven sections, in the order a reader asks the questions: what was compared,
     did it work, what did it cost, how long did it take, what did Monarch
     actually do, what went wrong, and where do these numbers come from. Each is
     built from the already-gated `arms` list; the renderer never reaches the
-    store. `sortable` is accepted for the CLI's --no-sort and is a no-op here:
-    the reference's pages do not sort, and the tables are short enough to read.
+    store. The tables do not sort: they are short enough to read.
     """
     p = report["provenance"]
     has_monarch = bool(report.get("monarch_attempts"))
     toc = _toc_links([t for t in _TECH_TOC
                       if t[0] != "monarch-phases" or has_monarch])
     mode = MODE_WORDS.get(p.get("mode") or "")
-    dollars = report["audience"] == "internal"
     warn = ""
-    if report["audience"] == "internal" and any(a.startswith("monarch-lab")
-                                                for a in report["arms"]):
-        warn = ('<div class="callout crit"><span class="label">Internal only</span>'
-                "Contains lab competitors - do not export.</div>")
     hero = (f'<header class="hero"><div class="eyebrow">WorkflowBench &middot; '
             f'{_esc(p.get("plan") or "round")} &middot; '
             f'{_esc((p.get("started") or "")[:10])}</div>'
@@ -645,20 +634,23 @@ def render_page(report: dict[str, Any], sortable: bool = True) -> str:
                        "Every attempt that did not pass, with its reason.",
                        _failures_table(report) + _src(_source_line_for(report, "failures"))))
     parts.append(_part("provenance", f"Part {n + 1:02d} - Repeatability", "Provenance",
-                       "What produced these numbers.", _provenance_body(report)))
+                       "What produced these numbers.", _provenance_body(report) + _grading_details(report)))
     return _shell(f"WorkflowBench {report['run_id']}", toc, hero, "".join(parts))
 
 
-def _round_source_line(rnd: dict) -> str:
-    """One round's source line on the summary page, with its stop reason where
-    it has one: a round cut short by the cost ceiling is a real partial result,
-    and labelling it beats hiding it (research R9)."""
-    p = rnd["source"]
-    line = (f"src: {p['suite']} - v{p['suite_version']} - n={rnd['size']['total']} - "
-            f"{rnd['run_id']}{rnd['source_suffix']}")
-    if rnd.get("stop_reason"):
-        line += f" - stopped: {rnd['stop_reason']}"
-    return line
+def _grading_details(report: dict) -> str:
+    """Source verdicts stay beside the independently checked collateral result."""
+    blocks = []
+    for episode, item in report.get("grading_evidence", {}).items():
+        if not item.get("details"):
+            continue
+        detail = item["details"]
+        status = "ungraded" if detail.get("ungraded") else "passed" if item["passed"] else "failed"
+        blocks.append(f'<details class="source-grading"><summary>{_esc(item["task_id"])} · {_esc(item["arm"])} · {status}</summary>'
+                      f'<p>Completion: {_esc(item["termination"])}. Grading: {_esc(item["kind"])}.</p>'
+                      f'<p class="source">Evidence: {_esc(item["uri"])}</p>'
+                      f'<pre style="white-space:pre-wrap;overflow-wrap:anywhere">{_esc(json.dumps(detail, ensure_ascii=False, indent=2))}</pre></details>')
+    return '<h3>Grading evidence</h3>' + ''.join(blocks) if blocks else ''
 
 
 def _aggregate_table(summary: dict) -> str:
@@ -694,22 +686,18 @@ def _stratification_table(summary: dict) -> str:
                   "", "Stratification check: does the tier mix match a random draw?")
 
 
-def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
+def render_summary_page(summary: dict[str, Any]) -> str:
     """Two to six rounds on one page, in the same design system.
 
     It reuses the per-round success, cost and time tables, so a number here and
     a number on a round's own page cannot disagree. No paired figure, no McNemar
     and no ratio spanning rounds is rendered - the dictionary has no field for
-    one. `sortable` is accepted for the CLI and is a no-op.
+    one.
     """
     rounds = summary["rounds"]
     toc = _toc_links([(f"round-{i}", r["run_id"]) for i, r in enumerate(rounds, 1)]
                      + [("aggregate", "Aggregate")])
     warn = ""
-    if summary["audience"] == "internal" and any(
-            a.startswith("monarch-lab") for a in summary["arms"]):
-        warn = ('<div class="callout crit"><span class="label">Internal only</span>'
-                "Contains lab competitors - do not export.</div>")
     chips = "".join(
         f'<span class="chip"><strong>{_esc(r["run_id"])}</strong> {_esc(r["plan"])}</span>'
         for r in rounds)
@@ -722,7 +710,7 @@ def render_summary_page(summary: dict[str, Any], sortable: bool = True) -> str:
 
     parts = [warn]
     for i, rnd in enumerate(rounds, 1):
-        one = {"metrics": rnd["metrics"], "audience": summary["audience"],
+        one = {"metrics": rnd["metrics"],
                "baseline": rnd["baseline"], "provenance": rnd["source"],
                "arms": [m["arm"] for m in rnd["metrics"]], "size": rnd["size"],
                "run_id": rnd["run_id"], "source_suffix": rnd["source_suffix"],
@@ -785,24 +773,6 @@ def _part(ident: str, eyebrow: str, title: str, sub: str, body: str) -> str:
 def _toc_links(items) -> str:
     return "".join(f'<a href="#{i}"><span class="n">{n:02d}</span>{_esc(t)}</a>'
                    for n, (i, t) in enumerate(items, 1))
-
-
-def _mtable(headers, rows, numeric_from=1, titles=None) -> str:
-    """The reference's `.tablewrap > table`. `titles` maps a header to the full
-    name it abbreviates, so a shortened column keeps its identity on hover."""
-    head = "".join(
-        f'<th title="{_esc((titles or {}).get(h, h))}">{_esc(h)}</th>' for h in headers)
-    body = []
-    for row in rows:
-        cells = []
-        for i, cell in enumerate(row):
-            text, title = cell if isinstance(cell, tuple) else (cell, None)
-            attr = f' title="{_esc(title)}"' if title else ""
-            klass = ' class="num"' if i >= numeric_from else ""
-            cells.append(f"<td{klass}{attr}>{_esc(text)}</td>")
-        body.append("<tr>" + "".join(cells) + "</tr>")
-    return (f'<div class="tablewrap"><table><tr>{head}</tr>'
-            + "".join(body) + "</table></div>")
 
 
 def _src(text: str) -> str:
@@ -976,8 +946,8 @@ def _has_retries(report: dict) -> bool:
 def render_executive_page(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
     """The stakeholder page: Monarch first everywhere, the verdict in colour.
 
-    Same dictionary, same numbers and the same audience gate as the technical
-    page; it selects and colours, it never recomputes.
+    Same dictionary and the same numbers as the technical page; it selects and
+    colours, it never recomputes.
     """
     metrics = _ordered_metrics(report)
     monarch = next((m for m in metrics if is_monarch(m["arm"])), None)
@@ -1133,12 +1103,11 @@ def _overview_section(report: dict) -> str:
     if mode:
         lines.append(_esc(mode))
     lines.append(_size_line(size))
-    lines.append(f"total spend: {_fmt(totals['spend_usd'], 'money')}"
-                 if report["audience"] == "internal" else
-                 f"attempts: {totals['attempts']}")
+    lines.append(f"total spend: {_fmt(totals['spend_usd'], 'money')}")
     lines.append("competitors: " + ", ".join(_esc(a) for a in report["arms"]))
     if p.get("plan"):
         lines.append(f"plan {_esc(p['plan'])} on {_esc(p.get('product') or 'n/a')}")
+    lines.extend(_esc(note) for note in report.get("caveats", []))
     body = f'<p class="over">{"<br>".join(lines)}</p>'
     return body
 
@@ -1197,7 +1166,7 @@ def _success_section(report: dict) -> str:
 
 def _cost_section_table(report: dict) -> str:
     """The cost table, shared by the per-round page and the summary."""
-    dollars = report["audience"] == "internal"
+    dollars = True
     metrics = report["metrics"]
     base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
                 None)
@@ -1238,21 +1207,8 @@ def _cost_section_table(report: dict) -> str:
 def _cost_section(report: dict) -> str:
     """Section 3: what it cost, per competitor and - for Monarch - per phase and
     per model of its team."""
-    dollars = report["audience"] == "internal"
-    metrics = report["metrics"]
-    base = next((m["cost_total"] for m in metrics if m["arm"] == report["baseline"]),
-                None)
-    if dollars:
-        series = _series(metrics, lambda m: (m["arm"], m["cost_per_passed"], None))
-        chart = _bar_chart(series, kind="money")
-        guide = ("What the round paid for. Cost per passed attempt is the one "
-                 "that compares competitors fairly; the bar shows it.")
-    else:
-        series = [(m["arm"], (m["cost_total"] / base) if base else None, None)
-                  for m in metrics]
-        chart = _bar_chart(series, kind="ratio")
-        guide = "What the round paid for, as a ratio against the baseline."
-    return chart + _cost_section_table(report)
+    series = _series(report["metrics"], lambda m: (m["arm"], m["cost_per_passed"], None))
+    return _bar_chart(series, kind="money") + _cost_section_table(report)
 
 
 def _time_section_table(report: dict) -> str:

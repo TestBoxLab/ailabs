@@ -44,12 +44,70 @@ def _error_text(error):
     return str(error)
 
 
+def resolve_service(url: str) -> str:
+    """Resolve the service name from the full host and path, distinguishing Google services."""
+    parsed = urlsplit(url or "")
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    if not host:
+        return "application"
+    if "salesforce" in host:
+        return "Salesforce"
+    if host.endswith(".googleapis.com") or host == "googleapis.com" or host.endswith(".google.com"):
+        if host.startswith("googleads.") or "googleads" in host:
+            return "Google Ads"
+        if host.startswith("sheets.") or "sheets" in host:
+            return "Google Sheets"
+        if host.startswith("calendar.") or "/calendar" in path:
+            return "Google Calendar"
+        if host.startswith("drive.") or "/drive" in path:
+            return "Google Drive"
+        if host.startswith("gmail.") or "gmail" in host or "/gmail" in path:
+            return "Gmail"
+        first = host.split(".")[0]
+        if first not in ("www", "api"):
+            return first.replace("_", " ").title()
+        return "Google"
+    if "airtable" in host:
+        return "Airtable"
+    if "mailchimp" in host:
+        return "Mailchimp"
+    if "slack" in host:
+        return "Slack"
+    if "freshdesk" in host:
+        return "Freshdesk"
+    if "hubapi" in host or "hubspot" in host:
+        return "HubSpot"
+    if "github" in host:
+        return "GitHub"
+    if "notion" in host:
+        return "Notion"
+    if "asana" in host:
+        return "Asana"
+    if "linear" in host:
+        return "Linear"
+    if "atlassian" in host or "jira" in host:
+        return "Jira"
+    if "gorgias" in host:
+        return "Gorgias"
+    if "stripe" in host:
+        return "Stripe"
+    if "zendesk" in host:
+        return "Zendesk"
+    if "intercom" in host:
+        return "Intercom"
+    parts = host.split(".")
+    sub = parts[0]
+    if sub in ("api", "www", "app", "rest", "us1") and len(parts) > 1:
+        sub = parts[1]
+    return sub.replace("_", " ").title()
+
+
 def action(event, completion):
     args = event.get("arguments", {})
     error = tool_error(completion)
     method = args.get("method", "GET")
-    service = urlsplit(args.get("url", "")).hostname or "application"
-    service = "Salesforce" if "salesforce" in service else "Gmail" if "gmail" in service or "googleapis" in service else service.split(".")[0].title()
+    service = resolve_service(args.get("url", ""))
     body = decode(args.get("body"))
     if event.get("label") == "api_search":
         title, detail = "Find the right action", 'Searched available application actions for "' + str(args.get("query", "")) + '".'
@@ -150,7 +208,9 @@ def outcome_report(job, events, tasks, database=None):
                         "event_ids": [e["id"] for e in trace], "limitations": "This account describes evidence. A reasoning-model review is a separate interpretation, not a replacement verdict."})
         from wb_studio.narrative import story
         reports[-1]["story"] = story(result, trace, reports[-1], assertions)
-    return {"version": 1, "run": job["id"], "attempts": reports}
+    from wb_studio.performance import performance_report
+    return {"version": 1, "run": job["id"], "attempts": reports,
+            "performance": performance_report(job, events)}
 
 
 def _singular(name):

@@ -164,7 +164,7 @@ def _arm(product_path, harness_path, env, timeout_s=900.0):
     plan = config.Plan(name="monarch-recipes", tasks="tasks", mode="create-run",
                        repetitions=1, timeout_s=timeout_s, concurrency=1,
                        competitors=[config.CompetitorSpec(model=None, harness=harness.name)],
-                       baseline=harness.name, audience="internal", cost_ceiling_usd=0.0,
+                       baseline=harness.name, cost_ceiling_usd=0.0,
                        approved_by=None)
     rc = config.RunConfig(
         product=product, plan=plan,

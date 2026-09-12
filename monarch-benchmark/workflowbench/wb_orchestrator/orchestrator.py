@@ -58,6 +58,29 @@ class RoundAdmissionError(Exception):
 
 
 # legacy: runs recorded before product/plan files
+_ABSENT = object()
+
+
+def _drifted(recorded: dict, current: dict, prefix: str = "") -> list[str]:
+    """The settings in `current` that differ from `recorded`, named, one level into maps.
+
+    Only `current`'s own keys are compared: the stored configuration carries fields
+    beside the hashed ones (paths, the cost ceiling), and naming those as drift
+    would point at the wrong file.
+    """
+    names = []
+    for key in sorted(current):
+        was, now = recorded.get(key, _ABSENT), current[key]
+        if was == now:
+            continue
+        if isinstance(now, dict) and isinstance(was, dict):
+            names += _drifted(was, now, f"{prefix}{key}.")
+            names += [f"{prefix}{key}.{k}" for k in sorted(set(was) - set(now))]
+        else:
+            names.append(f"{prefix}{key}")
+    return names
+
+
 def config_hash(tasks: list[dict], arms: list[str], k: int, timeout_s: float) -> str:
     blob = json.dumps({"tasks": sorted(contract_hash(t) for t in tasks),
                        "arms": sorted(arms), "k": k, "timeout_s": timeout_s},
@@ -102,6 +125,18 @@ def build_arm(key: str):
     return arm
 
 
+def world_for(run_config: "config_mod.RunConfig | None") -> type:
+    """The world class a run's product names; the AutomationBench world when it
+    names none, which is every run that predates feature 026.
+
+    Resolved once per run rather than per attempt: an unknown world should refuse
+    the round, not the four hundredth episode of it.
+    """
+    from wb_world import registry
+    product = getattr(run_config, "product", None) if run_config else None
+    return registry.resolve(getattr(product, "world", None))
+
+
 def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.RunConfig | None" = None,
                   ledger=None, operator: str | None = None):
     """Build the arm a plan competitor names; the arm reports under the competitor's name (R1).
@@ -124,6 +159,9 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
         arm.provider_key = competitor.model.name
     elif h.kind == "scripted":
         arm = _ScriptedAdapter(h.script)
+    elif h.kind == "cli" and h.output == "isolated-container-v2":
+        from wb_orchestrator.external_runtime import NativeCliArm
+        arm = NativeCliArm(competitor, run_config, ledger)
     elif h.kind == "cli":
         if h.launcher != "claude-code":
             raise ValueError(f"launcher {h.launcher!r} is not runnable yet")
@@ -173,6 +211,10 @@ class Orchestrator:
                     operator: str | None = None, attempt_admission=None,
                     attempt_release=None) -> "Orchestrator":
         plan = run_config.plan
+        if run_config.product.world == "appworld":
+            from wb_worlds.appworld.importer import outside_repository
+            outside_repository(store.path)
+            outside_repository(out_dir)
         # arms=[] skips the old key validation; competitor names are set below.
         self = cls(store, run_config.tasks_dir, [], plan.repetitions, out_dir,
                    timeout_s=plan.timeout_s,
@@ -182,6 +224,9 @@ class Orchestrator:
                    attempt_release=attempt_release)
         self.arm_keys = [c.name for c in run_config.competitors]
         self.run_config = run_config
+        # Resolved here, so an unknown world refuses the round rather than the
+        # four hundredth episode of it.
+        self.world = world_for(run_config)
         return self
 
     def __init__(self, store: Store, suite_dir: str | Path, arms: list[str], k: int,
@@ -201,6 +246,9 @@ class Orchestrator:
         self.store = store
         self.grader = grader or grade
         self.run_config: config_mod.RunConfig | None = None
+        # The world every attempt of this run gets. `from_config` replaces it with
+        # the one the product names; a run built directly is the world we always had.
+        self.world: type = Episode
         self.suite_dir = str(suite_dir)
         self.tasks = tasks if tasks is not None else load_suite(suite_dir)
         self.suite = suite_id(self.tasks)   # refuses a set that mixes worlds
@@ -239,6 +287,24 @@ class Orchestrator:
             return self.run_config.hash
         return config_hash(self.tasks, self.arm_keys, self.k, self.timeout_s)
 
+    def _drift_detail(self, run: dict) -> str:
+        """Which settings differ from the ones the run was recorded under.
+
+        Two hashes and "refusing to resume" say a round cannot continue without
+        saying why, and the cause is usually one field in one file. The run row
+        already stores the configuration, so naming it costs a dict comparison.
+        """
+        try:
+            recorded = json.loads(run["config_json"])
+        except (TypeError, ValueError, KeyError):
+            return ""
+        current = self.run_config._hashed() if self.run_config else self._config()
+        names = _drifted(recorded, current)
+        if not names:
+            # Every named setting agrees, so what moved is inside the task files.
+            return ". The task set's contents changed: same files, different contracts"
+        return ". Changed since the run was recorded: " + ", ".join(names)
+
     def run(self, run_id: str | None = None) -> str:
         run_id = run_id or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         arms = self._arms()
@@ -269,7 +335,7 @@ class Orchestrator:
         if run["config_hash"] != self._hash():
             raise ConfigDrift(
                 f"config drift: run has {run['config_hash']}, current config is {self._hash()}; "
-                "refusing to resume")
+                f"refusing to resume{self._drift_detail(run)}")
         if run["suite"] != self.suite:
             raise ConfigDrift(
                 f"suite drift: run {run_id} was recorded under {run['suite']}, the task set "
@@ -361,22 +427,31 @@ class Orchestrator:
         Nothing is held for the round itself: the per-request reservations are
         the enforcement while it runs, so a resume only counts what is left.
         """
+        if self.run_config:
+            missing = self.world.prerequisites()
+            if missing:
+                raise RoundAdmissionError("World prerequisites: " + "; ".join(missing))
         if self.ledger is None or self.run_config is None:
             return
         from decimal import Decimal
         plan = self.run_config.plan
         per_competitor = self.run_config.attempts_per_competitor
+        external = bool(self.run_config.product.source or self.run_config.native_runtimes)
+        if external:
+            per_competitor //= 1 + MAX_INFRA_RETRIES
         api_attempts = monarch_attempts = 0
         monarch_ceiling = None
         for arm in arms:
             if isinstance(arm, _ScriptedAdapter):
                 continue
             done = sum(1 for _, name, _ in skip if name == arm.name)
-            remaining = max(0, per_competitor - done)
+            remaining = max(0, per_competitor - done) * (1 + MAX_INFRA_RETRIES if external else 1)
             if getattr(arm, "provider_key", None) == "monarch":
                 from wb_arms.monarch import attempt_ceiling_usd
                 monarch_attempts += remaining
                 monarch_ceiling = attempt_ceiling_usd(arm.env)
+                if self.run_config.product.participants:
+                    monarch_ceiling += Decimal(str(plan.attempt_cap_usd))
             else:
                 api_attempts += remaining
         parts, asked = [], Decimal("0")
@@ -407,7 +482,21 @@ class Orchestrator:
                 f"short by US$ {liability - available:.2f}. Reduce the plan or wait for the next week "
                 "(Monday 00:00 America/Sao_Paulo); nothing was reserved")
 
+        if external:
+            prior_envelopes = [r for r in self.ledger.run_reservations() if r.scope_id.startswith(run_id + "#admission-")]
+            self._budget_run_id = run_id + f"#admission-{len(prior_envelopes):03d}"
+            self.ledger.reserve_run(self._budget_run_id, liability, metadata={"product":self.run_config.product.name,
+                "configuration":self.run_config.hash, "includes_infrastructure_retries":MAX_INFRA_RETRIES,
+                "participants":[p.role + ":" + p.model for p in self.run_config.product.participants]})
+
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
+        try:
+            return self._execute_inner(run_id, skip, arms)
+        finally:
+            if self.ledger and getattr(self, "_budget_run_id", None):
+                self.ledger.finish_run(self._budget_run_id)
+
+    def _execute_inner(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         arms = arms if arms is not None else self._arms()
         if self.run_config:
             from wb_studio.monarch_provenance import capture
@@ -417,6 +506,12 @@ class Orchestrator:
                 evidence.write_json(self._run_dir(run_id) / "monarch-provenance" / f"{segment_id}.json",
                     {"id": segment_id, "started_at": datetime.now(timezone.utc).isoformat(), "monarch_provenance": facts})
         threads = []
+        external = self.run_config and (self.run_config.product.source or self.run_config.native_runtimes)
+        if external:
+            # Refuse the entire comparison before another competitor can incur cost.
+            for arm in arms:
+                if hasattr(arm, "prepare"):
+                    arm.prepare()
         for arm in arms:
             work = self._pending_work(run_id, arm.name, skip)
             if not work:
@@ -470,7 +565,8 @@ class Orchestrator:
     def _run_arm_group(self, run_id: str, arm, work: list[tuple[dict, int]]) -> None:
         if self._abort.is_set():
             return
-        if hasattr(arm, "prepare"):   # ponytail: hasattr check; only Monarch has one
+        external = self.run_config and (self.run_config.product.source or self.run_config.native_runtimes)
+        if not external and hasattr(arm, "prepare"):   # all external arms prepared before workers start
             # A refused competitor stops the whole run before any attempt: the
             # thread body's exception is invisible to the joiner otherwise.
             try:
@@ -479,8 +575,9 @@ class Orchestrator:
                 self._thread_errors.append(e)
                 self._abort.set()
                 return
-        sem_key = arm.provider_key or "local"
-        sem = self._sems.setdefault(sem_key, threading.Semaphore(self.provider_concurrency))
+        external = self.run_config and (self.run_config.product.source or self.run_config.native_runtimes)
+        sem_key = "external-world" if external else arm.provider_key or "local"
+        sem = self._sems.setdefault(sem_key, threading.Semaphore(1 if external else self.provider_concurrency))
         with ThreadPoolExecutor(max_workers=self.provider_concurrency,
                                 thread_name_prefix=f"ep-{sem_key}") as pool:
             # A failed attempt can add work, so the list is drained rather than
@@ -531,7 +628,7 @@ class Orchestrator:
                 queue.append((task, trial + self.k))
 
     def _run_dir(self, run_id: str) -> Path:
-        d = self.out_dir / run_id
+        d = evidence._long(self.out_dir / run_id)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -596,7 +693,13 @@ class Orchestrator:
         while True:
             # PROVISION + SNAPSHOT0: fresh world per attempt (a retried episode
             # must not see the aborted attempt's writes).
-            ep = Episode(task, episode_id=eid)
+            if ep is not None:
+                ep.close()
+            runtime_task = task
+            if task.get("info", {}).get("world", {}).get("package") == "appworld":
+                from wb_worlds.appworld.importer import hydrate_task
+                runtime_task = hydrate_task(task)
+            ep = self.world(runtime_task, episode_id=eid)
             ep.attach_journal(ep_dir / f"attempt-{evidence_index:03d}")
             # Where an arm may drop its own artifacts (the front door's access log).
             ep.artifacts_dir = ep_dir
@@ -604,7 +707,18 @@ class Orchestrator:
             deadline = time.monotonic() + self.timeout_s
             attempt_result = ArmResult()
             try:
-                result = arm.run(ep, deadline=deadline)
+                if self.ledger and self.run_config and (self.run_config.product.source or self.run_config.native_runtimes):
+                    from wb_orchestrator.external_runtime import run_attempt
+                    # getattr, matching `_execute`'s finally: `_admit` returns early when
+                    # the remaining paid liability is zero and never opens the round
+                    # envelope, which a resume reaches whenever every paid competitor is
+                    # complete and a scripted control still has work. Reading it bare
+                    # raised AttributeError inside the attempt, and the blanket handler
+                    # below filed that as a scored agent_error against the competitor.
+                    result = run_attempt(arm, ep, self.run_config, self.ledger,
+                                         getattr(self, "_budget_run_id", None), deadline)
+                else:
+                    result = arm.run(ep, deadline=deadline)
                 attempt_result = result
                 termination, error = result.termination, result.error
                 break
@@ -638,8 +752,24 @@ class Orchestrator:
                     break   # record the infra row; resume re-attempts it
             except Exception as e:
                 termination, error = "agent_error", str(e)
+                result = getattr(e, "partial", None) or result
+                attempt_result = result
                 break
             finally:
+                if hasattr(ep, "set_termination"):
+                    ep.set_termination(termination)
+                # Preserve source-only grading artifacts for each retry, never overwrite them.
+                if self.run_config and self.run_config.product.source:
+                    original_artifacts = ep.artifacts_dir
+                    ep.artifacts_dir = ep_dir / f"attempt-{evidence_index:03d}"
+                    try:
+                        ep.finish()
+                    except Exception as exc:
+                        termination = "infra:harness_crash"
+                        error = "; ".join(filter(None, (error, "source evidence capture failed: " + str(exc))))
+                        attempt_result.flags.append("source_evidence_incomplete")
+                    finally:
+                        ep.artifacts_dir = original_artifacts
                 evidence.write_attempt(ep_dir, evidence_index, ep, attempt_result, termination, error)
                 evidence_index += 1
 
@@ -668,7 +798,7 @@ class Orchestrator:
             (ep_dir / "snapshot1.json").write_text(json.dumps(snap1))
             (ep_dir / "turns.jsonl").write_text(
                 "\n".join(json.dumps(t) for t in result.turn_log) + ("\n" if result.turn_log else ""))
-            g = self.grader(task, ep.snapshot0, snap1)
+            g = self.grader(task, ep.snapshot0, snap1, world=self.world, artifacts=ep_dir)
         except Exception as e:
             termination = "infra:harness_crash"
             crash = f"grade/record failed: {e}"
@@ -676,6 +806,16 @@ class Orchestrator:
             g = {"passed": False, "assertions_passed": False,
                  "invariant": {"passed": False, "unexpected_changes": []},
                  "invariant_declared": False, "assertion_results": [], "n_changes": 0}
+        finally:
+            try:
+                ep.close()
+            except Exception as exc:
+                termination = "infra:harness_crash"
+                error = "; ".join(filter(None, (error, "world cleanup failed: " + str(exc))))
+
+        if g.get("ungraded"):
+            result.flags.append("grading=ungraded")
+            error = "; ".join(x for x in (error, g.get("error")) if x)
 
         if termination != "completed" and g["n_changes"] > 0:
             # The failed episode mutated the world before dying — visible, so a
@@ -758,9 +898,19 @@ class Orchestrator:
         return self._earns_a_retry(row.passed, termination)
 
 
-def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
-    """Re-grade offline; append grading evidence before selecting the new verdict."""
+def regrade(store: Store, run_id: str, suite_dir: str | Path,
+            world: type | None = None) -> dict[str, Any]:
+    """Re-grade offline; append grading evidence before selecting the new verdict.
+
+    `world` is the product's adapter, whose `positive_check` answers the source half.
+    Unnamed means the AutomationBench world, which is every run before feature 026.
+    """
     from wb_results import regrade_evidence
+    if world is None:
+        from wb_world import registry
+        run = store.run(run_id)
+        saved = json.loads(run["config_json"]) if run else {}
+        world = registry.resolve((saved.get("product") or {}).get("world"))
     tasks = {t["task"]: t for t in load_suite(suite_dir)}
     res = store.episodes(run=run_id)
     changed = regraded = drifted = missing_task = missing_artifacts = evidence_invalid = 0
@@ -794,7 +944,7 @@ def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
         grader_provenance = evidence.provenance()
         s0 = json.loads(Path(arts["snapshot0"]).read_text())
         s1 = json.loads(Path(arts["snapshot1"]).read_text())
-        g = grade(task, s0, s1)
+        g = grade(task, s0, s1, world=world, artifacts=Path(arts["snapshot1"]).parent)
         row = EpisodeRow(**r)
         new_passed = g["passed"] and row.termination == "completed"
         verdict_changed = (new_passed, g["assertions_passed"], g["invariant"]["passed"]) != (
@@ -807,6 +957,9 @@ def regrade(store: Store, run_id: str, suite_dir: str | Path) -> dict[str, Any]:
         row.unexpected_changes = g["invariant"]["unexpected_changes"]
         row.count_violations = g["invariant"].get("count_violations", [])
         row.n_changes = g["n_changes"]
+        row.flags = [flag for flag in row.flags if flag != "grading=ungraded"]
+        if g.get("ungraded"):
+            row.flags.append("grading=ungraded")
         try:
             regrade_evidence.publish(store, r, row, g, arts, input_bindings, grader_provenance)
         except evidence.EvidenceIntegrityError:

@@ -59,9 +59,6 @@ than 30 days (warning, never a gate).
 
 ## 3. Smaller items carried from features 002 to 006
 
-- `wb_report/audiences.yaml`: the public allowlist matches the literal
-  `monarch`; real rows are `monarch@<sha>[+branch]`, so a public report needs
-  a `monarch@*` pattern before it can show Monarch. (PLAN.md §5)
 - `config.py::_hashed_harness` keeps `release: null` in every harness hash so
   the two smoke runs of 3 Sep keep their config hash; drop that line the next
   time the hash is allowed to move and old runs are re-hashed.
@@ -140,3 +137,45 @@ are not fetched for the Activity lane.
   pending billing, alongside the US$ 34.064 historical usage hold. Langfuse shows
   US$ 0.89375475 for the diagnostic. Preserve the refusal and frozen original
   config. See docs/rounds/2026-09-10-post-deploy-diagnostic.md under monarch-benchmark.
+
+## 5. Research mechanisms deferred from feature 025 (11 Sep 2026)
+
+A survey of public agents and repositories doing what this lab does was run on
+11 September; the design of record is
+`docs/superpowers/specs/2026-09-11-genesis-voice-live-build-design.md`. Three
+mechanisms were adopted into `specs/025-genesis-voice-live-build/`. These four
+were identified, judged worth having and deliberately left out of that feature.
+Each says what the lab does today and what the mechanism would add.
+
+- **Funnel economics for proposals** (ScholarLoop, `github.com/renee-jia/scholar-loop`).
+  Genesis proposes one experiment per card, which is the expensive way to be wrong.
+  The mechanism: propose several, screen all of them at smoke scale in parallel, and
+  let only survivors climb to a verified tier and then a full tier with more
+  repetitions. Described by its authors as a few lines of deterministic code under
+  unit test. Belongs with feature 024's research envelope, which it would stretch
+  further.
+
+- **Evaluation-gated skills** (SkillAxe, arXiv 2606.10546; the finding it answers is
+  SkillsBench). `genesis_skills.py` reviews a newly written skill by having a model
+  read it. SkillsBench found model-authored skills give no measurable improvement over
+  a bare agent despite reading fluently, and that failures are systematic — triggers
+  fire on the wrong tasks, instructions conflict with constraints. SkillAxe's method is
+  to run the agent with and without the skill on a frozen set and diagnose the
+  behavioural difference. The lab owns a benchmark and is unusually well placed to
+  measure this rather than assume it.
+
+- **The self-refutation gate** (ARA Research Artifact Protocol,
+  `github.com/ARA-Labs/Agent-Native-Research-Artifact`). Every conclusion must survive
+  an explicit attempt to disprove it before it is written; dead ends stay in the record
+  so failed paths are not re-walked; provenance tags separate human-confirmed facts
+  from model inferences. The last of those extends the existing `by: human:<name>`
+  attribution from writes to facts.
+
+- **Publish the harness's minimum detectable effect** (Miller, *Adding Error Bars to
+  Evals*, arXiv 2411.00640). `PLAN.md` §1 already requires paired comparisons with
+  error bars. The paper supplies the sample-size formula and two warnings worth
+  recording: unpaired comparison needed a 12% difference where paired with averaging
+  detected 2–4%, and a single error bar per competitor is not meaningful under the
+  paired method because the variance against a fixed baseline dominates the variance
+  between two similar competitors. Stating the round's minimum detectable effect would
+  stop a regression smaller than the instrument from reading as a tie.

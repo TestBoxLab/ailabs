@@ -20,7 +20,9 @@ REPOSITORY = "TestBoxLab/ailabls-benchmark-config"
 MAX_FILE = 1_048_576
 MAX_TREE = 8_388_608
 SHA = re.compile(r"[0-9a-f]{40}")
-SIDE_EFFECT_PATH = re.compile(r"config/side-effects(?:[.-][A-Za-z0-9][A-Za-z0-9_-]*)?\.yaml")
+# Feature 026 gave each external product its own reviewed side-effect list beside
+# the original one: `side-effects.appworld.yaml`, `side-effects-tau2-retail.yaml`.
+SIDE_EFFECT_PATH = re.compile(r"config/side-effects([.-][A-Za-z0-9_-]+)*\.yaml")
 
 
 class RepositoryError(ValueError):

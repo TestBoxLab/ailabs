@@ -1,4 +1,31 @@
 @layer views{
+.genesis-voice-bar{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);padding:var(--space-2) var(--gutter);min-width:0}
+.voice-controls{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;min-width:0}
+.voice-controls strong{font-size:var(--text-3)}
+.voice-controls .button{min-height:36px}
+.voice-listen[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.voice-mode{white-space:nowrap;min-height:36px}
+.voice-shortcuts kbd{font:inherit;color:var(--ink);border:1px solid var(--line);padding:0 .28em}
+.voice-mode-notice{position:fixed;inset:auto var(--gutter) var(--space-5) auto;z-index:30;max-width:min(360px,calc(100vw - 2 * var(--gutter)));padding:var(--space-3) var(--space-4);border:1px solid var(--ink);background:var(--bg);color:var(--ink);font-size:var(--text-2);line-height:1.45;opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity 140ms ease-out,transform 180ms cubic-bezier(.16,1,.3,1)}
+.voice-mode-notice[data-visible="true"]{opacity:1;transform:translateY(0)}
+@media(prefers-reduced-motion:reduce){.voice-mode-notice{transition:none}}
+.genesis-voice-bar p{margin:var(--space-1) 0 0;overflow-wrap:anywhere}
+.genesis-voice-bar p:empty{display:none}
+#genesis-voice-state{font-size:var(--text-2);overflow-wrap:anywhere;min-width:0}
+#genesis-voice-transcript{margin-top:var(--space-2);max-width:75ch}
+#genesis-voice-transcript summary{font-size:var(--text-2);cursor:pointer}
+.voice-captions{max-height:140px;overflow:auto;overscroll-behavior:contain;scrollbar-color:var(--line-strong) var(--bg);font-size:var(--text-3);line-height:1.5}
+.voice-captions p{white-space:pre-wrap;overflow-wrap:anywhere;padding-block:var(--space-1)}
+.voice-captions strong{font-weight:500;color:var(--muted)}
+#genesis-voice-audio{max-width:100%;margin-top:var(--space-2)}
+@media(max-width:600px){
+ .genesis-voice-bar{padding-inline:var(--space-3)}
+ .voice-mode-notice{inset:auto var(--space-3) var(--space-3) var(--space-3);max-width:none}
+ .voice-controls{gap:var(--space-2)}
+ .voice-controls .button,.voice-controls .voice-mode{min-height:44px;font-size:16px}
+ .voice-controls>.meta{font-size:14px}
+ .voice-captions{max-height:110px;font-size:16px}
+}
 /* Genesis, feature 022 lane B: three columns on the page grid. The rail lists a person's
    conversations and the views; the centre is the conversation at a 66-character measure;
    the right pane is what Genesis is tracking. Paper and ink, rules instead of boxes, no
@@ -36,6 +63,58 @@
 .turn-steps li.live .step-action{color:var(--signal)}
 .step-body{padding:0 0 var(--space-3) 16px}.step-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--text-1);background:var(--surface);padding:var(--space-2);max-height:260px;overflow:auto}
 .genesis-answer{font-size:var(--text-3);line-height:1.6}.genesis-answer p{margin:0 0 var(--space-3)}.genesis-answer h4{margin:var(--space-4) 0 var(--space-2)}.genesis-answer pre{background:var(--surface);padding:var(--space-3);overflow:auto;font-size:var(--text-1)}.genesis-answer table{margin:var(--space-3) 0;font-size:var(--text-2)}.genesis-answer ul,.genesis-answer ol{padding-left:22px}
+/* Hold to talk. The mark is a measurement: its scale is the microphone's own signal,
+   so it fails visibly at a muted mic instead of pulsing confidently at a dead one
+   (feature 024, stage S3).
+
+   Square, because --radius is 0 everywhere and this is `.status:before` grown to 72px
+   and given a live reading — continuous with the vocabulary rather than an exception to
+   it. The hairline gate is full scale, so the fill has something to be read against.
+
+   Scale, never opacity or colour: a flash under WCAG 2.3.1 is a pair of opposing
+   relative-luminance changes, and scaling a solid block on a constant ground changes
+   luminance only where the edge sweeps. Never --signal — red is the current place here,
+   and the saturated hue carries the stricter threshold. */
+.mic-row{display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-2);flex-wrap:wrap;min-width:0}
+#genesis-mic{white-space:nowrap;flex:none}
+#genesis-hush{white-space:nowrap;flex:none;min-height:24px;min-width:24px}
+.speak-toggle{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--text-2);color:var(--muted)}
+#genesis-volume{width:80px;max-width:100%;flex:0 1 auto;min-width:0}
+/* Persistent while follow is armed, never a toast: a toast that carries the only way
+   out is a way out that vanishes. */
+.follow-bar{display:flex;align-items:baseline;gap:var(--space-3);padding:6px 0;border-bottom:1px solid var(--line-strong);font-size:var(--text-2)}
+.follow-bar .follow-words{font-weight:500}
+#mic-state{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mic-gate{width:72px;height:72px;border:1px solid var(--line-strong);flex:none;display:grid;place-items:center}
+.mic-fill{width:72px;height:72px;background:var(--ink);transform-origin:center;transform:scale(calc(.45 + var(--mic-level,0) * .55))}
+.mic-steps{display:none;gap:3px}
+.mic-step{width:8px;height:20px;background:var(--line);display:block}
+.mic-step.on{background:var(--ink)}
+@media(prefers-reduced-motion:no-preference){
+ .mic-fill{transition:transform 90ms linear}
+}
+/* Not a frozen orb: a frozen one conveys nothing and removes the only live evidence the
+   microphone works. Five discrete fills are a change of content, not motion. */
+@media(prefers-reduced-motion:reduce){
+ .mic-fill{display:none}
+ .mic-steps{display:flex}
+}
+
+/* A step that just arrived. The flash marks the DATA landing, never the view being
+   re-rendered, and it is deliberately not --signal: red means the current place in this
+   system, and a saturated hue carries the stricter flash threshold under WCAG 2.3.1.
+   The word "new" carries it too, so neither colour nor motion is load-bearing. Rows are
+   coalesced by the caller, so a burst of fifty is one paint (feature 024, stage S2). */
+.turn-steps li.is-new{background:var(--surface-2);box-shadow:-2px 0 0 0 var(--line-strong)}
+.turn-steps li.is-new .step-action:after{content:" new";color:var(--muted);font-family:var(--font-mono);font-size:var(--text-1);font-weight:400}
+@media(prefers-reduced-motion:no-preference){
+ .turn-steps li.is-fading{transition:background var(--dur-3,1000ms) linear,box-shadow var(--dur-3,1000ms) linear}
+}
+
+/* Where Genesis pointed. A link, not a move: the reader decides (WCAG 3.2.5). */
+.genesis-goto{margin:var(--space-2) 0 0;display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap}
+.genesis-goto a{font-weight:500}
+.genesis-goto .meta{min-width:0}
 .genesis-turn-status{font-family:var(--font-mono);font-size:var(--text-1);color:var(--muted);margin:0}.genesis-turn-status:empty{display:none}
 .turn-stopped{color:var(--fail-text);font-size:var(--text-2);margin:var(--space-2) 0 0}
 .genesis-composer{border-top:1px solid var(--line-strong);padding-top:var(--space-3);max-width:var(--measure)}
@@ -58,6 +137,10 @@
 .card-head{display:grid;gap:4px;padding-bottom:var(--space-3);border-bottom:1px solid var(--line-strong);margin-bottom:var(--space-3)}.card-head h2{font-size:var(--text-5);line-height:1.25}
 .research-detail h3{font-size:var(--text-3);margin:var(--space-4) 0 var(--space-2)}
 .research-question{font-style:italic;color:var(--muted);margin:0 0 var(--space-3)}.research-body{font-size:var(--text-3)}.research-analysis{border-top:1px solid var(--line);margin-top:var(--space-3);padding-top:var(--space-2)}
+/* A figure in a card: a rule above it, never a box around it, and its caption in the label voice. */
+.card-figure{margin:var(--space-4) 0;border-top:1px solid var(--line);padding-top:var(--space-3)}
+.card-figure svg{max-width:100%}
+.figure-caption{margin:var(--space-2) 0 0;color:var(--muted);font-size:var(--text-2)}
 .research-outcome{font-size:var(--text-2)}.research-outcome.green strong{color:var(--accent-text)}.research-outcome.red strong{color:var(--fail-text)}
 .hypothesis-record,.review-record,.plan-block,.question-block,.proposal-review,.card-results,.card-conversation,.research-work{margin:var(--space-4) 0;padding-top:var(--space-2);border-top:1px solid var(--line-strong)}
 .research-detail .facts{grid-template-columns:120px minmax(0,1fr);gap:4px var(--space-3);font-size:var(--text-2)}

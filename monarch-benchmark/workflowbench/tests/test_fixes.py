@@ -34,7 +34,7 @@ def mock_server(monkeypatch):
 
 
 def test_grade_crash_records_harness_crash_row(tmp_path, mock_server, monkeypatch):
-    def boom(task, s0, s1):
+    def boom(task, s0, s1, **kw):
         raise RuntimeError("grader exploded")
     monkeypatch.setattr(orch_mod, "grade", boom)
     store, orch = make_orch(tmp_path, k=1, concurrency=1)

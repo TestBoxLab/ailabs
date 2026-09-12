@@ -81,6 +81,38 @@ turns everything off.
 - `tests/browser/suite.cjs` renders every surface in both themes and fails on
   horizontal overflow or a console error.
 
+## Removing a rule (11 Sep)
+
+A superseded view leaves its stylesheet behind: when the Leaderboard was replaced
+by Standings, its CSS stayed in four sheets. Cutting that is worth doing — half of
+`analytics.css` and a third of `style.css` were styling markup that no longer
+existed — but a text search decides it, and a text search is wrong twice.
+
+**A class the code builds by concatenation reads as dead.** `genesis.js` does
+`classList.toggle('view-' + name)`, so `view-chat`, `view-board`, `view-library`
+and `view-memory` appear in no file as literals. Same for `'family-' +
+Charts.familyOf(model)`, which is every model hue in `charts.css` and
+`analytics.css`. Before cutting anything, list the prefixes and check no removed
+name begins with one. Regenerate the list rather than trusting a written one:
+
+    grep -noE "['\"][a-z-]+-['\"] *\+" static/*.js     # 'view-' + name
+    grep -n  "className *= *'" static/*.js             # className = 'x' + state
+
+On 11 Sep that gave `view-`, `family-`, `data-`, `catalog-`, `component-`,
+`report-`, `run-`, `add-`, `inspector-tab-`, `library-detail-`, plus
+`builder-state` and `builder-problems` from the second form.
+
+**An id selector survives a class-only pass.** `#leaderboard-panel` outlived the
+panel in `analytics.css` and `workspace.css` because the cut only read `.class`
+tokens, and a mixed list (`#budget-panel,#leaderboard-panel`) keeps the rule alive
+on its live half. Read `#id` too, and thin selector lists rather than dropping
+them whole.
+
+Two rules for the cut itself: a rule survives if **any** class in its selector is
+still named, so compounds like `.workspace.has-inspector` are kept even when half
+is dead; and a minified sheet reports as bytes, not lines — `analytics.css` lost
+49% of itself and 9 lines, which in a diff stat looks like nothing.
+
 ## Signature details
 
 1. The running head: paper, one ink rule, the wordmark, the sections, and the

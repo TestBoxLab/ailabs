@@ -10,6 +10,10 @@ const evaluate = fn => execFileSync(bin, [...args, 'eval', '--stdin'], {input: '
 console.log(browser('open', 'http://127.0.0.1:' + (process.env.BROWSER_PORT || 8774)));
 const check = async () => {
   const assert = (ok, message) => { if (!ok) throw Error(message); };
+  history.replaceState(null, '', '#runs');
+  await window.goRoute('#benchmarks/products');
+  assert(location.hash === '#benchmarks/products', 'Explicit router hash must select the requested Benchmarks group');
+  assert(!document.querySelector('#benchmarks-panel').classList.contains('hidden'), 'Explicit Benchmarks route must show its own panel');
   const index = await (await fetch('/api/reports')).json();
   const run = index.rounds.flatMap(r => r.runs).find(r => r.title.startsWith('Answer key against sloppy'));
   assert(run, 'Scripted fixture must have a report');
@@ -27,11 +31,11 @@ const check = async () => {
   for (const kind of ['logs', 'prompts']) {
     const link = article.querySelector('[data-report-download="' + kind + '"]');
     assert(link && link.href.includes('/api/reports/run/' + run.id + '/downloads/' + kind), 'Separate download link required: ' + kind);
-    assert(link.href.includes('audience=public'), 'Sharing downloads must use the displayed audience');
+    assert(!link.href.includes('audience='), 'Shared report downloads must not restore the removed audience selector');
     const response = await fetch(link.href);
     assert(response.ok && response.headers.get('content-disposition')?.includes('attachment;'), 'Download must return an attachment: ' + kind);
     const saved = await response.json();
-    assert(saved.run === run.id && saved.kind === kind && saved.audience === 'public', 'Attachment must belong to this run and audience');
+    assert(saved.run === run.id && saved.kind === kind, 'Attachment must belong to this shared run');
     assert(saved.coverage && Array.isArray(saved[kind === 'logs' ? 'events' : 'prompts']), 'Attachment must describe retained evidence and coverage');
   }
   assert(!article.querySelector('a[href$=".zip"]'), 'Shared report must not require ZIP files');
@@ -75,6 +79,19 @@ const check = async () => {
   assert(article.textContent.includes('fixture-v1'), 'Analysis revision must be shown');
   assert(article.querySelectorAll('.reading-charts figure').length === 3, 'Non-scripted layout needs three readable comparison charts');
   assert(article.querySelectorAll('.reading-diagnoses thead th').length === 4, 'Diagnosis table has exactly four approved columns');
+  const authored = structuredClone(example);
+  authored.authored = {status: 'completed', revision: 'reviewed-fixture', summary: 'Reviewed layout fixture summary.', findings: [{title: 'Retained finding', explanation: '<img src=x> is plain text.', kind: 'fact', event_ids: []}], what_went_right: 'Recorded success.', what_went_wrong: 'Recorded failure.', why: 'A reviewed hypothesis.', next_experiment: 'Test a bounded intervention.', limitations: 'Layout fixture only.', attempts: [{index: 0, task: 'layout-fixture', model: authored.order[0], explanation: 'Reviewed attempt fixture.', event_ids: []}]};
+  renderRunReport(authored);
+  assert(article.querySelector('.report-summary').textContent === authored.authored.summary, 'Published Genesis summary remains visible in the readable template');
+  assert(article.querySelector('#report-analysis') && article.querySelector('#report-authored-attempts'), 'Authored analysis and every-attempt explanations survive the merge');
+  assert(!article.querySelector('#report-why img'), 'Authored prose stays escaped');
+  assert(new Set([...article.querySelectorAll('[id]')].map(n=>n.id)).size === article.querySelectorAll('[id]').length, 'Authored and recorded attempt sections need distinct IDs');
+  if(authored.performance)assert(article.querySelector('#report-performance'), 'Measured performance remains visible');
+  if(authored.patterns)assert(article.querySelector('#report-patterns .report-patterns'), 'Server outcome patterns remain visible');
+  authored.lab_setups = [{id:'lab-fixture', name:'Lab fixture'}];renderRunReport(authored);
+  const click = new MouseEvent('click', {bubbles:true,cancelable:true});article.querySelector('[data-report-download="logs"]').dispatchEvent(click);
+  assert(click.defaultPrevented && article.classList.contains('lab-present'), 'Lab report downloads and printing remain gated');
+  renderRunReport(example);
   window.layoutReport = example;
   return 'PASS: Studio template, pending analysis, explicit task metrics, evidence access and standalone export parity';
 };

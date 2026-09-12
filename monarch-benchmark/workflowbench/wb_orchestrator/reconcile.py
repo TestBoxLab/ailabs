@@ -8,8 +8,10 @@ dispatched in). Both numbers and the difference are written to
 `research/reconciliation/<week>.md`; a JSON file beside it carries the same
 figures for `wb budget status`. The week is `historical_billing_verified`
 only when every provider with spend, in the ledger or in an export, has been
-reconciled within 5 % of its own total. Unsettled holds are reported, never
-released: the ledger has no path for that, by design.
+reconciled within 5 % of its own total. Unsettled holds are reported here, never
+released here: releasing one is a person's act, recorded in the ledger with a
+reason (`wb budget release`), and a released hold is still reported as unsettled
+until its cost is known.
 """
 from __future__ import annotations
 
@@ -173,7 +175,8 @@ def render(state: dict) -> str:
     if state.get("unsettled"):
         parts = [f"{name}: {v['count']} (US$ {Decimal(v['held_usd']):.2f} held)" for name, v in state["unsettled"].items()]
         lines.append("Unsettled reservations dispatched this week, whose cost the ledger does not know and "
-                     "still holds at their maximum: " + "; ".join(parts) + ".")
+                     "holds at their maximum until it is settled or a person releases the hold: "
+                     + "; ".join(parts) + ".")
     else:
         lines.append("Every reservation dispatched this week is settled.")
     if state.get("not_reconciled"):

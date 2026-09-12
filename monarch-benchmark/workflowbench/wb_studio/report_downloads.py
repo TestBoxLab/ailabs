@@ -1,11 +1,12 @@
-"""Read-only, audience-scoped downloads of retained execution observations."""
+"""Read-only, redacted downloads of retained execution observations."""
 import json
 import hashlib
 from pathlib import Path
 import re
 
 from wb_studio.memory import CREDENTIAL
-from wb_studio.report_data import visible_setups
+from wb_studio.report_data import lab_setups, setup_ids
+from wb_studio.measures import setup_names
 
 
 SECRET_KEY = re.compile(r"(?:authorization|cookie|password|secret|credential|api.?key|token$)", re.I)
@@ -25,41 +26,50 @@ def private_block(value):
                                        or value.get("channel") == "analysis" or value.get("thought") is True)
 
 
-def clean(value, audience):
+def clean(value):
     """Reuse the credential pattern and remove structured secret/evaluator fields.
 
     JSON embedded in tool-output strings is cleaned structurally too. Arbitrary
     natural-language secrets cannot be exhaustively recognized by patterns.
     """
     if isinstance(value, dict):
-        if audience != "internal" and private_block(value):
+        if private_block(value):
             return {"omitted": "Provider reasoning"}
-        return {key: "[redacted]" if SECRET_KEY.search(key) else clean(item, audience)
+        return {key: "[redacted]" if SECRET_KEY.search(key) else clean(item)
                 for key, item in value.items() if key.lower() not in OMIT
-                and not (audience != "internal" and key.lower() in REASONING_FIELDS)}
+                and not (key.lower() in REASONING_FIELDS)}
     if isinstance(value, list):
-        return [clean(item, audience) for item in value if audience == "internal" or not private_block(item)]
+        return [clean(item) for item in value if not private_block(item)]
     if isinstance(value, str):
         if value.lstrip().startswith(("{", "[")):
             try:
-                return json.dumps(clean(json.loads(value), audience), ensure_ascii=False)
+                return json.dumps(clean(json.loads(value)), ensure_ascii=False)
             except (ValueError, RecursionError):
                 pass
         return CREDENTIAL.sub("[redacted]", SECRET_TEXT.sub("[redacted]", value))
     return value
 
 
-def download(studio, identity, kind, audience="public"):
+def export_setups(job):
+    """Keep the single report scope and refuse all exports carrying a lab build."""
+    shown = setup_ids(job)
+    names = setup_names(job)
+    if lab_setups(shown, {sid: {"name": names.get(sid, sid)} for sid in shown}):
+        raise PermissionError("Reports containing lab builds cannot be exported.")
+    return shown
+
+
+def download(studio, identity, kind):
     """Return JSON-ready logs or prompts; never load current task definitions.
 
     Only canonical result artifact locations inside this run can be read. Live
     and finalized journals retain their own provenance and may overlap.
     """
-    if kind not in ("logs", "prompts") or audience not in ("public", "internal"):
-        raise ValueError("Unknown evidence download or audience")
+    if kind not in ("logs", "prompts"):
+        raise ValueError("Unknown evidence download")
     job = studio.job(identity)
     folder = (studio.directory / identity).resolve()
-    shown, _ = visible_setups(job, audience)
+    shown = export_setups(job)
     from wb_studio.report_inputs import saved_rows
     rows = saved_rows(folder / "results.sqlite3", identity) or job.get("results") or []
     records, sources, omitted, invalid = [], set(), 0, 0
@@ -141,7 +151,7 @@ def download(studio, identity, kind, audience="public"):
                         (row["episode_id"] not in covered_ids if row.get("episode_id") else
                          (row.get("task_id", row.get("task")), row.get("arm", row.get("model")), row.get("trial")) not in covered_attempts)]
     expected = {(task, model) for task in (job.get("settings") or {}).get("tasks") or [] for model in shown}
-    result = {"version": 2, "run": identity, "audience": audience, "kind": kind,
+    result = {"version": 2, "run": identity, "kind": kind,
               "coverage": {"retained_log_records": len(records), "retained_prompt_records": len(prompts),
                            "unlinked_log_records": sum(entry["attempt_id"] is None for entry in records),
                            "unlinked_prompt_records": sum(entry["attempt_id"] is None for entry in prompts),
@@ -150,11 +160,11 @@ def download(studio, identity, kind, audience="public"):
                            "full_native_context": "unavailable",
                            "missing_prompt_tasks": [{"task": t, "model": m} for t, m in sorted(expected - covered)]},
               "limitations": ["Contains only retained observations and input records; current task text is never substituted for missing prompts.",
-                              "Join prompts.log_ids to events.log_id. attempt_id is the recorded episode_id; journal events without an explicit, uniquely matched episode or trial leave attempt linkage unavailable. Log IDs identify source locations and remain stable across audience filtering.",
+                              "Join prompts.log_ids to events.log_id. attempt_id is the recorded episode_id; journal events without an explicit, uniquely matched episode or trial leave attempt linkage unavailable. Log IDs identify source locations and remain stable across repeated downloads.",
                               "Native harness internals and complete system context are not guaranteed to have been recorded. A retained request may omit separately supplied system instructions.",
                               "Monarch goals are retained user objectives from builder frames, not the builder's system prompt. Identical input records for the same task, competitor, trial and turn are combined with every source reference retained.",
                               "Live and finalized journals may overlap; source paths and line numbers distinguish observations. Missing or invalid records are not reconstructed.",
                               "Snapshot, evaluator, environment and billing fields are excluded. Credential-shaped fields and common token patterns are redacted; arbitrary secrets embedded in prose may not be recognizable.",
-                              "Public downloads omit provider reasoning fields and internal-only competitors; internal downloads retain recorded provider summaries, not hidden model reasoning."],
+                              "Downloads omit provider reasoning fields. Reports containing lab builds cannot be exported."],
               "events" if kind == "logs" else "prompts": records if kind == "logs" else prompts}
-    return clean(result, audience)
+    return clean(result)

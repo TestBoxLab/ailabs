@@ -1,7 +1,11 @@
-"""HTTP front door for one episode (BUILD-SPEC §2.2 Option B; verified 2 Sep
-2026: the Monarch executor dispatches plain HTTP, never MCP). Stdlib only.
+"""HTTP front door for one attempt's world (BUILD-SPEC §2.2 Option B; verified
+2 Sep 2026: the Monarch executor dispatches plain HTTP, never MCP). Stdlib only.
 
-Two surfaces over the same Episode:
+Two surfaces over the same world. "World" rather than "episode" since feature 026:
+any object satisfying `wb_world/adapter.py` is served here, and it asks the world
+only three things about its published surface -- which services, what document, what
+URL a REST path maps to -- so an AutomationBench world and a world made of tools go
+through the same door.
 
   Tool surface (kept for harnesses that speak the 3-tool contract):
     POST /fetch   {method, url, params?, body?} -> api_fetch result
@@ -13,7 +17,7 @@ Two surfaces over the same Episode:
     ANY  /<service>/<real path>?query   JSON body -> api_fetch(baseUrl + path)
          AB error envelopes {"error": {"code": N}} become HTTP status N.
 
-One shim per episode. WB_SHIM_PUBLIC_URL overrides the advertised server URL
+One shim per attempt. WB_SHIM_PUBLIC_URL overrides the advertised server URL
 when Monarch runs in Docker (e.g. http://host.docker.internal:PORT).
 """
 from __future__ import annotations
@@ -28,12 +32,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from wb_world.episode import Episode
-from wb_world.openapi import build_spec, load_schemas, world_url
 
 
 # How much of a request and a response body one log line keeps.
 LOG_BODY_CHARS = 500
+# The largest body this accepts, matching the Studio's front door.
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+
+class BodyTooLarge(Exception):
+    """The request claimed a body this refuses to read."""
 
 
 class _Server(ThreadingHTTPServer):
@@ -51,14 +59,16 @@ class _Server(ThreadingHTTPServer):
 
 
 class EpisodeHTTPShim:
-    def __init__(self, episode: Episode, port: int = 0, public_url: str | None = None,
+    def __init__(self, episode, port: int = 0, public_url: str | None = None,
                  host: str = "127.0.0.1", access_log: str | Path | None = None):
+        # `episode` is any world satisfying the adapter contract; the name is kept
+        # because every caller and every test already uses it.
         self.episode = episode
         # One JSON line per request, so a failed step can say what actually
         # arrived instead of only what the engine reported. None = off.
         self.access_log = Path(access_log) if access_log else None
         self._log_lock = threading.Lock()
-        self.schemas = load_schemas()
+        self.interfaces = episode.interfaces()
         self.httpd = _Server((host, port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://{host}:{self.port}"
@@ -95,10 +105,23 @@ class EpisodeHTTPShim:
             def handle_one_request(self):
                 self._t0 = time.monotonic()
                 self._req_body = b""
-                super().handle_one_request()
+                try:
+                    super().handle_one_request()
+                except BodyTooLarge as exc:
+                    self._reply(413, {"error": str(exc)})
 
             def _body(self) -> bytes:
-                n = int(self.headers.get("Content-Length") or 0)
+                # The competitor under test is what calls this, and `wb_arms.monarch`
+                # binds the shim to 0.0.0.0. An unbounded Content-Length was a request
+                # to read as much as the sender claimed. Same 8 MB the Studio's front
+                # door allows, so a body it accepts is a body this accepts.
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = -1
+                if not 0 <= n <= MAX_BODY_BYTES:
+                    self._req_body = b""
+                    raise BodyTooLarge(f"Content-Length must be 0 to {MAX_BODY_BYTES}")
                 self._req_body = self.rfile.read(n) if n else b""
                 return self._req_body
 
@@ -106,13 +129,13 @@ class EpisodeHTTPShim:
                 sp = urlsplit(self.path)
                 if sp.path == "/openapi/index.json":
                     self._reply(200, {svc: {"url": f"{outer.public_url}/openapi/{svc}.json"}
-                                      for svc in outer.schemas})
+                                      for svc in outer.interfaces.services()})
                 elif sp.path.startswith("/openapi/") and sp.path.endswith(".json"):
                     svc = sp.path[len("/openapi/"):-len(".json")]
-                    if svc not in outer.schemas:
+                    if svc not in outer.interfaces.services():
                         self._reply(404, {"error": f"unknown service {svc}"})
                         return
-                    self._reply(200, build_spec(svc, outer.schemas[svc], outer.public_url))
+                    self._reply(200, outer.interfaces.spec(svc, outer.public_url))
                 else:
                     self._rest("GET")
 
@@ -126,11 +149,34 @@ class EpisodeHTTPShim:
             def do_PATCH(self): self._rest("PATCH")
             def do_DELETE(self): self._rest("DELETE")
 
+            def _admin(self, url: str) -> bool:
+                """Whether this URL names an administrative operation of the world.
+
+                Both surfaces ask, because both reach the same world: `_rest` builds the
+                URL from a path, and `/fetch` takes one the competitor wrote. The world's
+                own `admin_paths` are relative to a service, so the service segment comes
+                off first -- the same thing an adapter's router does before it checks.
+                """
+                admin = getattr(outer.interfaces, "admin_paths", ())
+                if not admin:
+                    return False
+                path = url if url.startswith("/") else "/" + url.split("://", 1)[-1].split("/", 1)[-1]
+                head, _, rest = path.lstrip("/").partition("/")
+                candidates = [path, "/" + rest] if head in outer.interfaces.services() else [path]
+                return any(c.startswith(a) for c in candidates for a in admin)
+
             def _tool(self):
                 try:
                     req = json.loads(self._body() or b"{}")
                     ep = outer.episode
                     if self.path == "/fetch":
+                        # The tool surface reaches the same world as the REST one, so the
+                        # door refuses the same operations on it (feature 026, FR-034).
+                        if self._admin(str(req.get("url") or "")):
+                            self._reply(403, {"error": f"{req.get('url')} is an administrative "
+                                                       "operation of the product under test, "
+                                                       "not part of the task"})
+                            return
                         out = ep.api_fetch(req["method"], req["url"],
                                            params=_as_json_str(req.get("params")),
                                            body=_as_json_str(req.get("body")))
@@ -139,6 +185,8 @@ class EpisodeHTTPShim:
                     else:
                         out = ep.base64_encode(req["text"])
                     self._reply(200, {"result": out})
+                except BodyTooLarge:
+                    raise          # one refusal, one status, whichever path asked
                 except Exception as e:
                     self._reply(400, {"error": str(e)})
 
@@ -146,11 +194,20 @@ class EpisodeHTTPShim:
                 sp = urlsplit(self.path)
                 parts = sp.path.lstrip("/").split("/", 1)
                 svc = parts[0]
-                if svc not in outer.schemas:
+                if svc not in outer.interfaces.services():
                     self._reply(404, {"error": f"unknown service {svc!r}"})
                     return
                 rest = parts[1] if len(parts) > 1 else ""
-                url = world_url(svc, rest, outer.schemas)
+                url = outer.interfaces.rest_url(svc, rest)
+                # A world may expose administrative operations on the same surface as
+                # its real work -- seeding, resetting, arbitrary queries. One of those
+                # in the competitor's hands writes the expected result directly or
+                # erases the evidence, so the door refuses them for every world rather
+                # than trusting each adapter to remember (feature 026, FR-034).
+                if self._admin(url):
+                    self._reply(403, {"error": f"{url} is an administrative operation of "
+                                               f"the product under test, not part of the task"})
+                    return
                 # Single-valued query params, like every AB router expects.
                 params = {k: v[-1] for k, v in parse_qs(sp.query, keep_blank_values=True).items()}
                 raw = self._body()
@@ -227,6 +284,11 @@ if __name__ == "__main__":   # serve one task's world by hand, for the live chec
     ap.add_argument("--port", type=int, default=9105)
     ap.add_argument("--task", default=None, help="task JSON (default: first in tasks/)")
     a = ap.parse_args()
+    # Imported here rather than at module scope: the shim serves any world satisfying
+    # the adapter contract and must not drag the AutomationBench one into every import.
+    # The top-level import went away with feature 026 and took this entry point with it.
+    from wb_world.episode import Episode, load_task_file
+
     tasks = Path(__file__).resolve().parents[1] / "tasks"
     path = Path(a.task) if a.task else sorted(tasks.glob("*.json"))[0]
     shim = EpisodeHTTPShim(Episode(load_task_file(path), episode_id="manual"),

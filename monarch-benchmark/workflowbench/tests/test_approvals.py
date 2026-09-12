@@ -260,7 +260,7 @@ def test_resume_of_a_paid_run_needs_the_operator_and_keeps_the_ledger(site, tmp_
 # -- capability checks: what may launch today -------------------------------------------
 
 def test_the_capability_matrix_names_the_pending_milestones():
-    assert approvals.capabilities() == {"api": None, "monarch": approvals.MONARCH_REASON,
+    assert approvals.capabilities(harnesses=[]) == {"api": None, "monarch": approvals.MONARCH_REASON,
                                         "native": approvals.NATIVE_REASON}
     assert approvals.MONARCH_REASON == "Monarch instance not verified: milestone M5"
     assert approvals.NATIVE_REASON == "native runtime not verified: milestone M7"
@@ -379,3 +379,70 @@ def test_wb_monarch_verify_prints_every_check_and_exits_on_the_verdict(tmp_path,
     assert main(["monarch", "verify"]) == 1
     captured = capsys.readouterr()
     assert "[NO ] knowledge_base: bench-gmail drifted" in captured.out and "stay refused" in captured.err
+
+
+def test_a_studio_launch_above_smoke_scale_without_an_approval_record_is_refused(tmp_path, monkeypatch):
+    """T027: A Studio launch above smoke scale (20 attempts/competitor) by a non-approver
+    without an approved record must be refused."""
+    from wb_studio.app import Studio
+    tasks = [f"task_{i}" for i in range(25)]
+    task_objs = [{"task": t, "contract_sha256": f"hash_{i}"} for i, t in enumerate(tasks)]
+    studio = Studio(tmp_path / "studio", tasks=task_objs,
+                    gateway_factory=lambda *a, **k: pytest.fail("paid dispatch"))
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("WB_OPERATOR", "alex")
+    payload = {
+        "models": ["gemini-3.7-flash"],
+        "tasks": tasks,
+        "maximum_usd": "10.00",
+        "title": "Big run",
+    }
+    with pytest.raises(Exception, match="approval|smoke scale"):
+        studio.create(payload, start=False)
+
+
+def test_a_studio_launch_above_smoke_scale_by_an_approver_creates_approved_record(tmp_path, monkeypatch):
+    """An approver's launch above smoke scale is approved on creation under their record."""
+    from wb_studio.app import Studio
+    tasks = [f"task_{i}" for i in range(25)]
+    task_objs = [{"task": t, "contract_sha256": f"hash_{i}"} for i, t in enumerate(tasks)]
+    studio = Studio(tmp_path / "studio", tasks=task_objs,
+                    gateway_factory=lambda *a, **k: pytest.fail("paid dispatch"))
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("WB_OPERATOR", "lucas")
+    payload = {
+        "models": ["gemini-3.7-flash"],
+        "tasks": tasks,
+        "maximum_usd": "10.00",
+        "title": "Big approved run",
+    }
+    job = studio.create(payload, start=False)
+    assert job["status"] == "queued"
+    assert job["settings"]["approval_request_id"] is not None
+    record = studio.store.approval_request(job["settings"]["approval_request_id"])
+    assert record is not None
+    assert record["status"] == "approved"
+    assert record["decided_by"] == "lucas"
+
+
+def test_a_studio_launch_at_smoke_scale_runs_without_approval_record(tmp_path, monkeypatch):
+    """Smoke scale (<= 20 tasks/competitor) requires no approval record, even for non-approvers."""
+    from wb_studio.app import Studio
+    tasks = [f"task_{i}" for i in range(20)]
+    task_objs = [{"task": t, "contract_sha256": f"hash_{i}"} for i, t in enumerate(tasks)]
+    studio = Studio(tmp_path / "studio", tasks=task_objs,
+                    gateway_factory=lambda *a, **k: pytest.fail("paid dispatch"))
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("WB_OPERATOR", "alex")
+    payload = {
+        "models": ["gemini-3.7-flash"],
+        "tasks": tasks,
+        "maximum_usd": "10.00",
+        "title": "Smoke run",
+    }
+    job = studio.create(payload, start=False)
+    assert job["status"] == "queued"
+    assert job["settings"].get("approval_request_id") is None
+
+
+

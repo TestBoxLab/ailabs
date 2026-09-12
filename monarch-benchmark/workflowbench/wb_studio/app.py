@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_UP
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -13,6 +14,8 @@ import secrets
 import sys
 import threading
 import time
+from types import SimpleNamespace
+
 import urllib.error
 import urllib.request
 import uuid
@@ -22,8 +25,11 @@ from dotenv import load_dotenv
 from runner.arms import OracleArm, SloppyArm
 from wb_arms.api_loop import ArmResult
 from wb_arms.runtime_manifest import sha256_json
-from wb_orchestrator.budget import BudgetLedger, BudgetExceeded
+from wb_orchestrator.approvals import ApprovalError, admit_launch
+from wb_orchestrator.budget import BudgetLedger, BudgetExceeded, default_ledger_path
 from wb_orchestrator.config import derive_langfuse_keys
+from wb_orchestrator.monarch_setup import front_door_secret
+from wb_studio.genesis_autonomy import background_wanted
 from wb_orchestrator.orchestrator import Orchestrator
 from wb_results.evidence import write_json
 from wb_results.store import Store
@@ -71,6 +77,23 @@ def setup_names(job) -> dict:
     return {i: display_name(i, arms.get(i)) for i in identifiers}
 
 
+def with_setup_names(job) -> dict:
+    """A run as the pages list it: one arm per competitor, each under its
+    readable name. The stored record keeps its own identifiers."""
+    names, settings = setup_names(job), job.get("settings") or {}
+    arms = settings.get("arms") or [{"id": i, "kind": "runner"} for i in settings.get("models") or []]
+    return {**job, "settings": {**settings, "arms": [{**a, "name": names.get(a["id"], a["id"])} for a in arms]}}
+
+
+def listed_jobs(studio, jobs) -> list:
+    """The runs the history lists. A benchmark Studio refuses to launch the
+    scripted checks (see create), so it does not list old fixture runs either.
+    The fixture Studio keeps them: they are all it has."""
+    from wb_studio.genesis_watcher import scripted_only
+    kept = jobs if studio.gateway_factory is not None else [j for j in jobs if not scripted_only(j)]
+    return [with_setup_names(j) for j in kept]
+
+
 def front_door_target(env, rest: str) -> str:
     """Where the front door relays an application call.
 
@@ -89,17 +112,85 @@ def front_door_target(env, rest: str) -> str:
     return f"http://127.0.0.1:{port}{rest}"
 
 
+# The gate and the seed URL must agree, and the seeds are written by the orchestrator,
+# so both live there. The Studio already depends on wb_orchestrator; the reverse edge
+# is the one the benchmark must not grow.
+
+AGENT_NAMES = ("genesis", "studio")
+
+
+def human_operator(name) -> str:
+    """One launcher's name, refused when an agent is presenting itself as a person.
+
+    Decision D5 puts a person's name on every paid launch and says an agent never
+    approves its own round. `human:studio` and `human:genesis` are the fallback strings
+    the Studio writes when nobody is named, so accepting them as operators would put a
+    placeholder where the accountable person belongs (feature 024, FR-007).
+    """
+    who = str(name or "").strip()
+    if not who:
+        return ""
+    bare = who.split(":", 1)[1] if ":" in who else who
+    if bare.strip().lower() in AGENT_NAMES:
+        raise ValueError(f"{who!r} is not a person: a paid launch names the person who asked for it. "
+                         "A launch Genesis makes is recorded as Genesis's, not as a person's.")
+    return who
+
+
+def attempt_cap_for(maximum, attempts: int, explicit=None, floor=None):
+    """What one attempt may spend, below the whole run ceiling wherever that is possible.
+
+    The Studio passed no run config, so `attempt_cap_usd` stayed None and every arm was
+    handed the run's whole maximum as its scope limit: one attempt looping on task 1 of
+    50 could spend the lot before task 2 started, and every competitor comparison assumes
+    attempts are comparably bounded (feature 024, FR-008).
+
+    The default is a generous share — four times an even split — clamped to the run
+    ceiling. On a fifty-task round that bounds one attempt to roughly 8% of the money,
+    which is the case the cap exists for. On a round of three attempts the share exceeds
+    the ceiling and the cap is the ceiling: a three-attempt round sized for three
+    expensive requests genuinely cannot bound one of them below what it costs, and
+    pretending otherwise refuses every attempt instead of limiting it.
+
+    `floor` is the largest amount a single request reserves before it is admitted, which
+    `create` already computes to validate the run ceiling. A cap under it would refuse
+    every attempt rather than bound it, so the floor wins: on a run whose ceiling is only
+    just large enough for one request, the cap equals the ceiling and this bounds nothing.
+    That is the honest outcome — the run is one request wide — not a reason to set a cap
+    that cannot be paid.
+    """
+    maximum = Decimal(str(maximum))
+    floor = Decimal(str(floor)) if floor is not None else Decimal("0")
+    if explicit is not None and str(explicit).strip() != "":
+        cap = Decimal(str(explicit))
+        if cap <= 0:
+            raise ValueError("The attempt cap is an amount above zero.")
+        if cap > maximum:
+            raise ValueError(f"The attempt cap ${cap:.2f} is above the run ceiling ${maximum:.2f}; "
+                             "one attempt may not be allowed to spend the whole round.")
+        if cap < floor:
+            raise ValueError(f"The attempt cap ${cap:.2f} is below the ${floor:.2f} a single request "
+                             "reserves before it is admitted, so no attempt could run. Raise the cap.")
+        return cap
+    share = (maximum * 4 / max(1, int(attempts))).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    return min(maximum, max(Decimal("0.01"), floor, share))
+
+
 class Studio:
     def __init__(self, directory=None, tasks=None, gateway_factory=None, adapter_factory=None):
         self.directory = Path(directory or ((data_dir() / "studio") if data_dir() else ROOT / "out" / "studio"))
         self.directory.mkdir(parents=True, exist_ok=True)
         self.tasks = {task["task"]: task for task in (tasks if tasks is not None else [load_task_file(p) for p in sorted((ROOT / "corpus").rglob("*.json"))])}
-        ledger_path = REPO / "research" / "budget.sqlite3"
-        if data_dir():
-            ledger_path = data_dir() / "research" / "budget.sqlite3"
-        if os.environ.get("STUDIO_LEDGER_PATH"):
-            ledger_path = Path(os.environ["STUDIO_LEDGER_PATH"]).expanduser()
+        # The shared rule lives in wb_orchestrator.budget so every process that reserves
+        # in this ledger — the CLI, the Studio, Genesis's envelope — agrees where it is.
+        ledger_path = default_ledger_path(REPO)
         self.ledger = BudgetLedger(self.directory / "budget.sqlite3" if gateway_factory is not None else ledger_path)
+        store_path = REPO / "wb.sqlite3"
+        if data_dir():
+            store_path = data_dir() / "wb.sqlite3"
+        if os.environ.get("STUDIO_STORE_PATH"):
+            store_path = Path(os.environ["STUDIO_STORE_PATH"]).expanduser()
+        self.store = Store(self.directory / "wb.sqlite3" if gateway_factory is not None else store_path)
         self.gateway_factory = gateway_factory      # test hook for the Gemini control
         self.adapter_factory = adapter_factory      # test hook for every other provider
         # Every finished run gets its interpretation automatically, under this per-run ceiling (US$).
@@ -107,9 +198,14 @@ class Studio:
         self.lock = threading.RLock()
         self._event_counts: dict[str, tuple[int, int]] = {}
         self.cancelled = {}
+        # What a browser has open with unsaved edits, so a model's commit cannot land on
+        # top of a person's typing (feature 025, FR-049). In memory on purpose: it is a
+        # fact about right now, and a Studio that restarts has no open editors.
+        self.editors: dict[str, dict] = {}
         self.token = secrets.token_urlsafe(32)
         from wb_studio.genesis import Genesis
         self.genesis = Genesis(self)
+        self.voice = None  # Created lazily; ordinary Studio startup never opens a voice connection.
         from wb_studio.scheduler import Scheduler
         self.scheduler = Scheduler(self, self.directory / "genesis" / "schedule.json")
         self.scheduler.discover()
@@ -444,8 +540,48 @@ class Studio:
         title = payload.get("title", "Model comparison")
         if not isinstance(title, str) or not title.strip() or len(title) > 100:
             raise ValueError("Use a comparison name between 1 and 100 characters")
-        settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks, "maximum_usd": str(maximum), "track": track,
-                    "architectures": [v["id"] for v in versions]}
+        # FR-007: a paid launch names the person who asked for it. Scripted competitors
+        # (the answer key, the sloppy check) cost nothing, so they are not a paid launch.
+        paid = any(a.get("kind") != "scripted" and a.get("id") not in ("oracle", "sloppy", "null") for a in arms)
+        operator = human_operator(payload.get("operator") or os.environ.get("WB_OPERATOR"))
+        if paid and not operator:
+            raise ValueError("A paid launch names the person who asked for it. "
+                             "Set WB_OPERATOR, or send `operator` with the launch.")
+        # FR-019: a run carries an explicit number of repetitions, default 1.
+        repetitions = positive_int(payload.get("repetitions", 1), "Repetitions", 100)
+        # FR-008: one attempt may never be allowed to spend the whole round.
+        cap = attempt_cap_for(maximum, attempts=len(tasks) * max(1, len(arms)) * repetitions,
+                              explicit=payload.get("attempt_cap_usd"), floor=floor)
+        approval_request_id = payload.get("approval_request") or payload.get("approval_request_id")
+        if paid:
+            config_hash = hashlib.sha256(json.dumps({
+                "tasks": sorted(tasks),
+                "models": [a["id"] for a in arms],
+                "maximum_usd": str(maximum),
+                "repetitions": repetitions,
+            }, sort_keys=True).encode()).hexdigest()[:16]
+            rc = SimpleNamespace(
+                attempts_per_competitor=len(tasks) * repetitions,
+                attempts_total=len(tasks) * len(arms) * repetitions,
+                hash=config_hash,
+                product_path="studio",
+                plan_path="studio",
+                plan=SimpleNamespace(name=title, cost_ceiling_usd=maximum),
+            )
+            env = dict(os.environ)
+            if operator:
+                env["WB_OPERATOR"] = operator
+            launch = admit_launch(self.store, rc, env, request_id=approval_request_id)
+            if not launch.run:
+                raise ApprovalError(launch.message)
+            if launch.request_id:
+                approval_request_id = launch.request_id
+        settings = {"models": [a["id"] for a in arms], "arms": arms, "tasks": tasks,
+                    "repetitions": repetitions, "maximum_usd": str(maximum), "track": track,
+                    "architectures": [v["id"] for v in versions],
+                    "operator": operator, "attempt_cap_usd": str(cap),
+                    "approval_request_id": approval_request_id}
+
         concurrency = positive_int(payload.get("concurrency", 1), "Concurrent agents", self.runtime.max_agents)
         pins = self.components.pin(payload.get("components"))
         if any(a["kind"] == "enterprise" for a in arms) and any(pins[r]["id"] != self.components.defaults[r] for r in ("brain", "action_builder")):
@@ -483,7 +619,7 @@ class Studio:
                 path.mkdir()
                 job = {"id": identity, "title": title,
                        "created_at": now(), "status": "queued", "settings": settings, "results": [], "completed": 0,
-                       "total": len(tasks) * len(arms), "task_hashes": {t: contract_hash(self.tasks[t]) for t in tasks}}
+                       "total": len(tasks) * len(arms) * repetitions, "task_hashes": {t: contract_hash(self.tasks[t]) for t in tasks}}
                 from wb_studio.task_sets import task_sets
                 reference = next((item for item in task_sets(self, ROOT)['items'] if item['id']=='catalog-50'), None)
                 if reference and set(tasks)==set(reference['tasks']) and len(tasks)==50:
@@ -492,7 +628,6 @@ class Studio:
                 job["world_manifest"] = {"package": "automation-bench", "installed_version": installed_world_version(),
                                          "task_worlds": {task: world_of(self.tasks[task]) or {"version": "1.0.6"} for task in tasks}}
                 if track == "create-and-run":
-                    import hashlib
                     from wb_studio import workflows
                     job["workflow_contract"] = {"formats": {"experimental": "studio-workflow-v1", "monarch": "native-recipe"}, "runtime_sha256": hashlib.sha256(Path(workflows.__file__).read_bytes()).hexdigest(),
                                                 "requirement": "saved workflow artifact plus execution"}
@@ -564,8 +699,14 @@ class Studio:
             from wb_studio import workflows
             if job.get("workflow_contract", {}).get("runtime_sha256") != hashlib.sha256(Path(workflows.__file__).read_bytes()).hexdigest():
                 raise ValueError("The workflow artifact contract changed; create a new run with the current contract")
-        maximum = Decimal(job["settings"]["maximum_usd"])
-        config = job["settings"].get("configuration", {})
+        # What ONE attempt may spend, not what the round may. Every arm below takes this
+        # as its ledger scope limit, and it used to be the whole run ceiling, so a single
+        # looping attempt could consume the round before the next task started
+        # (feature 024, FR-008). A run recorded before the cap existed falls back to the
+        # ceiling, which is what it ran under.
+        settings = job["settings"]
+        maximum = Decimal(settings.get("attempt_cap_usd") or settings["maximum_usd"])
+        config = settings.get("configuration", {})
         if arm["kind"] == "version":
             version = load_version(self, arm["blueprint"], arm["number"])
             if arm.get("runner_override"):
@@ -586,39 +727,37 @@ class Studio:
         return LiveArm(self, job["id"], arm["id"], task_id, cancel, maximum)
 
     def schedule_narrative(self, identity):
-        """Every finished run gets its interpretation without a manual step, paid
-        from the weekly ledger under the per-run ceiling. When it cannot run, the
-        reason is recorded so the report says "Analysis pending" and why."""
-        from wb_studio.paid import credential_status
+        """Start Genesis's complete report cycle within the existing automatic ceiling."""
+        from wb_studio.genesis_reports import start, status
         folder = self.directory / identity
         pending = folder / "analysis.pending.json"
+        if status(self.genesis, {'run': identity})['stage'] != 'none':
+            return  # completed, in flight or stopped: never replay paid work implicitly
+        # Preserve historical interpretations; author_report can explicitly create
+        # the first reviewed report for such a run when requested.
         if (folder / "analysis.json").exists():
             return
         job = self.job(identity)
         arms = job["settings"].get("arms") or [{"id": m, "kind": "runner"} for m in job["settings"]["models"]]
         ceiling = self.analysis_ceiling
         if all(a.get("kind") == "scripted" or a["id"] in ("oracle", "sloppy", "null") for a in arms):
-            return write_json(pending, {"reason": "Scripted checks only; there is nothing to interpret.", "ceiling_usd": str(ceiling)})
+            return write_json(pending, {"reason": "Scripted checks only; there is nothing to interpret.", "ceiling_usd": str(ceiling), "askable": False})
         if ceiling <= 0:
-            return write_json(pending, {"reason": "Automatic analysis is off for this workspace (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling)})
-        if self.gateway_factory is None and not credential_status()["configured"]:
-            return write_json(pending, {"reason": "No analysis credential is configured (GEMINI_API_KEY).", "ceiling_usd": str(ceiling)})
-        available = Decimal(str(self.budget().get("available", "0")))
-        if available < ceiling:
-            short = ceiling - available
-            return write_json(pending, {"reason": f"The weekly ledger cannot cover the ${ceiling:.2f} analysis ceiling; ${short:.2f} short.",
-                                        "shortfall_usd": str(short), "ceiling_usd": str(ceiling)})
-        write_json(pending, {"reason": "The analysis was dispatched and has not returned yet.", "ceiling_usd": str(ceiling)})
-        threading.Thread(target=self._narrative, args=(identity, ceiling), daemon=True).start()
+            return write_json(pending, {"reason": "Automatic report authoring is off (STUDIO_ANALYSIS_USD is 0).", "ceiling_usd": str(ceiling), "askable": True})
+        try:
+            result = start(self.genesis, {'run': identity, 'maximum_usd': str(ceiling)})
+            write_json(pending, {"reason": result.get('reason'), "ceiling_usd": str(ceiling), "askable": False})
+        except (ValueError, OSError, BudgetExceeded) as exc:
+            # BudgetExceeded is a RuntimeError, so it used to escape this handler, travel out
+            # of execute()'s finally, skip store.close() and kill the execution thread -- and
+            # the page showed no reason at all. An exhausted week is exactly the case this
+            # pending record exists to explain.
+            write_json(pending, {"reason": str(exc), "ceiling_usd": str(ceiling), "askable": "no recorded attempts" not in str(exc)})
 
     def _narrative(self, identity, ceiling):
-        from wb_studio.analysis import review
-        folder = self.directory / identity
-        try:
-            review(self, identity, maximum_usd=ceiling)
-            (folder / "analysis.pending.json").unlink(missing_ok=True)
-        except ValueError as exc:
-            write_json(folder / "analysis.pending.json", {"reason": str(exc), "ceiling_usd": str(ceiling)})
+        """Compatibility entry point; new readings use Genesis's reviewed workflow."""
+        from wb_studio.genesis_reports import start
+        return start(self.genesis, {'run': identity, 'maximum_usd': str(ceiling)})
 
     def execute(self, identity):
         if self.coordinator is not None:
@@ -669,6 +808,10 @@ class Studio:
                                 row = next(r for r in store.episodes(run=identity)["rows"] if r["task_id"] == task_id and r["arm"] == arm["id"])
                                 result = {"task": task_id, "model": arm["id"], "passed": row["passed"], "termination": row["termination"],
                                           "error": row["error"], "cost_usd": row["cost_usd"], "tokens": row["tokens"],
+                                          # `run` is the whole attempt; `authoring` and `execution` sit beside it
+                                          # and are what the break-even curve is computed from (FR-024, FR-025).
+                                          # Dropped until 11 September, which put the split out of the Studio's reach.
+                                          "phases": row["phases"],
                                           "seconds": row["phases"]["run"]["wall_clock_s"], "tool_calls": row["tool_calls"],
                                           "checks": row["check_results"] + [{"type": "allowed_changes_only", "passed": row["invariant_passed"]}],
                                           "unexpected_changes": row["unexpected_changes"], "flags": row["flags"], "output": live.output}
@@ -822,7 +965,15 @@ def handler(studio):
             host = self.headers.get("Host", "").lower()
             origin = self.headers.get("Origin")
             return host in allowed and (not origin or origin in ("http://" + host, "https://" + host)) and (
-                not write or self.headers.get("X-Studio-Token") == studio.token or self.person() is not None)
+                not write or secrets.compare_digest(self.headers.get("X-Studio-Token") or "", studio.token)
+                or self.person() is not None)
+
+        def voice_service(self):
+            with studio.lock:
+                if studio.voice is None:
+                    from wb_studio.genesis_voice import VoiceSessions
+                    studio.voice = VoiceSessions(studio.genesis)
+                return studio.voice
 
         def person(self):
             """The person named by the X-Person-Key header, or None (feature 022, lane B)."""
@@ -870,20 +1021,49 @@ def handler(studio):
         FRONT_DOOR = "/front-door"
 
         def is_front_door(self) -> bool:
-            return self.path == self.FRONT_DOOR or self.path.startswith(self.FRONT_DOOR + "/")
+            """True only for a front-door call carrying the current secret segment.
+
+            An address under /front-door without a valid secret is not "a front-door
+            call that fails auth" — it is not a front-door call at all, and falls
+            through to the normal authenticated routing, which 404s it. Saying so
+            here keeps every method's gate in one place.
+            """
+            return self.front_door_rest() is not None
+
+        def front_door_rest(self) -> str | None:
+            """The path the shim should see, or None when this is not a valid front-door call.
+
+            Fails closed: with no STUDIO_FRONT_DOOR_SECRET set there is no valid call,
+            because an absent secret must never mean "no gate" on a public address.
+            """
+            if self.path != self.FRONT_DOOR and not self.path.startswith(self.FRONT_DOOR + "/"):
+                return None
+            secret = front_door_secret(os.environ)
+            if not secret:
+                return None
+            prefix = self.FRONT_DOOR + "/" + secret
+            if self.path == prefix:
+                return "/"
+            if self.path.startswith(prefix + "/") or self.path.startswith(prefix + "?"):
+                return self.path[len(prefix):]
+            return None
 
         def front_door(self):
             """Forward one request to the attempt's front door: wherever its shim runs.
 
             A hosted Studio is the only address Monarch can reach, so the seeds name
-            `https://<studio>/front-door` and this handler relays to the shim the
-            Monarch attempt started — on this host by default (STUDIO_FRONT_DOOR_PORT,
-            9105), or at STUDIO_FRONT_DOOR_TARGET when the attempt runs elsewhere, as
-            a CLI round does. Like the tunnel it replaces there is no login and no
-            origin check on this path; the shim itself accepts only its episode's
-            world calls.
+            `https://<studio>/front-door/<secret>` and this handler relays to the shim
+            the Monarch attempt started — on this host by default
+            (STUDIO_FRONT_DOOR_PORT, 9105), or at STUDIO_FRONT_DOOR_TARGET when the
+            attempt runs elsewhere, as a CLI round does.
+
+            There is no login on this path because the competitor under test calls it
+            and holds no credentials. The gate is the secret segment, which rides in
+            the seed URL. Without it anyone holding the hosted address could write
+            into a running attempt's world, and the approval rule would read that
+            write as the competitor failing.
             """
-            rest = self.path[len(self.FRONT_DOOR):] or "/"
+            rest = self.front_door_rest() or "/"
             length = int(self.headers.get("Content-Length") or 0)
             if length > 8 * 1024 * 1024:
                 return self.send_json({"error": "Request too large"}, 413)
@@ -909,14 +1089,22 @@ def handler(studio):
             self.end_headers()
             self.wfile.write(data)
 
-        def do_PUT(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+        def write_method(self):
+            """PUT, PATCH and DELETE exist only to serve the front door.
 
-        def do_PATCH(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+            They took the relay before any authentication ran, so a write to a
+            running attempt's world needed nothing but the address. `is_front_door`
+            now requires the secret segment, and anything else is refused here.
+            """
+            if self.is_front_door():
+                return self.front_door()
+            if not self.authorised():
+                return self.challenge()
+            return self.send_json({"error": "Not found"}, 404)
 
-        def do_DELETE(self):
-            return self.front_door() if self.is_front_door() else self.send_json({"error": "Not found"}, 404)
+        do_PUT = write_method
+        do_PATCH = write_method
+        do_DELETE = write_method
 
         def challenge(self):
             self.send_response(401)
@@ -936,6 +1124,17 @@ def handler(studio):
                 return self.send_json({"error": "Origin refused"}, 403)
             url = urlsplit(self.path)
             try:
+                if url.path == '/api/genesis/voice':
+                    return self.send_json(self.voice_service().availability())
+                voice_match = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)', url.path)
+                if voice_match:
+                    person = self.person()
+                    ok, why = studio.genesis.access.may_write(person)
+                    if not ok:
+                        return self.send_json({'error': why}, 403)
+                    who = 'human:' + person['name'] if person else 'human:studio'
+                    known = parse_qs(url.query).get('known', [''])[0].split(',')[:12]
+                    return self.send_json(self.voice_service().status(voice_match[1], who, known=known))
                 if url.path == "/api/benchmark-config":
                     from wb_studio.benchmark_config import catalog
                     try:
@@ -962,8 +1161,9 @@ def handler(studio):
                 if url.path == "/api/budget":
                     return self.send_json(studio.budget())
                 if url.path == "/api/budget/ledger":
+                    from wb_studio import allowances
                     from wb_studio.usage import ledger_lines
-                    return self.send_json(ledger_lines(studio))
+                    return self.send_json({**ledger_lines(studio), "allowances": allowances.states(studio)})
                 if url.path == "/api/runtime":
                     state = studio.runtime.snapshot()
                     if studio.coordinator is not None:
@@ -974,7 +1174,7 @@ def handler(studio):
                 if url.path == "/api/jobs":
                     if studio.coordinator is not None:
                         studio.coordinator.reap()
-                    return self.send_json({"items": studio.jobs()})
+                    return self.send_json({"items": listed_jobs(studio, studio.jobs())})
                 if url.path == "/api/jobs/counts":
                     from wb_studio.measures import run_counts
                     # ponytail: reads every run's events on each call; cache per job if the listing grows slow
@@ -1036,14 +1236,14 @@ def handler(studio):
                     return self.send_json({"token": studio.token, "models": [m for m in studio.models() if m["id"] not in ("oracle", "sloppy")], "budget": studio.budget(),
                                            "capabilities": capability_matrix(studio),
                                            "tasks": [public_task(t) | {"difficulty": ratings[t["task"]]} for t in studio.tasks.values()],
-                                           "jobs": studio.jobs(), "setups": [json.loads(p.read_text(encoding="utf-8")) for p in (studio.directory / "setups").glob("*.json")] })
+                                           "jobs": listed_jobs(studio, jobs), "setups": [json.loads(p.read_text(encoding="utf-8")) for p in (studio.directory / "setups").glob("*.json")] })
                 match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)(/events|/report)?", url.path)
                 if match:
                     identity = match[1]
                     if not match[2]:
                         from wb_studio.monarch_provenance import project
                         job = studio.job(identity)
-                        return self.send_json({**job, "monarch_provenance": project(job)})
+                        return self.send_json({**with_setup_names(job), "monarch_provenance": project(job)})
                     if match[2] == "/report":
                         from wb_studio.report_data import narrative_status
                         report_job = studio.job(identity)
@@ -1077,23 +1277,32 @@ def handler(studio):
                     return
                 if url.path == '/api/reports':
                     from wb_studio.report_data import index as report_index
-                    return self.send_json(report_index(studio, self.audience(url)))
+                    return self.send_json(report_index(studio))
                 download_match = re.fullmatch(r'/api/reports/run/([a-zA-Z0-9_-]+)/downloads/(logs|prompts|guide)', url.path)
                 if download_match:
                     from wb_studio.report_downloads import download
                     identity, kind = download_match.groups()
                     if kind == 'guide':
                         from wb_studio.evidence_guide import download as download_guide
-                        return self.send_text(download_guide(studio, identity, self.audience(url)),
+                        return self.send_text(download_guide(studio, identity),
                                               'text/html; charset=utf-8', filename=f'{identity}-evidence-guide.html')
-                    value = download(studio, identity, kind, self.audience(url))
+                    value = download(studio, identity, kind)
                     return self.send_text(json.dumps(value, ensure_ascii=False, indent=2),
                                           'application/json; charset=utf-8', filename=f'{identity}-{kind}.json')
                 report_match = re.fullmatch(r'/api/reports/(run|round)/([a-zA-Z0-9_-]+)', url.path)
                 if report_match:
-                    from wb_studio.report_data import round_report, run_report
+                    from wb_studio.report_data import AUDIENCES, round_report, run_report
                     build = run_report if report_match[1] == 'run' else round_report
-                    return self.send_json(build(studio, report_match[2], self.audience(url)))
+                    out = build(studio, report_match[2])
+                    # `audience` is the gap list's WORDING and nothing else (FR-031). It is
+                    # not the audiences gate Lucas removed on 11 September: every reader
+                    # still sees the same page, the same setups and the same numbers. An
+                    # unknown value falls back rather than erroring, because a report that
+                    # refuses to render over a query string is worse than one that reads
+                    # in the default voice.
+                    audience = (parse_qs(url.query).get('audience') or ['lab'])[0]
+                    out['audience'] = audience if audience in AUDIENCES else 'lab'
+                    return self.send_json(out)
                 if url.path == '/api/genesis':
                     person=self.person()
                     return self.send_json({**studio.genesis.state(),'me':('human:'+person['name']) if person else 'human:studio'})
@@ -1103,6 +1312,52 @@ def handler(studio):
                 if url.path == '/api/genesis/threads': return self.send_json({'threads':studio.genesis.threads()})
                 history_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/history',url.path)
                 if history_match: return self.send_json({'history':studio.genesis.card_history(history_match[1])})
+                figure_match=re.fullmatch(r'/api/genesis/figures/([a-zA-Z0-9]+)',url.path)
+                if figure_match:  # read-only: the drawing options the Studio computed, never anything a model wrote
+                    from wb_studio import figures
+                    try: return self.send_json(figures.read(studio.genesis,figure_match[1]))
+                    except ValueError as exc: return self.send_json({'error':str(exc)},404)
+                turn_stream=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)/events',url.path)
+                if turn_stream:
+                    # The live view used to re-ask for the whole turn every 650 ms, which is a
+                    # fresh TCP handshake per tick against the browser's six-connection budget
+                    # and re-implements Last-Event-ID by hand. This is the same shape as the
+                    # run stream above (feature 024, stage S2).
+                    #
+                    # ponytail: one thread per open stream, and a held stream owns one of the
+                    # six connections for its lifetime. One stream per tab; a connection
+                    # manager if that ever stops being true.
+                    identity=turn_stream[1]
+                    cursor=int(self.headers.get('Last-Event-ID') or parse_qs(url.query).get('after',['0'])[0])
+                    studio.genesis.read('turns',identity)   # 404 before the stream opens, not after
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.send_header('Cache-Control','no-cache')
+                    self.send_header('X-Accel-Buffering','no')
+                    self.end_headers()
+                    # EventSource has no backoff of its own; without this the reconnect delay is
+                    # whatever the browser decided (~3 s in Chrome, 1 s in Firefox).
+                    self.wfile.write(b'retry: 2000\n\n')
+                    last=time.monotonic()
+                    while True:
+                        turn=studio.genesis.read('turns',identity)
+                        fresh=[e for e in turn.get('events') or [] if e['id']>cursor]
+                        for event in fresh:
+                            frame='id: %d\nevent: step\ndata: %s\n\n' % (event['id'], json.dumps(event))
+                            self.wfile.write(frame.encode())
+                            cursor=event['id']
+                        if turn.get('status')!='running':
+                            # The turn itself, once, so the client never has to ask again.
+                            rest={k:v for k,v in turn.items() if k!='events'}
+                            self.wfile.write(('event: done\ndata: %s\n\n' % json.dumps(rest)).encode())
+                            self.wfile.flush()
+                            break
+                        if fresh or time.monotonic()-last>15:
+                            self.wfile.write(b': keepalive\n\n')
+                            last=time.monotonic()
+                        self.wfile.flush()
+                        time.sleep(.4)
+                    return
                 genesis_match=re.fullmatch(r'/api/genesis/turns/([a-zA-Z0-9_-]+)',url.path)
                 if genesis_match:
                     turn=studio.genesis.read('turns',genesis_match[1])
@@ -1132,14 +1387,16 @@ def handler(studio):
                     from wb_studio import genesis_people
                     return self.send_json(genesis_people.read(studio.genesis,person_file[1]))
                 if url.path == '/api/genesis/settings':
-                    from wb_studio.usage import ledger_lines
+                    from wb_studio import allowances
                     access=studio.genesis.access
-                    return self.send_json({**access.settings(),'envelope':access.envelope(ledger_lines(studio)['lines']),'channels':access.channels()})
+                    return self.send_json({**access.settings(),'allowance':allowances.state(studio,'genesis'),'channels':access.channels()})
                 if url.path == '/api/genesis/channels': return self.send_json(studio.genesis.access.channels())
                 if url.path == '/api/genesis/digest':
                     from wb_studio import genesis_channels
-                    from datetime import date
-                    week=parse_qs(url.query).get('week',[None])[0] or date.today().strftime('%G-W%V')
+                    from wb_studio.library import now_sao_paulo
+                    # The lab's week is the São Paulo week. The server's own date named
+                    # next week's empty digest for the three hours a UTC host runs ahead.
+                    week=parse_qs(url.query).get('week',[None])[0] or now_sao_paulo().strftime('%G-W%V')
                     if not re.fullmatch(r'\d{4}-W\d{2}',week): raise ValueError('Name the week as YYYY-Www, like 2026-W37.')
                     return self.send_json(genesis_channels.digest(studio.genesis,week))
                 patch_match=re.fullmatch(r'/api/genesis/cards/([a-zA-Z0-9_-]+)/patch',url.path)
@@ -1162,6 +1419,8 @@ def handler(studio):
                 self.send_static(url.path)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
             except (ValueError, FileNotFoundError) as exc:
                 # The message stays generic for the browser; the server log keeps the cause.
                 print(f"studio GET {url.path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -1200,11 +1459,6 @@ def handler(studio):
             self.end_headers()
             self.wfile.write(data)
 
-        def audience(self, url):
-            """Reports are public unless the reader asks for the internal view."""
-            from urllib.parse import parse_qs
-            return "internal" if parse_qs(url.query).get("audience", [""])[0] == "internal" else "public"
-
         def worker_request(self):
             token = os.environ.get("STUDIO_WORKER_TOKEN", "")
             header = self.headers.get("Authorization", "")
@@ -1230,6 +1484,32 @@ def handler(studio):
                 return self.challenge()
             if not self.trusted(write=True):
                 return self.send_json({"error": "Origin or session refused"}, 403)
+            if self.path == '/api/voice/stt':
+                # Before the generic read: every other POST here is JSON, and this one is
+                # audio bytes. Same origin, so `connect-src 'self'` is untouched and no
+                # API key or ephemeral token is ever in the page (feature 024, stage S6).
+                from wb_studio import voice_stt
+                person = self.person()
+                ok, why = studio.genesis.access.may_write(person)
+                if not ok:
+                    return self.send_json({'error': why}, 403)
+                if studio.genesis.autonomy.read()['paused']:
+                    return self.send_json({'error': 'Genesis is paused. Resume it before transcribing.'}, 400)
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= voice_stt.MAX_BYTES:
+                    return self.send_json({'error': 'Send one audio clip, up to '
+                                           + str(voice_stt.MAX_BYTES // 1024) + ' KB.'}, 400)
+                audio = self.rfile.read(length)
+                try:
+                    found = voice_stt.transcribe(studio, audio,
+                                                 self.headers.get('Content-Type') or '',
+                                                 self.headers.get('X-Clip-Seconds'),
+                                                 by='human:' + person['name'] if person else 'human:studio')
+                except voice_stt.Refused as exc:
+                    return self.send_json({'error': str(exc)}, 400)
+                except Exception as exc:
+                    return self.send_json({'error': str(exc), 'error_type': type(exc).__name__}, 502)
+                return self.send_json(found)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 limit = 16_777_216 if self.path.startswith("/api/benchmark-config/") else 131072
@@ -1264,7 +1544,25 @@ def handler(studio):
                         if person and person['role']!='admin' and person['name']!=person_file[1]: return self.send_json({'error':'A member edits only their own file.'},403)
                         return self.send_json(genesis_people.write(studio.genesis,person_file[1],payload.get('text',''),by=who))
                     if self.path == '/api/genesis/settings':
-                        out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out);return self.send_json(out)
+                        from wb_studio import allowances
+                        # The weekly ceiling is an allowance now; the field on the page keeps its name.
+                        if 'envelope_usd' in payload: allowances.set_limit(studio,'genesis',payload['envelope_usd'])
+                        out=access.set_settings(payload);studio.genesis.autonomy.record('settings',by=who,**out)
+                        return self.send_json({**out,'allowance':allowances.state(studio,'genesis')})
+                if self.path == '/api/genesis/voice/sessions':
+                    caller = self.person()
+                    who = 'human:' + caller['name'] if caller else 'human:studio'
+                    return self.send_json(self.voice_service().start(payload, who), 201)
+                voice_action = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)/(close|context|detach)', self.path)
+                if voice_action:
+                    caller = self.person()
+                    who = 'human:' + caller['name'] if caller else 'human:studio'
+                    service = self.voice_service()
+                    if voice_action[2] == 'detach':
+                        return self.send_json(service.close(voice_action[1], who, reason='page_detached'))
+                    if voice_action[2] == 'close':
+                        return self.send_json(service.close(voice_action[1], who))
+                    return self.send_json(service.context(voice_action[1], payload, who))
                 if self.path == '/api/genesis/chat': return self.send_json(studio.genesis.chat(payload),201)
                 schedule_run=re.fullmatch(r'/api/genesis/schedule/([a-z0-9-]+)/run',self.path)
                 if schedule_run: return self.send_json(studio.scheduler.run(schedule_run[1]))
@@ -1284,7 +1582,14 @@ def handler(studio):
                 if self.path == '/api/genesis/memory': return self.send_json(studio.genesis.memory.edit(payload))
                 if self.path == '/api/genesis/drop': return self.send_json(studio.genesis.drop(payload),201)
                 if self.path == '/api/genesis/watcher': studio.genesis.watcher.pause(payload.get('paused'));return self.send_json(studio.genesis.watcher.status())
-                if self.path == '/api/genesis/autonomy': return self.send_json(studio.genesis.autonomy.set(payload,by=payload.get('by') or 'human:studio'))
+                if self.path == '/api/genesis/autonomy':
+                    dials = studio.genesis.autonomy.set(payload, by=payload.get('by') or 'human:studio')
+                    # Turning a dial on is what starts the unattended work; the owner no
+                    # longer starts it unconditionally (feature 024, FR-002).
+                    if background_wanted(studio.genesis.autonomy):
+                        studio.scheduler.start()
+                        studio.genesis.watcher.start()
+                    return self.send_json(dials)
                 if self.path == '/api/genesis/config':
                     out=studio.genesis.config.set(payload);studio.genesis.autonomy.record('config',by=payload.get('by') or 'human:studio',models=out['models']);return self.send_json(out)
                 if self.path == '/api/genesis/skills':
@@ -1315,6 +1620,25 @@ def handler(studio):
                 if self.path == "/api/blueprints/publish":
                     from wb_studio.blueprints import publish
                     return self.send_json(publish(studio, payload), 201)
+                if self.path == "/api/studio/editor":
+                    # The open editor says whether it is holding unsaved edits. Only Genesis
+                    # reads it, and only to refuse its own commit; it grants nothing.
+                    with studio.lock:
+                        held = studio.editors.get("architecture")
+                        # An editor only speaks for the architecture it names. A second tab
+                        # (or a second person on the hosted Studio) entering ANY other
+                        # architecture posts {id: <other or null>, dirty: false}, and that
+                        # used to overwrite the one record -- clearing the first tab's
+                        # unsaved-work flag and letting Genesis commit over it, which is the
+                        # single thing this record exists to prevent (FR-049).
+                        speaks_for_another = (not payload.get("dirty") and isinstance(held, dict)
+                                              and held.get("dirty") and held.get("id")
+                                              and held["id"] != payload.get("id"))
+                        if not speaks_for_another:
+                            studio.editors["architecture"] = {"id": payload.get("id"),
+                                                              "dirty": bool(payload.get("dirty")),
+                                                              "at": time.time()}
+                    return self.send_json({"recorded": True})
                 if self.path == "/api/product-graphs/draft":
                     from wb_studio.product_graphs import save_draft as save_graph_draft
                     return self.send_json(save_graph_draft(studio, payload), 201)
@@ -1348,14 +1672,18 @@ def handler(studio):
                 if self.path == "/api/architectures/refresh":
                     from wb_studio.architectures import default_status
                     return self.send_json(default_status(studio, refresh=True))
+                if self.path == "/api/budget/allowances":
+                    from wb_studio import allowances
+                    allowances.set_limit(studio, payload.get("kind"), payload.get("limit_usd"))
+                    return self.send_json({"allowances": allowances.states(studio)})
                 if self.path == "/api/setups":
                     from wb_studio.setups import save_setup
                     return self.send_json(save_setup(studio, payload), 201)
                 analyze = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/analyze", self.path)
                 if analyze:
-                    from wb_studio.analysis import review
-                    # Asking by hand is asking again: a reading that failed is re-dispatched.
-                    return self.send_json(review(studio, analyze[1], retry=True))
+                    from wb_studio.genesis_reports import start
+                    return self.send_json(start(studio.genesis, {'run': analyze[1], 'retry': True,
+                        'maximum_usd': payload.get('maximum_usd', str(studio.analysis_ceiling))}))
                 if self.path == "/api/bare-coverage":
                     from wb_studio.bare_coverage import coverage
                     return self.send_json(coverage(studio, payload))
@@ -1371,10 +1699,13 @@ def handler(studio):
                         return self.send_json(studio.resume(match[1], preview_id=payload.get("preview_id")))
                     return self.send_json(getattr(studio, match[2])(match[1]))
                 return self.send_json({"error": "Not found"}, 404)
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
             except BudgetExceeded as exc:
                 self.send_json({"error": str(exc)}, 409)
-            except (ValueError, TypeError, KeyError, FileNotFoundError) as exc:
+            except (ValueError, TypeError, KeyError, FileNotFoundError, ApprovalError) as exc:
                 self.send_json({"error": str(exc)}, 400)
+
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             except Exception as exc:
@@ -1397,8 +1728,13 @@ def main(argv=None):
     with single_host_owner(directory):
         app = Studio()
         app.genesis.recover_interrupted()
-        app.scheduler.start()
-        app.genesis.watcher.start()
+        # The watcher and the daily jobs spend money without anyone watching, so the
+        # owner starts them only when a person has turned a dial on. A workspace nobody
+        # has configured stays quiet (feature 024, FR-002). Turning a dial on through
+        # the interface starts them; nothing is lost by not starting them here.
+        if background_wanted(app.genesis.autonomy):
+            app.scheduler.start()
+            app.genesis.watcher.start()
         server = ThreadingHTTPServer((args.host, args.port), handler(app))
         if app.coordinator is None:
             for job in app.jobs():

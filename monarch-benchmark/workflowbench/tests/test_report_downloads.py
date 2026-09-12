@@ -3,6 +3,8 @@ import base64
 import hashlib
 import json
 
+import pytest
+
 from tests.test_studio_reports import studio, finished_run
 from tests.test_studio_app import server_for, request
 
@@ -11,7 +13,6 @@ def record(studio):
     job = finished_run(studio)
     folder = studio.directory / job["id"]
     saved = json.loads((folder / "job.json").read_text(encoding="utf-8"))
-    saved["settings"]["arms"][1]["name"] = "monarch-lab-private"
     (folder / "job.json").write_text(json.dumps(saved), encoding="utf-8")
     task = saved["settings"]["tasks"][0]
     studio.emit(job["id"], "model_prompt", model="oracle", task=task,
@@ -19,7 +20,7 @@ def record(studio):
     studio.emit(job["id"], "node_finished", model="oracle", task=task, output=json.dumps({
         "authorization": "Bearer never-share", "result": "Observed tool value", "snapshot0": "ANSWER KEY"}),
         reasoning=["PRIVATE REASONING"], credentials={"password": "never-share"})
-    studio.emit(job["id"], "model_prompt", model="sloppy", task=task, arguments={"system": "HIDDEN PROMPT", "brief": "HIDDEN PROMPT"})
+    studio.emit(job["id"], "model_prompt", model="sloppy", task=task, arguments={"system": "Retained second setup prompt", "brief": "Retained second setup prompt"})
     studio.emit(job["id"], "job_config", settings={"password": "CONFIG SECRET"})
     return job, folder
 
@@ -45,17 +46,17 @@ def test_public_downloads_filter_prose_and_redact_without_reading_current_tasks(
     job, folder = record(studio)
     before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob("*") if p.is_file()}
     studio.tasks = {}  # No replacement current task text may be consulted.
-    logs = download(studio, job["id"], "logs", "public")
-    prompts = download(studio, job["id"], "prompts", "public")
+    logs = download(studio, job["id"], "logs")
+    prompts = download(studio, job["id"], "prompts")
     text = json.dumps([logs, prompts])
     assert "Observed tool value" in text and "Retained request, not the current task." in text
-    for excluded in ("HIDDEN PROMPT", "PRIVATE REASONING", "never-share", "CONFIG SECRET", "ANSWER KEY", "monarch-lab-private"):
+    for excluded in ("PRIVATE REASONING", "never-share", "CONFIG SECRET", "ANSWER KEY", "monarch-lab-private"):
         assert excluded not in text
     assert prompts["coverage"]["full_native_context"] == "unavailable"
     assert prompts["prompts"] and "Retained system" in json.dumps(prompts["prompts"])
     assert before == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in before}
-    internal = download(studio, job["id"], "prompts", "internal")
-    assert "HIDDEN PROMPT" in json.dumps(internal)
+    assert "Retained second setup prompt" in text
+    assert "audience" not in logs and "audience" not in prompts
 
 
 def test_canonical_attempt_requests_are_downloaded_and_outside_paths_refused(studio, tmp_path, monkeypatch):
@@ -97,8 +98,7 @@ def test_canonical_attempt_requests_are_downloaded_and_outside_paths_refused(stu
     for log_id in original[0]["log_ids"]:
         assert linked[log_id]["attempt_id"] == original[0]["attempt_id"]
         assert "Original retained API request" in json.dumps(linked[log_id]["record"])
-    internal = download(studio, job["id"], "logs", "internal")
-    assert set(linked) <= {event["log_id"] for event in internal["events"]}
+    assert set(linked) == {event["log_id"] for event in download(studio, job["id"], "logs")["events"]}
     assert prompts["coverage"]["missing_prompt_attempts"]
 
 
@@ -130,8 +130,8 @@ def test_token_fields_and_bearer_tokens_are_fully_redacted():
     from wb_studio.report_downloads import clean
     value = {"token": "secret-token", "X-Studio-Token": "secret-session", "output": "Bearer secret-bearer and sk-secretapikey",
              "input": "token=secret-inline"}
-    assert "secret-" not in json.dumps(clean(value, "internal"))
-    assert "SYNTHETIC_SECRET_VALUE" not in clean("GOOGLE_API_KEY=SYNTHETIC_SECRET_VALUE AWS_SECRET_ACCESS_KEY=SYNTHETIC_SECRET_VALUE Cookie: session=SYNTHETIC_SECRET_VALUE", "internal")
+    assert "secret-" not in json.dumps(clean(value))
+    assert "SYNTHETIC_SECRET_VALUE" not in clean("GOOGLE_API_KEY=SYNTHETIC_SECRET_VALUE AWS_SECRET_ACCESS_KEY=SYNTHETIC_SECRET_VALUE Cookie: session=SYNTHETIC_SECRET_VALUE")
 
 
 def test_public_downloads_remove_typed_provider_reasoning_from_request_histories():
@@ -141,9 +141,9 @@ def test_public_downloads_remove_typed_provider_reasoning_from_request_histories
         {"role": "assistant", "channel": "analysis", "content": "PRIVATE ANALYSIS"},
         {"thought": True, "text": "PRIVATE GEMINI", "thoughtSignature": "PRIVATE SIGNATURE"},
         {"role": "assistant", "content": "Visible answer", "reasoning_content": "PRIVATE DEEPSEEK"}]}}
-    public = clean(value, "public")
+    public = clean(value)
     assert "PRIVATE" not in json.dumps(public) and "Visible answer" in json.dumps(public)
-    assert "PRIVATE OPENAI" in json.dumps(clean(value, "internal"))
+    assert "PRIVATE OPENAI" not in json.dumps(clean(value))
 
 
 def test_missing_prompts_are_reported_instead_of_reconstructed(studio):
@@ -153,3 +153,17 @@ def test_missing_prompts_are_reported_instead_of_reconstructed(studio):
     assert prompts["prompts"] == []
     assert prompts["coverage"]["retained_prompt_records"] == 0
     assert prompts["coverage"]["missing_prompt_tasks"]
+
+
+@pytest.mark.parametrize("kind", ["logs", "prompts", "guide"])
+def test_lab_build_refuses_whole_export_by_id_or_name(studio, kind):
+    from wb_studio.report_downloads import download
+    from wb_studio.evidence_guide import download as guide
+    job, folder = record(studio)
+    saved = json.loads((folder / "job.json").read_text(encoding="utf-8"))
+    saved["settings"]["arms"][1]["name"] = "monarch-lab-private"
+    (folder / "job.json").write_text(json.dumps(saved), encoding="utf-8")
+    with pytest.raises(PermissionError, match="lab"):
+        guide(studio, job["id"]) if kind == "guide" else download(studio, job["id"], kind)
+    with server_for(studio) as port:
+        assert request(port, "GET", f"/api/reports/run/{job['id']}/downloads/{kind}")[0] == 403
