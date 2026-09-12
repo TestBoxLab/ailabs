@@ -10,6 +10,7 @@ from wb_orchestrator import config_repository as cr
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ACTOR = {"id": "person:carlos", "name": "carlos", "source": "person-key"}
 
 
 def files():
@@ -93,11 +94,11 @@ def test_atomic_save_preserves_old_snapshot_and_noop_has_no_commit(tmp_path):
     path = "config/models/gpt-5.6-sol.yaml"
     original = api.content[path]
     changed = original + "\n# Reviewed model configuration.\n"
-    result = r.save(old["commit"], [{"path": path, "text": changed}], "Review model", "Carlos")
+    result = r.save(old["commit"], [{"path": path, "text": changed}], "Review model", ACTOR)
     assert result["commit"] == "c" * 40
     assert (Path(old["directory"]) / path).read_text(encoding="utf-8") == original
     before = len(api.writes)
-    assert r.save(result["commit"], [{"path": path, "text": changed}], "No change", "Carlos")["commit"] == result["commit"]
+    assert r.save(result["commit"], [{"path": path, "text": changed}], "No change", ACTOR)["commit"] == result["commit"]
     assert len(api.writes) == before
 
 
@@ -105,14 +106,14 @@ def test_conflicting_save_never_forces_remote_ref(tmp_path):
     r, api = repo(tmp_path)
     api.race = True
     with pytest.raises(cr.Conflict):
-        r.save(api.head, [{"path": "config/README.md", "text": "Changed\n"}], "Edit docs", "Carlos")
+        r.save(api.head, [{"path": "config/models/gpt-5.6-sol.yaml", "text": api.content["config/models/gpt-5.6-sol.yaml"] + "\n# Changed\n"}], "Edit docs", ACTOR)
     assert api.head == "d" * 40
 
 
 def test_ambiguous_ref_write_is_confirmed_by_read_not_repeated(tmp_path):
     r, api = repo(tmp_path)
     api.ambiguous = True
-    result = r.save(api.head, [{"path": "config/README.md", "text": "Changed\n"}], "Edit docs", "Carlos")
+    result = r.save(api.head, [{"path": "config/models/gpt-5.6-sol.yaml", "text": api.content["config/models/gpt-5.6-sol.yaml"] + "\n# Changed\n"}], "Edit docs", ACTOR)
     assert result["commit"] == "c" * 40
     assert sum(path == "git/refs/heads/main" for _, path, _ in api.writes) == 1
 
@@ -121,16 +122,16 @@ def test_ambiguous_ref_write_is_confirmed_by_read_not_repeated(tmp_path):
 def test_unsafe_paths_rejected(path, tmp_path):
     r, api = repo(tmp_path)
     with pytest.raises(ValueError):
-        r.save(api.head, [{"path": path, "text": "bad"}], "Edit", "Carlos")
+        r.save(api.head, [{"path": path, "text": "bad"}], "Edit", ACTOR)
     assert not api.writes
 
 
 def test_invalid_yaml_and_missing_reference_do_not_write(tmp_path):
     r, api = repo(tmp_path)
     with pytest.raises(ValueError):
-        r.save(api.head, [{"path": "config/models/gpt-5.6-sol.yaml", "text": "name: ["}], "Invalid", "Carlos")
+        r.save(api.head, [{"path": "config/models/gpt-5.6-sol.yaml", "text": "name: ["}], "Invalid", ACTOR)
     with pytest.raises(ValueError):
-        r.save(api.head, [{"path": "config/harnesses/api.yaml", "text": None}], "Missing dependency", "Carlos")
+        r.save(api.head, [{"path": "config/harnesses/api.yaml", "text": None}], "Missing dependency", ACTOR)
     assert not api.writes
 
 
@@ -138,7 +139,7 @@ def test_editing_a_historical_invalid_plan_requires_fixing_its_references(tmp_pa
     r, api = repo(tmp_path)
     path = "config/plans/achievable-50-request.yaml"
     with pytest.raises(ValueError, match="missing harness"):
-        r.save(api.head, [{"path": path, "text": api.content[path] + "\n# edited\n"}], "Edit plan", "Carlos")
+        r.save(api.head, [{"path": path, "text": api.content[path] + "\n# edited\n"}], "Edit plan", ACTOR)
     assert not api.writes
 
 
@@ -160,14 +161,16 @@ def test_oversized_save_is_rejected_before_git_mutation(tmp_path, monkeypatch):
     r.snapshot()
     monkeypatch.setattr(cr, "MAX_TREE", sum(len(t.encode()) for t in api.content.values()) + 10)
     with pytest.raises(ValueError, match="large"):
-        r.save(api.head, [{"path": "config/README.md", "text": api.content["config/README.md"] + "x" * 100}], "Large edit", "Carlos")
+        r.save(api.head, [{"path": "config/models/gpt-5.6-sol.yaml", "text": api.content["config/models/gpt-5.6-sol.yaml"] + "\n# " + "x" * 100}], "Large edit", ACTOR)
     assert not api.writes
 
 
 def test_empty_tree_cannot_be_published(tmp_path):
     r, api = repo(tmp_path)
+    api.content = {"config/models/gpt-5.6-sol.yaml": api.content["config/models/gpt-5.6-sol.yaml"]}
+    api.commits[api.head] = dict(api.content)
     with pytest.raises(ValueError, match="empty"):
-        r.save(api.head, [{"path": p, "text": None} for p in api.content], "Delete everything", "Carlos")
+        r.save(api.head, [{"path": p, "text": None} for p in api.content], "Delete everything", ACTOR)
     assert not api.writes
 
 
@@ -212,7 +215,7 @@ def test_offline_snapshot_reads_exact_bytes_and_refuses_writes(offline_source):
     with pytest.raises(ValueError, match="read-only"):
         reader.validate(source["commit"], [])
     with pytest.raises(ValueError, match="read-only"):
-        reader.save(source["commit"], [], "Edit", "Carlos")
+        reader.save(source["commit"], [], "Edit", ACTOR)
     (Path(snapshot["directory"]) / "config/README.md").write_text("tampered")
     with pytest.raises(ValueError, match="changed"):
         reader.snapshot()

@@ -11,15 +11,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 11 September readable reports: Carlos approved the diagnostic format for Studio
 and exported HTML, plus separate authenticated logs and prompts downloads.
-Implemented and browser verified locally on `ailabs/report-template`; not yet
-deployed. Historical results and upstream inputs remain unchanged. Template and
+Implemented, deployed and browser verified on `ailabs/report-template`; Carlos
+rejected the configuration editor during acceptance. The revision moves typed
+YAML artifacts into Benchmarks, attributes commits to authenticated accounts,
+exposes retained Monarch provenance, and validates future discovery/model-family
+definitions with execution refusals. Carlos accepted the artifact segregation and
+authorized push/PR after editing was restored; hosted editing and history now
+pass browser checks. Merge remains pending. Historical results and upstream inputs remain unchanged. Template and
 verification: [report format](docs/REPORT-TEMPLATE.md),
-[feature 014](../specs/014-readable-reports/quickstart.md).
+[feature 014](../specs/014-readable-reports/quickstart.md),
+[artifact workspace revision](../specs/013-benchmark-config-repository/artifact-workspace/quickstart.md).
 
 11 September Studio controls: configured Pause and explicit Resume implemented,
-deployed and browser verified. Git configuration integration is deployed in
-read-only snapshot mode; PAT repository access remains blocked. Historical files
-and upstream inputs are unchanged. Evidence and remaining runtime prerequisite:
+deployed and browser verified. Git configuration editing and history are now
+active after removing only the obsolete snapshot selector. README, frozen files
+and upstream inputs are unchanged. [Git activation verification](docs/rounds/2026-09-11-studio-config-editing-restored.md). Earlier controls evidence:
 [deployment record](docs/rounds/2026-09-11-studio-run-controls.md).
 
 10 September continuation: shared harness instructions reconciled. Carlos's final

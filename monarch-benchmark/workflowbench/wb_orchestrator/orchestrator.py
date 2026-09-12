@@ -21,6 +21,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,7 +111,12 @@ def build_arm_for(competitor: config_mod.Competitor, run_config: "config_mod.Run
     table and the knowledge base). With a `ledger`, paid arms reserve through it:
     the API loop per request, Monarch per attempt (milestone M3).
     """
+    if run_config and run_config.plan.mode == "feature-discovery":
+        raise ConfigError(run_config.plan_path, "mode",
+                          "feature-discovery execution and evaluation are not implemented")
     h = competitor.harness
+    if h.kind == "monarch":
+        config_mod.require_model_routing(h, Path(run_config.config_dir if run_config else "config") / "harnesses" / f"{h.name}.yaml")
     if h.kind == "api":
         arm = ApiLoopArm(competitor.model.name, ledger=ledger, operator=operator,
                          provider=providers.from_model(competitor.model),
@@ -403,6 +409,13 @@ class Orchestrator:
 
     def _execute(self, run_id: str, skip: set[tuple[str, str, int]], arms: list | None = None) -> None:
         arms = arms if arms is not None else self._arms()
+        if self.run_config:
+            from wb_studio.monarch_provenance import capture
+            facts = capture(self.run_config, os.environ)
+            if facts:
+                segment_id = uuid.uuid4().hex
+                evidence.write_json(self._run_dir(run_id) / "monarch-provenance" / f"{segment_id}.json",
+                    {"id": segment_id, "started_at": datetime.now(timezone.utc).isoformat(), "monarch_provenance": facts})
         threads = []
         for arm in arms:
             work = self._pending_work(run_id, arm.name, skip)

@@ -11,15 +11,19 @@ const script = async () => {
   const assert = (value, message) => {if (!value) throw Error(message);};
   const wait = async () => {for(let i=0;i<100;i++){if(document.querySelector('#connection')?.dataset.status==='connected') return; await new Promise(r=>setTimeout(r,100));}throw Error('Fixture did not connect');};
   await wait();
-  assert(typeof window.loadBenchmarkConfig === 'function', 'Settings configuration editor is missing');
+  assert(document.getElementById('nav-benchmarks'), 'Benchmark artifacts need a separate navigation module');
+  assert(typeof window.loadBenchmarkConfig === 'function', 'Benchmark artifact editor is missing');
   const original = api, calls = [];
   let conflict = false, blocked = false, offline = false;
-  const catalog = {configured:true,writable:true,repository:'TestBoxLab/ailabls-benchmark-config',branch:'main',commit:'a'.repeat(40),history_url:'https://github.com/TestBoxLab/ailabls-benchmark-config/commits/main',files:[{path:'config/models/example.yaml',text:'name: example\nprice: 1\n'},{path:'config/plans/example.yaml',text:'name: example\nrepetitions: 1\n'},{path:'config/products/example.yaml',text:'name: example\n'}]};
-  for(const suffix of ['knowledge-map','monarch-kb','monarch-recipes'])catalog.files.push({path:'config/products/example.'+suffix+'.yaml',text:'fixture: supporting file\n'});
+  let historyOffline=false;
+  const types=[['model','models',['name','provider'],'name: __NAME__\nprovider: example\n'],['price-table','models',['name','kind'],'name: __NAME__\nkind: price-table\n'],['plan','plans',['name','repetitions'],'name: __NAME__\nrepetitions: 1\n'],['product','products',['name'],'name: __NAME__\n'],['harness-cli','harnesses',['name','kind','command'],'name: __NAME__\nkind: cli\ncommand: [example]\n'],['side-effects','products',['service','allowed'],'[]\n']].map(([id,group,required_fields,template])=>({id,group,required_fields,template,label:id,path_pattern:id==='side-effects'?'config/side-effects-{name}.yaml':'config/'+group+'/{name}.yaml'}));
+  const catalog = {configured:true,writable:true,repository:'TestBoxLab/ailabls-benchmark-config',branch:'main',commit:'a'.repeat(40),actor:{id:'basic:admin',name:'admin',source:'basic'},artifact_types:types,history_url:'https://github.com/TestBoxLab/ailabls-benchmark-config/commits/main',files:[{path:'config/models/example.yaml',text:'name: example\nprice: 1\n',artifact:{group:'models',kind:'model',editable:true}},{path:'config/plans/example.yaml',text:'name: example\nrepetitions: 1\n',artifact:{group:'plans',kind:'plan',editable:true}},{path:'config/products/example.yaml',text:'name: example\n',artifact:{group:'products',kind:'product',editable:true}},{path:'config/README.md',text:'Not editable'}]};
+  for(const suffix of ['knowledge-map','monarch-kb','monarch-recipes'])catalog.files.push({path:'config/products/example.'+suffix+'.yaml',text:'fixture: supporting file\n',artifact:{group:'products',kind:suffix,editable:false,reason:'Generated product evidence; update it with its generator.'}});
   api = async (path, body) => {
     if(!path.startsWith('/api/benchmark-config'))return original(path, body);
     calls.push({path,body});
     if(offline)throw Error('Fixture offline');
+    if(path.endsWith('/history')){if(historyOffline)throw Error('History unavailable');return {history:[{commit:'d'.repeat(40),author:'admin',committer:'GitHub integration',time:'2026-09-11T12:00:00Z',message:'Update fixture artifacts',url:'https://github.com/TestBoxLab/ailabls-benchmark-config/commit/'+'d'.repeat(40)}]};}
     if(path.endsWith('/validate'))return {valid:!body.changes.some(c=>c.text==='invalid'),errors:['config/models/example.yaml: invalid YAML'],warnings:['Historical plan refers to an unavailable task set'],diff:body.changes.map(c=>'--- '+c.path+'\n+++ '+c.path+'\n+'+c.text).join('\n')};
     if(path.endsWith('/save')){if(conflict){const e=Error('Main changed');e.status=409;throw e;}catalog.commit='b'.repeat(40);for(const c of body.changes){const f=catalog.files.find(f=>f.path===c.path);if(f)f.text=c.text;}return structuredClone(catalog);}
     if(path.endsWith('/preview'))return {preview_id:'preview-fixture',commit:catalog.commit,product:body.product,plan:body.plan,config_hash:'frozen-hash',tasks:1,competitors:['answer key'],attempts_min:1,attempts_max:2,cost_ceiling_usd:'6.00',launchable:!blocked,reasons:blocked?['Billing is not verified']:[]};
@@ -29,14 +33,31 @@ const script = async () => {
   const el = id => document.getElementById('bc-'+id);
   const input = (id,value) => {el(id).value=value;el(id).dispatchEvent(new Event('input',{bubbles:true}));};
   const click = async id => {el(id).click();await new Promise(r=>setTimeout(r,80));};
-  await document.getElementById('nav-runtime').onclick();await window.loadBenchmarkConfig();
-  assert(el('files').value==='config/models/example.yaml' && el('text').value.includes('price: 1'),'Initial file must be selected and loaded');
-  assert([...el('product').options].map(o=>o.value).join(',')==='example','Product options must exclude knowledge maps, knowledge bases and recipes');
-  assert(['knowledge-map','monarch-kb','monarch-recipes'].every(s=>[...el('files').options].some(o=>o.value==='config/products/example.'+s+'.yaml')),'Supporting files remain editable');
+  await document.getElementById('nav-benchmarks').onclick();
+  assert(typeof window.openBenchmarks==='function' && location.hash==='#benchmarks/plans','Benchmarks opens Plans by default');
+  assert(!document.getElementById('benchmarks-panel').classList.contains('hidden') && document.getElementById('runtime-panel').classList.contains('hidden'),'Editor belongs to Benchmarks, outside Settings');
+  assert(el('files').value==='config/plans/example.yaml','Plans group starts with plan artifacts');
+  assert([...document.querySelectorAll('[data-benchmark-group]')].map(n=>n.textContent.trim()).join(',')==='Harnesses,Models,Plans,Products','All four artifact groups have direct links');
+  assert(el('actor').textContent.includes('admin') && el('actor').textContent.includes('basic:admin'),'Authenticated account attribution must be visible');
+  assert(el('history-list').textContent.includes('admin') && el('history-list').textContent.includes('GitHub integration') && el('history-list').textContent.includes('d'.repeat(40)),'Show commit author, technical committer and immutable revision');
+  assert(el('operator').closest('.config-launch'),'Declared operator belongs only to the run preview');
+  assert([...el('product').options].map(o=>o.value).join(',')==='example','Product choices use product metadata');
+  await openBenchmarks('products');
+  assert(['knowledge-map','monarch-kb','monarch-recipes'].every(s=>[...el('files').options].some(o=>o.value==='config/products/example.'+s+'.yaml')),'Generated evidence remains inspectable');
+  el('files').value='config/products/example.monarch-kb.yaml';el('files').dispatchEvent(new Event('change'));
+  assert(el('text').readOnly && el('delete').disabled && el('help').textContent.includes('generator'),'Generated evidence must be read-only with an explanation');
+  assert(![...el('files').options].some(o=>o.value.endsWith('README.md')),'Only recognized artifacts appear');
+  await openBenchmarks('harnesses');assert(el('files').options.length===0 && el('text').readOnly,'Empty artifact groups remain usable');
+  assert(el('new-type').value==='harness-cli' && el('new-help').textContent.includes('command'),'Creation guidance comes from the server manifest');
+  document.querySelector('.config-create').open=true;
+  input('new-name','../arbitrary.md');await click('new');assert(el('files').options.length===0,'Names cannot create arbitrary repository paths');
+  input('new-name','review-cli');await click('new');assert(el('text').value.includes('name: review-cli') && el('text').value.includes('kind: cli'),'Typed creation uses the retained server template');await click('delete');
+  document.querySelector('[data-benchmark-group=models]').click();await new Promise(r=>setTimeout(r,20));assert(location.hash==='#benchmarks/models','Group links update the route');
+  assert(el('files').value==='config/models/example.yaml' && el('help').textContent.includes('provider'),'Existing files show their required fields');
   input('text','invalid');await click('validate');
   assert(el('save').disabled && el('validation').textContent.includes('invalid YAML'),'Invalid YAML must block save');
   input('text','name: example\nprice: 2\n');
-  el('files').value='config/plans/example.yaml';el('files').dispatchEvent(new Event('change'));
+  await openBenchmarks('plans');await openBenchmarks('models');assert(el('text').value.includes('price: 2'),'Returning to a group retains its edited draft');await openBenchmarks('plans');
   input('text','name: example\nrepetitions: 2\n');input('message','Update model and plan');input('operator','Carlos');
   await click('validate');assert(!el('save').disabled,'Valid multi-file draft should be saveable');
   conflict=true;await click('save');
@@ -44,16 +65,18 @@ const script = async () => {
   offline=true;await click('refresh');assert(el('text').value.includes('repetitions: 2'),'Network failure must retain draft');offline=false;
   conflict=false;await click('save');
   const saved=calls.filter(c=>c.path.endsWith('/save')).at(-1).body;
-  assert(saved.changes.length===2 && saved.changes.some(c=>c.path==='config/models/example.yaml') && saved.base_commit==='a'.repeat(40) && saved.operator==='Carlos','Atomic save must retain base and both files');
+  assert(saved.changes.length===2 && saved.changes.some(c=>c.path==='config/models/example.yaml') && saved.base_commit==='a'.repeat(40) && !('operator' in saved) && !('actor' in saved),'Atomic save retains base and files; author must come from authentication');
   assert(!calls.some(c=>c.path.endsWith('/run')),'Saving must never run');
-  input('new-path','config/models/new.yaml');await click('new');input('text','name: new\n');
-  el('files').value='config/products/example.yaml';el('files').dispatchEvent(new Event('change'));await click('delete');
+  await openBenchmarks('models');input('new-name','new');await click('new');input('text','name: new\n');
+  await openBenchmarks('products');el('files').value='config/products/example.yaml';el('files').dispatchEvent(new Event('change'));await click('delete');
   await click('validate');const changed=calls.filter(c=>c.path.endsWith('/validate')).at(-1).body.changes;
-  assert(changed.some(c=>c.path==='config/models/new.yaml'&&c.text==='name: new\n') && changed.some(c=>c.path==='config/products/example.yaml'&&c.text===null),'Draft must support creating and deleting files atomically');
+  assert(changed.some(c=>c.path==='config/models/new.yaml'&&c.text==='name: new\n') && changed.some(c=>c.path==='config/products/example.yaml'&&c.text===null),'Draft supports creating and deleting across groups atomically');
   assert(el('validation').textContent.includes('Historical plan') && el('validation').textContent.includes('Valid configuration'),'Warnings remain visible without claiming launch readiness');
-  await click('delete');el('files').value='config/models/new.yaml';el('files').dispatchEvent(new Event('change'));await click('delete');
+  historyOffline=true;await click('refresh');assert(el('history-list').textContent.includes('History unavailable') && el('dirty').textContent.includes('2 changed'),'History failure must retain drafts');historyOffline=false;
+  await click('delete');await openBenchmarks('models');el('files').value='config/models/new.yaml';el('files').dispatchEvent(new Event('change'));await click('delete');
   assert(el('dirty').textContent==='No unsaved changes.','Restore deletion and remove unsaved new file');
-  assert(el('files').value==='config/models/example.yaml','Removing new file must select a remaining file');
+  assert(el('files').value==='config/models/example.yaml','Removing new file selects a remaining artifact');
+  await openBenchmarks('plans');
   blocked=true;await click('preview');assert(el('run').disabled && el('preview-result').textContent.includes('Billing is not verified'),'Readiness refusal must block run');
   blocked=false;await click('preview');
   assert(calls.filter(c=>c.path.endsWith('/preview')).at(-1).body.operator==='Carlos','Preview must use the declared operator');
@@ -77,7 +100,11 @@ const script = async () => {
   }
   syncJob(sample);assert(!document.getElementById('pause-run').classList.contains('hidden'),'Ordinary Studio runs retain Pause');
   assert(!document.documentElement.scrollWidth || document.documentElement.scrollWidth<=innerWidth+1,'Editor must not overflow');
-  return 'PASS: Settings navigation, invalid YAML, warnings, create/delete, multi-file save, conflict/network draft retention, operator readiness, pinned explicit launch and configured controls';
+  await openBenchmarks('plans');
+  catalog.writable=false;await click('refresh');assert(el('text').readOnly && el('new').disabled && el('delete').disabled && el('save').disabled,'Read-only snapshots prohibit artifact mutations');
+  catalog.configured=false;await click('refresh');assert(el('editor').classList.contains('hidden') && el('status').textContent.includes('not configured'),'Unconfigured repository has an explicit empty state');
+  catalog.configured=true;catalog.writable=true;await click('refresh');document.querySelector('.config-create').open=false;document.querySelector('.config-history').open=true;
+  return 'PASS: Benchmarks groups, metadata guidance, read-only evidence, authenticated history, invalid YAML, warnings, create/delete, multi-file save, conflict/network draft retention, operator readiness, pinned explicit launch and configured controls';
 };
 // stdin avoids shell interpretation of the browser script on Windows.
 console.log(execFileSync(bin, ['--session','benchmark-config','eval','--stdin'], {input:`(${script.toString()})()`,encoding:'utf8'}));

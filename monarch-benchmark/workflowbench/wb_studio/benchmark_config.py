@@ -7,7 +7,7 @@ import threading
 import uuid
 
 from wb_orchestrator import approvals, config
-from wb_orchestrator.config_repository import Repository, RepositoryError, Conflict, validate_files
+from wb_orchestrator.config_repository import Repository, RepositoryError, Conflict, validate_files, artifact, artifact_types
 from wb_results.evidence import write_json
 from wb_results.store import Store
 
@@ -20,16 +20,29 @@ def repository(studio):
     return getattr(studio, "config_repository", None) or Repository.from_env(studio.directory / "config-revisions")
 
 
-def catalog(studio, snapshot=None):
+def catalog(studio, snapshot=None, actor=None):
     repo = repository(studio)
     if repo is None:
         return {"configured": False, "writable": False, "repository": None, "branch": "main", "commit": None,
-                "files": [], "history_url": None}
+                "files": [], "history_url": None, "actor": actor, "artifact_types": artifact_types()}
     snapshot = snapshot or repo.snapshot()
-    return {k: snapshot[k] for k in ("repository", "branch", "commit", "files")} | {
+    files = [{**f, "artifact": description} for f in snapshot["files"]
+             if (description := artifact(f["path"], f["text"])) is not None]
+    return {k: snapshot[k] for k in ("repository", "branch", "commit")} | {
+        "files": files, "actor": actor, "artifact_types": artifact_types(),
         "configured": True, "writable": bool(repo.token),
         "history_url": f"https://github.com/{repo.repository}/commits/main/config",
         "warnings": validate_files({f["path"]: f["text"] for f in snapshot["files"]})}
+
+
+def history(studio):
+    try:
+        repo = repository(studio)
+        if repo is None:
+            raise RepositoryError("The configuration repository is not configured")
+        return {"history": repo.history(), "error": None}
+    except (RepositoryError, ValueError) as exc:
+        return {"history": [], "error": str(exc)}
 
 
 def resolve(studio, payload):
@@ -152,7 +165,7 @@ def execute(studio, identity):
     return execute_controlled(studio, identity)
 
 
-def dispatch(studio, action, payload, person=None):
+def dispatch(studio, action, payload, person=None, actor=None):
     allowed, why = studio.genesis.access.may_write(person)
     if not allowed:
         raise PermissionError(why)
@@ -169,6 +182,8 @@ def dispatch(studio, action, payload, person=None):
         result = repo.validate(payload.get("base_commit"), payload.get("changes"))
         return {k: result[k] for k in ("valid", "errors", "warnings", "diff")}
     if action == "save":
+        if actor is None:
+            raise PermissionError("An authenticated person or Basic login is required to save configuration")
         return catalog(studio, repo.save(payload.get("base_commit"), payload.get("changes"),
-                                        payload.get("message"), payload.get("operator")))
+                                        payload.get("message"), actor), actor=actor)
     raise ValueError("Unknown configuration operation")

@@ -11,6 +11,7 @@ import copy
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -25,7 +26,9 @@ from wb_world.episode import (WORLD_PACKAGE, contract_hash, load_suite, recorded
 from wb_world.seeds import product_slug
 
 PRODUCT_KINDS = ("simulated", "real-api-ui", "real-api")
-MODES = ("full-flow", "create-run", "run-only")
+MODES = ("full-flow", "create-run", "run-only", "feature-discovery")
+MONARCH_MODEL_ROLES = ("brain", "writer", "selector", "critic", "triage", "reviewer",
+                       "storyteller", "advisory", "investigator", "engine_small", "engine_large")
 # Evaluation track (direction of 7 Sep 2026): a one-off agentic request, or workflow
 # creation plus execution. Results are never pooled across tracks.
 TRACKS = ("agentic-request", "create-run")
@@ -139,6 +142,7 @@ class Harness:
     monarch_repo: str | None = None
     modes: list[str] = field(default_factory=list)
     authoring_mode: str = "interactive"   # "unattended": the builder does not stop to ask
+    model_families: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,13 @@ class _Checker:
             self.fail(key, f"expected {_tname(types)}, got bool")
         if not isinstance(v, types):
             self.fail(key, f"expected {_tname(types)}, got {type(v).__name__}")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            try:
+                finite = math.isfinite(v)
+            except OverflowError:
+                finite = False
+            if not finite:
+                self.fail(key, "must be a finite number")
         if enum and v not in enum:
             self.fail(key, f"must be one of {', '.join(enum)}; got {v!r}")
         if minimum is not None and (v < minimum if not strict else v <= minimum):
@@ -229,11 +240,32 @@ def _tname(types):
     return "/".join(t.__name__ for t in (types if isinstance(types, tuple) else (types,)))
 
 
+class _UniqueLoader(yaml.SafeLoader):
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key, _ in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                continue
+            value = self.construct_object(key, deep=deep)
+            try:
+                if value in seen:
+                    raise yaml.constructor.ConstructorError(None, None, f"duplicate key {value!r}", key.start_mark)
+                seen.add(value)
+            except TypeError:
+                raise yaml.constructor.ConstructorError(None, None, "unhashable mapping key", key.start_mark) from None
+        return super().construct_mapping(node, deep=deep)
+
+
+def load_yaml(text):
+    """Safe YAML with duplicate keys refused, shared by CLI and artifact editing."""
+    return yaml.load(text, Loader=_UniqueLoader)
+
+
 def _read(path, kind, name_key: str | None = "name"):
     """Parse a mapping file into a _Checker; `name_key=None` skips the name-equals-stem rule."""
     path = Path(path)
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = load_yaml(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as e:
         raise ConfigError(path, "<root>", f"cannot read {kind}: {e}") from e
     if not isinstance(data, dict):
@@ -268,7 +300,7 @@ def load_side_effects(path: str | Path) -> SideEffects:
     """Read a side-effect file (research.md R7; data-model.md Side effects) into (service, when, matchers) tuples."""
     path = Path(path)
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = load_yaml(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as e:
         raise ConfigError(path, "<root>", f"cannot read side effects: {e}") from e
     if not isinstance(data, list):
@@ -310,9 +342,9 @@ def _prices(c, key="usd_per_million", cache_write_required=False) -> Prices:
     p.keys(("input", "cached", "output", *(("cache_write",) if cache_write_required else ())),
            () if cache_write_required else ("cache_write",))
     num = (int, float)
-    return Prices(input=float(p.get("input", num)), cached=float(p.get("cached", num)),
-                  output=float(p.get("output", num)),
-                  cache_write=float(p.get("cache_write", num, default=p.get("input", num))))
+    return Prices(input=float(p.get("input", num, minimum=0)), cached=float(p.get("cached", num, minimum=0)),
+                  output=float(p.get("output", num, minimum=0)),
+                  cache_write=float(p.get("cache_write", num, minimum=0, default=p.get("input", num))))
 
 
 def load_model(path) -> Model:
@@ -347,14 +379,14 @@ _HARNESS_KEYS = {
     "monarch": (("base_url", "credential_env", "login_email", "login_password_env", "fd_url",
                  "shim_port", "langfuse_url", "langfuse_public_key_env", "langfuse_secret_key_env",
                  "price_table", "monarch_repo", "modes"),
-                ("shim_public_host", "shim_public_url", "fd_api_key_env", "authoring_mode")),
+                ("shim_public_host", "shim_public_url", "fd_api_key_env", "authoring_mode", "model_families")),
 }
 
 
 def is_price_table(path) -> bool:
     """True for a `kind: price-table` file; they share the models/ folder but are not competitors."""
     try:
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        data = load_yaml(Path(path).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return False
     return isinstance(data, dict) and data.get("kind") == "price-table"
@@ -406,6 +438,12 @@ def load_harness(path) -> Harness:
     for k, v in env.items():
         if not isinstance(k, str) or not isinstance(v, str):
             c.fail(f"env.{k}", "env keys and values must be strings")
+    families = c.get("model_families", dict, default={})
+    for role, family in families.items():
+        if role not in MONARCH_MODEL_ROLES:
+            c.fail(f"model_families.{role}", f"unknown role; allowed: {', '.join(MONARCH_MODEL_ROLES)}")
+        if not isinstance(family, str) or not family.strip() or family != family.strip():
+            c.fail(f"model_families.{role}", "expected a nonempty family name without surrounding whitespace")
     return Harness(
         name=c.data["name"],
         kind=kind,
@@ -434,7 +472,20 @@ def load_harness(path) -> Harness:
         modes=c.str_list("modes", enum=MODES, default=[]),
         authoring_mode=c.get("authoring_mode", str, default=Harness.authoring_mode,
                              enum=AUTHORING_MODES),
+        model_families=families,
     )
+
+
+def validate_model_families(harness, table, path):
+    known_families = {entry.family for entry in table.models}
+    for role, family in harness.model_families.items():
+        if family not in known_families:
+            raise ConfigError(path, f"model_families.{role}", f"unknown model family {family!r} in price table {table.name!r}")
+
+
+def require_model_routing(harness, path):
+    if harness.model_families:
+        raise ConfigError(path, "model_families", "Monarch model-family routing and verification are not implemented; declarations cannot execute")
 
 
 def load_plan(path) -> Plan:
@@ -605,6 +656,8 @@ def _hashed_harness(h: Harness) -> dict:
         # ponytail: the default is dropped so runs frozen before this key stay
         # regradable; only asking for the unattended builder moves the hash.
         del d["authoring_mode"]
+    if not d.get("model_families"):
+        d.pop("model_families", None)
     return d
 
 
@@ -752,6 +805,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
 
     if plan.mode not in product.modes:
         c.fail("mode", f"{plan.mode!r} is not in the modes of {product_path}: {', '.join(product.modes)}")
+    if plan.mode == "feature-discovery":
+        c.fail("mode", "feature-discovery definitions are supported; execution and evaluation are not implemented")
     if plan.audience not in audiences:
         c.fail("audience", f"unknown audience {plan.audience!r}; known: {', '.join(audiences)}")
 
@@ -765,6 +820,10 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
             c.fail(f"competitors[{i}].harness",
                    f"unknown harness {spec.harness!r}; known: {known(hpath.parent)}")
         h = harnesses.get(spec.harness) or load_harness(hpath)
+        if h.kind == "monarch" and h.model_families:
+            table = load_price_table(config_dir / "models" / f"{h.price_table}.yaml")
+            validate_model_families(h, table, hpath)
+            require_model_routing(h, hpath)
         model = None
         if spec.model is None:
             if h.accepts != "none":
