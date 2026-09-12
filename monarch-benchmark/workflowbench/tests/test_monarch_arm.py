@@ -227,7 +227,7 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
              "shim_public_url": f"http://127.0.0.1:{port}", "kb": kb_hashes}))
         rc = config.resolve(site / "config/products/simulated-apps.yaml",
                             site / "config/plans/smoke-frontier.yaml",
-                            env={**MONARCH_ENV}, audiences={"internal": ["*"]})
+                            env={**MONARCH_ENV})
         store = Store(tmp_path / "wb.sqlite3")
         orch = Orchestrator.from_config(store, rc, tmp_path / "out")
         # One story per attempt: the workflow Monarch is pretended to have
@@ -253,7 +253,7 @@ def test_pilot_plan_offline(tmp_path, repo, monkeypatch):
     assert all("snapshot1" in store.artifacts(r["episode_id"]) for r in mon)
     assert sum(r["passed"] for r in mon) == 20
 
-    md = render_md(build_report(store, run_id, audience="internal"))
+    md = render_md(build_report(store, run_id))
     assert "oracle" in md and mon[0]["arm"] in md
     cfg = json.loads(store.run(run_id)["config_json"])
     assert len(cfg["monarch_kb"]["kb"]) == 47
@@ -673,7 +673,7 @@ def test_a_timed_out_row_keeps_its_spend(site, repo, tmp_path, monkeypatch):
         one_task = site / "tasks" / "simple.email_sf_contact_city_update.json"
         rc = config.resolve(site / "config/products/simulated-apps.yaml",
                             site / "config/plans/smoke-frontier.yaml",
-                            env=env, audiences={"internal": ["*"]})
+                            env=env)
         rc.tasks = [t for t in rc.tasks if t["task"] == one_task.stem]
         store = Store(tmp_path / "wb.sqlite3")
         orch = Orchestrator.from_config(store, rc, tmp_path / "out")

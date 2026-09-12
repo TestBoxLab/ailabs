@@ -19,6 +19,9 @@ REPOSITORY = "TestBoxLab/ailabls-benchmark-config"
 MAX_FILE = 1_048_576
 MAX_TREE = 8_388_608
 SHA = re.compile(r"[0-9a-f]{40}")
+# Feature 026 gave each external product its own reviewed side-effect list beside
+# the original one: `side-effects.appworld.yaml`, `side-effects-tau2-retail.yaml`.
+SIDE_EFFECTS = re.compile(r"side-effects([.-][A-Za-z0-9_-]+)*\.yaml")
 
 
 class RepositoryError(ValueError):
@@ -35,8 +38,10 @@ def safe_path(value):
     path = PurePosixPath(value)
     if any(p in (".", "..") for p in value.split("/")) or str(path) != value:
         raise ValueError("Config paths cannot escape their directory")
-    allowed = (len(path.parts) == 3 and path.parts[1] in ("models", "harnesses", "plans", "products")
-               and path.suffix == ".yaml") or value in ("config/README.md", "config/side-effects.yaml")
+    allowed = ((len(path.parts) == 3 and path.parts[1] in ("models", "harnesses", "plans", "products")
+                and path.suffix == ".yaml")
+               or value == "config/README.md"
+               or (len(path.parts) == 2 and SIDE_EFFECTS.fullmatch(path.name)))
     if not allowed:
         raise ValueError("Unsupported config file path")
     return value

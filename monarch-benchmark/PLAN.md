@@ -28,8 +28,22 @@ pricing. A successor price configuration and approver defaults are verified
 offline; the original result and unknown-cost holds remain intact. Full-suite
 and focused follow-up outcomes are recorded in that same section.
 
+
+11 September Genesis voice continuation: [~] local GPT-Live-1 WebRTC connection,
+server delegation, shared conversation/workspace context, cancellation and voice
+controls implemented. Offline evidence and remaining scope are recorded in
+[feature 025](../specs/025-genesis-voice-live-build/implementation-2026-09-11.md).
+[!] Live audio validation awaits existing billing reconciliation; no paid session,
+push or deployment was performed. The complete feature remains in progress.
+
 ---
 
+11 September Genesis orb: [x] the global voice strip is replaced locally by a
+floating animated sphere and measured audio/recorded action graphs. Lucas removed
+visible captions, toolbar and cost copy. Sixteen offline browser scenarios and nine
+CSP checks pass; desktop/mobile light and dark captures reviewed. Both final review
+fixes resolved. No live audio session, push or deployment in this slice. Component
+record: [orb design](../specs/025-genesis-voice-live-build/orb-design.md).
 ## 1. Test methodology
 
 The methodology is the constant. Three things vary and plug into it: the **target platform**,
@@ -38,7 +52,7 @@ the **test mode** (how much of Monarch is under test), and the **competitors**.
 ```
 trigger ──▶ run(config) ──▶ for each (task, competitor, trial):
                               prepare target ▶ snapshot before ▶ competitor works ▶ snapshot after ▶ check ▶ record
-                           ──▶ statistics ──▶ report(audience) ──▶ publish (Slack, Langfuse)
+                           ──▶ statistics ──▶ report ──▶ publish (Slack, Langfuse)
 ```
 
 ### 1.1 Fixed rules
@@ -57,7 +71,10 @@ trigger ──▶ run(config) ──▶ for each (task, competitor, trial):
 8. **Every figure carries its source** (task set · version · count · competitor · run). No hand-typed numbers.
 9. **Cost is complete.** Tokens split cached / not cached; dollars from a versioned price table;
    for Monarch, the sum over its whole model team. Wall-clock per stage.
-10. **Audience rules are code.** `audiences.yaml` decides which competitors may appear in a report.
+10. **One report.** Every competitor that ran appears in it and every reader sees the same page.
+    (Superseded rule, 11 Sep 2026: `audiences.yaml` decided which competitors may appear.
+    Retired by Lucas; a lab build is displayed like any other and the interface refuses to
+    export or print a report carrying one.)
 11. **Config hash per run.** Resume skips finished work and refuses if the config changed. Retries only on `infra:*`.
 12. **API-key billing only** for vendor competitors. Pinned versions. Non-default flags recorded in the row.
 
@@ -127,7 +144,7 @@ From 2 Sep 2026 competitor names in results are `model/harness` or the harness n
 wb doctor                                     # every provider reachable, cache hit proven
 wb corpus validate <task set>                 # tasks are frozen and non-empty
 wb run --product simulated-apps --plan <plan>  # resumable
-wb report <run_id> --audience internal --baseline claude-opus-4-8/api
+wb report <run_id> --baseline claude-opus-4-8/api
 post summary to Slack #benchmarks; link Langfuse traces
 ```
 
@@ -184,7 +201,7 @@ post summary to Slack #benchmarks; link Langfuse traces
 
 - [ ] G1 One module for every figure of the page (`wb_report/metrics.py`), calling `wb_stats` rather than reimplementing it, so the page and the markdown report can never disagree. → feature 006 (`specs/006-html-report/`)
 - [ ] G2 The per-round page: metrics, comparison against the baseline with a plain-words verdict, task matrix, failures, provenance; real tables, standard library, no chart. → **D14**
-- [ ] G3 The audience gate proved across all four tables: the renderer receives a dictionary and cannot query the results store. → feature 006
+- [ ] G3 The renderer receives a dictionary and cannot query the results store, proved across all four tables. → feature 006
 - [ ] G4 `wb summary --runs | --plans`: two to six rounds on one page, a mean per competitor across rounds, the random draw beside the mean of the three tiers. Paired figures stay per round on identical sets, never pooled. → **D14**
 - [ ] G5 Slack post rendered from the page. → WS-D, D11 (not feature 006)
 
@@ -276,6 +293,7 @@ Import of the 5,427 old results · real tenant pool · computer-use competitors 
 | 4 Sep 2026 | Report pages are built with the standard library, no templating engine, CSS framework or chart library, and open from disk with no network. | Carlos |
 | 4 Sep 2026 | Across rounds, the aggregate is a mean of per-round rates; paired comparisons are never pooled across different task sets. | Carlos |
 | 9 Sep 2026 | Studio reports render for the public audience by default; the internal view is a filter with a visible mark, never a different report. | Lucas |
+| 11 Sep 2026 | There is one report, with no internal/public division, in the Studio and in `wb report` alike: `audiences.yaml`, the gate, `Plan.audience` and `--audience` are retired. A lab build is displayed like any other competitor; the interface refuses to export or print a report that carries one ("display yes, export no"). | Lucas |
 | 9 Sep 2026 | The narrative of a finished run is written automatically, reserved in the weekly ledger before the request and settled from the receipt, US$ 0.50 per run unless the plan says otherwise; no manual "Analyse" button. Every number in a report comes from code; the model fills prose slots only, and a claim without evidence renders as Unknown. | Lucas |
 | 9 Sep 2026 | The Studio's design system is composed, not adopted: Radix Colors (sage, green accent), IBM Plex, Lucide, Tufte-style report layer; square geometry; green means better than Bare and red worse; model families get hues that are neither green nor red. | Lucas |
 | 9 Sep 2026 | The weekly budget is a chip in the Studio's top bar, always visible; Budget leaves the main navigation. | Lucas |
@@ -325,9 +343,8 @@ or the offline implementation; all three are Monarch-side improvements, not bloc
   leaves the engine working and the next attempt waits it out (bounded, 60 s). A cancel route would
   replace the wait. Owner: Deyton.
 
-Note: Monarch attempts are named `monarch@<version>`; `wb_report/audiences.yaml`'s `public-rung2`
-today allows only the exact name `monarch`. A public report with the real Monarch competitor needs a
-`monarch@*` pattern (or equivalent) added there before publication.
+Note: Monarch attempts are named `monarch@<version>`. The audience allowlist that once had to name
+them is retired (11 Sep 2026), so no pattern needs adding before publication.
 
 **Feature 005 open questions** (`specs/005-task-tiers/spec.md`; only the first blocks committing the drawn task sets; none blocks the code or its tests):
 
@@ -338,6 +355,82 @@ today allows only the exact name `monarch`. A public report with the real Monarc
 **Feature 006 open questions** (`specs/006-html-report/spec.md`; none blocks the work):
 
 - Should the median wall-clock exclude attempts with no phase timing, or show `n/a` for the whole column? Proposed: exclude, stating how many attempts contributed. Also: the phase sum omits queueing and snapshot time; a separate column from `started_at`/`finished_at` would show real elapsed time. (Carlos)
-- Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>-<audience>.html`. (Carlos)
+- Where is the summary page filed when `--out` is omitted? Proposed `out/summary-<date>.html`. (Carlos)
 - Are sortable columns worth their twelve lines of inline JavaScript, or should the page be pure markup? Proposed: keep them, with `--no-sort` to drop them. (Carlos)
 - Monarch's cost per model comes from the per-family breakdown the competitor writes to `turns.jsonl` (`{"cost": ...}`), not from phase keys; the report reads it from there. (Carlos)
+
+## Decision D10 — Monarch phase telemetry, satisfied 11 September 2026
+
+D10 asked for per-phase telemetry from Monarch so a round could say what authoring
+cost against what execution cost. It is satisfied, and mostly was already: the
+contract's span table in `wb_arms/langfuse_cost.py` maps `recipe.*` spans to
+`authoring`, `engine.*` to `execution` and `discovery.run` to `discovery`, and
+`CostSummary.by_phase` has carried the split since feature 002. The Monarch arm has
+written it onto `EpisodeRow.phases`, with a wall clock per phase, since the same
+feature.
+
+What was missing was a reader, and feature 024 supplied it. The Studio's result row
+dropped the phase block entirely, so no measure or report could see it; `measures`
+now exposes `cost_by_phase`, `time_by_phase`, `per_execution` and `curve`, and the
+round report opens with the break-even point they compute.
+
+Two facts worth keeping with the decision, because both were defects found in
+satisfying it:
+
+- Anything the named phases do not claim is reported as `unattributed`, not dropped.
+  The arm pre-creates only `authoring` and `execution`, so discovery spend genuinely
+  falls outside them.
+- An unpriced phase stays unknown and never becomes zero. An attempt whose cost
+  cannot be read holds its whole ceiling against the week instead of settling, so a
+  zero tells a reader the round was cheap while the ledger is still holding the money.
+
+Frente C is closed for the simulated product. Nothing here changes §1.
+
+
+## 11 September 2026 — Genesis report authoring (feature 027)
+
+Lucas requested a concise decision-focused opening with full analysis, stronger
+explanations of Monarch's winning/losing behavior, explicit error buckets and
+percentage slices. Genesis now owns a local report workflow: complete analysis
+in bounded native subagent turns, authored synthesis, separate review, one repair
+and re-review, then internal Studio publication. Role tools, source coverage,
+exact review hashes, spending admission and interrupted-work recovery are enforced.
+Code supplies chart counts/denominators and exact attempt drilldowns; writing
+procedures adapt Humanizer and statistical-reporting guidance.
+
+Local validation: 176 focused offline checks passed, including a 106-attempt
+native-loop fixture with provider doubles; run/round browser checks passed at
+desktop/narrow widths and both themes. Live model writing quality and completion
+cost remain unmeasured. The existing automatic ceiling is unchanged; insufficient
+startup allocations are refused before spending. No deployment or paid model
+call was made for this implementation. Evidence: specs/027-genesis-report-authoring/validation.md.
+
+
+## 11 September 2026 — Live workflows and performance (feature 028)
+
+Lucas requested streamed node workflows, visible outputs and stronger per-model
+metrics, then an Impeccable UI/UX review and polish. Activity now has persistent
+model lanes, structured previews, finite delivery animation, active-task navigation
+and inspectable evidence. Shared live/permanent metrics cover successful and failed
+completion time, median/p90, cost per success, reliability, tool activity, phase
+timing and unintended-change coverage. Unknowns remain explicit.
+
+Impeccable independent reviews informed a workflow-first responsive layout,
+44px main controls, clearer preview labels, status announcements and stable focus.
+87 focused Python checks, projection checks and the full offline browser scenario
+passed. Desktop, phone and dark screenshots were inspected. No paid execution,
+deployment, frozen task change or historical regrading occurred. Evidence and
+limits: specs/028-live-workflow-metrics/implementation.md.
+
+
+### September 11: Genesis partner and mission hosting
+
+Feature 029 now defaults Genesis conversation and reading to GPT-6 Astra medium, with durable bounded missions, clarification resume/stop protection, visible worker updates and recorded voice progress. Focused shared-workspace checks: 614 passed; mission browser 4 scenarios, voice browser 13. Hosted release `6320318b-a1d4-4c5b-ae07-8cabe86ede5d` reached SUCCESS; authenticated browser confirms Astra medium without page errors. Current-week billing verification blocks voice/live paid acceptance; Cards/Runs remain off, source checkout access is absent, and no 50-task comparison has run. Evidence: `specs/029-genesis-research-missions/implementation-2026-09-11.md` and `hosted-verification.json` at the repository root.
+
+### September 11: Genesis live stage (feature 030)
+
+Implemented local animated work stages, seven ASCII scenes, typed reusable presentation cards, recorded tool drilldown, guided route transitions and persistent off-page results. Added architecture/history audit and Product Graph Fast Path proposal; no performance win is claimed. Focused checks: 73 passed, mission browser 4 and voice browser 17; 1440/390 presentation replay and actual draft/editor operation replay passed. No paid run or deployment. Evidence: `specs/030-genesis-live-stage/implementation.md`.
+
+Feature 030 visual correction: Lucas requested Matrix-like, 3D ASCII. Replaced flat scenes with projected shaded geometry, code rain and a black/phosphor display. Seven scene captures and desktop/mobile stage/editor checks passed; animated preview retained with feature evidence. No benchmark execution or deployment.
+
+Feature 030 compact refinement: Lucas requested closer alignment with Studio and less screen space. Restored theme-aware paper/ink styling while retaining projected 3D ASCII. Work details and activity start collapsed; the companion is 320px wide with a 48px launcher and a 352px reserved desktop column. Desktop/mobile presentation and guided-editor checks passed; nine static policy checks passed. Local implementation only; no paid execution or deployment.

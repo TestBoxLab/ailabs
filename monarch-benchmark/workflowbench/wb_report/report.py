@@ -3,15 +3,11 @@ hand-entered numbers. Every figure carries value ± SEM, W/L where paired,
 its source line {suite, suite_version, denominator, arm, run_id}, and the
 contract hashes it covers.
 
-The gate is code: audiences.yaml maps audience -> arm allowlist; a disallowed
-arm in the input raises GateError, never warns. The public-rung2 audience
-strips everything but `monarch` at query level (arms are filtered before any
-stat is computed, not by editing rendered output) and swaps exact dollars for
-cost ratios (DESIGN descope: no external cost-per-workflow dollars).
+There is one report. Every competitor that ran appears in it, with its exact
+cost, and every reader sees the same page.
 """
 from __future__ import annotations
 
-import fnmatch
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -23,51 +19,11 @@ from wb_report.metrics import (NOT_APPLICABLE_REASON, comparison,
 from wb_results.store import Store
 from wb_results.evidence import EvidenceIntegrityError, verify_manifest
 from wb_results.regrade_evidence import validate_current
-from wb_stats.stats import _is_infra, arm_summary, paired_wl, pass_hat_k
+from wb_stats.stats import _is_infra, _is_ungraded, arm_summary, paired_wl, pass_hat_k
 from wb_stats.stats import sem as stats_sem
-
-_AUDIENCES_FILE = Path(__file__).parent / "audiences.yaml"
-
 
 class GateError(Exception):
     pass
-
-
-def load_audiences(path: str | Path = _AUDIENCES_FILE) -> dict[str, list[str]]:
-    """Parse the trivial `audience:\n  - pattern` YAML subset (stdlib only)."""
-    audiences: dict[str, list[str]] = {}
-    current: str | None = None
-    for raw in Path(path).read_text().splitlines():
-        line = raw.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if not line.startswith(" ") and line.endswith(":"):
-            current = line[:-1].strip()
-            audiences[current] = []
-        elif line.strip().startswith("- ") and current:
-            audiences[current].append(line.strip()[2:].strip().strip('"').strip("'"))
-        else:
-            raise ValueError(f"unparseable audiences.yaml line: {raw!r}")
-    return audiences
-
-
-def is_lab(name: str) -> bool:
-    """Lab competitors are watermarked in internal and never rendered elsewhere."""
-    return name.startswith("monarch-lab")
-
-
-def _allowed(arm: str, allowlist: list[str]) -> bool:
-    return any(fnmatch.fnmatchcase(arm, pat) for pat in allowlist)
-
-
-def gate_arms(arms: list[str], audience: str,
-              audiences: dict[str, list[str]] | None = None) -> list[str]:
-    audiences = audiences or load_audiences()
-    if audience not in audiences:
-        raise GateError(f"unknown audience {audience!r}; known: {sorted(audiences)}")
-    allowlist = audiences[audience]
-    kept = [a for a in arms if _allowed(a, allowlist)]
-    return kept
 
 
 # Tier names in difficulty order, so the matrix reads easy to hard. A tier this
@@ -86,13 +42,15 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
     """One task-and-competitor cell of the matrix (contracts section 3).
     Infrastructure attempts are named and excluded from the denominator, so
     `0/0 (infra 2)` is a legitimate cell, not a bug."""
-    ok = [r for r in rows if not _is_infra(r)]
+    ok = [r for r in rows if not _is_infra(r) and not _is_ungraded(r)]
     failing = [r for r in sorted(rows, key=lambda r: r["trial"]) if not r["passed"]]
     category, detail, trial = "passed", None, None
     if failing:
         first = failing[0]
         trial = first["trial"]      # which repetition the reason was taken from
-        if _is_infra(first):
+        if _is_ungraded(first):
+            category, detail = "ungraded", first.get("error")
+        elif _is_infra(first):
             category, detail = "infra", first.get("termination")
         elif first.get("unexpected_changes"):
             category = "unexpected change"
@@ -111,7 +69,9 @@ def _cell(rows: list[dict]) -> dict[str, Any]:
     on_retry = bool(ordered) and not ordered[0]["passed"] and any(
         r["passed"] for r in ordered[1:])
     return {"passed": sum(1 for r in ok if r["passed"]), "attempted": len(ok),
-            "infra": len(rows) - len(ok), "category": category, "detail": detail,
+            "infra": sum(_is_infra(r) for r in rows),
+            **({"ungraded": sum(_is_ungraded(r) for r in rows)} if any(_is_ungraded(r) for r in rows) else {}),
+            "category": category, "detail": detail,
             "trial": trial, "on_retry": on_retry}
 
 
@@ -150,10 +110,9 @@ def _build_failures(arms: list[str], per_arm_rows: dict[str, list[dict]]) -> lis
     return failures
 
 
-def _build_provenance(run: dict, config: dict, audience: str, stripped: list[str],
+def _build_provenance(run: dict, config: dict,
                       per_arm_rows: dict[str, list[dict]]) -> dict[str, Any]:
-    """Contracts section 5. A non-internal audience gets the count of withheld
-    competitors, never their names: their existence is internal (FR-023)."""
+    """Contracts section 5."""
     monarch_rows = [r for arm, rows in per_arm_rows.items() if arm.startswith("monarch")
                     for r in rows]
     missing_cost = None
@@ -173,35 +132,22 @@ def _build_provenance(run: dict, config: dict, audience: str, stripped: list[str
                                for rows in per_arm_rows.values() for r in rows
                                if r.get("contract_sha256")}),
         "started": run.get("started"), "finished": run.get("finished"),
-        "stop_reason": run.get("stop_reason"), "audience": audience,
-        "withheld": stripped if audience == "internal" else len(stripped),
+        "stop_reason": run.get("stop_reason"),
     }
 
 
-def build_report(store: Store, run_id: str, audience: str = "internal",
-                 baseline_arm: str | None = None, k: int | None = None,
-                 audiences_path: str | Path = _AUDIENCES_FILE) -> dict[str, Any]:
-    audiences = load_audiences(audiences_path)
-    if audience not in audiences:
-        raise GateError(f"unknown audience {audience!r}; known: {sorted(audiences)}")
-    allowlist = audiences[audience]
-
+def build_report(store: Store, run_id: str, baseline_arm: str | None = None,
+                 k: int | None = None) -> dict[str, Any]:
     run = store.run(run_id)
     if run is None:
         raise KeyError(f"unknown run {run_id!r}")
     config = json.loads(run["config_json"])
-    all_arms = sorted(store.episodes(run=run_id)["source"]["arm"] or [])
-    arms = [a for a in all_arms if _allowed(a, allowlist)]
-    stripped = [a for a in all_arms if a not in arms]
-    if not arms:
-        raise GateError(
-            f"audience {audience!r} allows none of the run's arms {all_arms}; "
-            "nothing to render")
-    if audience != "internal" and any(is_lab(a) for a in arms):
-        raise GateError("monarch-lab* may never render outside the internal audience")
+    from wb_world.source import comparison_notes, product_of
+    product = product_of(config)
+    plan = config.get("plan") if isinstance(config.get("plan"), dict) else {}
+    arms = sorted(store.episodes(run=run_id)["source"]["arm"] or [])
 
     k = k or config.get("k") or 1
-    show_dollars = audience == "internal"
     figures: list[dict[str, Any]] = []
     per_arm_rows: dict[str, list[dict]] = {}
     grading_evidence: dict[str, dict] = {}
@@ -218,8 +164,15 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                 selected = validate_current(row, artifacts)
             except EvidenceIntegrityError as error:
                 raise GateError(f"invalid grading evidence for episode {row['episode_id']}: {error}") from error
-            grading_evidence[row["episode_id"]] = selected if audience == "internal" else {
-                key: value for key, value in selected.items() if key in ("kind", "revision_id", "sha256")}
+            if product.get("source") and selected.get("uri"):
+                stored = json.loads(Path(selected["uri"]).read_text(encoding="utf-8"))
+                grading = stored.get("grading", stored) if selected["kind"] == "regrade" else stored
+                selected = {**selected, "task_id": row["task_id"], "arm": arm,
+                            "termination": row["termination"], "passed": row["passed"],
+                            "details": {key: grading.get(key) for key in (
+                                "assertions_passed", "positive_source", "positive", "invariant",
+                                "source_collateral", "disagreement", "ungraded", "error")}}
+            grading_evidence[row["episode_id"]] = selected
         suites = {r["suite"] for r in res["rows"]}
         if len(suites) > 1 or (suites and suites != {run["suite"]}):
             # Legacy rows live beside new rows in one store but never pool
@@ -244,14 +197,12 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
         }
         if not_applicable:
             fig["not_applicable"] = NOT_APPLICABLE_REASON
-        if show_dollars:
-            fig["cost_usd"] = summ["cost_usd"]
-            fig["cost_per_episode"] = summ["cost_per_episode"]
+        fig["cost_usd"] = summ["cost_usd"]
+        fig["cost_per_episode"] = summ["cost_per_episode"]
         figures.append(fig)
 
     baseline = baseline_arm if baseline_arm in arms else (arms[0] if len(arms) > 1 else None)
     if baseline:
-        base_cost = sum(r.get("cost_usd") or 0.0 for r in per_arm_rows[baseline])
         for arm in arms:
             if arm == baseline:
                 continue
@@ -264,13 +215,11 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                    "wins": wl["wins"], "losses": wl["losses"],
                    "both_pass": wl["both_pass"], "neither_pass": wl["neither_pass"],
                    "dropped_infra": wl["dropped_infra"],
+                   "dropped_ungraded": wl["dropped_ungraded"],
                    "mcnemar": wl["mcnemar"],
                    "source": {"suite": run["suite"], "suite_version": run["suite"].split("@")[-1],
                               "denominator": wl["pairs"], "arm": [arm, baseline],
                               "run_id": run_id}}
-            if not show_dollars and base_cost:
-                arm_cost = sum(r.get("cost_usd") or 0.0 for r in per_arm_rows[arm])
-                fig["cost_ratio_vs_baseline"] = round(arm_cost / base_cost, 3)
             figures.append(fig)
 
     metrics = [competitor_metrics(per_arm_rows[arm], k) for arm in arms]
@@ -289,6 +238,13 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                      "total": sum(len(per_arm_rows[a]) for a in arms)},
             "metrics": metrics, "comparisons": comparisons,
             "grading_evidence": grading_evidence,
+            "product": product, "caveats": comparison_notes(product) + (
+                ["This round evaluates one-off business requests. Monarch creates and executes a workflow internally; "
+                 "the native agent fulfills the same request. Workflow reuse is not measured."]
+                if product.get("source") and config.get("track", plan.get("track")) == "agentic-request" else []) + (
+                ["This two-task smoke checks integration and grading. It does not estimate general performance "
+                 "or isolate the effect of Monarch's architecture from its models and harness."]
+                if product.get("source") and len(tasks) <= 2 else []),
             "totals": round_totals(metrics),
             # one entry per Monarch attempt, per Monarch competitor; empty when
             # none ran, and the page omits the section entirely
@@ -296,9 +252,9 @@ def build_report(store: Store, run_id: str, audience: str = "internal",
                                  for arm in arms if is_monarch(arm)},
             "matrix": _build_matrix(arms, per_arm_rows, config.get("task_info") or {}),
             "failures": _build_failures(arms, per_arm_rows),
-            "provenance": _build_provenance(run, config, audience, stripped, per_arm_rows),
+            "provenance": _build_provenance(run, config, per_arm_rows),
             "source_suffix": _source_suffix(config, per_arm_rows),
-            "audience": audience, "arms": arms, "arms_stripped_by_gate": stripped,
+            "arms": arms,
             "baseline": baseline, "k": k, "stop_reason": run.get("stop_reason"),
             "figures": figures}
 
@@ -351,18 +307,11 @@ def render_md(report: dict[str, Any]) -> str:
     suffix = report["source_suffix"]
     lines = [f"# WorkflowBench report — {report['run_id']}",
              "",
-             f"audience: **{report['audience']}** · suite `{report['suite']}` · "
+             f"suite `{report['suite']}` · "
              f"config `{report['config_hash']}` · k={report['k']}"]
     if report.get("stop_reason"):
         lines.append(f"\nstopped: {report['stop_reason']}")
-    if report["audience"] == "internal" and any(is_lab(a) for a in report["arms"]):
-        lines.append("\n> **INTERNAL — CONTAINS LAB ARMS — DO NOT EXPORT**")
-    if report["arms_stripped_by_gate"]:
-        if report["audience"] == "internal":
-            lines.append(f"\narms stripped by audience gate: {', '.join(report['arms_stripped_by_gate'])}")
-        else:
-            # Public renders never name gated arms — even their existence is internal.
-            lines.append(f"\n{len(report['arms_stripped_by_gate'])} arm(s) withheld by audience gate")
+    lines.extend("\n" + note for note in report.get("caveats", []))
     lines.append("\n## Per-arm results\n")
     hdr = ("| arm | strict pass ± SEM | first try | after retry | retries "
            "| pass^k | infra rate | cache hit |")
@@ -411,19 +360,28 @@ def render_md(report: dict[str, Any]) -> str:
             lines.append(
                 f"- `{f['arm']}` vs `{f['baseline']}`: **{f['wins']}W / {f['losses']}L** "
                 f"(both {f['both_pass']}, neither {f['neither_pass']}, "
-                f"infra-dropped {f['dropped_infra']}) · McNemar b={m['b']} c={m['c']} "
-                f"p={m['p']}" +
-                (f" · cost ratio {f['cost_ratio_vs_baseline']}x" if "cost_ratio_vs_baseline" in f else ""))
+                f"infra-dropped {f['dropped_infra']}"
+                # Only when there are any, so every line already written keeps its shape.
+                + (f", ungraded-dropped {f['dropped_ungraded']}" if f.get("dropped_ungraded") else "")
+                + f") · McNemar b={m['b']} c={m['c']} "
+                f"p={m['p']}")
             lines.append(f"  `{_source_line(f['source'])}{suffix}`")
+    source_details = {episode: item for episode, item in report.get("grading_evidence", {}).items()
+                      if item.get("details")}
+    if source_details:
+        lines.append("\n## Grading evidence\n")
+        for episode, item in source_details.items():
+            lines.extend([f"\n### {item['task_id']} — {item['arm']}\n",
+                          f"Strict pass: {item['passed']}. Completion: {item['termination']}. "
+                          f"Evidence: {item['uri']}.", "\n```json",
+                          json.dumps(item["details"], ensure_ascii=False, indent=2), "```"])
     return "\n".join(lines) + "\n"
 
 
-def render_html(report: dict[str, Any], sortable: bool = True) -> str:
-    """The page of contracts/report.md, no longer the escaped markdown blob.
-    The signature is unchanged bar `sortable`, which `wb report --no-sort` sets.
-    """
+def render_html(report: dict[str, Any]) -> str:
+    """The page of contracts/report.md, no longer the escaped markdown blob."""
     from wb_report.html import render_page
-    return render_page(report, sortable=sortable)
+    return render_page(report)
 
 
 def render_executive(report: dict[str, Any], tasks_dir: str | Path = "tasks") -> str:
@@ -433,27 +391,29 @@ def render_executive(report: dict[str, Any], tasks_dir: str | Path = "tasks") ->
 
 
 def write_report(store: Store, run_id: str, out_dir: str | Path,
-                 audience: str = "internal", sortable: bool = True,
-                 fmt: str = "html", tasks_dir: str | Path = "tasks",
-                 **kw) -> dict[str, str]:
+                 fmt: str = "html",
+                 tasks_dir: str | Path = "tasks", **kw) -> dict[str, str]:
     """Write the markdown report and one HTML page.
 
     `fmt` picks which page: `html` is the seven-section technical page (the
     default, what a round's own report is), `executive` the stakeholder one.
-    Both are built from the same `build_report` dictionary, so the gate and
-    every number are identical; only the selection and the dress differ.
+    Both are built from the same `build_report` dictionary, so every number is
+    identical; only the selection and the dress differ.
     """
-    rep = build_report(store, run_id, audience=audience, **kw)
+    rep = build_report(store, run_id, **kw)
     out = Path(out_dir)
+    if rep.get("product", {}).get("world") == "appworld":
+        from wb_worlds.appworld.importer import outside_repository
+        out = outside_repository(out)
     out.mkdir(parents=True, exist_ok=True)
-    md = out / f"report-{run_id}-{audience}.md"
+    md = out / f"report-{run_id}.md"
     md.write_text(render_md(rep), encoding="utf-8")
     if fmt == "executive":
-        htm = out / f"report-{run_id}-{audience}-executive.html"
+        htm = out / f"report-{run_id}-executive.html"
         htm.write_text(render_executive(rep, tasks_dir=tasks_dir), encoding="utf-8")
     else:
-        htm = out / f"report-{run_id}-{audience}.html"
-        htm.write_text(render_html(rep, sortable=sortable), encoding="utf-8")
+        htm = out / f"report-{run_id}.html"
+        htm.write_text(render_html(rep), encoding="utf-8")
     return {"md": str(md), "html": str(htm)}
 
 # The one sentence the summary page always carries (contracts section 9). A
@@ -463,13 +423,12 @@ NEVER_POOLED = ("Paired comparisons are computed per round, on that round's "
                 "identical task set, and are never pooled across rounds.")
 
 
-def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
-                  baseline: str | None = None,
-                  audiences_path: str | Path = _AUDIENCES_FILE) -> dict[str, Any]:
+def build_summary(store: Store, run_ids: list[str],
+                  baseline: str | None = None) -> dict[str, Any]:
     """Two to six rounds on one page (data-model.md section 3).
 
-    Each round is built by `build_report`, so the audience gate, the suite check
-    and every metric are exactly what the per-round page shows. The aggregate is
+    Each round is built by `build_report`, so the suite check and every metric
+    are exactly what the per-round page shows. The aggregate is
     a mean of per-round rates, never a recomputation over pooled attempts, and
     this dictionary has no field for a paired figure spanning rounds.
     """
@@ -478,8 +437,7 @@ def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
                          "Use `wb report` for a single round.")
     rounds = []
     for run_id in run_ids:
-        rep = build_report(store, run_id, audience=audience, baseline_arm=baseline,
-                           audiences_path=audiences_path)
+        rep = build_report(store, run_id, baseline_arm=baseline)
         rounds.append({"run_id": run_id, "plan": rep["provenance"]["plan"],
                        "suite": rep["suite"], "size": rep["size"],
                        "metrics": rep["metrics"], "source": rep["provenance"],
@@ -491,6 +449,9 @@ def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
     # Rounds on different worlds (suite ids) are not the same measurement: the
     # aggregate below is a mean over rounds, and a mean over two worlds would
     # be a number about nothing (unblock plan M1, 8 Sep 2026).
+    products = {r["source"].get("product") for r in rounds}
+    if len(products) > 1:
+        raise GateError("cannot pool different products: " + ", ".join(sorted(str(p) for p in products)))
     suites = sorted({r["suite"] for r in rounds})
     if len(suites) > 1:
         raise GateError("refusing to pool rounds of different suites into one summary: "
@@ -514,7 +475,7 @@ def build_summary(store: Store, run_ids: list[str], audience: str = "internal",
         aggregate.append(entry)
 
     summary = {"rounds": rounds, "arms": arms, "aggregate": aggregate,
-               "audience": audience, "statement": NEVER_POOLED}
+               "statement": NEVER_POOLED}
     stratification = _stratification(rounds, arms)
     if stratification:
         summary["stratification"] = stratification
@@ -567,19 +528,18 @@ def resolve_plans(store: Store, plans: list[str]) -> list[tuple[str, str, str]]:
     return picked
 
 
-def render_summary_html(summary: dict[str, Any], sortable: bool = True) -> str:
+def render_summary_html(summary: dict[str, Any]) -> str:
     """The summary page. Like render_html, it delegates to the renderer that
     cannot reach the store."""
     from wb_report.html import render_summary_page
-    return render_summary_page(summary, sortable=sortable)
+    return render_summary_page(summary)
 
 
 def write_summary(store: Store, run_ids: list[str], out: str | Path,
-                  audience: str = "internal", baseline: str | None = None,
-                  sortable: bool = True) -> str:
+                  baseline: str | None = None) -> str:
     from wb_report.html import render_summary_page
-    summary = build_summary(store, run_ids, audience=audience, baseline=baseline)
+    summary = build_summary(store, run_ids, baseline=baseline)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_summary_page(summary, sortable=sortable), encoding="utf-8")
+    path.write_text(render_summary_page(summary), encoding="utf-8")
     return str(path)

@@ -20,9 +20,11 @@ from wb_results.evidence import write_json
 from wb_studio.library import now_sao_paulo
 
 MODULES = ("wb_studio.code_index", "wb_studio.genesis_sleep", "wb_studio.genesis_initiative",
+           "wb_studio.genesis_engineer", "wb_studio.genesis_critic",
            "wb_studio.genesis_ranking", "wb_studio.genesis_memory_suite", "wb_studio.genesis_channels")  # feature 022 lanes; missing ones are skipped
 # genesis_initiative comes after genesis_sleep: due jobs run in this order, so the morning reads a
-# record the night has already consolidated.
+# record the night has already consolidated. genesis_engineer follows both, and the code index at
+# 04:00 before them, so a spec is written against an index built the same morning.
 
 
 class Scheduler:
@@ -100,8 +102,45 @@ class Scheduler:
                 recorder("job-incident", job=name, repeats=entry["repeats"], error=entry["error"][:200])
         return entry
 
+    def stopped(self) -> str | None:
+        """Why unattended work must not run now, or None.
+
+        Settings that cannot be read stop the jobs. This used to fall through to
+        running them: the dials are a spending gate, and a gate that fails open
+        because it crashed is worse than no gate, because it reads as one.
+        """
+        autonomy = getattr(getattr(self.studio, "genesis", None), "autonomy", None)
+        if autonomy is None:
+            return None   # a Studio without Genesis has nothing to pause
+        try:
+            from wb_studio.genesis_autonomy import background_wanted
+            if autonomy.read()["paused"]:
+                return "Genesis is paused; a person has to turn it back on."
+            if not background_wanted(autonomy):
+                return "The research loop is stopped; an exhausted envelope or all dials off."
+        except Exception as exc:
+            return (f"Genesis's settings could not be read ({type(exc).__name__}); "
+                    "nothing paid runs unattended until they can.")
+        return None
+
     def run_due(self, now: datetime | None = None) -> list:
-        return [self.run(j["name"], now) for j in self.due(now)]
+        """Every due job, unless a person has hit Pause or the dials are off.
+
+        FR-003: six daily jobs reach paid model turns, and none of them read the dial.
+        Gating them here rather than in each module means a job added later is paused
+        too, without its author having to remember. A skipped job is not stamped, so it
+        runs when the pause is lifted rather than being silently lost for the day.
+        """
+        reason = self.stopped()
+        if reason is None:
+            return [self.run(j["name"], now) for j in self.due(now)]
+        recorder = getattr(getattr(getattr(self.studio, "genesis", None), "autonomy", None), "record", None)
+        skipped = []
+        for job in self.due(now):
+            if callable(recorder):
+                recorder("job-skipped", job=job["name"], reason=reason)
+            skipped.append({"name": job["name"], "status": "skipped", "reason": reason})
+        return skipped
 
     def status(self) -> list:
         stamps = self._read()

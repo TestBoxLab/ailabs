@@ -338,6 +338,145 @@ def test_refreeze_refuses_when_a_member_left_the_corpus(tmp_path):
     assert {p.name: p.read_bytes() for p in out.iterdir()} == before   # untouched
 
 
+# --- the stratified split (FR-017, FR-018, FR-033) -----------------------------
+
+def test_stratified_draw_tier_and_domain_balance(tmp_path):
+    dev_out = tmp_path / "tasks" / "dev-4"
+    heldout_out = tmp_path / "tasks" / "heldout-4"
+    manifest_path = tmp_path / "tasks" / "split-manifest.yaml"
+    res = slate.split(
+        dirs=CORPUS_DIRS,
+        size=4,
+        seed=20260911,
+        dev_out=dev_out,
+        heldout_out=heldout_out,
+        manifest=manifest_path,
+        because="stratified split test",
+    )
+    assert len(res.development) == 4
+    assert len(res.held_out) == 4
+    dev_ids = {r.task_id for r in res.development}
+    heldout_ids = {r.task_id for r in res.held_out}
+    assert dev_ids.isdisjoint(heldout_ids)
+
+    # Per tier, the two slates differ by at most one task
+    dev_tiers = res.balance["development"]["tiers"]
+    heldout_tiers = res.balance["held-out"]["tiers"]
+    for t in ("simple", "medium", "complex"):
+        assert abs(dev_tiers.get(t, 0) - heldout_tiers.get(t, 0)) <= 1
+
+    # Per domain, the two slates differ by at most one task
+    dev_domains = res.balance["development"]["domains"]
+    heldout_domains = res.balance["held-out"]["domains"]
+    for d in ("alpha", "beta", "gamma"):
+        assert abs(dev_domains.get(d, 0) - heldout_domains.get(d, 0)) <= 1
+
+
+def test_a_split_that_fails_partway_leaves_the_held_out_name_free(tmp_path, monkeypatch):
+    """A half-written held-out slate could never be redrawn: the refusal triggers on
+    any *.json in that folder. So a failed split writes nothing at all."""
+    dev_out = tmp_path / "tasks" / "dev-4"
+    heldout_out = tmp_path / "tasks" / "heldout-4"
+    manifest_path = tmp_path / "tasks" / "split-manifest.yaml"
+    calls = []
+
+    def fail_after_five(src, dst):
+        calls.append(dst)
+        if len(calls) > 5:
+            raise OSError(28, "No space left on device")
+        return shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(slate.shutil, "copyfile", fail_after_five)
+    with pytest.raises(OSError):
+        slate.split(dirs=CORPUS_DIRS, size=4, seed=20260911, dev_out=dev_out,
+                    heldout_out=heldout_out, manifest=manifest_path, because="crash test")
+    assert list(heldout_out.glob("*.json")) == []
+    assert list(dev_out.glob("*.json")) == []
+    assert not manifest_path.exists()
+
+    monkeypatch.undo()
+    res = slate.split(dirs=CORPUS_DIRS, size=4, seed=20260911, dev_out=dev_out,
+                      heldout_out=heldout_out, manifest=manifest_path, because="redrawn after the failure")
+    assert len(res.held_out) == 4
+
+
+def test_split_manifest_fields_present(tmp_path):
+    dev_out = tmp_path / "tasks" / "dev-4"
+    heldout_out = tmp_path / "tasks" / "heldout-4"
+    manifest_path = tmp_path / "tasks" / "split-manifest.yaml"
+    res = slate.split(
+        dirs=CORPUS_DIRS,
+        size=4,
+        seed=20260911,
+        dev_out=dev_out,
+        heldout_out=heldout_out,
+        manifest=manifest_path,
+        because="manifest field check",
+    )
+    assert manifest_path.is_file()
+    m = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+    # Required top-level fields from contracts/config-files.md
+    assert "measure" in m and "services seeded" in m["measure"]
+    assert m["measure_kind"] == "structural-proxy"
+    assert m["measure_version"] == "1"
+    assert "generated_at" in m
+    assert m["seed"] == 20260911
+    assert m["per_slate"] == 4
+    assert m["because"] == "manifest field check"
+    assert m["cuts"] == {"low": 4, "high": 7}
+    assert isinstance(m["corpus"], list) and len(m["corpus"]) == 3
+    for entry in m["corpus"]:
+        assert {"dir", "domain", "tasks", "usable"} <= set(entry.keys())
+
+    # Balance structure
+    assert "balance" in m
+    for slate_key in ("development", "held-out"):
+        assert slate_key in m["balance"]
+        bal = m["balance"][slate_key]
+        assert "tiers" in bal and "domains" in bal
+        assert {"simple", "medium", "complex"} <= set(bal["tiers"].keys())
+        assert {"alpha", "beta", "gamma"} <= set(bal["domains"].keys())
+
+    # Tasks rows: id, slate, tier, domain, score, contract_sha256
+    assert isinstance(m["tasks"], list) and len(m["tasks"]) == 8
+    for row in m["tasks"]:
+        assert {"id", "slate", "tier", "domain", "score", "contract_sha256"} <= set(row.keys())
+        assert row["slate"] in ("development", "held-out")
+        assert row["tier"] in ("simple", "medium", "complex")
+        assert len(row["contract_sha256"]) == 16
+
+
+def test_split_refuses_redrawing_frozen_held_out_slate(tmp_path):
+    dev_out = tmp_path / "tasks" / "dev-4"
+    heldout_out = tmp_path / "tasks" / "heldout-4"
+    manifest_path = tmp_path / "tasks" / "split-manifest.yaml"
+    slate.split(
+        dirs=CORPUS_DIRS,
+        size=4,
+        seed=20260911,
+        dev_out=dev_out,
+        heldout_out=heldout_out,
+        manifest=manifest_path,
+        because="initial draw",
+    )
+    with pytest.raises(slate.Refusal) as e:
+        slate.split(
+            dirs=CORPUS_DIRS,
+            size=4,
+            seed=20260911,
+            dev_out=tmp_path / "tasks" / "dev-new",
+            heldout_out=heldout_out,
+            manifest=tmp_path / "tasks" / "split-manifest-2.yaml",
+            because="redraw attempt",
+        )
+    expected_text = (
+        f"refused: {heldout_out.as_posix()} is a frozen held-out slate. A held-out slate is never redrawn.\n"
+        f"Draw a new one under a different name and retire this one with a recorded reason."
+    )
+    assert str(e.value) == expected_text
+
+
 # --- the command -----------------------------------------------------------------
 
 def test_cli(tmp_path, capsys, monkeypatch):

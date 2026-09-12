@@ -1,15 +1,15 @@
 'use strict';
 // Navigation and evidence views share the existing Studio API and immutable records.
-let workspaceSurface = 'runs', historyPage = 0, expandedRuns = new Set(), leaderboardData = null;
+let workspaceSurface = 'runs', historyPage = 0, expandedRuns = new Set();
 const historyPageSize = 15, graphLogCache = new Map();
-let selectedBare=null;
 const trackName = value => value === 'create-and-run' ? 'Workflow configuration' : 'Agentic requests';
 const chevron = '<svg class="icon small" aria-hidden="true"><use href="/vendor/lucide/sprite.svg#chevron-right"/></svg>';
 function showWorkspaceSurface(surface, updateHash=true) {
+ queueMicrotask(()=>document.dispatchEvent(new Event('genesis:surface')));
   workspaceSurface=surface;
-  for(const [selector,name] of [['#reports-panel','reports'],['#report-panel','report'],['#genesis-panel','genesis'],['#runs-panel','runs'],['.workspace','detail'],['#setup-panel','studio'],['#leaderboard-panel','leaderboard'],['#runtime-panel','runtime'],['#budget-panel','budget'],['#launch-panel','launch']])$(selector).classList.toggle('hidden',surface!==name);
+  for(const [selector,name] of [['#reports-panel','reports'],['#report-panel','report'],['#genesis-panel','genesis'],['#runs-panel','runs'],['.workspace','detail'],['#setup-panel','studio'],['#runtime-panel','runtime'],['#budget-panel','budget'],['#launch-panel','launch']])$(selector).classList.toggle('hidden',surface!==name);
   $('.page-heading').classList.toggle('hidden',['studio','launch','genesis','report','detail'].includes(surface));
-  const titles={reports:['Reports',''],report:['Report',''],genesis:['Genesis',''],budget:['Budget',''],runs:['Runs',''],detail:['Run',''],leaderboard:['Leaderboard','Full 50-task runs only.'],runtime:['Settings','']};
+  const titles={reports:['Reports',''],report:['Report',''],genesis:['Genesis',''],budget:['Budget',''],runs:['Runs',''],detail:['Run',''],runtime:['Settings','']};
   if(titles[surface]){$('#page-title').textContent=titles[surface][0];$('#page-description').textContent=titles[surface][1];}
   for(const [selector,name] of [['#nav-reports','reports'],['#nav-genesis','genesis'],['#nav-runs','runs'],['#open-setup','studio'],['#nav-runtime','runtime'],['#nav-budget','budget']])$(selector).setAttribute('aria-current',surface===name||(name==='runs'&&surface==='detail')||(name==='reports'&&surface==='report')?'page':'false');
   if(updateHash&&location.hash!=='#'+surface&&!location.hash.startsWith('#'+surface+'/'))history.pushState(null,'','#'+surface);
@@ -98,19 +98,6 @@ $('#enterprise-verify').onclick=async()=>{const done=busy($('#enterprise-verify'
 $('#run-track').onchange=()=>renderComparisonVersions().catch(e=>toast(e.message));
 $('#run-concurrency').oninput=launchSize;
 $('#blueprint-track').onchange=e=>{commit();blueprint.track=e.target.value;markDirty();render();renderInspector();$('#architecture-track-note').textContent=blueprint.track==='create-and-run'?'Design how a workflow is configured. Result Output receives the workflow artifact; the benchmark saves and executes it.':'Design how an agent attends to a request. Monarch Enterprise is a separate reference implementation.';};
-
-const openLeaderboard=async()=>{showWorkspaceSurface('leaderboard');$('#leaderboard-content').textContent='Loading recorded comparisons…';try{leaderboardData=await api('/api/leaderboard');$('#leaderboard-cohort').innerHTML=leaderboardData.cohorts.map((c,i)=>option(String(i),c.architecture_name,i===0)).join('');renderLeaderboard();}catch(e){$('#leaderboard-content').textContent=e.message;}};
-$('#leaderboard-cohort').onchange=()=>{selectedBare=null;renderLeaderboard();};
-function renderLeaderboard(){
- const cohort=leaderboardData?.cohorts[Number($('#leaderboard-cohort').value)];if(!cohort){$('#leaderboard-content').innerHTML='<div class="history-empty"><h3>No completed comparisons yet</h3><p>Completed runs with recorded task identities will appear here.</p></div>';return;}
- $('#leaderboard-panel .surface-heading h2').textContent=cohort.contract.judge==='historical-unpinned'?'Historical results · provisional':'Ranked architectures';
- const bareOptions=cohort.entries.filter(e=>e.is_bare);const baseline=bareOptions.find(e=>e.id===selectedBare)||null;
- const delta=entry=>!baseline?'<span class="delta-neutral">No matched Bare</span>':entry.id===baseline.id?'<span class="delta-neutral">Baseline</span>':'<strong class="'+(entry.success_rate>baseline.success_rate?'delta-better':entry.success_rate<baseline.success_rate?'delta-worse':'delta-neutral')+'">'+(entry.success_rate>baseline.success_rate?'+':'')+((entry.success_rate-baseline.success_rate)*100).toFixed(1)+' pp</strong>';
- const row=(entry)=>'<tr><td>'+(cohort.contract.judge==='historical-unpinned'?'—':entry.rank)+'</td><th scope="row">'+esc(entry.name)+'<small>'+esc(({version:'Experimental architecture',enterprise:'Monarch Enterprise',scripted:'Scripted control'})[entry.kind]||entry.kind)+'</small></th><td><div class="ranking-bar"><progress max="1" value="'+entry.success_rate+'" aria-label="Task success"></progress><strong>'+Math.round(entry.success_rate*100)+'%</strong></div><small>'+entry.passed+' / '+entry.attempts+' attempts</small></td><td>'+entry.task_count+'</td><td>'+delta(entry)+'</td><td>'+entry.infrastructure+'</td><td>'+esc(money(entry.cost_usd))+'</td><td>'+entry.runs.map(r=>'<button class="text-button" data-ranking-run="'+esc(r)+'">Open run</button>').join('')+'</td></tr>';
- $('#leaderboard-content').innerHTML='<div class="baseline-picker"><label for="bare-baseline">Compare with Bare</label><select id="bare-baseline"><option value="">'+(bareOptions.length?'Choose a recorded native baseline':'No compatible native Bare run recorded')+'</option>'+bareOptions.map(e=>option(e.id,e.name+' / '+e.attempts+' recorded attempts',e.id===selectedBare)).join('')+'</select><p>Green: outperforming Bare. Red: underperforming Bare. Reused baseline evidence is linked, never counted as a new trial. API controls do not substitute for native Bare.</p></div><p class="leaderboard-note">'+esc(cohort.note)+'</p><div class="table-scroll"><table class="history-table leaderboard-table"><thead><tr><th>Rank</th><th>Setup / architecture</th><th>Observed success</th><th>Tasks</th><th>vs. Bare</th><th>Execution issues</th><th>Cost estimate</th><th>Evidence</th></tr></thead><tbody>'+cohort.entries.map(row).join('')+'</tbody></table></div><p class="node-help">Ranks describe this comparison set only. Historical results without judge pins are provisional; a rank does not establish superiority. Repeated attempts and execution issues remain in the denominator.</p><details><summary>Comparison contract</summary><pre>'+esc(JSON.stringify(cohort.contract,null,2))+'</pre></details>';
- $('#bare-baseline').onchange=e=>{selectedBare=e.target.value;renderLeaderboard();};
- $$('.leaderboard-table tbody tr').forEach((tr,i)=>tr.classList.toggle('top-ranked',cohort.contract.judge!=='historical-unpinned'&&cohort.entries[i].rank<=3&&cohort.entries[i].passed>0));$$('[data-ranking-run]').forEach(b=>b.onclick=()=>openJob(b.dataset.rankingRun));
-}
 
 const priorRenderPgPlan=renderPgPlan;
 renderPgPlan=function(){priorRenderPgPlan();if(!pg)return;const p=pgPlan();$('#pg-plan-diff').innerHTML='<details class="pg-change-preview"><summary>Preview enrichment changes</summary><div class="change-counts"><span>'+p.fresh.length+' new</span><span>'+p.changed.length+' changed</span><span>'+p.carried.length+' carried</span><span>'+p.removed.length+' removed</span></div>'+[...p.fresh.map(f=>['Add',f.path]),...p.changed.map(f=>['Research again',f.path]),...p.removed.map(f=>['Remove',f])].map(([kind,path])=>'<p><strong>'+kind+'</strong> '+esc(path)+'</p>').join('')+'</details>';};
@@ -230,7 +217,12 @@ $$('[data-pg-view][type=button]').forEach(button=>button.onclick=()=>{
 
 
 
-window.addEventListener('popstate',async()=>{
+// One router. It was inline in the popstate listener, so "go to this address" existed
+// only as a side effect of the browser going back — anything else wanting to route had to
+// write a second copy (feature 024, stage S5).
+window.goRoute=async function(hash){
  if(!state)return;
- try{const route=location.hash.slice(1);if(route.startsWith('run/')){const id=decodeURIComponent(route.slice(4).split('/')[0]);if(typeof job!=='undefined'&&job?.id===id&&!$('.workspace').classList.contains('hidden')){if(window.syncAttemptFromHash)syncAttemptFromHash();}else await openJob(id);}else if(route==='genesis'||route.startsWith('genesis/'))await openGenesis();else if(route==='studio')await $('#open-setup').onclick();else if(route==='budget')await openBudget();else if(route==='launch')await openLaunch();else if(route==='runtime')await $('#nav-runtime').onclick();else if(route==='runs')showWorkspaceSurface('runs',false);else if(route==='reports'||route==='leaderboard'||route===''||route.startsWith('report/')||route.startsWith('round/'))await window.reportRoute(location.hash);else showWorkspaceSurface('runs',false);}catch(e){toast(e.message);}
-});
+ const route=String(hash||location.hash).replace(/^#/,'');
+ try{if(route.startsWith('run/')){const id=decodeURIComponent(route.slice(4).split('/')[0]);if(typeof job!=='undefined'&&job?.id===id&&!$('.workspace').classList.contains('hidden')){if(window.syncAttemptFromHash)syncAttemptFromHash();}else await openJob(id);}else if(route==='genesis'||route.startsWith('genesis/'))await openGenesis();else if(route==='studio'||route.startsWith('studio/')){await $('#open-setup').onclick();const id=route.slice(7);if(id&&window.openStudioItem)window.openStudioItem(decodeURIComponent(id));}else if(route==='budget')await openBudget();else if(route==='launch')await openLaunch();else if(route==='runtime')await $('#nav-runtime').onclick();else if(route==='runs')showWorkspaceSurface('runs',false);else if(route==='reports'||route==='leaderboard'||route===''||route.startsWith('report/')||route.startsWith('round/'))await window.reportRoute(location.hash);else showWorkspaceSurface('runs',false);}catch(e){toast(e.message);}
+};
+window.addEventListener('popstate',()=>window.goRoute(location.hash));

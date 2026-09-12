@@ -88,12 +88,12 @@ function toast(text) {
   $('#toast').textContent=text; $('#toast').classList.remove('hidden');
   toastTimer=setTimeout(()=>$('#toast').classList.add('hidden'),6000);
 }
-async function api(path,body,recovered=false) {
+async function api(path,body,recovered=false,options={}) {
   const write=body!==undefined;
   let response;
   try {
     const personKey=(()=>{try{return localStorage.getItem('ailabs-person-key')||'';}catch{return '';}})();
-    response=await fetch(path,write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||'',...(personKey?{'X-Person-Key':personKey}:{})},body:JSON.stringify(body)}:{headers:personKey?{'X-Person-Key':personKey}:{},signal:AbortSignal.timeout(30000)});
+    response=await fetch(path,write?{keepalive:!!options.keepalive,method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||'',...(personKey?{'X-Person-Key':personKey}:{})},body:JSON.stringify(body)}:{headers:personKey?{'X-Person-Key':personKey}:{},signal:AbortSignal.timeout(30000)});
   } catch (error) {
     const issue=new Error(error.name==='TimeoutError'?'Studio took too long to respond. Try again.':'Cannot reach Studio. Check the local server and try again.');
     issue.uncertain=write; throw issue;
@@ -107,7 +107,7 @@ async function api(path,body,recovered=false) {
   if(write && response.status===403 && data.error==='Origin or session refused' && !recovered) {
     const previous=state?.token;
     const fresh=await api('/api/state');
-    if(fresh.token && fresh.token!==previous) { state.token=fresh.token; return api(path,body,true); }
+    if(fresh.token && fresh.token!==previous) { state.token=fresh.token; return api(path,body,true,options); }
   }
   if(!response.ok) {
     const issue=new Error(response.status===403?'Your Studio session changed. Reload the workspace before trying again.':data.error||'Studio could not complete this request. Try again.');
@@ -221,7 +221,7 @@ async function refreshReport(id,sequence) {
     const [next,current]=await Promise.all([api('/api/jobs/'+id+'/report'),configured?api('/api/jobs/'+id):null]);
     if(sequence!==openSequence||revision!==reportSequence)return;
     if(current){syncJob(current);scheduleEventRender();}
-    report=next; renderReport();
+    report=next; renderReport(); if(view==='live')renderGraph();
   } catch(error) {if(sequence===openSequence)toast('Findings could not refresh. '+error.message);}
 }
 function scheduleEventRender() {
@@ -229,12 +229,12 @@ function scheduleEventRender() {
   renderFrame=requestAnimationFrame(()=>{
     renderFrame=null;
     if(view==='live')renderGraph();
-    if(window.renderObservatory)window.renderObservatory();
+
     if(view==='results')renderResults();
     if(window.builderLive)builderLive(job,events);
     if(selected&&outputMode!=='output'){renderOutput();bindEvidence();}
     if(selected&&!selected.report) {
-      const latest=nodeList(selected.model).find(n=>n.node===selected.node);
+      const latest=typeof flowNode==='function'?flowNode(selected.model,selected.node):nodeList(selected.model).find(n=>n.node===selected.node);
       if(latest&&JSON.stringify(latest)!==JSON.stringify(selected)){selected=latest;renderOutput();bindEvidence();}
     }
   });
@@ -244,7 +244,7 @@ function nodeLabel(node){if(node.category==='result')return 'Verify task outcome
 const WORKFLOW_STATUS={pending:'pending',running:'running',succeeded:'completed',failed:'error',skipped:'skipped',blocked:'error'};
 function nodeList(model){const nodes=[];for(const e of events.filter(x=>x.task===taskId&&x.model===model)){if(e.type==='step_started'){nodes.push({...e,node:'step:'+e.step,status:'running',category:'step'})}else if(e.type==='step_finished'){const old=nodes.find(n=>n.node==='step:'+e.step);if(old)Object.assign(old,e,{node:'step:'+e.step});else nodes.push({...e,node:'step:'+e.step,category:'step'})}else if(['node_started','model_started'].includes(e.type)){nodes.push({...e,status:'running',category:e.category||(e.type==='model_started'?'model':'tool')})}else if(['node_finished','model_finished'].includes(e.type)){let old=nodes.find(n=>n.node===e.node);if(old)Object.assign(old,e);else nodes.push({...e,category:e.category||(e.type==='model_finished'?'model':'tool')})}else if(e.type==='workflow_recipe'){for(const w of e.nodes||[]){const id='wf:'+w.id;if(!nodes.find(n=>n.node===id))nodes.push({...w,node:id,model,task:taskId,status:'pending',workflowStatus:'pending',category:'workflow'})}}else if(e.type==='workflow_step'){const old=nodes.find(n=>n.node===e.node);const status=WORKFLOW_STATUS[e.status]||'running';if(old)Object.assign(old,e,{status,workflowStatus:e.status});else nodes.push({...e,status,workflowStatus:e.status,category:'workflow'})}}
 const result=job?.results.find(r=>r.task===taskId&&r.model===model);if(result){nodes.forEach(n=>{if(n.status==='running')n.status='error';if(n.status==='pending'){n.status='skipped';n.workflowStatus='not reached'}});}if(result)nodes.push({node:'result',model,task:taskId,label:'Task result',status:result.passed?'completed':'error',category:'result',output:result.output,result});return nodes}
-function renderGraph(){if(!job)return;const focusNode=document.activeElement?.dataset?.node;const focusModel=document.activeElement?.dataset?.model;{const brief=state.tasks.find(t=>t.id===taskId)?.brief||'',title=$('#task-select').selectedOptions[0]?.textContent||'';$('#task-brief').textContent=brief.trim()===title.trim()?'':brief;$('#task-brief').classList.toggle('hidden',!$('#task-brief').textContent);}$('#task-progress').textContent=(job.settings.tasks.indexOf(taskId)+1)+' / '+job.settings.tasks.length;$('#lanes').innerHTML=job.settings.models.map(model=>{const info=state.models.find(m=>m.id===model);const nodes=nodeList(model);return '<section class="lane" aria-label="'+esc(modelName(model))+'"><div class="lane-heading"><span class="model-icon">'+icon(armKind(model)==='version'?'model':'tool')+'</span><div><strong>'+esc(modelName(model))+'</strong><small>'+esc(armKind(model)==='version'?'Published architecture · steps run in order':armKind(model)==='enterprise'?'Monarch Enterprise · builds the workflow, then runs it':info?.kind||'Setup')+'</small></div></div><div class="lane-nodes">'+(nodes.length?nodes.map(n=>n.category==='step'?'<div class="lane-step '+esc(n.status)+'"><strong>'+esc(n.label)+'</strong><small>'+esc(n.status==='running'?'Running this step':n.status==='error'?'Stopped with an error':'Step finished')+'</small></div>':'<button class="node '+esc(n.status)+(selected?.node===n.node&&selected?.model===model?' selected':'')+'" data-node="'+esc(n.node)+'" data-model="'+esc(model)+'"><div class="node-head">'+icon(n.category==='model'||n.category==='builder'?'model':'check')+'<span>'+esc(nodeLabel(n))+'</span></div><p>'+esc(n.category==='result'?(n.result.passed?'All task checks passed':n.result.error||'One or more task checks failed'):n.category==='workflow'?(n.message||workflowWords(n)):n.arguments?JSON.stringify(n.arguments):n.output||(n.status==='running'?'Waiting for the response…':n.status==='error'?'The request stopped before a response arrived.':'Chose the next application actions without a written reply.'))+'</p><div class="node-foot"><span>'+esc(n.category==='result'?'Verified task checks':n.category==='model'?'Model response':n.category==='builder'?'Workflow builder':n.category==='workflow'?'Workflow node'+((n.kind||n.node_kind)?' · '+(n.kind||n.node_kind):''):'Application action')+'</span><span>'+esc(n.category==='workflow'?workflowWords(n):n.status==='running'?'Running':n.status==='error'?'Attention':'Done')+'</span></div></button>').join(''):'<div class="lane-waiting">Waiting for this task</div>')+'</div></section>'}).join('');$$('[data-node]').forEach(b=>b.onclick=()=>{selected=nodeList(b.dataset.model).find(n=>n.node===b.dataset.node);revealSelection();renderGraph()});if(focusNode){const target=$$('[data-node]').find(b=>b.dataset.node===focusNode&&b.dataset.model===focusModel);target?.focus({preventScroll:true});}}
+function renderGraph(){if(typeof renderObservatory==='function')renderObservatory();}
 function workflowWords(n){const w=n.workflowStatus||n.status;const words={pending:'Waiting to run',running:'Running',succeeded:'Done',failed:'Failed',skipped:'Skipped',blocked:'Blocked','not reached':'Not reached'};return (words[w]||human(w))+(n.progress?' · '+n.progress.current+(n.progress.total?'/'+n.progress.total:''):'')}
 function pretty(value,depth=0){if(value&&typeof value==='object'&&!Array.isArray(value)&&!Object.keys(value).length)return '<p>No response body returned.</p>';if(depth>5)return '<pre>'+esc(JSON.stringify(value,null,2))+'</pre>';if(value===null||value===undefined)return '<span>Not available</span>';if(typeof value==='string'){try{return pretty(JSON.parse(value),depth)}catch{}return textDocument(value)}if(typeof value!=='object')return esc(value);if(Array.isArray(value)){if(!value.length)return '<p>No records returned.</p>';if(value.every(v=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.values(v).every(x=>x===null||typeof x!=='object'))){const allKeys=[...new Set(value.flatMap(v=>Object.keys(v)))],keys=allKeys.slice(0,8);return '<div class="collection-label">'+(value.length>100||allKeys.length>8?'Showing '+Math.min(100,value.length)+' of '+value.length+' records and '+keys.length+' of '+allKeys.length+' fields. Open Raw evidence for the complete output.':value.length+' records')+'</div><div class="table-scroll"><table><thead><tr>'+keys.map(k=>'<th>'+esc(human(k))+'</th>').join('')+'</tr></thead><tbody>'+value.slice(0,100).map(v=>'<tr>'+keys.map(k=>'<td>'+esc(v[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';}return '<div class="collection-label">'+value.length+' records</div>'+value.slice(0,100).map(v=>'<section class="record">'+pretty(v,depth+1)+'</section>').join('')+(value.length>100?'<p>Showing the first 100 records. Copy raw evidence for the full output.</p>':'')}return '<dl>'+Object.entries(value).map(([k,v])=>'<dt>'+esc(human(k))+'</dt><dd>'+pretty(v,depth+1)+'</dd>').join('')+'</dl>'}
 function textDocument(value){return value.split(/\n\s*\n/).map(block=>{if(/^#{1,3}\s/.test(block))return '<h3>'+esc(block.replace(/^#{1,3}\s/,''))+'</h3>';if(block.split('\n').every(l=>/^[-*]\s/.test(l)))return '<ul>'+block.split('\n').map(l=>'<li>'+esc(l.slice(2))+'</li>').join('')+'</ul>';return '<p>'+esc(block).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replaceAll('\n','<br>')+'</p>'}).join('')}
@@ -689,7 +689,7 @@ async function initialize() {
   try {
     const latest=await api('/api/state');state=latest;budget(state.budget);setConnection('Connected','connected');$('#connection-error').classList.add('hidden');
     renderJobs();renderSetups();
-    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5).split('/')[0]));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis'||location.hash.startsWith('#genesis/'))await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio')await $('#open-setup').onclick();else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
+    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5).split('/')[0]));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis'||location.hash.startsWith('#genesis/'))await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio'||location.hash.startsWith('#studio/')){await $('#open-setup').onclick();const id=location.hash.slice(8);if(id&&window.openStudioItem)window.openStudioItem(decodeURIComponent(id));}else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
   } catch(error){showConnectionError(error.message);}
   finally {button.disabled=false;}
 }
@@ -846,8 +846,9 @@ function reviewSection(live){
  if(a.status==='failed')return '<section class="analysis-section">'+head
   +'<div class="analysis-retry"><button class="button" id="analyze-run"'+(running?' disabled':'')+'>'+(running?'Reading the execution…':'Try again')+'</button>'
   +'<p class="fail">'+esc(a.error||'The reading did not complete.')+'</p></div></section>';
- // A reason that says the reading cannot run is not an invitation to ask for it.
- const askable=!running&&!live&&(!a.reason||/has not run yet/i.test(a.reason));
+ // The server says whether asking by hand could still work; a reason that names a
+ // wall (nothing to interpret, no credential, no ledger) is not an invitation.
+ const askable=!running&&!live&&a.askable!==false;
  return '<section class="analysis-section">'+head
   +'<p class="meta">'+esc(running?'Reading the execution…':a.reason||'The reading has not run yet.')+'</p>'
   +(askable?'<button class="button" id="analyze-run">Run it now</button>':'')+'</section>';

@@ -54,9 +54,31 @@ def is_approver(name: str | None, env) -> bool:
     return bool(name) and name.strip().lower() in approvers(env)
 
 
-def capabilities() -> dict[str, str | None]:
-    """Per competitor kind, None when it may launch, else the reason it may not."""
-    return {"api": None, "monarch": MONARCH_REASON, "native": NATIVE_REASON}
+def configured_harnesses():
+    """Public harness configuration only; this function never admits a round."""
+    from wb_orchestrator.config import DEFAULT_CONFIG_DIR, load_harness, ConfigError
+    found = []
+    for path in sorted((Path(DEFAULT_CONFIG_DIR) / "harnesses").glob("*.yaml")):
+        try:
+            found.append(load_harness(path))
+        except (ConfigError, OSError, ValueError):
+            continue
+    return found
+
+
+def capabilities(harnesses=None, env=None) -> dict[str, str | None]:
+    """Whether at least one configured harness of each kind is currently verified.
+
+    The actual launch still validates its exact competitor, frozen configuration,
+    operator, approval scope and weekly reservations. Status uses that same
+    competitor verification; it cannot grant an exception to it.
+    """
+    result = {"api": None, "monarch": MONARCH_REASON, "native": NATIVE_REASON}
+    for harness in configured_harnesses() if harnesses is None else harnesses:
+        kind = {"monarch":"monarch", "cli":"native"}.get(harness.kind)
+        if kind and harness.runnable and competitor_reason(harness, env) is None:
+            result[kind] = None
+    return result
 
 
 def _probe_site() -> SimpleNamespace:
@@ -74,9 +96,11 @@ def monarch_reason(harness, env) -> str | None:
     Langfuse checked against the deployment, no model money spent. It admits
     Monarch competitors for `PROBE_TTL` (two hours), for that backend only.
     """
-    from wb_studio import enterprise
+    from wb_orchestrator import monarch_probe
     from wb_orchestrator.monarch_setup import Stop, expand
-    probe = enterprise.load_probe(_probe_site())
+    site = _probe_site()
+    site.enterprise_harness = getattr(harness, "name", "monarch")
+    probe = monarch_probe.load_probe(site)
     if probe is None:
         return f"{MONARCH_REASON}; {VERIFY_HINT}"
     try:
@@ -85,9 +109,11 @@ def monarch_reason(harness, env) -> str | None:
         return f"{MONARCH_REASON}; the last record carries no valid time; {VERIFY_HINT}"
     if checked.tzinfo is None:
         checked = checked.replace(tzinfo=timezone.utc)
-    hours = int(enterprise.PROBE_TTL.total_seconds() // 3600)
-    if datetime.now(timezone.utc) - checked > enterprise.PROBE_TTL:
+    hours = int(monarch_probe.PROBE_TTL.total_seconds() // 3600)
+    if datetime.now(timezone.utc) - checked > monarch_probe.PROBE_TTL:
         return f"{MONARCH_REASON}; the last verification is older than {hours} hours; {VERIFY_HINT}"
+    if site.enterprise_harness != "monarch" and probe.get("harness_sha256") != monarch_probe.harness_hash(harness):
+        return f"{MONARCH_REASON}; verify this exact source harness with wb monarch verify --harness {harness.name} --product <source>"
     if not probe.get("ok"):
         failed = ", ".join(c.get("name", "?") for c in probe.get("checks", []) if not c.get("ok")) or "unknown check"
         return f"{MONARCH_REASON}; the last verification failed ({failed}); {VERIFY_HINT}"
@@ -105,6 +131,10 @@ def competitor_reason(harness, env=None) -> str | None:
     if harness.kind == "monarch":
         return monarch_reason(harness, os.environ if env is None else env)
     if harness.kind == "cli":
+        if harness.output == "isolated-container-v2":
+            from wb_studio.native import status
+            state = status(_probe_site())
+            return None if state["launchable"] else state["reason"]
         return NATIVE_REASON
     return None   # scripted checks are free; the API loop reserves per request
 

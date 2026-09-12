@@ -158,12 +158,19 @@ window.Charts = (() => {
     for (const group of Object.values(points.reduce((acc, p) => { if (p.link) (acc[p.link] = acc[p.link] || []).push(p); return acc; }, {}))) {
       if (group.length > 1) el('path', { d: group.sort((a, b) => a.x - b.x).map((p, i) => (i ? 'L' : 'M') + x(p.x) + ',' + y(p.y)).join(' '), class: 'link' }, f.plot);
     }
+    // Labels dodge each other: setups that cost about the same and pass about as
+    // often land on the same spot, and stacked names read as neither.
+    const taken = [];
     for (const p of points) {
       const g = interactive(el('g', { class: 'point ' + seriesClass(p) }, f.plot), p);
       if (p.low !== undefined && p.low !== null) el('line', { x1: x(p.x), x2: x(p.x), y1: y(p.low), y2: y(p.high), class: 'whisker' }, g);
       el('rect', { x: x(p.x) - 5, y: y(p.y) - 5, width: 10, height: 10, class: 'mark' }, g);
-      const flip = x(p.x) > f.width * .7;
-      el('text', { x: x(p.x) + (flip ? -9 : 9), y: y(p.y) - 8, 'text-anchor': flip ? 'end' : 'start', class: 'point-label' }, g, p.label);
+      const px = x(p.x), py = y(p.y), flip = px > f.width * .7;
+      const width = String(p.label || '').length * 7.2, x0 = flip ? px - 9 - width : px + 9;
+      const free = ly => !taken.some(t => x0 < t.x1 && t.x0 < x0 + width && Math.abs(t.y - ly) < 13);
+      const ly = [-8, -22, 14, -36, 28].map(d => py + d).find(free) ?? py - 8;
+      taken.push({ x0, x1: x0 + width, y: ly });
+      el('text', { x: px + (flip ? -9 : 9), y: ly, 'text-anchor': flip ? 'end' : 'start', class: 'point-label' }, g, p.label);
     }
     if (!points.length) el('text', { x: f.width / 2, y: f.height / 2, 'text-anchor': 'middle', class: 'empty-mark' }, f.plot, options.empty || 'No costed attempts');
     return f.figure;
@@ -295,6 +302,52 @@ window.Charts = (() => {
     return f.figure;
   }
 
+  // The break-even curve: cumulative cost against number of executions (FR-029).
+  // A workflow is configured once and run many times; a harness pays full price every
+  // time. Where those two lines cross is what the product is for, and no evaluation
+  // product plots it, because their subjects have no reusable artefact.
+  //
+  // The crossing is drawn only where one was measured. `none-in-range` and `never` are
+  // different facts and neither is drawn as a projection: the server decides which, and
+  // the note says so in words. Nothing here extrapolates past the observed range.
+  function breakEven(options) {
+    const product = options.product || [], comparator = options.comparator || [];
+    const n = Math.min(product.length, comparator.length);
+    // `series` is what `chartRows` reads, so the figure carries its own data table
+    // and CSV without the caller having to build one.
+    const series = [
+      { label: options.productLabel || 'product', points: product.slice(0, n).map((v, i) => ({ x: i + 1, y: v })) },
+      { label: options.comparatorLabel || 'per request', points: comparator.slice(0, n).map((v, i) => ({ x: i + 1, y: v })) },
+    ];
+    const f = frame({ ...options, series, kind: 'break-even', height: options.height || 300,
+                      margin: { top: 28, right: 132, bottom: 44, left: 64 } });
+    if (!n) { el('text', { x: f.width / 2, y: f.height / 2, 'text-anchor': 'middle', class: 'empty-mark' }, f.plot, options.empty || 'Not enough recorded to draw a curve'); return f.figure; }
+    const max = Math.max(1e-9, ...product.slice(0, n), ...comparator.slice(0, n));
+    const x = linear([1, Math.max(2, n)], [0, f.width]), y = linear([0, max * 1.1], [f.height, 0]);
+    axisLeft(f.plot, y, f.width, money, options.yLabel || 'cumulative cost');
+    for (const i of ticks(1, n, Math.min(n, 6)).filter(Number.isInteger)) {
+      el('text', { x: x(i), y: f.height + 18, 'text-anchor': 'middle', class: 'tick' }, f.plot, String(i));
+    }
+    el('text', { x: f.width / 2, y: f.height + 36, 'text-anchor': 'middle', class: 'axis-label' }, f.plot,
+       options.xLabel || 'executions of the same workflow');
+    const line = (values, cls, label) => {
+      const g = el('g', { class: 'series ' + cls }, f.plot);
+      const pts = values.slice(0, n).map((v, i) => ({ px: x(i + 1), py: y(v) }));
+      el('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + p.px + ',' + p.py).join(' '), class: 'line' }, g);
+      const last = pts[pts.length - 1];
+      if (last) el('text', { x: last.px + 8, y: last.py + 4, class: 'point-label' }, g, label);
+    };
+    line(comparator, 'baseline', options.comparatorLabel || 'per request');
+    line(product, seriesClass({ label: options.productLabel || 'product' }), options.productLabel || 'product');
+    if (Number.isInteger(options.crossing) && options.crossing >= 1 && options.crossing <= n) {
+      const px = x(options.crossing);
+      const g = el('g', { class: 'crossing' }, f.plot);
+      el('line', { x1: px, x2: px, y1: 0, y2: f.height, class: 'rule' }, g);
+      el('text', { x: px + 6, y: 12, class: 'point-label' }, g, 'ahead from ' + options.crossing);
+    }
+    return f.figure;
+  }
+
   // 9. Timeline of tool calls by node over the attempt.
   function timeline(options) {
     const lanes = options.lanes || [], rowHeight = 26;
@@ -396,5 +449,5 @@ window.Charts = (() => {
     observer.observe(figure);
     return figure;
   };
-  return { dotWhisker: fitted(dotWhisker), scatter: fitted(scatter), bars: fitted(bars), columns: fitted(columns), failureColumns: fitted(failureColumns), strips: fitted(strips), waterfall: fitted(waterfall), trend: fitted(trend), timeline: fitted(timeline), matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
+  return { dotWhisker: fitted(dotWhisker), scatter: fitted(scatter), bars: fitted(bars), columns: fitted(columns), failureColumns: fitted(failureColumns), strips: fitted(strips), waterfall: fitted(waterfall), trend: fitted(trend), breakEven: fitted(breakEven), timeline: fitted(timeline), matrix, architecture, familyOf, pct, money, compact, ticks, linear, log10 };
 })();

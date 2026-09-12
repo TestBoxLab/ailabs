@@ -50,6 +50,8 @@ def decode(value):
 
 
 def code_identity():
+    # Deliberately uncached: this answers "is the tree the same on both sides now".
+    # A cached answer lets a coordinator admit a worker running code it is not.
     root = Path(__file__).resolve().parents[1]
     digest = hashlib.sha256()
     for package in ('wb_studio', 'wb_arms', 'wb_orchestrator', 'wb_world', 'wb_results', 'grader', 'runner'):

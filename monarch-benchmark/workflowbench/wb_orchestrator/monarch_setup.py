@@ -1,6 +1,6 @@
 """`wb monarch setup`: prepare one product's knowledge base inside Monarch, once.
 
-Five steps, printed one line each (contracts/cli.md):
+Preparation steps, printed one line each (contracts/cli.md):
 
   generate  write the seed folders from the product's OpenAPI documents, then
             run Monarch's own `validate-seeds.mjs` when `MONARCH_SEED_VALIDATOR`
@@ -14,7 +14,11 @@ Five steps, printed one line each (contracts/cli.md):
   granted   an open question; warned about, never fails
   write     config/products/<product>.monarch-kb.yaml, the file `wb run` checks
 
-With `--knowledge <catalog.json>` the seeds it validates, checks and imports
+External products require `--tasks` with frozen source contracts. Their seeds use
+product-qualified slugs, published source API documents, and guarded imports.
+Source-native execution is checked in separate live smoke runs.
+
+With `--knowledge <catalog.json>` the AutomationBench seeds it validates, checks and imports
 are the LAB seeds (`wb_world.knowledge`): the same routes, descriptions from
 the reviewed catalog, and the catalog's sha256 in the hash file. `wb monarch
 knowledge` runs only the first step and writes them without importing.
@@ -63,12 +67,39 @@ def expand(value: str | None, env: dict, field: str) -> str:
 
     return _VAR.sub(sub, value).rstrip("/")
 
+def front_door_secret(env) -> str:
+    """The segment the Studio's front door demands, or "" when it is not configured.
+
+    Basic Auth cannot gate that path: the competitor under test calls it and holds no
+    credentials. The secret travels in the address the seeds name instead, so Monarch
+    sends nothing it did not send before. Rotate it per round by changing the variable
+    before `wb monarch setup` writes the seeds.
+    """
+    return (env.get("STUDIO_FRONT_DOOR_SECRET") or "").strip().strip("/")
+
+
+def front_door_path(base: str, env) -> str:
+    """The seed URL for the front door: the base plus the secret segment when there is one.
+
+    A base that does not point at a Studio front door is left alone — a direct shim
+    address or an ngrok tunnel straight to the shim has no such segment to carry.
+    """
+    secret = front_door_secret(env)
+    base = base.rstrip("/")
+    if not secret or not base.endswith("/front-door"):
+        return base
+    return base + "/" + secret
+
+
 def public_front_door_url(harness, env) -> str:
     """The address Monarch's containers use to reach the front door: the harness's
     `shim_public_url` (a tunnel such as ngrok; `${VAR}` expanded) when set, else
-    `http://<shim_public_host>:<shim_port>` for Monarch in Docker on this machine."""
+    `http://<shim_public_host>:<shim_port>` for Monarch in Docker on this machine.
+
+    When that address is a Studio front door, the secret segment is appended so the
+    seeds name a door that will actually open (feature 024, FR-001)."""
     if harness.shim_public_url:
-        return expand(harness.shim_public_url, env, "shim_public_url").rstrip("/")
+        return front_door_path(expand(harness.shim_public_url, env, "shim_public_url"), env)
     return f"http://{harness.shim_public_host}:{harness.shim_port}"
 
 
@@ -150,6 +181,10 @@ def lab_seeds(product_path, harness_path, out_dir, env: dict, stdout, knowledge_
     """
     out = Path(out_dir).resolve()
     try:
+        product = config.load_product(product_path)
+        if product.world and product.world != "automation-bench":
+            raise Stop(2, "knowledge", "source products use their published API contracts; "
+                       "AutomationBench knowledge maps do not apply")
         harness = config.load_harness(harness_path)
         shim_public_url = front_door.rstrip("/") if front_door else public_front_door_url(harness, env)
         _generate(out, shim_public_url, stdout)
@@ -162,27 +197,53 @@ def lab_seeds(product_path, harness_path, out_dir, env: dict, stdout, knowledge_
 
 def run(product_path, harness_path, out_dir, env: dict, stdout,
         conform: bool = True, knowledge: str | None = None,
-        knowledge_map: str | None = None) -> int:
+        knowledge_map: str | None = None, tasks: str | Path | None = None) -> int:
     def say(mark: str, step: str, detail: str = "") -> None:
         print(f"[{mark}] {step}{': ' + detail if detail else ''}", file=stdout)
 
     out = Path(out_dir).resolve()
     try:
         product = config.load_product(product_path)
+        external = bool(product.world and product.world != "automation-bench")
+        if external:
+            if knowledge or knowledge_map:
+                raise Stop(2, "knowledge", "source products use their published API contracts; "
+                           "AutomationBench knowledge maps do not apply")
+            if not tasks:
+                raise Stop(2, "generate", "source products require --tasks with a frozen task directory")
         harness = config.load_harness(harness_path)
         fd_url = expand(harness.fd_url, env, "fd_url")
         shim_public_url = public_front_door_url(harness, env)
         fd_head = fd_headers(harness, env)
 
-        # 1. generate (and, for the lab instance, enrich before anything checks or imports it)
-        _generate(out, shim_public_url, stdout)
-        taught = _enrich(out, product_path, knowledge, knowledge_map, stdout) if knowledge else None
+        # 1. generate the selected product's catalogue before any import.
+        taught = None
+        if external:
+            from wb_orchestrator import external_catalogue
+            try:
+                summary = external_catalogue.generate(product, tasks, out, shim_public_url)
+            except (ValueError, OSError) as exc:
+                raise Stop(2, "generate", str(exc)) from exc
+            want = sorted(external_catalogue.product_slug(product, s) for s in product.services)
+            if summary.folders != want or summary.service_slugs != {
+                    service: external_catalogue.product_slug(product, service)
+                    for service in product.services}:
+                raise Stop(2, "generate", "source catalogue returned a different product namespace")
+            say("ok", "generate", f"operations_in_spec={summary.operations_in_spec} "
+                f"files_written={summary.files_written} folders={len(summary.folders)} "
+                f"source_catalogue_sha256={summary.sha256}")
+        else:
+            _generate(out, shim_public_url, stdout)
+            taught = _enrich(out, product_path, knowledge, knowledge_map, stdout) if knowledge else None
+            want = sorted(seeds.product_slug(s) for s in product.services)
         _run_seed_validator(out, env, stdout)
-        if conform:
+        if external:
+            say("ok", "contracts", "source API documents validated; source-native live smoke "
+                "is a separate execution check")
+        elif conform:
             _conform_gate(out, product.services, stdout)
 
         # 2. mounted
-        want = sorted(seeds.product_slug(s) for s in product.services)
         listed = {s["slug"] for s in _get(f"{fd_url}/v1/seeds", "mounted", headers=fd_head).get("items", [])}
         missing = [s for s in want if s not in listed]
         if missing:
@@ -196,8 +257,11 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
         # registered a second, slugified product per app -- verified 4 Sep 2026)
         kb: dict[str, str] = {}
         for slug in want:
-            res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}",
-                        headers=fd_head)
+            if external:
+                res = _source_import(fd_url, slug, fd_head)
+            else:
+                res = _post(f"{fd_url}/v1/seeds/{slug}/import", {}, f"import {slug}",
+                            headers=fd_head)
             kb[slug] = str((res.get("after") or {}).get("kb_hash") or "")
             print(f"      {slug}: actions_imported={res.get('actions_imported')} "
                   f"kb_hash={kb[slug][:12]}", file=stdout)
@@ -206,8 +270,12 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
         # 5. granted
         # ponytail: static warning, not a check; Monarch names no grant route yet
         # (open question 2). Upgrade: query the org's products and print the missing slugs.
-        say("warn", "granted", "unknown (open question 2): verify the 47 bench-* products "
-                               "are granted to the bench user's organisation")
+        if external:
+            say("warn", "granted", "verify these source products are granted to the source "
+                f"benchmark user's organisation: {', '.join(want)}")
+        else:
+            say("warn", "granted", "unknown (open question 2): verify the 47 bench-* products "
+                                   "are granted to the bench user's organisation")
 
         # 6. write
         path, changed = _write_kb(Path(product_path), product.name, shim_public_url, kb,
@@ -219,6 +287,24 @@ def run(product_path, harness_path, out_dir, env: dict, stdout,
     except Stop as stop:
         say("stop", stop.step, stop.message)
         return stop.code
+
+
+def _source_import(fd_url: str, slug: str, headers: dict) -> dict:
+    """Use FD's transactional drift guard for both first and repeated source imports."""
+    diff = _get(f"{fd_url}/v1/seeds/{slug}/diff", f"diff {slug}", headers=headers)
+    if (not isinstance(diff, dict) or diff.get("slug") != slug or "kb_hash" not in diff
+            or not (diff["kb_hash"] is None or
+                    isinstance(diff["kb_hash"], str) and bool(diff["kb_hash"].strip()))
+            or not isinstance(diff.get("seed_hash"), str) or not diff["seed_hash"].strip()):
+        raise Stop(4, f"diff {slug}", "source diff lacks an explicit current hash or absence")
+    result = _post(f"{fd_url}/v1/seeds/{slug}/import", {"expected_hash": diff["kb_hash"]},
+                   f"import {slug}", headers=headers)
+    after = result.get("after") if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or result.get("slug") != slug
+            or result.get("in_sync") is not True or result.get("seed_hash") != diff["seed_hash"]
+            or not isinstance(after, dict) or after.get("kb_hash") != diff["seed_hash"]):
+        raise Stop(4, f"import {slug}", "source import did not confirm the observed seed hash in sync")
+    return result
 
 
 def _run_seed_validator(out: Path, env: dict, stdout) -> None:

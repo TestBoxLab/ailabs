@@ -127,3 +127,193 @@ def test_every_turn_records_a_prompt_with_the_date_and_the_recency_rule(tmp_path
     assert 'America/Sao_Paulo' in brief
     assert 'Prefer sources from the last six months; keep foundational and contradicting work.' in brief
     assert brief.rstrip().endswith('What changed in agent evaluation this quarter?')
+
+
+def test_task_values_false_completion_restricts_to_competitor_produced_output():
+    from wb_studio.genesis_hypotheses import _task_values
+    rows = [
+        {"task": "t1", "model": "m", "passed": False, "termination": "agent_error", "output": "Please complete this task."},
+        {"task": "t2", "model": "m", "passed": False, "termination": "completed", "output": "I am done."},
+        {"task": "t3", "model": "m", "passed": True, "termination": "completed", "output": "Done."},
+    ]
+    values = _task_values(rows, [], "false_completion")
+    assert values.get("t1") == 0.0
+    assert values.get("t2") == 1.0
+    assert "t3" not in values
+
+
+def test_variant_test_defaults_to_development_slate():
+    from wb_studio.genesis_hypotheses import check_hypothesis
+    record = {
+        'claim': 'Naming the record owner raises pass rate.',
+        'population': {'filter': {'domain': 'finance'}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    checked = check_hypothesis(record)
+    assert checked['slate'] == 'development'
+
+
+def test_variant_test_accepts_held_out_slate_and_refuses_unknown():
+    from wb_studio.genesis_hypotheses import check_hypothesis
+    record = {
+        'claim': 'Naming the record owner raises pass rate.',
+        'population': {'filter': {'domain': 'finance'}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+        'slate': 'held-out',
+    }
+    assert check_hypothesis(record)['slate'] == 'held-out'
+
+    with pytest.raises(ValueError, match='development or held-out'):
+        check_hypothesis({**record, 'slate': 'validation'})
+
+
+def test_smallest_plan_refuses_size_when_sign_test_cannot_reach_significance(tmp_path):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(10)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=Mock(), create=Mock())
+    record = {
+        'claim': 'V2 beats V1.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(10)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                       'b': {'kind': 'architecture', 'id': 'v1'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is False
+    assert 'cannot be settled' in plan['not_launchable']
+
+
+def test_smallest_plan_refuses_when_exceeding_envelope_remainder(tmp_path, monkeypatch):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    from wb_studio.genesis_access import Envelope
+    from decimal import Decimal
+
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(100)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=None, create=Mock())
+    # Envelope has $3.00 left
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='50.00', per_experiment_ceiling_usd='40.00', by='Lucas')
+    monkeypatch.setattr(env, 'status', lambda ledger=None: {
+        'week_start': '2026-09-07', 'amount_usd': '50.00', 'per_experiment_ceiling_usd': '40.00',
+        'held_usd': '47.00', 'settled_usd': '0.00', 'available_usd': Decimal('3.00'),
+        'left_usd': '3.00', 'is_set': True, 'set_by': 'human:lucas', 'set_at': '2026-09-11T00:00:00Z',
+    })
+    studio.envelope = env
+
+    record = {
+        'claim': 'V2 beats V1 on development slate.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(50)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2', 'model': 'gemini-3.7-flash'},
+                       'b': {'kind': 'architecture', 'id': 'v1', 'model': 'gemini-3.7-flash'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is True
+    max_usd = Decimal(plan['proposal']['maximum_usd'])
+    assert max_usd > Decimal('3.00')
+    shortfall = max_usd - Decimal('3.00')
+    expected_refusal = (
+        f"refused: this experiment reserves up to ${max_usd:.2f}; "
+        f"the research envelope has $3.00 left this week. "
+        f"Short by ${shortfall:.2f}. It will not draw on the lab's weekly ceiling."
+    )
+    assert plan['not_launchable'] == expected_refusal
+
+
+def test_smallest_plan_refuses_when_exceeding_per_experiment_ceiling(tmp_path):
+    from wb_studio.genesis_hypotheses import smallest_plan
+    from wb_studio.genesis_access import Envelope
+    from decimal import Decimal
+
+    tasks = {'t%d' % i: {'task': 't%d' % i, 'info': {}} for i in range(100)}
+    studio = SimpleNamespace(directory=tmp_path, tasks=tasks, jobs=lambda: [],
+                             job=lambda identity: None, events=lambda i, after=0: [],
+                             budget=lambda: {}, ledger=None, create=Mock())
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='200.00', per_experiment_ceiling_usd='0.05', by='Lucas')
+    studio.envelope = env
+
+    record = {
+        'claim': 'V2 beats V1 on development slate.',
+        'population': {'filter': {'task_ids': ['t%d' % i for i in range(50)]}},
+        'comparison': {'a': {'kind': 'architecture', 'id': 'v2', 'model': 'gemini-3.7-flash'},
+                       'b': {'kind': 'architecture', 'id': 'v1', 'model': 'gemini-3.7-flash'}},
+        'measure': 'pass_rate',
+        'direction': 'a_higher',
+        'minimum_effect': 0.2,
+    }
+    plan = smallest_plan(studio, record)
+    assert plan['power']['ok'] is True
+    max_usd = Decimal(plan['proposal']['maximum_usd'])
+    assert max_usd > Decimal('0.05')
+    shortfall = max_usd - Decimal('0.05')
+    expected_refusal = (
+        f"refused: this experiment reserves up to ${max_usd:.2f}; "
+        f"the per-experiment ceiling is $0.05. Short by ${shortfall:.2f}."
+    )
+    assert plan['not_launchable'] == expected_refusal
+
+
+
+
+# --- the proposal: what a held-out confirmation produces (FR-034) ---
+
+def _lineage_genesis(cards):
+    return SimpleNamespace(listing=lambda kind: cards if kind == 'cards' else [])
+
+
+def _confirmed_card(slate='held-out', outcome='supported', identity='c2'):
+    return {
+        'id': identity, 'created_at': '2026-09-11T10:00:00Z', 'lineage': 'L1',
+        'hypothesis': {'claim': 'Naming the record owner raises pass rate.',
+                       'slate': slate, 'lineage': 'L1', 'repetitions': 3,
+                       'comparison': {'a': {'kind': 'architecture', 'id': 'v2'},
+                                      'b': {'kind': 'architecture', 'id': 'v1'}},
+                       'measure': 'pass_rate', 'direction': 'a_higher',
+                       'minimum_effect': 0.2},
+        'settlement': {'outcome': outcome, 'effect': 0.3, 'certainty': 'probably',
+                       'paired': {'wins': 8, 'losses': 1, 'pairs': 9, 'p_value': 0.02},
+                       'tags': ['[rec:run:run-9]']},
+    }
+
+
+def test_a_proposal_comes_only_from_a_supported_held_out_confirmation():
+    from wb_studio.genesis_hypotheses import proposal
+    ok = proposal(_lineage_genesis([_confirmed_card()]), 'L1')
+    assert ok['variant'] == 'v2' and ok['baseline'] == 'v1'
+    assert ok['slate'] == 'held-out' and ok['repetitions'] == 3
+    assert ok['paired_result']['p_value'] == 0.02
+    assert '[rec:run:run-9]' in ok['evidence']
+    # A written specification, not something anybody can execute.
+    assert ok['kind'] == 'written-specification'
+    assert 'v2' in ok['rationale'] and '8' in ok['rationale']
+
+
+def test_a_development_result_alone_is_not_a_proposal():
+    """FR-034. Development is where the search happens; it is contaminated by design."""
+    from wb_studio.genesis_hypotheses import proposal
+    out = proposal(_lineage_genesis([_confirmed_card(slate='development')]), 'L1')
+    assert out['proposal'] is None
+    assert 'held-out' in out['reason']
+
+
+def test_a_held_out_result_that_did_not_hold_is_not_a_proposal():
+    from wb_studio.genesis_hypotheses import proposal
+    out = proposal(_lineage_genesis([_confirmed_card(outcome='not_supported')]), 'L1')
+    assert out['proposal'] is None and 'not_supported' in out['reason']

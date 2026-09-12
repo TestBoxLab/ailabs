@@ -151,3 +151,61 @@ def test_service_check_survives_a_re_import(stub_vendor, tmp_path):
     second = corpus_mod.import_ab(["finance"], tmp_path, product_services=["airtable"])
     assert second["written"] == 0 and second["unchanged"] == 1
     assert second["missing_services"] == ["not_a_product_app"]
+
+
+def test_structural_difficulty_scores_arbitrary_task():
+    task = {
+        "info": {
+            "initial_state": {"airtable": {"contacts": [{"id": 1}]}},
+            "expected_changes": [{"service": "airtable", "action": "update"}],
+            "zapier_tools": ["airtable_create_record", "gmail_send_mail"],
+        }
+    }
+    # 1 seeded service + 1 expected change + 2 zapier tools = 4
+    assert corpus_mod.structural_difficulty(task) == 4
+    assert corpus_mod.score_task(task) == 4
+
+
+def test_cli_corpus_split(tmp_path, capsys):
+    from pathlib import Path
+    from wb_orchestrator.cli import main
+
+    fixture = Path(__file__).parent / "fixtures" / "mini-corpus"
+    corpus_dirs = sorted(fixture.glob("imported-*"))
+    corpus_arg = ",".join(d.as_posix() for d in corpus_dirs)
+
+    dev_out = tmp_path / "tasks" / "dev-4"
+    heldout_out = tmp_path / "tasks" / "heldout-4"
+    manifest_path = tmp_path / "tasks" / "split-manifest.yaml"
+
+    argv = [
+        "corpus", "split",
+        f"--corpus={corpus_arg}",
+        "--size", "4",
+        "--seed", "20260911",
+        "--dev-out", dev_out.as_posix(),
+        "--heldout-out", heldout_out.as_posix(),
+        "--manifest", manifest_path.as_posix(),
+        "--because", "cli test split",
+    ]
+
+    rc = main(argv)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "drawn from 13 usable tasks across 3 domains" in out
+    assert "development  4 tasks" in out
+    assert "held-out     4 tasks" in out
+    assert "domains balanced:" in out
+    assert "frozen:" in out
+    assert f"manifest: {manifest_path.as_posix()}" in out
+    assert dev_out.is_dir() and len(list(dev_out.glob("*.json"))) == 4
+    assert heldout_out.is_dir() and len(list(heldout_out.glob("*.json"))) == 4
+    assert manifest_path.is_file()
+
+    # Redrawing against the frozen held-out slate exits 2 with refusal text
+    rc_redraw = main(argv)
+    assert rc_redraw == 2
+    err = capsys.readouterr().err
+    assert f"refused: {heldout_out.as_posix()} is a frozen held-out slate. A held-out slate is never redrawn." in err
+
+

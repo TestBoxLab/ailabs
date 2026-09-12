@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Genesis recovery · AI Labs</title><link rel="stylesheet" href="/recovery.css"><script src="/recovery.js" defer></script></head>
+<body>
+<!-- THESIS: Extend AI Labs operations with a recovery form independent of Studio.
+OWN-WORLD: Existing paper, ink, signal red, IBM Plex Sans and hairline rules.
+STORY: Authenticate, inspect accepted repairs, pin a source revision and request a verified patch.
+FIRST VIEWPORT: Compact header, access form, then request form beside the repair list. Mobile follows that reading order.
+FORM: Narrow operational extension; existing visual authority. Signature interaction: selecting a repair reveals its receipt and complete patch.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md -->
+<header><a href="/" aria-label="Genesis recovery home">AI Labs <span>/ Genesis recovery</span></a><span id="service">Checking service…</span></header>
+<main><h1>Genesis recovery</h1><p class="intro">Inspect and request repairs even when Studio is unavailable. Verified changes stay here for review before release.</p>
+<form id="access" class="access"><p id="connected-state" hidden>Connected to recovery</p><label id="key-label" for="key">Recovery access key</label><div class="row"><input id="key" type="password" autocomplete="off" required placeholder="Enter your recovery key"><button id="connect">Connect</button><button id="disconnect" type="button" hidden>Disconnect</button></div><p class="hint">Your key stays in this tab’s memory and is cleared on refresh.</p></form>
+<p id="notice" role="status" aria-live="polite"></p>
+<div id="workspace" class="workspace" hidden>
+<section aria-labelledby="request-title"><h2 id="request-title">Request a repair</h2><form id="repair">
+<label for="repo">Repository</label><select id="repo"><option value="lab">AI Labs</option><option value="monarch">Monarch Enterprise</option></select>
+<label for="commit">Source commit</label><div class="row"><input id="commit" required pattern="[0-9a-f]{40}" maxlength="40" spellcheck="false" placeholder="Full 40-character commit"><button type="button" id="resolve">Use latest</button></div>
+<label for="change">What needs to change?</label><textarea id="change" required maxlength="16000" rows="4" placeholder="Describe the problem and the behavior you want."></textarea>
+<label for="verification">How should it be verified?</label><textarea id="verification" required maxlength="8000" rows="3" placeholder="Describe what must work before this repair is ready for review."></textarea>
+<p class="hint">Queueing saves the request. Execution also needs an authorized allowance and a connected worker.</p><button type="submit" class="primary">Queue repair</button></form></section>
+<section aria-labelledby="jobs-title"><div class="section-head"><h2 id="jobs-title">Your repairs</h2><button id="refresh" type="button">Refresh</button></div><p class="hint">The latest 50 requests, newest first.</p><div id="jobs"></div><article id="detail" hidden><h3 id="receipt-title" tabindex="-1">Repair receipt</h3><p id="detail-state"></p><dl id="metadata"></dl><p id="detail-note"></p><button id="download" type="button" hidden>Download complete patch</button><details id="verification-result"><summary>Verification output</summary><pre id="output"></pre></details><details id="patch-preview"><summary>Patch preview</summary><pre id="diff"></pre></details></article></section>
+</div></main><footer>Genesis recovery runs separately from AI Labs Studio.</footer></body></html>

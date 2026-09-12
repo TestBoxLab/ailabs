@@ -14,6 +14,9 @@ The identity, the keys and the roles are lane B's; this module only stores and i
 from __future__ import annotations
 
 import re
+import os
+import uuid
+from contextlib import nullcontext
 
 from wb_studio.memory import scan
 
@@ -54,10 +57,36 @@ def write(genesis, who, text, by='genesis') -> dict:
     if len(text) > PERSON_BUDGET:
         raise ValueError(f'A person file holds at most {PERSON_BUDGET:,} characters; this one has {len(text):,}. '
                          'Merge what you know instead of adding to it.')
-    file.write_text(text + ('\n' if text else ''), encoding='utf8', newline='\n')
+    temporary = file.with_name(file.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        temporary.write_text(text + ('\n' if text else ''), encoding='utf8', newline='\n')
+        os.replace(temporary, file)
+    finally:
+        temporary.unlink(missing_ok=True)
     genesis.autonomy.record('person-file', person=file.stem, size=len(text), by=by)
     return read(genesis, file.stem)
 
+
+
+def remember(genesis, who, text, old=None):
+    """Add or correct one explicit preference without replacing unrelated entries."""
+    text = str(text or '').strip()
+    if not text or '\n' in text or len(text) > 400:
+        raise ValueError('Write one memory line up to 400 characters.')
+    with getattr(genesis, 'lock', nullcontext()):
+        current = read(genesis, who)['text']
+        lines = current.splitlines()
+        if old is not None:
+            old = str(old).strip()
+            matches = [i for i, line in enumerate(lines) if old and old in line]
+            if len(matches) != 1:
+                raise ValueError('The old memory must match exactly one existing line; read the profile first.')
+            lines[matches[0]] = text
+        elif text in lines:
+            return read(genesis, who)
+        else:
+            lines.append(text)
+        return write(genesis, who, '\n'.join(lines))
 
 def listing(genesis) -> list:
     folder = genesis.root / 'people'
@@ -111,7 +140,8 @@ def ON_TURN(genesis, turn):
         genesis.memory.index_records([row])
 
 
-TOOLS = {'person_read': lambda genesis, payload: read(genesis, payload.get('person')),
+TOOLS = {'person_remember': lambda genesis, payload: remember(genesis, payload.get('person'), payload.get('text'), payload.get('old')),
+         'person_read': lambda genesis, payload: read(genesis, payload.get('person')),
          'person_write': lambda genesis, payload: write(genesis, payload.get('person'), payload.get('text'))}
 
 PROTOCOL = ('You keep one file per person, at most 1,000 characters: what you know about them and how they like '

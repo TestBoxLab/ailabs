@@ -168,6 +168,8 @@ class FakeMonarch:
         self._lock = threading.Lock()
         self._stopping = threading.Event()   # released so held-open streams end
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.httpd.daemon_threads = True
+        self.httpd.block_on_close = False
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}"
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -226,7 +228,14 @@ class FakeMonarch:
         against a hand-picked deadline: the engine call may take up to
         ENGINE_CALL_TIMEOUT_S, so any shorter wait is a race by construction."""
         budget = ENGINE_CALL_TIMEOUT_S + 5 if timeout is None else timeout
-        return self._run_finished(run_id).wait(timeout=budget)
+        end = time.monotonic() + budget
+        ev = self._run_finished(run_id)
+        while time.monotonic() < end:
+            if self._stopping.is_set():
+                return False
+            if ev.wait(timeout=0.2):
+                return True
+        return False
 
     def _handler(self):
         outer = self
@@ -267,8 +276,10 @@ class FakeMonarch:
                 self.send_header("Content-Type",
                                  "text/plain" if isinstance(obj, str) else "application/json")
                 self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(payload)
+                self.close_connection = True
 
             def _authed(self) -> bool:
                 got = self.headers.get("x-monarch-session")
@@ -564,17 +575,25 @@ class FakeMonarch:
                     self._chunk(f"data: {json.dumps(frame)}\n\n".encode())
                     with outer._lock:
                         outer._frames_sent[run_id] = i + 1
+                    if outer._stopping.is_set():
+                        break
                     if frame.get("status") == "awaiting_input":
                         rid = (frame.get("awaiting_reply") or {}).get("requestId", "")
-                        outer._event(rid).wait(timeout=REPLY_GATE_TIMEOUT_S)
+                        ev = outer._event(rid)
+                        end_wait = time.monotonic() + REPLY_GATE_TIMEOUT_S
+                        while time.monotonic() < end_wait and not outer._stopping.is_set():
+                            if ev.wait(timeout=0.2):
+                                break
                         with outer._lock:
                             cancelled = run_id in outer._cancelled
-                        if cancelled:
-                            self._chunk(b'data: {"status": "error", "error": "cancelled"}\n\n')
+                        if cancelled or outer._stopping.is_set():
+                            if cancelled:
+                                self._chunk(b'data: {"status": "error", "error": "cancelled"}\n\n')
                             break
                     if frame.get("status") in ("done", "error"):
                         break
                 self._chunk(b"")   # terminating chunk closes the stream
+                self.close_connection = True
 
             def _run_stream(self):
                 """The stock engine stream: one frame per change of the run view,
@@ -595,6 +614,8 @@ class FakeMonarch:
                 self.end_headers()
                 self._chunk(b": ping\n\n")
                 for view in sc.run_views:
+                    if outer._stopping.is_set():
+                        break
                     time.sleep(sc.delay_s.get("view", 0))
                     frame = {"id": run_id, **view, "status": "running",
                              "engineState": {"status": "running", "parkedReason": None}}
@@ -608,6 +629,7 @@ class FakeMonarch:
                          "engineState": {"status": engine, "parkedReason": None}}
                 self._chunk(f"data: {json.dumps(final)}\n\n".encode())
                 self._chunk(b"")
+                self.close_connection = True
 
             def _chunk(self, payload: bytes):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(payload), payload))
@@ -621,12 +643,17 @@ class FakeMonarch:
 
     def stop(self) -> None:
         self._stopping.set()
+        with self._lock:
+            for ev in self._reply_events.values():
+                ev.set()
+            for ev in self._run_events.values():
+                ev.set()
         self.httpd.shutdown()
         # Join before closing: a stream handler still writing frames from the
         # previous scenario would otherwise outlive its test and serve them to
         # the next one, whose fixture is a different FakeMonarch but whose
         # client may still be reading.
-        self._thread.join(timeout=10)
+        self._thread.join(timeout=3)
         self.httpd.server_close()
 
     def __enter__(self):

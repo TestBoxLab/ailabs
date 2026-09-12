@@ -19,7 +19,11 @@ def genesis(tmp_path, monkeypatch):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(return_value={'id': 'run-1'}), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=ledger)
     monkeypatch.setattr('wb_studio.runtime_registry.check_launch', lambda studio, architectures, selected, track='agentic-request': [{'id': 'without-monarch', 'name': 'API control'}])
-    return Genesis(studio)
+    # Feature 024 FR-002 turns every dial off by default; these tests are about
+    # what Genesis does once a person has turned it on.
+    genesis = Genesis(studio)
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
+    return genesis
 
 
 def test_skills_are_bounded_scanned_and_enter_the_prompt_by_kind(genesis, monkeypatch):
@@ -113,7 +117,12 @@ def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason
 
 
 def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
-    monkeypatch.setattr(harness, 'model_routes', lambda: [{'id': 'gemini-3.7-flash', 'available': True}])
+    routes = [{'id': 'gemini-3.7-flash', 'available': True}]
+    monkeypatch.setattr(harness, 'model_routes', lambda: routes)
+    # This test is about the pause and the queue, not about which model the lab picked.
+    # `reading` resolves the partner exactly and never substitutes, so pin it to this
+    # fixture's own stub route rather than inheriting the global partner default.
+    genesis.config.set({'models': {'chat': routes[0]['id'], 'reading': routes[0]['id']}}, routes=routes)
     dropped = genesis.drop({'text': 'A sentence to work.'})
     genesis.autonomy.set({'paused': True})
     with pytest.raises(ValueError, match='paused'):

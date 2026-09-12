@@ -7,7 +7,23 @@ name = "workflowbench"
 version = "0.1.0"
 description = "WorkflowBench T0: synthetic-mode world server, graph ingester, grader, pilot runner"
 requires-python = ">=3.13"
-dependencies = ["pydantic>=2.0", "mcp>=1.0", "automation-bench==1.0.6", "openai>=1.50", "google-genai>=1.0", "pyyaml>=6.0"]
+dependencies = ["pydantic>=2.0", "mcp>=1.0", "automation-bench==1.0.6", "openai>=1.50", "google-genai>=1.0", "pyyaml>=6.0", "websockets>=15"]
+
+# The external benchmarks that run as products under test (feature 026) are NOT
+# dependencies of this project, in any form -- not required, not optional, not an
+# extra. Each runs out of process in its own environment, and WorkflowBench talks to
+# it over HTTP.
+#
+# That is not a preference. `appworld` pins pydantic>=1.9,<2.0 and this project needs
+# pydantic>=2.0 for AutomationBench's WorldState, so the two cannot share an
+# environment at all; declaring it even as an extra makes `uv sync` unresolvable.
+# tau2 would drag litellm into a repository whose provider calls all go through
+# wb_arms/api_loop.py. EnterpriseOps-Gym was always going to be containers.
+#
+# So all three are out of process, which is also the shape the uniform front door
+# wants: a world is an HTTP endpoint plus an interface document, whatever language or
+# dependency set it happens to be written against. See
+# specs/026-external-benchmark-products/research.md R10.
 
 [project.scripts]
 wb = "wb_orchestrator.cli:main"
@@ -30,7 +46,9 @@ dev = [
 automation-bench = { path = "vendor/automation-bench", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["wb_world", "ingester", "grader", "runner", "wb_arms", "wb_orchestrator", "wb_results", "wb_stats", "wb_report", "wb_tenants", "wb_studio", "legacy"]
+packages = ["wb_world", "wb_worlds", "ingester", "grader", "runner", "wb_arms", "wb_orchestrator", "wb_results", "wb_stats", "wb_report", "wb_studio", "wb_repair", "legacy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+

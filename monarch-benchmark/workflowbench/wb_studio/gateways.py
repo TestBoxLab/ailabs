@@ -66,10 +66,11 @@ def _money(value) -> Decimal:
 
 
 def ceiling_cost(provider: providers.Provider, input_tokens: int, output_tokens: int) -> Decimal:
-    rate_in = max(provider.price_in, provider.price_cache_write or 0)
+    input_rate, _, write_rate, output_rate = providers.context_rates(provider, input_tokens)
+    rate_in = max(input_rate, write_rate)
     with localcontext() as context:
         context.prec = 40
-        total = (Decimal(input_tokens) * Decimal(str(rate_in)) + Decimal(output_tokens) * Decimal(str(provider.price_out))) / Decimal(1_000_000)
+        total = (Decimal(input_tokens) * Decimal(str(rate_in)) + Decimal(output_tokens) * Decimal(str(output_rate))) / Decimal(1_000_000)
         return _money(total)
 
 

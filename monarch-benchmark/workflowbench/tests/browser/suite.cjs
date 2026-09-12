@@ -257,8 +257,6 @@ check('report: a contents list, sections with an address, the page titled by the
     await p.locator('[data-open-round]').first().click(); await p.waitForSelector('#report-article .standings');
     assert(!(await p.locator('#report-article').innerText()).includes('Not counted in the standings'), 'a pilot round does not list its own runs as excluded');
     assert((await p.locator('#report-article .standings thead th').first().innerText()) === 'Rank', 'standings carry a rank column');
-    at('audience in the address'); await p.locator('#report-article [data-audience=internal]').click(); await p.waitForFunction(() => location.hash.includes('audience=internal'));
-    assert((await p.locator('#report-article .internal-mark').count()) === 1, 'the internal view is banded');
     assert((await p.locator('#report-article figure.chart .chart-take a').count()) >= 2, 'a figure can be taken away as SVG or CSV');
     assert((await p.locator('#report-article .report-terms-fold').count()) === 1 && !(await p.locator('#report-article .report-terms-fold').getAttribute('open')), 'terms fold away');
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
@@ -410,6 +408,50 @@ check('studio: New architecture opens the template menu and a choice opens the e
   } finally { await context.close(); }
 });
 
+check('studio: Genesis builds in the open editor, provisional until a save, and a busy prompt field waits', async browser => {
+  // Feature 025, FR-044 to FR-049. The operations are the ones the lab would put on the
+  // turn stream; delivering them by hand is what keeps this check free of a paid turn.
+  const { p, context, errors } = await page(browser, 'light', '/#studio');
+  const send = op => p.evaluate(v => window.applyArchitectureOperation(v), op);
+  try {
+    await p.waitForSelector('#studio-library-rows');
+    await p.locator('[data-studio-empty-create]').click();
+    await p.waitForSelector('.context-menu:not(.hidden) [role=menuitem]');
+    await p.locator('.context-menu [role=menuitem]').first().click();
+    await p.waitForFunction(() => document.querySelector('#setup-panel').dataset.screen === 'editor', null, { timeout: 10000 });
+    const before = await p.locator('#builder-nodes [data-node]').count();
+
+    at('a step Genesis added is on the canvas, marked provisional');
+    await send({ id: null, nodes: before + 1, edges: 0, operation: { operation: 'add_node', node: { id: 'gx', type: 'agent', label: 'Reviewer', x: 700, y: 300, config: {} } } });
+    // In-page predicates, not element handles: renderNodes() replaces the canvas wholesale
+    // on every validate, so a handle taken between two renders is stale by the next one.
+    await p.waitForFunction(() => !!document.querySelector('#builder-nodes [data-node=gx].provisional'), null, { timeout: 10000 });
+    assert(await p.evaluate(() => document.querySelector('#builder-nodes [data-node=gx]').getAttribute('aria-label').includes('provisional, not saved')), 'a screen reader hears it too');
+    assert((await p.locator('#builder-state').innerText()).includes('provisional'), 'the state line counts the provisional work');
+
+    at('voice sees the open architecture and selection without copying prompt text');
+    await p.evaluate(() => select('gx'));
+    const voiceContext = await p.evaluate(() => window.genesisWorkspaceContext());
+    assert(voiceContext.route === '#studio' && voiceContext.architecture.selected_nodes.includes('gx'), 'voice receives the current editor selection: ' + JSON.stringify(voiceContext));
+    assert(!JSON.stringify(voiceContext).includes('theirs') && voiceContext.architecture.dirty === true, 'voice distinguishes a dirty draft without copying prompt content');
+
+    at('a prompt the person is typing in is never overwritten; the operation waits');
+    await p.evaluate(() => { select('gx'); });
+    await p.waitForFunction(() => !!document.querySelector('#node-instructions'), null, { timeout: 10000 });
+    await p.locator('#node-instructions').fill('mine');
+    await send({ id: null, nodes: before + 1, edges: 0, operation: { operation: 'set_prompt', node: 'gx', text: 'theirs' } });
+    assert(await p.evaluate(() => document.querySelector('#node-instructions').value) === 'mine', 'their text is still theirs');
+    at('and it lands the moment they leave the field');
+    await p.locator('#blueprint-name').focus();
+    await p.waitForFunction(() => document.querySelector('#builder-nodes [data-node=gx] p')?.textContent.includes('theirs'), null, { timeout: 5000 });
+
+    at('undo discards it, because each operation is one entry');
+    await p.locator('#builder-undo').click();
+    await p.waitForFunction(() => document.querySelector('#builder-nodes [data-node=gx] p')?.textContent.includes('mine'), null, { timeout: 5000 });
+    await noOverflowNoErrors(p, errors, 'studio genesis build');
+  } finally { await context.close(); }
+});
+
 check('runs: days as group rows, text filters, the pager only when needed', async browser => {
   const { p, context, errors } = await page(browser, 'light', '/#runs');
   try {
@@ -451,7 +493,7 @@ check('settings: budget, capacity, providers with key presence, Monarch pin, all
     at('genesis configuration'); await p.waitForSelector('#settings-genesis-config .step-table');
     assert((await p.locator('#settings-genesis-config .step-table tbody tr').count()) >= 9, 'one row per step of Genesis\'s work');
     const genesisText = await p.locator('#settings-genesis-config').innerText();
-    assert(/envelope/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
+    assert(/weekly allowance/i.test(genesisText) && /People/.test(genesisText) && /Slack/.test(genesisText), 'budget, people and channels on the configuration page');
     await p.waitForSelector('#config-jobs .schedule-table'); assert((await p.locator('[data-run-job]').count()) >= 2, 'daily jobs listed with a run action');
     at('digest'); await p.goto(BASE + '/#genesis/digest'); await p.waitForSelector('#genesis-digest .report-section');
     assert(/^Genesis, week \d{1,2} of \d{4}$/.test(await p.locator('#genesis-digest h1').innerText()), 'the digest reads as a report');
@@ -505,6 +547,68 @@ check('genesis: chat first with the rail and the tracking pane; a dropped senten
     assert(narrow.overflow <= 1, 'the conversation overflows on a phone by ' + narrow.overflow + 'px');
     assert(narrow.composer, 'the composer is on screen on a phone');
     await phone.close();
+  } finally { await context.close(); }
+});
+
+check('genesis voice: completed delegated turns join the conversation once without losing the current workspace', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#genesis');
+  try {
+    await p.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const result = await p.evaluate(async () => {
+      const route = location.hash;
+      const turn = {id:'voice-browser-turn',thread:'voice-browser-thread',status:'completed',by:'human:studio',message:'Check this architecture',answer:'The recorded check is ready.',model:'gpt-5.6-sol',events:[]};
+      await window.genesisAcceptVoiceTurn(turn);
+      await window.genesisAcceptVoiceTurn(turn);
+      return {route,after:location.hash,conversation:window.genesisVoiceThreadContext(),count:document.querySelectorAll('[data-turn="voice-browser-turn"]').length,text:document.querySelector('#genesis-messages').innerText};
+    });
+    assert(result.route === result.after && result.count === 1, 'voice turn appears exactly once and preserves the workspace');
+    assert(result.conversation.thread === 'voice-browser-thread' && result.conversation.parent === 'voice-browser-turn', 'typing can continue the voice conversation');
+    assert(result.text.includes('Check this architecture') && result.text.includes('The recorded check is ready.'), 'actual Genesis renders both sides of the delegated turn');
+    await noOverflowNoErrors(p, errors, 'voice conversation integration');
+  } finally { await context.close(); }
+});
+
+check('genesis voice: a fast show receipt follows once and respects the follow preference', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#genesis');
+  try {
+    await p.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const result = await p.evaluate(async () => {
+      const original = window.goRoute, routes=[];
+      window.goRoute = route => routes.push(route);
+      const make = id => ({id,thread:'voice-show-thread',status:'completed',by:'human:studio',message:'Open budget',answer:'Budget is ready.',model:'gpt-5.6-sol',events:[{id:1,type:'tool_started',action:'show'},{id:2,type:'tool_completed',action:'show',detail:JSON.stringify({route:'#budget',label:'Budget'})}]});
+      try {
+        localStorage.setItem('genesis.follow','1');
+        await window.genesisAcceptVoiceTurn(make('fast-voice-show'));
+        await window.genesisAcceptVoiceTurn(make('fast-voice-show'));
+        localStorage.setItem('genesis.follow','0');
+        await window.genesisAcceptVoiceTurn(make('voice-show-follow-off'));
+        return {routes,links:document.querySelectorAll('[data-genesis-goto="#budget"]').length};
+      } finally { window.goRoute=original; }
+    });
+    assert(result.routes.length===1 && result.routes[0]==='#budget', 'completed-first-poll voice navigation follows exactly once: ' + JSON.stringify(result));
+    assert(result.links===2, 'both turns retain accessible navigation links');
+    await noOverflowNoErrors(p, errors, 'fast voice navigation');
+  } finally { await context.close(); }
+});
+
+check('genesis voice: refresh restores the conversation without replaying navigation', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#genesis');
+  try {
+    await p.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const turn = {id:'durable-voice-turn',thread:'durable-voice-thread',status:'completed',by:'human:studio',message:'Open budget',answer:'The budget link is ready.',events:[{type:'tool_completed',action:'show',detail:JSON.stringify({route:'#budget',label:'Budget'})}]};
+    await p.route('**/api/genesis', async route => {
+      const response=await route.fetch(), data=await response.json();
+      data.threads=[...(data.threads||[]),{id:turn.thread,owner:data.me||'human:studio',title:'Durable voice',turn_count:1}];
+      await route.fulfill({response,json:data});
+    });
+    await p.route('**/api/genesis/threads/durable-voice-thread', route => route.fulfill({json:{turns:[turn]}}));
+    await p.evaluate(async t => {localStorage.setItem('genesis.follow','0');await window.genesisAcceptVoiceTurn(t);location.hash='#reports';},turn);
+    await p.reload();
+    await p.waitForFunction(() => window.genesisVoiceThreadContext?.().parent==='durable-voice-turn');
+    assert(await p.evaluate(() => location.hash)==='#reports','refresh preserves the current page');
+    assert(await p.locator('[data-turn="durable-voice-turn"]').count()===1,'restored turn renders once');
+    assert((await p.evaluate(() => window.genesisVoiceThreadContext())).thread===turn.thread,'next voice turn continues the saved conversation');
+    await noOverflowNoErrors(p, errors, 'voice refresh recovery');
   } finally { await context.close(); }
 });
 

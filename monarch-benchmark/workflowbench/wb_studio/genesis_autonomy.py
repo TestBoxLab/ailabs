@@ -22,13 +22,27 @@ from wb_orchestrator.config import SMOKE_SCALE_ATTEMPTS
 CARD_LEVELS = ('act', 'off')
 RUN_LEVELS = ('smoke', 'propose', 'off')
 INITIATIVE_LEVELS = ('open', 'off')
-DEFAULTS = {'cards': 'act', 'runs': 'smoke', 'initiative': 'off', 'paused': False}
+ENGINEER_LEVELS = ('propose', 'off')  # there is no level at which a fix applies itself
+# Every dial defaults off. An absent autonomy.json means a workspace nobody has
+# configured, and such a workspace must do nothing paid: a fresh Studio with provider
+# keys used to begin working cards within thirty seconds and could dispatch a run whose
+# operator was `genesis:smoke` and whose approver was a model turn (feature 024, FR-002).
+# `edit` is the one dial that ships on (feature 025, FR-058), and it is not an exception to
+# the rule above: building an architecture spends nothing of its own, writes nothing outside
+# the turn until a person's own save tool runs, and cannot publish. Off, Genesis cannot touch
+# an architecture at all — which is stricter than what shipped before this dial existed.
+DEFAULTS = {'cards': 'off', 'runs': 'off', 'initiative': 'off', 'engineer': 'off', 'edit': 'act', 'paused': False}
+EDIT_LEVELS = ('act', 'off')
 WORDS = {
+    'edit': {'act': 'Genesis builds architectures in the open editor; every save and publish stays a separate act',
+             'off': 'Genesis cannot change an architecture'},
     'cards': {'act': 'Genesis creates, moves and writes cards and reports it', 'off': 'Genesis only reads; a person moves every card'},
     'runs': {'smoke': f'Genesis launches plans of at most {SMOKE_SCALE_ATTEMPTS} attempts per competitor within its allowances',
              'propose': 'Every plan waits for a person, whatever its size', 'off': 'Genesis never proposes a run'},
     'initiative': {'open': "Genesis opens one card a day from the lab's open threads, and may take it to a smoke run",
                    'off': 'Genesis works only the cards people and triggers give it'},
+    'engineer': {'propose': 'Once a day Genesis specs one failure and a Codex agent writes the diff; every fix waits for a person',
+                 'off': 'Genesis does not write fixes'},
 }
 
 
@@ -51,6 +65,11 @@ class Autonomy:
         except (OSError, ValueError):
             data = {}
         out = {**DEFAULTS, **{k: v for k, v in data.items() if k in DEFAULTS}}
+        # A stored value this version does not know (an older file, a hand edit) falls
+        # back to off rather than raising: every caller of read() is a gate, and a gate
+        # that crashes is a gate whose caller decides what to do without it.
+        out.update({key: DEFAULTS[key] for key in WORDS
+                    if not (isinstance(out[key], str) and out[key] in WORDS[key])})
         out['words'] = {key: WORDS[key][out[key]] for key in WORDS}
         out['smoke_attempts'] = SMOKE_SCALE_ATTEMPTS
         out['card_usd'] = os.environ.get('STUDIO_GENESIS_CARD_USD', '2.00')
@@ -72,6 +91,14 @@ class Autonomy:
             if payload['initiative'] not in INITIATIVE_LEVELS:
                 raise ValueError('Initiative is open or off.')
             changes['initiative'] = payload['initiative']
+        if 'engineer' in payload:
+            if payload['engineer'] not in ENGINEER_LEVELS:
+                raise ValueError('Engineer is propose or off.')
+            changes['engineer'] = payload['engineer']
+        if 'edit' in payload:
+            if payload['edit'] not in EDIT_LEVELS:
+                raise ValueError('Editing is act or off.')
+            changes['edit'] = payload['edit']
         if 'paused' in payload:
             changes['paused'] = bool(payload['paused'])
         with self.lock:
@@ -85,7 +112,7 @@ class Autonomy:
         return self.read()
 
     # ---- the gate for a launch -----------------------------------------------------
-    def may_launch(self, plan: dict, today_usd: Decimal, card_usd: Decimal, daily_usd: Decimal) -> tuple[bool, str | None]:
+    def may_launch(self, plan: dict, today_usd: Decimal, card_usd: Decimal, daily_usd: Decimal, envelope_usd: Decimal | None = None) -> tuple[bool, str | None]:
         """Whether Genesis may launch this plan itself, and the plain reason when it may not.
 
         `plan` carries attempts_per_competitor and maximum_usd as the Studio computed them.
@@ -107,6 +134,29 @@ class Autonomy:
             return False, f'The ceiling ${maximum:.2f} is above the per-card allowance ${card_usd:.2f}; a person approves it.'
         if today_usd + maximum > daily_usd:
             return False, f"Today's allowance ${daily_usd:.2f} cannot cover ${maximum:.2f} more; it waits for tomorrow or a person."
+
+        # Research envelope check (FR-035)
+        from wb_studio.genesis_access import Envelope
+        env_file = self.root / 'envelope.json'
+        if envelope_usd is not None:
+            if envelope_usd <= Decimal('0.00'):
+                return False, 'The research envelope is exhausted; a person sets a new envelope. It will not draw on the lab\'s weekly ceiling.'
+            if maximum > envelope_usd:
+                return False, f"The ceiling ${maximum:.2f} is above the research envelope remainder ${envelope_usd:.2f}; short by ${maximum - envelope_usd:.2f}. It will not draw on the lab's weekly ceiling."
+        elif env_file.exists():
+            env = Envelope(self.root)
+            avail = env.available_usd()
+            status = env.status()
+            per_exp = Decimal(status['per_experiment_ceiling_usd'])
+            if avail <= Decimal('0.00'):
+                return False, 'The research envelope is exhausted; a person sets a new envelope. It will not draw on the lab\'s weekly ceiling.'
+            if status['is_set'] and per_exp > 0 and maximum > per_exp:
+                shortfall = maximum - per_exp
+                return False, f'The ceiling ${maximum:.2f} is above the per-experiment ceiling ${per_exp:.2f}; short by ${shortfall:.2f}.'
+            if maximum > avail:
+                shortfall = maximum - avail
+                return False, f"The research envelope cannot cover ${maximum:.2f} (${avail:.2f} left this week); short by ${shortfall:.2f}. It will not draw on the lab's weekly ceiling."
+
         return True, None
 
     # ---- the activity record -------------------------------------------------------
@@ -176,3 +226,21 @@ def plan_lines(studio, proposal: dict) -> dict:
     ]
     return {'lines': lines, 'attempts_per_competitor': attempts, 'attempts': total, 'competitors': competitors,
             'maximum_usd': str(maximum), 'smoke': attempts <= SMOKE_SCALE_ATTEMPTS, 'task_count': len(tasks)}
+
+
+def background_wanted(autonomy) -> bool:
+    """Whether any dial asks for unattended work, so the watcher and scheduler may start.
+
+    All dials off means a workspace nobody has configured. Starting the background
+    threads there costs money for work no one asked for, so the owner starts them only
+    when a person has turned something on (feature 024, FR-002).
+    Exhaustion of the research envelope stops the loop (feature 024, FR-035).
+    """
+    dials = autonomy.read()
+    if dials.get('paused'):
+        return False
+    from wb_studio.genesis_access import Envelope
+    env = Envelope(autonomy.root)
+    if env.path.exists() and env.available_usd() <= Decimal('0.00'):
+        return False
+    return any(dials.get(key, 'off') != 'off' for key in ('cards', 'runs', 'initiative', 'engineer'))

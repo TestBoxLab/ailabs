@@ -43,7 +43,8 @@ def genesis(tmp_path, repo, monkeypatch):
     monkeypatch.setattr('wb_studio.genesis_harness.model_routes', lambda: [{'id': 'cheap', 'available': True}])
     out = tmp_path / 'genesis' / 'code-index'
     monkeypatch.setattr(code_index, 'settings',
-                        lambda studio: {'repo': repo, 'ref': 'main', 'out': out, 'build': None})
+                        lambda studio, which='monarch': {'repo': repo, 'ref': 'main', 'out': out, 'build': None,
+                                                         'target': code_index.target(which)})
     studio = SimpleNamespace(directory=tmp_path, create=Mock(), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=Mock())
     studio.genesis = Genesis(studio)
@@ -64,7 +65,7 @@ BUCKETS = {'run': 'run-7', 'summary': 'Half the attempts stop at the graph endpo
 
 
 def with_tools(genesis):
-    genesis.tool = Mock(side_effect=lambda action, payload: {
+    genesis.tool = Mock(side_effect=lambda action, payload, turn=None: {
         'failure_buckets': BUCKETS,
         'read_run': {'job': {'id': 'run-7', 'title': 'Nightly'}, 'events': [{'id': 4, 'task': 'finance.1', 'text': '500 from /graphs/:id'}]},
     }[action])

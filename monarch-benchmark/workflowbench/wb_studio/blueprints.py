@@ -102,6 +102,55 @@ def validate_graph(graph,strict=True):
             if not degree[target]:ready.append(target)
     return order
 
+OPERATIONS=('add_node','connect','set_prompt')
+
+def apply_operation(graph,op):
+    """One incremental build step, applied to a copy of a graph (feature 025, FR-056).
+
+    The three steps the spec requires and no more: add a node, connect two nodes, set a
+    prompt. It writes nothing — the caller decides whether a graph ever becomes a draft —
+    and every refusal is a sentence a model can act on without seeing this file.
+    """
+    if not isinstance(op,dict) or op.get('operation') not in OPERATIONS:
+        raise ValueError('operation must be one of: '+', '.join(OPERATIONS)+'.')
+    kind=op['operation']
+    if not isinstance(graph,dict) or not isinstance(graph.get('nodes'),list) or not isinstance(graph.get('edges'),list):
+        graph={'nodes':[],'edges':[]}
+    out={'nodes':[dict(n) for n in graph['nodes'] if isinstance(n,dict)],
+         'edges':[dict(e) for e in graph['edges'] if isinstance(e,dict)]}
+    by_id={n['id']:n for n in out['nodes'] if isinstance(n.get('id'),str)}
+    if kind=='add_node':
+        node=op.get('node')
+        if not isinstance(node,dict):raise ValueError('add_node needs a node: at least an id and a type.')
+        node=deepcopy(node)
+        identity=node.get('id')
+        if not isinstance(identity,str) or not ID.fullmatch(identity):
+            raise ValueError('A node id is 1-80 characters of letters, digits, dash or underscore.')
+        if identity in by_id:raise ValueError(f"This build already has a step called '{identity}'.")
+        if node.get('type') not in KINDS:raise ValueError('Node type must be one of: '+', '.join(sorted(KINDS))+'.')
+        # A build step is one sentence for the model, so the canvas fills in what it did not
+        # say: a name, and a position in the next lane. Both are ordinary editable fields.
+        node.setdefault('label',identity[:100])
+        node.setdefault('config',{})
+        node.setdefault('x',min(60+300*len(out['nodes']),9000));node.setdefault('y',100)
+        out['nodes'].append(node)
+    elif kind=='connect':
+        source,target=op.get('from'),op.get('to')
+        for end,value in (('from',source),('to',target)):
+            if value not in by_id:raise ValueError(f"connect needs a step that exists; '{value}' is not in this build ({end}).")
+        if source==target:raise ValueError('A step cannot connect to itself.')
+        if any(e.get('from')==source and e.get('to')==target for e in out['edges']):
+            raise ValueError('Those two steps are already connected.')
+        out['edges'].append({'from':source,'to':target})
+    else:
+        target,text=op.get('node'),op.get('text')
+        if target not in by_id:raise ValueError(f"set_prompt needs a step that exists; '{target}' is not in this build.")
+        if not isinstance(text,str) or not text.strip():raise ValueError('set_prompt needs the instructions text.')
+        node=by_id[target]
+        node['config']=dict(node.get('config') or {})
+        node['config']['instructions']=text[:20000]
+    return out
+
 def paths(studio,identity):
     if not isinstance(identity,str) or not ID.fullmatch(identity):raise ValueError('Invalid architecture ID')
     return studio.directory/'blueprints'/identity

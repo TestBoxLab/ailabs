@@ -1,0 +1,63 @@
+task_20251217_153037_688_97d7df7d_be0bd794:
+  reviewed_by: Codex task review under Lucas authorization, 2026-09-11
+  rationale: The request identifies only the oldest Carlos incident, INC_004, the
+    service owned by Priya, SVC_002, and one alert to its existing assignee Elena.
+    Verify those entity relationships against the unchanged seed. Permit one service
+    field change and exactly one matching sent alert; no other existing record or
+    field may change.
+  expected_changes:
+  - service: gym-itsm-mcp
+    op: changed
+    path: gym-itsm-mcp.incident[id=INC_004].service
+    after_contains: SVC_002
+    count: 1
+  - service: gym-itsm-mcp
+    op: added
+    path: gym-itsm-mcp.notification[id=*]
+    where:
+      incident_id: INC_004
+      email: elena.petrov@techcorp.com
+      subject: Service Association Updated for Assigned Incident
+      type: alert
+      status: sent
+      org_id: ORG_001
+    count: 1
+  allowed_changes: []
+task_20251218_063226_501_97d7df7d_8fd400d1:
+  reviewed_by: Codex task review under Lucas authorization, 2026-09-11
+  rationale: 'The source request and selected tools ask for alerts, without changing
+    priority fields. The unchanged seed has two qualifying open Level 1 Support incidents
+    before 20 February 2024: INC_003 assigned to Carlos and INC_004 assigned to Elena.
+    Permit exactly one sent alert to each existing assignee with the requested subject.
+    The source SQL retains its message-content checks. All existing state must remain
+    unchanged.'
+  expected_changes:
+  - service: gym-itsm-mcp
+    op: added
+    path: gym-itsm-mcp.notification[id=*]
+    where:
+      incident_id: INC_003
+      email: carlos.rodriguez@techcorp.com
+      subject: Priority Escalation for Aging Incidents
+      type: alert
+      status: sent
+      org_id: ORG_001
+    count: 1
+  - service: gym-itsm-mcp
+    op: added
+    path: gym-itsm-mcp.notification[id=*]
+    where:
+      incident_id: INC_004
+      email: elena.petrov@techcorp.com
+      subject: Priority Escalation for Aging Incidents
+      type: alert
+      status: sent
+      org_id: ORG_001
+    count: 1
+  allowed_changes: []
+task_20251217_030654_663_99ba2325_f931fd42:
+  reviewed_by: Codex source validation, 2026-09-11
+  rationale: Source task excluded before any competitor attempt.
+  exclude: Source seed already contains INC_024 (Mixer Hum) among 100 incidents, while
+    the unchanged verifier requires a new Elena desktop incident to have INC_024.
+    Creating an incident cannot satisfy this without changing unrelated seeded data.

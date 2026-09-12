@@ -7,3 +7,15 @@ Requirements mapped to test_studio_app.py: test_scripted_comparison_retains_real
 Gateway exacttests in test_studio_paid.py cover admission, maxima, unknownholds, usageincludingthinking, IDreplay, rateexpiry andsanitized HTTPdiagnostics. Reviewedpaidintegrationfindings fixed: function IDs, canonicalledger, admissionvsunknownbilling andthinkingcounts. Focused assertions exercise effects rather than implementation presence.
 
 UI independentreview defects fixed; browser script confirms focusRetained,truncationDisclosed,staleOutputCleared,errors[],overflowfalse. Full native execution and successful realpaidgeneration remain blocked by runtime/credentials, not claimedtested.
+
+
+## Feature 027 report validation — 2026-09-11
+
+176 relevant checks passed in 41.48s. Exact command and requirement matrix:
+specs/027-genesis-report-authoring/validation.md. Reviewed assertions cover saved
+publication contents, absence after rejected/stale work, exact attempt identities,
+100% partitions, batch coverage, call counts/forbidden calls, lossless paging,
+ledger balances/unknown charges and read-only historical preservation. Independent
+review findings were fixed and checked. Browser run/round checks pass at 1440 light,
+390 light and 1440 dark, with zero overflow/errors. No live paid-model semantics
+or full repository-suite claim.

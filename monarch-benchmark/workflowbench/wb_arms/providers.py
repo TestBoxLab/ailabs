@@ -104,12 +104,25 @@ def extract_cached_tokens(usage: dict | None, headers: dict | None = None,
     return 0, None
 
 
+def context_rates(p: Provider, input_tokens: int) -> tuple[float, float, float, float]:
+    """Input, cache read/write, output rates for this complete request.
+
+    Astra standard pricing changes above 272K input tokens (official rate card,
+    verified 2026-09-11). Existing model rates and historical pins are unchanged.
+    """
+    long_context = p.model_id == 'gpt-6-astra' and input_tokens > 272000
+    factor = 2 if long_context else 1
+    write = p.price_cache_write if p.price_cache_write is not None else p.price_in
+    return (p.price_in * factor, p.price_cached * factor, write * factor,
+            p.price_out * (1.5 if long_context else 1))
+
+
 def cost_usd(p: Provider, prompt: int, cached: int, output: int, cache_write: int = 0) -> float:
     """prompt = all input tokens incl. cached and cache-write; cache_write is the
     subset billed at the creation rate (Anthropic); others report 0."""
     cached = min(max(cached, 0), prompt)   # clamp provider overreport; flag is set upstream
     cache_write = min(max(cache_write, 0), prompt - cached)
     uncached = prompt - cached - cache_write
-    write_rate = p.price_cache_write if p.price_cache_write is not None else p.price_in
-    return (uncached * p.price_in + cached * p.price_cached + cache_write * write_rate
-            + output * p.price_out) / 1e6
+    input_rate, cached_rate, write_rate, output_rate = context_rates(p, prompt)
+    return (uncached * input_rate + cached * cached_rate + cache_write * write_rate
+            + output * output_rate) / 1e6

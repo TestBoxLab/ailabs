@@ -1,85 +1,45 @@
 """Public-API seed folders for Monarch's discovery service, one per simulated app.
 
-Monarch's create + run mode needs a knowledge base it did not have to discover.
 `generate` turns the 47 OpenAPI documents of `wb_world.openapi` into the
-`public-api-seeds` fixture shape the discovery service imports: one folder per
-service holding `_meta.json` and one business action per operation, every URL
-pointing back at the episode's front door (the HTTP shim).
+`public-api-seeds` fixture the discovery service imports: one folder per service
+holding `_meta.json` and one business action per operation, every URL pointing at
+the episode's front door (the HTTP shim). Output is byte-deterministic, so a rerun
+of `wb monarch setup` is a no-op and knowledge-base hashes stay comparable.
+`validate` is the mechanical half of the runbook's acceptance bar; `generate` runs
+it on what it built and writes nothing if a gap is found. Monarch's own
+`validate-seeds.mjs` is the authority, wired in behind `MONARCH_SEED_VALIDATOR`.
 
-Output is deterministic: the same inputs write the same bytes, so a rerun of
-`wb monarch setup` is a no-op and the knowledge-base hashes stay comparable.
-`ok.txt` records the version, the canonical flag and the digest.
+Format v5.3 (Monarch's SPEC.md, 4 Sep 2026). Each rule below was a live planner
+refusal before it was a rule; re-deriving a seed from the "obvious" source breaks
+them again:
 
-`validate` is the mechanical half of the runbook's acceptance bar; `generate`
-runs it on what it built and refuses to write anything if a gap is found.
-Monarch's own `validate-seeds.mjs` is the authority and is wired into
-`wb monarch setup` behind `MONARCH_SEED_VALIDATOR`.
-
-v5 is Monarch's canonical format (their SPEC.md of 4 Sep 2026). What it changed:
-
-  * GET/HEAD/DELETE carry `body_template: null` and `headers_template: {}`. The
-    engine serializes even `{}`, and fetch refuses those methods with a body.
-  * Every query parameter is placed in the URL, optional ones included; the
-    engine percent-encodes what is filled and drops the rest of the pair.
-  * A list extracts the ARRAY itself (`"messages": "$.messages"`). The engine's
-    path grammar is `$.a.b` with numeric indices -- v4.1's `$.messages[*].id`
-    resolved to nothing at run time, so every list read came back empty.
-  * Schemas describe what the front door really returns, read from
-    AutomationBench's own models (`to_display_dict` and the Pydantic
-    annotations behind it), with `required` for the keys that always survive.
-    Where nothing describes a response, the schema stays honest rather than
-    inventing fields.
-  * `creates_entities[].identifier_path` is always one of the step's extract
-    paths, or the action declares no entity at all.
-  * `label` is a short verb phrase (the only text the builder ranks on) and
-    `area` a lowercase plural noun; the OpenAPI sentence goes to `description`.
-
-v5.1 fixes what v5's shape rules could not catch: the seeds were VALID but not
-TRUE. Monarch's planner refused every Google Sheets task ("the catalog doesn't
-actually expose the data") because those seeds described AutomationBench's
-`Spreadsheet` RECORD where the wire carries something else entirely. The rule
-"resource record = response" was wrong for 13 of the 22 services the frozen
-task sets use (probed against the real front door, 4 Sep 2026). What changed:
-
-  * The HANDLER THAT SERVES THE REQUEST is now the first source of the response
-    shape, not the last. It was already read, but the route key was matched
-    against the wrong name -- `routes/<service>.py` maps a route to a key and
-    then `_HANDLERS[key]` to a differently-named function, so every service that
-    spells the two apart fell through to a guess. The lambda is read for the
-    function it calls, and `_HANDLERS: dict[...] = {...}` is parsed as well as
-    the bare assignment.
-  * A response is an ENVELOPE far more often than a record: `{Customer: {...}}`,
-    `{organization: {...}}`, `{success, calendar}`, `{ok, members}`. The
-    outermost error-free dict of the handler's return is the body -- v5 took the
-    widest, so a Salesforce report published its inner `report_result` as the
-    whole response -- plus the keys appended afterwards (`d["envelopeUri"] =
-    ...`, six of the DocuSign envelope's eleven fields) and the keys of a helper
-    the handler delegates to.
+  * GET/HEAD/DELETE carry `body_template: null` and `headers_template: {}` -- the
+    engine serializes even `{}` and fetch refuses those methods with a body.
+  * Every query parameter goes in the URL, optional ones included; the engine
+    percent-encodes what is filled and drops the rest of the pair.
+  * A list extracts the ARRAY (`"messages": "$.messages"`). The path grammar is
+    `$.a.b` with numeric indices; `$.messages[*].id` resolves to nothing.
+  * The RESPONSE shape comes from the handler that serves the request, not from
+    AutomationBench's record -- and it is usually an envelope (`{Customer: {...}}`,
+    `{ok, members}`), so take the outermost error-free dict plus keys appended
+    after it and keys of any helper the handler delegates to. Resolve the route
+    through both `_HANDLERS[key]` and the bare assignment; they are often spelled
+    apart, and a name mismatch silently falls through to a guess.
   * The REQUEST body is the endpoint's stated contract, then the handler's own
-    arguments, and only then a record schema. Sheets' `values/{range}:append`
-    takes `{values: [[...]]}`; v5 sent it `properties`/`sheets`/`spreadsheetUrl`,
-    so nothing a planner wrote could reach the wire. A router lambda that never
-    forwards the request body (`f(w, ids[0], ids[1])`) declares no body at all.
-  * Where a body field is opaque -- Gmail's `raw`, a base64url RFC 2822 message
-    -- the endpoint's own request prose is appended to `constraints.helper_text`,
-    the only prose the builder sees per parameter.
+    arguments, then a record schema. A router lambda that only PICKS keys
+    (`b.get(k)`, `b[k]`, `b.pop(k)`) still declares every one of them as a body
+    parameter, typed from the handler argument it feeds and required only where
+    neither side has a default; an object-typed one carries its shape in helper
+    text, because an object the builder cannot see into is one it cannot fill.
+  * Where a field is opaque (Gmail's base64url `raw`), the endpoint's request
+    prose is appended to `constraints.helper_text` -- the only per-parameter prose
+    the builder sees.
+  * `creates_entities[].identifier_path` is always one of the step's extract
+    paths, or the action declares no entity. `label` is a short verb phrase (the
+    only text the builder ranks on), `area` a lowercase plural noun.
 
-v5.3 closes the other half of that last rule. "A router lambda that never
-forwards the request body declares no body at all" was wrong for the routers
-that PICK named keys out of it instead: `fields=b.get("fields", b)`,
-`text=b.get("text", "")`. Those forward nothing and still read the body, so v5.2
-gave `bench-airtable:create:root` an empty `body_template` and no body
-parameters, and Monarch's builder refused to create a record -- "the catalog's
-only create-record action exposes just baseId and tableId, with no parameter for
-record fields" (live catalogue, 8 Sep 2026). Every `b.get(k)`, `b.get(k, d)`,
-`b[k]` and `b.pop(k)` in a router lambda is now a body parameter, typed from the
-handler argument the lambda passes it to and required only where neither the
-lambda nor the handler has a default. An object-typed one carries the shape in
-its helper text -- an object the builder cannot see into is one it cannot fill,
-so Airtable's `fields` names the columns the app's own tables carry.
 `wb_world.conformance` reads the same parser: a write whose seed declares no
-parameter for a key its handler reads is `body_unusable`, and gates the import
-exactly as a wrong read schema does.
+parameter for a key its handler reads is `body_unusable` and gates the import.
 """
 from __future__ import annotations
 
@@ -633,13 +593,13 @@ def _handler_signatures() -> dict[tuple[str, str, str], dict[str, str]]:
     return out
 
 
-def _handler_bindings(routes_src: Any, ast: Any) -> dict[str, tuple[bool, int, set[str]]]:
-    """route key -> (the lambda forwards the request body, how many args it takes from the URL).
+def _handler_entries(routes_src: Any, ast: Any):
+    """Yield (route key, the lambda it maps to) out of a routes module's `_HANDLERS`.
 
-    `lambda w, ids, p, b: f(w, ids[0], ids[1], **{**p, **b})` -> (True, 2, set()),
-    and `f(w, object_type=ids[0], record_id=ids[1], **b)` names them instead.
+    Reads `_HANDLERS = {...}` and the annotated `_HANDLERS: dict[...] = {...}`
+    alike -- half the routes modules write the second, and reading only the first
+    left QuickBooks' companyinfo with no handler at all.
     """
-    out: dict[str, tuple[bool, int, set[str]]] = {}
     for node in ast.walk(routes_src):
         targets = (node.targets if isinstance(node, ast.Assign)
                    else [node.target] if isinstance(node, ast.AnnAssign) else [])
@@ -647,22 +607,32 @@ def _handler_bindings(routes_src: Any, ast: Any) -> dict[str, tuple[bool, int, s
                 and isinstance(node.value, ast.Dict)):
             continue
         for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            call = next((c for c in ast.walk(value)
-                         if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), None)
-            if call is None:
-                continue
-            source = ast.dump(call)
-            # `**b` anywhere in the call -- bare, or merged as `**{**p, **b}`
-            forwards = "id='b'" in source.replace('"', "'")
-            url_bound = sum(1 for a in call.args
-                            if isinstance(a, ast.Subscript)
-                            and getattr(a.value, "id", "") == "ids")
-            named = {kw.arg for kw in call.keywords
-                     if kw.arg and isinstance(kw.value, ast.Subscript)
-                     and getattr(kw.value.value, "id", "") == "ids"}
-            out[key.value] = (forwards, url_bound, named)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                yield key.value, value
+
+
+def _handler_bindings(routes_src: Any, ast: Any) -> dict[str, tuple[bool, int, set[str]]]:
+    """route key -> (the lambda forwards the request body, how many args it takes from the URL).
+
+    `lambda w, ids, p, b: f(w, ids[0], ids[1], **{**p, **b})` -> (True, 2, set()),
+    and `f(w, object_type=ids[0], record_id=ids[1], **b)` names them instead.
+    """
+    out: dict[str, tuple[bool, int, set[str]]] = {}
+    for route, value in _handler_entries(routes_src, ast):
+        call = next((c for c in ast.walk(value)
+                     if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), None)
+        if call is None:
+            continue
+        source = ast.dump(call)
+        # `**b` anywhere in the call -- bare, or merged as `**{**p, **b}`
+        forwards = "id='b'" in source.replace('"', "'")
+        url_bound = sum(1 for a in call.args
+                        if isinstance(a, ast.Subscript)
+                        and getattr(a.value, "id", "") == "ids")
+        named = {kw.arg for kw in call.keywords
+                 if kw.arg and isinstance(kw.value, ast.Subscript)
+                 and getattr(kw.value.value, "id", "") == "ids"}
+        out[route] = (forwards, url_bound, named)
     return out
 
 
@@ -694,23 +664,15 @@ def _lambda_body_keys(service: str) -> dict[str, dict[str, bool]]:
     except Exception:
         return {}
     out: dict[str, dict[str, bool]] = {}
-    for node in ast.walk(routes_src):
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
-        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
-                and isinstance(node.value, ast.Dict)):
-            continue
-        for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            picked: dict[str, bool] = {}
-            for call in ast.walk(value):
-                name, required = _picked_key(call, ast)
-                if name and re.fullmatch(r"\w+", name):
-                    # a key read twice is required only where every read is
-                    picked[name] = picked.get(name, True) and required
-            if picked:
-                out[key.value] = picked
+    for route, value in _handler_entries(routes_src, ast):
+        picked: dict[str, bool] = {}
+        for call in ast.walk(value):
+            name, required = _picked_key(call, ast)
+            if name and re.fullmatch(r"\w+", name):
+                # a key read twice is required only where every read is
+                picked[name] = picked.get(name, True) and required
+        if picked:
+            out[route] = picked
     return out
 
 
@@ -851,28 +813,20 @@ def _picked_targets(routes_src: Any, ast: Any) -> dict[str, dict[str, str]]:
     that argument's annotation is what types all three.
     """
     out: dict[str, dict[str, str]] = {}
-    for node in ast.walk(routes_src):
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
-        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
-                and isinstance(node.value, ast.Dict)):
-            continue
-        for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+    for route, value in _handler_entries(routes_src, ast):
+        bound: dict[str, str] = {}
+        for call in ast.walk(value):
+            if not isinstance(call, ast.Call):
                 continue
-            bound: dict[str, str] = {}
-            for call in ast.walk(value):
-                if not isinstance(call, ast.Call):
+            for kw in call.keywords:
+                if not kw.arg:
                     continue
-                for kw in call.keywords:
-                    if not kw.arg:
-                        continue
-                    for inner in ast.walk(kw.value):
-                        name, _ = _picked_key(inner, ast)
-                        if name:
-                            bound.setdefault(name, kw.arg)
-            if bound:
-                out[key.value] = bound
+                for inner in ast.walk(kw.value):
+                    name, _ = _picked_key(inner, ast)
+                    if name:
+                        bound.setdefault(name, kw.arg)
+        if bound:
+            out[route] = bound
     return out
 
 
@@ -885,33 +839,25 @@ def _picked_canonical(routes_src: Any, ast: Any) -> dict[str, dict[str, str]]:
     map to it.
     """
     out: dict[str, dict[str, str]] = {}
-    for node in ast.walk(routes_src):
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
-        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
-                and isinstance(node.value, ast.Dict)):
-            continue
-        for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+    for route, value in _handler_entries(routes_src, ast):
+        aliases: dict[str, str] = {}
+        for call in ast.walk(value):
+            head, _ = _picked_key(call, ast)
+            if not head or not isinstance(call, ast.Call) or len(call.args) < 2:
                 continue
-            aliases: dict[str, str] = {}
-            for call in ast.walk(value):
-                head, _ = _picked_key(call, ast)
-                if not head or not isinstance(call, ast.Call) or len(call.args) < 2:
-                    continue
-                # everything the default of this read names is the same field
-                for inner in ast.walk(call.args[1]):
-                    name, _ = _picked_key(inner, ast)
-                    if name and name != head:
-                        aliases[name] = head
-            if aliases:
-                # collapse a chain (`Body` <- `message` <- ...) onto its head
-                for name in list(aliases):
-                    seen = {name}
-                    while aliases.get(aliases[name]) and aliases[name] not in seen:
-                        seen.add(aliases[name])
-                        aliases[name] = aliases[aliases[name]]
-                out[key.value] = aliases
+            # everything the default of this read names is the same field
+            for inner in ast.walk(call.args[1]):
+                name, _ = _picked_key(inner, ast)
+                if name and name != head:
+                    aliases[name] = head
+        if aliases:
+            # collapse a chain (`Body` <- `message` <- ...) onto its head
+            for name in list(aliases):
+                seen = {name}
+                while aliases.get(aliases[name]) and aliases[name] not in seen:
+                    seen.add(aliases[name])
+                    aliases[name] = aliases[aliases[name]]
+            out[route] = aliases
     return out
 
 
@@ -1522,22 +1468,11 @@ def _handler_envelopes() -> dict[tuple[str, str, str], list[str]]:
 def _handler_names(routes_src: Any, ast: Any) -> dict[str, str]:
     """route key -> the impl function `_HANDLERS[key]`'s lambda calls."""
     out: dict[str, str] = {}
-    for node in ast.walk(routes_src):
-        # `_HANDLERS = {...}` and the annotated `_HANDLERS: dict[...] = {...}`
-        # alike -- half the routes modules write the second, and reading only the
-        # first left QuickBooks' companyinfo with no handler at all.
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
-        if not (targets and any(getattr(t, "id", "") == "_HANDLERS" for t in targets)
-                and isinstance(node.value, ast.Dict)):
-            continue
-        for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            called = next((c.func.id for c in ast.walk(value)
-                           if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), "")
-            if called:
-                out[key.value] = called
+    for route, value in _handler_entries(routes_src, ast):
+        called = next((c.func.id for c in ast.walk(value)
+                       if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)), "")
+        if called:
+            out[route] = called
     return out
 
 

@@ -13,7 +13,7 @@ from tests.test_run_config import mock_model
 from wb_orchestrator import config
 from wb_orchestrator.cli import main
 from wb_orchestrator.config import ConfigError
-from wb_orchestrator.orchestrator import Orchestrator, RunKilled
+from wb_orchestrator.orchestrator import ConfigDrift, Orchestrator, RunKilled
 from wb_results.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +103,7 @@ def _mock_site(site):
 
 def _resolve(site):
     return config.resolve(site / "config/products/simulated-apps.yaml",
-                          site / "config/plans/smoke-frontier.yaml", audiences={"internal": ["*"]})
+                          site / "config/plans/smoke-frontier.yaml")
 
 
 def _set_ceiling(site, value):
@@ -242,3 +242,26 @@ def test_status_prints_stopped_line(site, tmp_path, mock_server, capsys):
     store.set_stop_reason("run-status", "interrupted")
     main(["--db", str(db), "status", "run-status"])
     assert "stopped: interrupted\n" in capsys.readouterr().out
+
+
+def test_config_drift_names_what_changed(site, tmp_path, mock_server):
+    """Two hashes and "refusing to resume" say a round cannot continue without saying
+    why. The run row already stores the configuration, so the message can name it."""
+    _mock_site(site)
+    rc = _resolve(site)
+    store = Store(tmp_path / "wb.sqlite3")
+    orch = Orchestrator.from_config(store, rc, tmp_path / "out")
+    store.create_run("run-drift", orch._hash(), orch.suite, orch._config())
+
+    p = site / "config/plans/smoke-frontier.yaml"
+    p.write_text(edit(p.read_text(), "repetitions", 3))
+    with pytest.raises(ConfigDrift) as exc:
+        Orchestrator.from_config(store, _resolve(site), tmp_path / "out").resume("run-drift")
+    assert "plan.repetitions" in str(exc.value)
+
+    # A ceiling is stored but not hashed, so raising it is not drift at all.
+    p.write_text(edit(p.read_text(), "repetitions", rc.plan.repetitions))
+    _set_ceiling(site, 100)
+    Orchestrator.from_config(store, _resolve(site), tmp_path / "out")._drift_detail(
+        store.run("run-drift"))
+    assert Orchestrator.from_config(store, _resolve(site), tmp_path / "out")._hash() == rc.hash

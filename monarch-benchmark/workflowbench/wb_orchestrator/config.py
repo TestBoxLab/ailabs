@@ -56,6 +56,33 @@ class ProductData:
 
 
 @dataclass
+class SourcePin:
+    """Which external benchmark a product's tasks and checks come from (feature 026).
+
+    It is what makes "frozen by hash before any competitor runs" honest for a world
+    whose answer key lives outside our files: our hash covers the request text and
+    the approval rule, and this pin covers the rest.
+    """
+    benchmark: str
+    version: str
+    split: str
+    checker: str                                   # prose; the report's comparability sentence uses it
+    positive_half_is_end_state_only: bool = True   # false for tau2, whose reward also scores the path
+
+
+@dataclass
+class Participant:
+    """A paid party inside an attempt that is not the competitor (feature 026).
+
+    Today only tau2's simulated customer. Every field is hashed, because a round
+    whose customer changed is a different measurement.
+    """
+    role: str
+    model: str
+    price_table: str
+
+
+@dataclass
 class Product:
     name: str
     kind: str
@@ -64,6 +91,9 @@ class Product:
     side_effects: str
     modes: list[str]
     description: str | None = None
+    world: str | None = None                       # None = the world we always had
+    source: SourcePin | None = None
+    participants: list[Participant] = field(default_factory=list)
 
 
 @dataclass
@@ -157,7 +187,6 @@ class Plan:
     concurrency: int
     competitors: list[CompetitorSpec]
     baseline: str
-    audience: str
     cost_ceiling_usd: float
     # Kept so older plan files load; ignored since decision D5 (8 Sep 2026): an
     # approval is a record in the results store (`wb approvals`), not a word in a file.
@@ -248,19 +277,66 @@ def _read(path, kind, name_key: str | None = "name"):
 
 # ---------------------------------------------------------------- loaders
 
+PARTICIPANT_ROLES = ("simulated-user",)
+
+
 def load_product(path) -> Product:
+    from wb_world import registry
+
     c = _read(path, "product")
-    c.keys(("name", "kind", "data", "services", "side_effects", "modes"), ("description",))
+    c.keys(("name", "kind", "data", "services", "side_effects", "modes"),
+           ("description", "world", "source", "participants"))
     d = c.sub("data")
     d.keys(("dataset", "mutable"))
+    services = c.str_list("services")
+
+    world = c.get("world", str)
+    if world is not None:
+        try:
+            world_cls = registry.resolve(world)
+        except registry.UnknownWorld as e:
+            c.fail("world", str(e))
+        # An approval rule addresses a service by name. A name the world does not
+        # have would match nothing, and every attempt would read as clean.
+        known = set(world_cls.service_names())
+        unknown = [s for s in services if s not in known]
+        if unknown:
+            c.fail("services", f"not services of the {world!r} world: {', '.join(unknown)}")
+
+    source = None
+    if "source" in c.data:
+        if world is None:
+            c.fail("source", "a source pin needs a `world`; without one the product runs "
+                             "on the world we always had, which has no external source")
+        sc = c.sub("source")
+        sc.keys(("benchmark", "version", "split", "checker"), ("positive_half_is_end_state_only",))
+        source = SourcePin(
+            benchmark=sc.get("benchmark", str), version=str(sc.get("version", (str, int, float))),
+            split=sc.get("split", str), checker=sc.get("checker", str),
+            positive_half_is_end_state_only=sc.get("positive_half_is_end_state_only", bool, default=True),
+        )
+
+    participants = []
+    for i, raw in enumerate(c.get("participants", list, default=[])):
+        if not isinstance(raw, dict):
+            c.fail(f"participants[{i}]", "expected a mapping {role, model, price_table}")
+        pc = _Checker(c.path, raw, f"participants[{i}].")
+        pc.keys(("role", "model", "price_table"))
+        participants.append(Participant(
+            role=pc.get("role", str, enum=PARTICIPANT_ROLES),
+            model=pc.get("model", str), price_table=pc.get("price_table", str)))
+
     return Product(
         name=c.data["name"],
         kind=c.get("kind", str, enum=PRODUCT_KINDS),
         data=ProductData(dataset=d.get("dataset", str), mutable=d.get("mutable", bool)),
-        services=c.str_list("services"),
+        services=services,
         side_effects=c.get("side_effects", str),
         modes=c.str_list("modes", enum=MODES),
         description=c.get("description", str),
+        world=world,
+        source=source,
+        participants=participants,
     )
 
 
@@ -439,9 +515,12 @@ def load_harness(path) -> Harness:
 
 def load_plan(path) -> Plan:
     c = _read(path, "plan")
-    c.keys(("name", "tasks", "mode", "repetitions", "timeout_s", "concurrency", "competitors",
-            "baseline", "audience", "cost_ceiling_usd"),
-           ("approved_by", "description", "retry_on_fail", "track", "attempt_cap_usd"))
+    # `audience` is accepted and ignored, like `approved_by`: there is one report,
+    # so an older plan file that still names an audience loads unchanged.
+    c.keys(("name", "tasks", "mode", "timeout_s", "concurrency", "competitors",
+            "baseline", "cost_ceiling_usd"),
+           ("approved_by", "audience", "description", "retry_on_fail", "track",
+            "attempt_cap_usd", "repetitions"))
     competitors = []
     for i, item in enumerate(c.get("competitors", list)):
         if not isinstance(item, dict):
@@ -457,12 +536,11 @@ def load_plan(path) -> Plan:
         name=c.data["name"],
         tasks=c.get("tasks", str),
         mode=c.get("mode", str, enum=MODES),
-        repetitions=c.get("repetitions", int, minimum=1),
+        repetitions=c.get("repetitions", int, minimum=1, default=1),
         timeout_s=float(c.get("timeout_s", num, minimum=0, strict=True)),
         concurrency=c.get("concurrency", int, minimum=1),
         competitors=competitors,
         baseline=c.get("baseline", str),
-        audience=c.get("audience", str),
         cost_ceiling_usd=c.get("cost_ceiling_usd", num, minimum=0, strict=True),
         approved_by=approved,
         description=c.get("description", str),
@@ -495,7 +573,11 @@ def load_monarch_kb(path, product: Product) -> MonarchKb:
     for k, v in kb.items():
         if not isinstance(k, str) or not isinstance(v, str):
             c.fail("kb", "keys and hashes must be strings")
-    want = {product_slug(s) for s in product.services}
+    if product.world and product.world != "automation-bench":
+        from wb_orchestrator.external_catalogue import product_slug as source_product_slug
+        want = {source_product_slug(product, s) for s in product.services}
+    else:
+        want = {product_slug(s) for s in product.services}
     for slug in sorted(want - set(kb)):
         c.fail(f"kb.{slug}", "no entry; run `wb monarch setup` again")
     for slug in sorted(set(kb) - want):
@@ -587,6 +669,23 @@ _PRE_002_MONARCH_KEYS = ("base_url", "credential_env", "modes")  # also on the p
 _MONARCH_ONLY = tuple(k for k in sum(_HARNESS_KEYS["monarch"], ()) if k not in _PRE_002_MONARCH_KEYS)
 
 
+def _hashed_product(p: Product) -> dict:
+    """A product as the config hash sees it.
+
+    Feature 026 added `world`, `source` and `participants`. A product that names no
+    external world must hash exactly as it did before, or every round already
+    recorded becomes non-resumable and non-comparable -- the fields are dropped when
+    they hold their defaults. A product that does name one hashes them, which is the
+    point: a different source pin or a different simulated customer is a different
+    measurement.
+    """
+    d = asdict(p)
+    for key, default in (("world", None), ("source", None), ("participants", [])):
+        if d.get(key) == default:
+            d.pop(key, None)
+    return d
+
+
 def _hashed_harness(h: Harness) -> dict:
     """Keep the pre-002 shape for non-Monarch harnesses so their run hashes stay regradable.
 
@@ -627,13 +726,19 @@ class RunConfig:
     runtime_root: str = ""                   # installed tasks and Monarch checkout references
     config_source: dict = field(default_factory=dict)  # additive evidence; never changes legacy hashes
 
+    native_runtimes: dict = field(default_factory=dict)
+
     @property
     def attempts_per_competitor(self) -> int:
         """The most attempts one competitor can make: every prompt failing every
         planned repetition and spending every retry. Retries only happen on
         failures, so the floor is `len(tasks) x repetitions`; the ceiling counts
         this number, because it counts every attempt that could be paid for."""
-        return len(self.tasks) * (self.plan.repetitions + self.plan.retry_on_fail)
+        attempts = len(self.tasks) * (self.plan.repetitions + self.plan.retry_on_fail)
+        if self.product.source or self.native_runtimes:
+            from wb_orchestrator.orchestrator import MAX_INFRA_RETRIES
+            attempts *= 1 + MAX_INFRA_RETRIES
+        return attempts
 
     @property
     def attempts_per_competitor_min(self) -> int:
@@ -648,6 +753,12 @@ class RunConfig:
         """Everything the hash covers (research.md R2): guard fields out, secrets by name."""
         plan = asdict(self.plan)
         del plan["cost_ceiling_usd"], plan["approved_by"]
+        # `audience` was a plan field until 11 Sep 2026, when one report replaced
+        # the internal/public split. It chose how a round was rendered, never what
+        # was measured, so the value every plan carried stays in the hash: a stored
+        # run remains resumable and comparable instead of looking like a different
+        # measurement (PLAN.md §1, "config hash per run").
+        plan["audience"] = "internal"
         if not plan["retry_on_fail"]:
             # A plan that asks for no retry is the plan it was before the key
             # existed, and keeps the hash its stored runs were recorded under.
@@ -660,7 +771,7 @@ class RunConfig:
             # Same rule again: the default cap keeps every stored hash in place.
             del plan["attempt_cap_usd"]
         d = {"tasks": sorted(contract_hash(t) for t in self.tasks),
-             "product": asdict(self.product), "plan": plan,
+             "product": _hashed_product(self.product), "plan": plan,
              "models": {k: asdict(v) for k, v in self.models.items()},
              "harnesses": {k: _hashed_harness(v) for k, v in self.harnesses.items()}}
         if self.monarch_kb:  # absent for plans without Monarch, so their hashes do not move
@@ -674,6 +785,11 @@ class RunConfig:
                 "kb_hash_file_sha": r.kb_hash_file_sha,
                 "recipes": {k: asdict(v) for k, v in r.recipes.items()},
                 "missing": sorted(r.missing)}
+        if self.product.source or self.native_runtimes:
+            from wb_orchestrator.orchestrator import MAX_INFRA_RETRIES
+            d["infrastructure_retries"] = MAX_INFRA_RETRIES
+        if self.native_runtimes:
+            d["native_runtimes"] = self.native_runtimes
         if self.price_tables:
             d["price_tables"] = {k: asdict(v) for k, v in self.price_tables.items()}
         return json.loads(json.dumps(d, default=str))  # dates -> ISO strings
@@ -732,7 +848,7 @@ def _check_monarch_env(h, hpath, env) -> None:
             raise ConfigError(hpath, attr, f"environment variable {name} is not set")
 
 
-def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
+def resolve(product_path, plan_path, config_dir=None, env=None,
             runtime_root=None, source=None) -> RunConfig:
     """Join a product and a plan; apply validation rules 3-10 (data-model.md).
 
@@ -744,16 +860,11 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
     product_path, plan_path = Path(product_path), Path(plan_path)
     config_dir = Path(config_dir) if config_dir else product_path.parent.parent
     env = os.environ if env is None else env
-    if audiences is None:
-        from wb_report.report import load_audiences
-        audiences = load_audiences()
     product, plan = load_product(product_path), load_plan(plan_path)
     c = _Checker(plan_path, {})
 
     if plan.mode not in product.modes:
         c.fail("mode", f"{plan.mode!r} is not in the modes of {product_path}: {', '.join(product.modes)}")
-    if plan.audience not in audiences:
-        c.fail("audience", f"unknown audience {plan.audience!r}; known: {', '.join(audiences)}")
 
     models, harnesses, competitors = {}, {}, []
     for i, spec in enumerate(plan.competitors):
@@ -798,6 +909,26 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
         if model:
             models[model.name] = model
 
+    native_runtimes = {}
+    for competitor in competitors:
+        if competitor.harness.output == "isolated-container-v2":
+            from wb_orchestrator.approvals import _probe_site
+            from wb_studio.native import freeze
+            native_runtimes[competitor.name] = freeze(_probe_site(), {"harness":competitor.harness.launcher,
+                "model":competitor.model.name, "effort":competitor.model.effort})
+            native_runtimes[competitor.name]["limits"]["max_turns"] = 60
+    for participant in product.participants:
+        mpath = config_dir / "models" / f"{participant.model}.yaml"
+        model = load_model(mpath)
+        if participant.price_table != participant.model:
+            raise ConfigError(product_path, "participants.price_table", "customer price table must be its pinned model rate card")
+        from wb_arms.providers import _DEFAULT_ADAPTER
+        if (model.adapter or _DEFAULT_ADAPTER.get(model.provider, "openai")) != "openai_responses":
+            raise ConfigError(product_path, "participants.model", "customer requires the verified OpenAI Responses transport")
+        if not env.get(model.key_env):
+            raise ConfigError(mpath, "key_env", f"environment variable {model.key_env} is not set")
+        models[model.name] = model
+
     monarch_kb, monarch_recipes, price_tables = None, None, {}
     for h in harnesses.values():
         if h.kind != "monarch":
@@ -822,26 +953,44 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
         tasks = load_suite(tasks_dir)
     except (OSError, ValueError) as e:
         c.fail("tasks", str(e))
-    # A set runs only on the world it was imported under (unblock plan M1, 8 Sep
-    # 2026): the frozen sets of the upstream 1.0.6 world do not run on the
-    # repaired world by accident, nor the other way round. Both worlds are
-    # named, and the way out is said, before anything is spent.
+    from wb_world.episode import is_external, source_identity
     try:
-        recorded = recorded_world_version(tasks)
-    except ValueError as e:
-        c.fail("tasks", str(e))
-    installed = world.installed_world_version()
-    if recorded != installed:
-        c.fail("tasks", f"this task set was imported under {WORLD_PACKAGE} {recorded}, but the "
-                        f"installed world is {WORLD_PACKAGE} {installed}; a set runs only on "
-                        f"the world it was imported under. Draw a set from a corpus imported "
-                        f"under {installed} (wb corpus import-ab --revision LABEL --out DIR), "
-                        f"or install {recorded} to run this one")
+        pin = source_identity(tasks)
+    except ValueError as exc:
+        c.fail("tasks", str(exc))
+    if product.world and product.world != WORLD_PACKAGE:
+        if product.source is None:
+            raise ConfigError(product_path, "source", "an external product requires a source pin")
+        for task in tasks:
+            if not task.get("contract_sha256") or task["contract_sha256"] != contract_hash(task):
+                c.fail("tasks", f"task {task['task']} has missing or drifting content hash")
+        wanted = {"package": product.world, "version": product.source.version,
+                  "split": product.source.split}
+        if pin is None or any(str(pin.get(k)) != str(v) for k, v in wanted.items()):
+            c.fail("tasks", f"source pin {pin} differs from product source {wanted}")
+    else:
+        if pin is not None:
+            c.fail("tasks", f"external source {pin['package']} cannot run on {WORLD_PACKAGE}")
+        # A set runs only on the world it was imported under (unblock plan M1, 8 Sep
+        # 2026): the frozen sets of the upstream 1.0.6 world do not run on the
+        # repaired world by accident, nor the other way round. Both worlds are
+        # named, and the way out is said, before anything is spent.
+        try:
+            recorded = recorded_world_version(tasks)
+        except ValueError as e:
+            c.fail("tasks", str(e))
+        installed = world.installed_world_version()
+        if recorded != installed:
+            c.fail("tasks", f"this task set was imported under {WORLD_PACKAGE} {recorded}, but the "
+                            f"installed world is {WORLD_PACKAGE} {installed}; a set runs only on "
+                            f"the world it was imported under. Draw a set from a corpus imported "
+                            f"under {installed} (wb corpus import-ab --revision LABEL --out DIR), "
+                            f"or install {recorded} to run this one")
     for t in tasks:
         # The services the task's data seeds (wb_world.episode.seeded_services):
         # the repaired world writes every app's empty default into each scored
         # task, and an empty default is not something the product has to serve.
-        for service in seeded_services(t["info"]["initial_state"]):
+        for service in seeded_services(t["info"].get("initial_state", {})):
             if service not in product.services:
                 raise ConfigError(product_path, "services",
                                   f"task {t['task']} seeds service {service}, which {product_path} "
@@ -875,7 +1024,8 @@ def resolve(product_path, plan_path, config_dir=None, env=None, audiences=None,
                      models=models, harnesses=harnesses, tasks_dir=str(tasks_dir),
                      monarch_kb=monarch_kb, monarch_recipes=monarch_recipes,
                      excluded_tasks=excluded_tasks, price_tables=price_tables,
-                     config_dir=str(config_dir), runtime_root=str(runtime_root or config_dir.parent),
+                     config_dir=str(config_dir), native_runtimes=native_runtimes,
+                     runtime_root=str(runtime_root or config_dir.parent),
                      config_source=copy.deepcopy(source or {}))
 
 

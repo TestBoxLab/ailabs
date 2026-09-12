@@ -17,3 +17,12 @@ the upstream licence file. Python dependencies are declared in
 AutomationBench is vendored separately under
 `monarch-benchmark/workflowbench/vendor/automation-bench` (gitignored) and keeps
 its own licence and provenance note (`VENDORED-FROM.txt`).
+
+The external benchmarks WorkflowBench can run as products under test —
+EnterpriseOps-Gym (Apache-2.0), AppWorld (Apache-2.0 with a redistribution
+condition) and τ²-bench (MIT) — are installed or downloaded, never vendored. Each
+keeps its licence and provenance note beside its adapter, in
+`monarch-benchmark/workflowbench/wb_worlds/<source>/LEGAL.md`. **AppWorld's task,
+interface and answer-key content may only be redistributed publicly in its packed
+form, so none of it is committed to this repository** — see
+`wb_worlds/appworld/LEGAL.md`.

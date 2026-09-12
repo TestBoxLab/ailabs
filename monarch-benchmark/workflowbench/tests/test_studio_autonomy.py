@@ -19,7 +19,11 @@ def genesis(tmp_path, monkeypatch):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(return_value={'id': 'run-accepted'}), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=ledger)
     monkeypatch.setattr('wb_studio.runtime_registry.check_launch', lambda studio, architectures, selected, track='agentic-request': [{'id': 'without-monarch', 'name': 'API control'}])
-    return Genesis(studio)
+    genesis = Genesis(studio)
+    # Feature 024 FR-002 turns every dial off by default. These tests are about what
+    # Genesis does once a person has turned it on, so the fixture turns it on.
+    genesis.autonomy.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
+    return genesis
 
 
 SMOKE = {'title': 'Two tasks', 'tasks': ['t1', 't2'], 'models': ['gemini-3.7-flash'], 'maximum_usd': '1.00', 'track': 'agentic-request'}
@@ -28,7 +32,10 @@ SMOKE = {'title': 'Two tasks', 'tasks': ['t1', 't2'], 'models': ['gemini-3.7-fla
 def test_dials_default_validate_and_record(tmp_path):
     a = Autonomy(tmp_path)
     state = a.read()
-    assert state['cards'] == 'act' and state['runs'] == 'smoke' and state['paused'] is False and state['smoke_attempts'] == 20
+    assert state['cards'] == 'off' and state['runs'] == 'off' and state['paused'] is False and state['smoke_attempts'] == 20
+    a.set({'cards': 'act', 'runs': 'smoke'}, by='human:lucas')
+    state = a.read()
+    assert state['cards'] == 'act' and state['runs'] == 'smoke'
     with pytest.raises(ValueError):
         a.set({'runs': 'anything'})
     a.set({'runs': 'propose', 'paused': True}, by='human:lucas')
@@ -40,6 +47,8 @@ def test_dials_default_validate_and_record(tmp_path):
 def test_may_launch_gates_in_order(tmp_path):
     a = Autonomy(tmp_path)
     plan = {'attempts_per_competitor': 2, 'maximum_usd': '1.00'}
+    assert a.may_launch(plan, Decimal('0'), Decimal('2'), Decimal('6'))[0] is False  # FR-002: off until a person says so
+    a.set({'runs': 'smoke'}, by='human:lucas')
     assert a.may_launch(plan, Decimal('0'), Decimal('2'), Decimal('6')) == (True, None)
     assert 'above smoke scale' in a.may_launch({'attempts_per_competitor': 21, 'maximum_usd': '1.00'}, Decimal('0'), Decimal('2'), Decimal('6'))[1]
     assert 'per-card allowance' in a.may_launch({'attempts_per_competitor': 2, 'maximum_usd': '3.00'}, Decimal('0'), Decimal('2'), Decimal('6'))[1]
@@ -138,6 +147,8 @@ def test_autonomy_routes(tmp_path, monkeypatch):
     with server_for(studio) as port:
         headers = {'X-Studio-Token': studio.token, 'Origin': f'http://127.0.0.1:{port}', 'Content-Type': 'application/json'}
         status, _, body = request(port, 'GET', '/api/genesis/autonomy')
+        assert status == 200 and json.loads(body)['runs'] == 'off'  # FR-002
+        status, _, body = request(port, 'POST', '/api/genesis/autonomy', json.dumps({'runs': 'smoke'}), headers)
         assert status == 200 and json.loads(body)['runs'] == 'smoke'
         status, _, body = request(port, 'POST', '/api/genesis/autonomy', json.dumps({'runs': 'propose'}), headers)
         assert status == 200 and json.loads(body)['runs'] == 'propose'
@@ -149,3 +160,100 @@ def test_autonomy_routes(tmp_path, monkeypatch):
         assert status == 200 and 'answer' in kinds and 'autonomy' in kinds
         status, _, body = request(port, 'GET', '/api/genesis')
         assert json.loads(body)['autonomy']['runs'] == 'propose'
+
+
+# --- FR-002: a workspace nobody has configured does nothing paid -----------------------
+# Before feature 024 the dials defaulted to cards='act' and runs='smoke', and the
+# watcher and scheduler started unconditionally. A fresh Studio with provider keys
+# began working cards within thirty seconds, and could dispatch a paid run whose
+# operator string was `genesis:smoke` and whose approver was a model turn. Restarting
+# the hosted app was enough to start it.
+
+def test_an_unconfigured_workspace_has_every_dial_off(tmp_path):
+    dials = Autonomy(tmp_path).read()
+    assert (dials['cards'], dials['runs'], dials['initiative'], dials['engineer']) == ('off', 'off', 'off', 'off')
+
+
+def test_an_unconfigured_workspace_refuses_to_launch(tmp_path):
+    allowed, reason = Autonomy(tmp_path).may_launch(
+        {'attempts_per_competitor': 1, 'maximum_usd': '0.01'}, Decimal('0'), Decimal('2'), Decimal('6'))
+    assert allowed is False and reason
+
+
+def test_a_person_can_still_turn_the_dials_on(tmp_path):
+    autonomy = Autonomy(tmp_path)
+    autonomy.set({'runs': 'smoke'}, by='human:lucas')
+    assert autonomy.read()['runs'] == 'smoke'
+
+
+def test_the_background_work_starts_only_when_a_dial_is_on(tmp_path):
+    from wb_studio.genesis_autonomy import background_wanted
+    assert background_wanted(Autonomy(tmp_path)) is False
+    autonomy = Autonomy(tmp_path)
+    autonomy.set({'cards': 'act'}, by='human:lucas')
+    assert background_wanted(autonomy) is True
+
+
+def test_exhausted_envelope_stops_the_loop_and_scheduled_day_spends_zero(tmp_path, monkeypatch):
+    """FR-035: An exhausted research envelope stops the loop without drawing on the weekly ceiling.
+    A full scheduled day spends zero.
+    """
+    from datetime import datetime, timezone
+    from wb_studio.genesis import Genesis
+    from wb_studio.genesis_access import Envelope
+    from wb_studio.genesis_autonomy import background_wanted
+    from wb_studio.scheduler import Scheduler
+
+    # Ledger refuses any attempt to reserve funds on an exhausted envelope
+    ledger = Mock()
+    ledger.reserve_run.side_effect = AssertionError('Reserved funds when research envelope was exhausted')
+    ledger.status.return_value = SimpleNamespace(blocked=False, available_usd=Decimal('280.00'), week_start='2026-09-07')
+
+    studio = SimpleNamespace(
+        directory=tmp_path,
+        jobs=Mock(return_value=[]),
+        job=Mock(),
+        events=Mock(return_value=[]),
+        ledger=ledger,
+        create=Mock(),
+    )
+    studio.genesis = Genesis(studio)
+    # Enable dials for autonomous work
+    studio.genesis.autonomy.set({'cards': 'act', 'runs': 'smoke', 'initiative': 'open'}, by='human:lucas')
+
+    # Set an envelope, but exhaust it (0 available)
+    env = Envelope(tmp_path / 'genesis')
+    env.set(amount_usd='50.00', per_experiment_ceiling_usd='15.00', by='Lucas', now=datetime(2026, 9, 7, 3, tzinfo=timezone.utc))
+    monkeypatch.setattr(Envelope, 'available_usd', lambda *a, **kw: Decimal('0.00'))
+    studio.envelope = env
+    studio.genesis.envelope = env
+
+    # 1. Background worker does not want to run
+    assert background_wanted(studio.genesis.autonomy) is False
+
+    # 2. may_launch refuses any proposed plan
+    plan = {'attempts_per_competitor': 2, 'maximum_usd': '1.00'}
+    allowed, reason = studio.genesis.autonomy.may_launch(plan, Decimal('0'), Decimal('2'), Decimal('6'))
+    assert allowed is False
+    assert 'envelope is exhausted' in reason
+    assert 'weekly ceiling' in reason
+
+    # 3. Full scheduled day (00:00 to 23:00): all jobs skipped, zero spend
+    scheduler = Scheduler(studio, tmp_path / 'schedule.json')
+    ran = []
+    scheduler.daily('nightly', 0, lambda s: ran.append('nightly'))
+    scheduler.daily('initiative', 7, lambda s: ran.append('initiative'))
+    scheduler.daily('ranking', 12, lambda s: ran.append('ranking'))
+
+    total_skipped = 0
+    for hour in range(24):
+        dt = datetime(2026, 9, 7, hour, 30, tzinfo=timezone.utc)
+        entries = scheduler.run_due(dt)
+        for entry in entries:
+            assert entry['status'] == 'skipped'
+            assert 'stopped' in entry['reason']
+            total_skipped += 1
+
+    assert ran == []
+    assert total_skipped > 0
+    assert ledger.reserve_run.call_count == 0

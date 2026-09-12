@@ -14,8 +14,11 @@ Late billing can therefore charge multiple weeks even if execution finished earl
 these capacity charges are not a claim about when provider usage occurred. Never
 sum weekly capacity charges as total paid spend. Unresolved reservations consume
 current capacity across every rollover until verified settlement.
-An actual above its reserved maximum is recorded, then permanently blocks new
-admissions. Request reservations have no override, expiry, or cancellation path.
+An actual above its reserved maximum is recorded, then blocks new admissions until
+a named person acknowledges that one overrun with a reason (`acknowledge_overrun`,
+`wb budget acknowledge`). The acknowledgement changes no money and removes nothing
+from the record; it replaces hand-editing the database, which is out of scope here.
+Request reservations still have no override, expiry, or cancellation path.
 Run envelopes hold unallocated capacity before scheduling; child request holds
 replace that capacity rather than adding it again. Closing an envelope prevents
 further dispatch and releases only unallocated capacity, never unknown billing.
@@ -29,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
@@ -40,6 +44,23 @@ MICROUSD = 1_000_000
 MAX_SQLITE_INTEGER = 2**63 - 1
 AUTHORIZED_WEEKLY_MICROUSD = 300 * MICROUSD
 TIMEZONE = 'America/Sao_Paulo'
+
+
+def default_ledger_path(repo: Path | None = None) -> Path:
+    """Where the one shared weekly ledger lives, for every process that reserves in it.
+
+    `STUDIO_LEDGER_PATH` wins, then a hosted Studio's mounted volume
+    (`STUDIO_DATA_DIR`), then `repo`'s own `research/` — this repository unless a
+    caller names another root. One rule in one place: a caller that guesses a
+    different path reads a different week's spend and lets through what the
+    ledger would have refused.
+    """
+    override = os.environ.get('STUDIO_LEDGER_PATH')
+    if override:
+        return Path(override).expanduser()
+    data = os.environ.get('STUDIO_DATA_DIR')
+    root = Path(data) if data else (repo or Path(__file__).resolve().parents[3])
+    return root / 'research' / 'budget.sqlite3'
 
 
 class BudgetExceeded(RuntimeError):
@@ -94,6 +115,16 @@ def _json_keys(value: Any) -> None:
             _json_keys(item)
 
 
+def _released(row: Any) -> bool:
+    """Has a named person released this unsettled hold? Unreadable metadata never has."""
+    if row['actual_microusd'] is not None:
+        return False
+    try:
+        return bool(json.loads(row['metadata_json']).get('hold_released'))
+    except (ValueError, TypeError):
+        return False
+
+
 def _identity(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f'{name} must be a nonempty string')
@@ -122,6 +153,23 @@ class Reservation:
     @property
     def metadata(self) -> dict[str, Any]:
         return json.loads(self.metadata_json)
+
+    @property
+    def released(self) -> bool:
+        """Whether a named person released this unsettled hold (see `release_hold`).
+
+        The cost is still unknown and `wb budget reconcile` still counts it; what a
+        release settles is that it no longer occupies capacity. A gate that asks only
+        `actual_usd is None` therefore has no way out, because nothing ever sets an
+        actual on a cost the provider never reported. Unreadable metadata is not a
+        release, the same rule `_released` applies to the row form.
+        """
+        if self.actual_microusd is not None:
+            return False
+        try:
+            return bool(json.loads(self.metadata_json).get('hold_released'))
+        except (ValueError, TypeError):
+            return False
 
 
 @dataclass(frozen=True)
@@ -152,6 +200,8 @@ class BudgetStatus:
     held_microusd: int
     carried_held_microusd: int
     overrun_ids: tuple[str, ...]
+    unknown_ids: tuple[str, ...] = ()
+    released_microusd: int = 0
 
     @property
     def committed_microusd(self) -> int:
@@ -180,6 +230,10 @@ class BudgetStatus:
     @property
     def carried_held_usd(self) -> Decimal:
         return _usd(self.carried_held_microusd)
+
+    @property
+    def released_usd(self) -> Decimal:
+        return _usd(self.released_microusd)
 
     @property
     def committed_usd(self) -> Decimal:
@@ -275,17 +329,30 @@ class BudgetLedger:
             end, _ = self._time(datetime.fromisoformat(row['settled_at']))
             if start <= week <= end:
                 actual += row['actual_microusd']
-        # All unknown liabilities count, including prior weeks. Python sums avoid
-        # SQLite SUM overflow when an unusually large verified overrun is recorded.
-        held = sum(row['maximum_microusd'] for row in rows if row['actual_microusd'] is None)
-        carried = sum(row['maximum_microusd'] for row in rows if row['actual_microusd'] is None and row['week_start'] < week)
+        # All unknown liabilities count, including prior weeks — until a named person
+        # releases one. Python sums avoid SQLite SUM overflow when an unusually large
+        # verified overrun is recorded.
+        unknown = [row for row in rows if row['actual_microusd'] is None and not _released(row)]
+        held = sum(row['maximum_microusd'] for row in unknown)
+        carried = sum(row['maximum_microusd'] for row in unknown if row['week_start'] < week)
+        released = sum(row['maximum_microusd'] for row in rows if _released(row))
         for envelope in connection.execute('SELECT * FROM budget_run_reservations WHERE closed_at IS NULL'):
             unused = max(0, envelope['maximum_microusd'] - self._run_used(connection, envelope['scope_id']))
             held += unused
             if envelope['week_start'] < week:
                 carried += unused
-        overruns = tuple(sorted(row['reservation_id'] for row in rows if row['actual_microusd'] is not None and row['actual_microusd'] > row['maximum_microusd']))
-        return BudgetStatus(week, self.weekly_limit_microusd, actual, held, carried, overruns)
+        # An overrun a named person has answered for stops blocking; it stays on the
+        # record and its money is unchanged (feature 024, FR-006).
+        def unanswered(row) -> bool:
+            if row['actual_microusd'] is None or row['actual_microusd'] <= row['maximum_microusd']:
+                return False
+            try:
+                return not json.loads(row['metadata_json']).get('overrun_acknowledged')
+            except (ValueError, TypeError):
+                return True   # metadata we cannot read is not an acknowledgement
+        overruns = tuple(sorted(row['reservation_id'] for row in rows if unanswered(row)))
+        return BudgetStatus(week, self.weekly_limit_microusd, actual, held, carried, overruns,
+                            tuple(sorted(row['reservation_id'] for row in unknown)), released)
 
     def status(self, *, now: datetime | None = None) -> BudgetStatus:
         week, _ = self._time(now)
@@ -297,12 +364,23 @@ class BudgetLedger:
         week, _ = self._time(instant)
         return week
 
-    def reservations(self, *, scope_id: str | None = None) -> list[Reservation]:
-        """Every reservation, oldest first; a read-only view for dispatch checks and reconciliation."""
+    def reservations(self, *, scope_id: str | None = None, run_id: str | None = None) -> list[Reservation]:
+        """Read request liabilities, optionally including a run's legacy episode requests."""
         query, args = 'SELECT * FROM budget_reservations', ()
+        if scope_id is not None and run_id is not None:
+            raise ValueError('Choose scope_id or run_id, not both')
         if scope_id is not None:
             _identity(scope_id, 'scope_id')
             query, args = query + ' WHERE scope_id=?', (scope_id,)
+        elif run_id is not None:
+            _identity(run_id, 'run_id')
+            # Older runs scoped each request to its episode and encoded the run
+            # in the request ID. Match the literal slash boundary, never LIKE:
+            # run1 must not collect run10, and IDs may contain SQL wildcards.
+            prefix = run_id + '/'
+            query += """ WHERE scope_id=? OR substr(reservation_id, 1, ?)=?
+                OR reservation_id IN (SELECT reservation_id FROM budget_run_requests WHERE run_id=?)"""
+            args = (run_id, len(prefix), prefix, run_id)
         with self._transaction() as connection:
             rows = connection.execute(query + ' ORDER BY created_at, reservation_id', args).fetchall()
         return [Reservation(**dict(row)) for row in rows]
@@ -491,6 +569,9 @@ class BudgetLedger:
                 raise ReservationConflict('settled reservation cannot be dispatched')
             if row['dispatched_at'] is not None:
                 raise ReservationConflict('reservation was already dispatched or dispatch is unknown')
+            # Its capacity was released; dispatching it now would spend money nothing holds.
+            if _released(row):
+                raise ReservationConflict('released reservation cannot be dispatched')
             if datetime.fromisoformat(timestamp) < datetime.fromisoformat(row['created_at']):
                 raise ValueError('dispatch cannot be before reservation')
             envelope = connection.execute("""SELECT run.closed_at FROM budget_run_reservations run
@@ -536,6 +617,84 @@ class BudgetLedger:
                 connection.execute('UPDATE budget_reservations SET actual_microusd=?, settled_at=? WHERE reservation_id=?', (actual, timestamp, reservation_id))
                 row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
             langfuse_export.record(connection, dict(row), usage=usage, outcome=outcome, trace_ids=trace_ids)
+            return Reservation(**dict(row))
+
+    def acknowledge_overrun(self, reservation_id: str, *, by: str, reason: str,
+                            now: datetime | None = None) -> Reservation:
+        """A named person answers for one recorded overrun, so work can resume.
+
+        An overrun blocks every admission, which is right: a provider that charged
+        above what it promised is exactly when the lab should stop and look. What was
+        missing is the looking. The only recovery was editing the ledger file by hand,
+        which this module puts out of scope, so one under-estimated request could stop
+        every run, every Genesis turn and `wb run` itself for good (feature 024, FR-006).
+
+        This does not undo or reduce anything. The settled total stays immutable and the
+        overrun stays on the record; the acknowledgement is written beside it with who,
+        when and why, and only then does that particular overrun stop blocking. Each one
+        is answered separately: a later overrun blocks again.
+        """
+        _identity(reservation_id, 'reservation_id')
+        who, why = str(by or '').strip(), str(reason or '').strip()
+        if not who:
+            raise ValueError('acknowledging an overrun names the person doing it')
+        if not why:
+            raise ValueError('acknowledging an overrun states why, for the record')
+        _, timestamp = self._time(now)
+        with self._transaction() as connection:
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f'no reservation {reservation_id!r} in the ledger')
+            if row['actual_microusd'] is None or row['actual_microusd'] <= row['maximum_microusd']:
+                raise ValueError(f'reservation {reservation_id!r} did not overrun its maximum')
+            metadata = json.loads(row['metadata_json'])
+            metadata['overrun_acknowledged'] = {'by': who, 'reason': why[:500], 'at': timestamp}
+            connection.execute('UPDATE budget_reservations SET metadata_json=? WHERE reservation_id=?',
+                               (json.dumps(metadata, sort_keys=True), reservation_id))
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            return Reservation(**dict(row))
+
+    def release_hold(self, reservation_id: str, *, by: str, reason: str,
+                     now: datetime | None = None) -> Reservation:
+        """A named person releases one hold whose cost the provider never reported.
+
+        An attempt whose billing cannot be read settles with no actual and keeps its whole
+        maximum held, this week and every week after it. That is right while the cost is
+        merely late — the money may have been spent — but there was no way out. Ten Monarch
+        attempts during a Langfuse outage hold US$ 250 of a US$ 300 week for ever, with no
+        cent proven spent; `acknowledge_overrun` answers for overruns only.
+
+        No clock does this. An expiry at the week boundary would quietly drop a charge
+        nobody has read yet, and the ledger would report a week it cannot stand behind.
+        A person decides, with who, when and why written beside the reservation.
+
+        Nothing about the money changes. The reservation stays unsettled and unknown, so
+        `wb budget reconcile` still counts it against the provider's own export, and a
+        total that arrives later still settles and charges its weeks. What changes is that
+        the unknown stops occupying capacity — and that this reservation can never dispatch
+        again, since nothing holds it any more.
+        """
+        _identity(reservation_id, 'reservation_id')
+        who, why = str(by or '').strip(), str(reason or '').strip()
+        if not who:
+            raise ValueError('releasing a hold names the person doing it')
+        if not why:
+            raise ValueError('releasing a hold states why, for the record')
+        _, timestamp = self._time(now)
+        with self._transaction() as connection:
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f'no reservation {reservation_id!r} in the ledger')
+            if row['actual_microusd'] is not None:
+                raise ValueError(f'reservation {reservation_id!r} is settled, not held; its cost is known')
+            if _released(row):
+                raise ValueError(f'reservation {reservation_id!r} was already released')
+            metadata = json.loads(row['metadata_json'])
+            metadata['hold_released'] = {'by': who, 'reason': why[:500], 'at': timestamp}
+            connection.execute('UPDATE budget_reservations SET metadata_json=? WHERE reservation_id=?',
+                               (json.dumps(metadata, sort_keys=True), reservation_id))
+            row = connection.execute('SELECT * FROM budget_reservations WHERE reservation_id=?', (reservation_id,)).fetchone()
+            langfuse_export.record(connection, dict(row), outcome='hold_released')
             return Reservation(**dict(row))
 
     def record_summary(self, identity: str, summary: dict) -> None:

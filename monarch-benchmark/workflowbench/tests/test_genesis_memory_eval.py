@@ -24,6 +24,8 @@ def genesis(tmp_path):
     studio = SimpleNamespace(directory=tmp_path, create=Mock(), jobs=Mock(return_value=[]), job=Mock(),
                              events=Mock(return_value=[]), ledger=Mock())
     studio.genesis = Genesis(studio)
+    # This fixture deliberately exercises its stub route, independently of the partner default.
+    studio.genesis.config.set({'models': {'chat': 'fake-route', 'reading': 'fake-route'}}, routes=[{'id': 'fake-route', 'available': True}])
     studio.genesis.memory.index_records(RECORDS)
     return studio.genesis
 

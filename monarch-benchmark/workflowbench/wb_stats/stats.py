@@ -34,19 +34,41 @@ def _is_infra(row: dict) -> bool:
     return str(row.get("termination", "")).startswith("infra:")
 
 
+def _is_ungraded(row: dict) -> bool:
+    return bool(row.get("ungraded")) or "grading=ungraded" in (row.get("flags") or [])
+
+
+def _excluded(row: dict) -> bool:
+    return _is_infra(row) or _is_ungraded(row)
+
+
 def paired_wl(rows_a: list[dict], rows_b: list[dict]) -> dict[str, Any]:
     """Per-(task, trial) pairing on the identical task set. Infra episodes on
-    either side drop the pair (the pair wasn't a fair comparison)."""
+    either side drop the pair (the pair wasn't a fair comparison); so does an
+    ungraded one, counted separately.
+
+    Both drops are counted apart because they say different things to a reader.
+    Infra is our machine failing; ungraded is a checker that could not answer. A
+    round whose grading broke, reported as forty infra-dropped pairs, sends
+    whoever reads it to look at the wrong thing -- and `arm_summary` already
+    keeps the two apart.
+    """
+    suites = {r.get("suite") for r in rows_a + rows_b if r.get("suite")}
+    if len(suites) > 1:
+        raise ValueError("cannot pair different products/suites: " + ", ".join(sorted(suites)))
     key = lambda r: (r["task_id"], r["trial"])
     a = {key(r): r for r in rows_a}
     bmap = {key(r): r for r in rows_b}
     common = sorted(set(a) & set(bmap))
-    b = c = both = neither = dropped_infra = 0
+    b = c = both = neither = dropped_infra = dropped_ungraded = 0
     per_task: dict[str, dict[str, int]] = defaultdict(lambda: {"w": 0, "l": 0, "t": 0})
     for k in common:
         ra, rb = a[k], bmap[k]
         if _is_infra(ra) or _is_infra(rb):
             dropped_infra += 1
+            continue
+        if _is_ungraded(ra) or _is_ungraded(rb):
+            dropped_ungraded += 1
             continue
         pa, pb = bool(ra["passed"]), bool(rb["passed"])
         if pa and not pb:
@@ -57,7 +79,8 @@ def paired_wl(rows_a: list[dict], rows_b: list[dict]) -> dict[str, Any]:
             both += 1; per_task[k[0]]["t"] += 1
         else:
             neither += 1; per_task[k[0]]["t"] += 1
-    return {"pairs": len(common) - dropped_infra, "dropped_infra": dropped_infra,
+    return {"pairs": len(common) - dropped_infra - dropped_ungraded,
+            "dropped_infra": dropped_infra, "dropped_ungraded": dropped_ungraded,
             "wins": b, "losses": c, "both_pass": both, "neither_pass": neither,
             "mcnemar": mcnemar(b, c), "per_task": dict(per_task)}
 
@@ -66,7 +89,7 @@ def pass_hat_k(rows: list[dict], k: int) -> dict[str, Any]:
     """Per-task pass_hat_k, infra excluded; mean +/- SEM over tasks."""
     by_task: dict[str, list[bool]] = defaultdict(list)
     for r in rows:
-        if not _is_infra(r):
+        if not _excluded(r):
             by_task[r["task_id"]].append(bool(r["passed"]))
     per_task = {}
     for task, outcomes in sorted(by_task.items()):
@@ -129,7 +152,7 @@ def cluster_bootstrap(rows: list[dict], value: Callable[[dict], float],
 def arm_summary(rows: list[dict]) -> dict[str, Any]:
     """Per-arm headline block: strict pass +/- SEM (clustered by task), cost,
     cache hit rate, infra rate. The report builder consumes this verbatim."""
-    non_infra = [r for r in rows if not _is_infra(r)]
+    non_infra = [r for r in rows if not _excluded(r)]
     by_task: dict[str, list[float]] = defaultdict(list)
     for r in non_infra:
         by_task[r["task_id"]].append(1.0 if r["passed"] else 0.0)
@@ -137,8 +160,9 @@ def arm_summary(rows: list[dict]) -> dict[str, Any]:
     tp = sum((r.get("tokens") or {}).get("prompt", 0) for r in rows)
     tc = sum((r.get("tokens") or {}).get("cached", 0) for r in rows)
     cost = sum(r.get("cost_usd") or 0.0 for r in rows)
-    return {"episodes": len(rows), "infra_episodes": len(rows) - len(non_infra),
-            "infra_rate": round((len(rows) - len(non_infra)) / len(rows), 4) if rows else None,
+    return {"episodes": len(rows), "infra_episodes": sum(_is_infra(r) for r in rows),
+            "ungraded_episodes": sum(_is_ungraded(r) for r in rows),
+            "infra_rate": round(sum(_is_infra(r) for r in rows) / len(rows), 4) if rows else None,
             "strict_pass": mean_sem(task_rates),
             "cost_usd": round(cost, 6),
             "cost_per_episode": round(cost / len(rows), 6) if rows else None,

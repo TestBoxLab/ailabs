@@ -1,38 +1,26 @@
 """The lab seeds: the stock seeds with descriptions from a reviewed knowledge catalog.
 
-Unblock plan (8 Sep 2026) M6, T6.3 groundwork. Lucas's experimental knowledge
-("PG-Waki", `research/architectures/pg-waki/v1/provenance.md`) is a catalog of
-reviewed action semantics: for each AutomationBench Zapier tool, its purpose,
-what it does not do, whether repeating it is safe, where the records sit in
-its response and what its arguments mean; plus one paragraph per product on
-how its records relate. Monarch learns products from seed folders only
-(`POST /v1/seeds/<slug>/import` replays a fixture folder), so the knowledge
-enters the lab instance as a second seed set, generated here.
+Monarch learns products from seed folders only, so Lucas's reviewed action
+semantics ("PG-Waki", `research/architectures/pg-waki/v1/provenance.md`) enter the
+lab instance as a second seed set, generated here.
 
 The lab set is the stock set (`wb_world.seeds.generate`) with ONE difference:
-`business_action.description` of every matched action carries the catalog's
-text, and the first action of every product opens with the product's
-paragraph, prefixed "Product:". Nothing the importer keys on or the executor
-runs -- ids, verbs, labels, url templates, parameters, extracts, schemas,
-`_meta.json` -- moves by a byte, so the two sets validate alike and run alike.
-The SPEC (`local-docs/benchmark/seed-format/SPEC.md` §2) stores `description`
-and does not serve it to the builder today; making the builder read it is a
-Monarch-side change, and `_meta.json` has exactly five keys, none for prose.
+`business_action.description` of every matched action carries the catalog's text,
+and the first action of every product opens with the product's paragraph, prefixed
+"Product:". Nothing the importer keys on or the executor runs -- ids, verbs, labels,
+url templates, parameters, extracts, schemas, `_meta.json` -- moves by a byte, so
+the two sets validate alike and run alike. (The SPEC stores `description` but does
+not serve it to the builder today; that is a Monarch-side change.)
 
 Matching is an explicit table, never a guess: `config/products/<product>.
-knowledge-map.yaml` maps a catalog id (`zapier:<app>_<tool>`) to a bench action
-id (`bench-<app>:<verb>:<object>`). Entries without a row, actions without an
-entry, and rows the catalog does not carry are listed in
-`<out>/KNOWLEDGE-MAPPING.yaml` with the catalog's sha256 and the counts. Two
-things from the catalog are kept only where the seed can honour them: a record
-location only when the seed's own response schema reaches that path, an
-argument's meaning only when the seed has a parameter of that name (the
-Zapier tools and the REST routes spell most arguments differently).
+knowledge-map.yaml` maps a catalog id to a bench action id. Unmatched entries and
+actions are listed in `<out>/KNOWLEDGE-MAPPING.yaml` with the catalog's sha256 and
+the counts. A record location is kept only where the seed's own response schema
+reaches that path, an argument's meaning only where the seed has a parameter of
+that name -- the Zapier tools and the REST routes spell most arguments differently.
 
-Deterministic: the same catalog, table and stock set give the same bytes.
-`ok.txt` gains `knowledge_sha256` and `knowledge_source` next to the seed
-version, and its digest is recomputed, so the lab instance's knowledge-base
-hash file can record which knowledge it was taught.
+Deterministic: the same catalog, table and stock set give the same bytes. `ok.txt`
+gains `knowledge_sha256` and `knowledge_source`, and its digest is recomputed.
 """
 from __future__ import annotations
 

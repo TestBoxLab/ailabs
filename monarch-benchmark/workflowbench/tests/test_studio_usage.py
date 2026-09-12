@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 from wb_studio.usage import usage_report
 
@@ -42,3 +43,24 @@ def test_ledger_lines_read_the_week_as_a_person_audits_it(tmp_path):
     assert run['what']=='Two tasks' and run['who']=='lucas' and run['maximum_usd']=='2.00' and run['actual_usd']=='0.10' and run['requests']==1 and run['state']=='open' and run['run']=='run-1'
     req=next(l for l in out['lines'] if l['kind']=='request')
     assert req['what']=='Genesis' and req['who']=='Genesis' and req['actual_usd'] is None and req['state']=='open'
+
+
+def test_a_released_hold_is_not_shown_as_still_reserved(tmp_path):
+    """A hold a person released stops holding capacity in the ledger, so the page must
+    not keep reading `Reserved` — and the allowance must stop counting its ceiling."""
+    from datetime import datetime, timezone
+    from wb_orchestrator.budget import BudgetLedger
+    from wb_studio import allowances
+    from wb_studio.usage import ledger_lines
+    now=datetime(2026,9,9,12,tzinfo=timezone.utc)
+    ledger=BudgetLedger(tmp_path/'budget.sqlite3')
+    ledger.reserve('genesis-x','0.25',scope_id='genesis',now=now,metadata={'purpose':'Genesis'})
+    ledger.claim('genesis-x',now=now)
+    ledger.settle('genesis-x',None,now=now)
+    studio=SimpleNamespace(ledger=ledger,jobs=lambda:[],budget=lambda:{})
+    held,settled=allowances._spent(ledger_lines(studio,now=now)['lines'],'genesis')
+    assert (held,settled)==(Decimal('0.25'),Decimal('0.00'))
+    ledger.release_hold('genesis-x',by='human:lucas',reason='Provider never reported a cost.',now=now)
+    line=ledger_lines(studio,now=now)['lines'][0]
+    assert line['state']=='released' and line['actual_usd'] is None
+    assert allowances._spent([line],'genesis')==(Decimal('0.00'),Decimal('0.00'))
