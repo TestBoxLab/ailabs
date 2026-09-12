@@ -982,6 +982,16 @@ def handler(studio):
             except Exception:
                 return None
 
+        def configuration_actor(self):
+            """Only identities verified by this request can author configuration changes."""
+            person = self.person()
+            if person:
+                return {"id": "person:" + person["name"], "name": person["name"], "source": "person-key"}
+            name = os.environ.get("STUDIO_AUTH_USER")
+            if name and os.environ.get("STUDIO_AUTH_PASSWORD") and self.authorised():
+                return {"id": "basic:" + name, "name": name, "source": "basic"}
+            return None
+
         def send_text(self, text, content_type="text/plain; charset=utf-8", status=200, filename=None):
             data = str(text).encode("utf8")
             self.send_response(status)
@@ -1128,9 +1138,12 @@ def handler(studio):
                 if url.path == "/api/benchmark-config":
                     from wb_studio.benchmark_config import catalog
                     try:
-                        return self.send_json(catalog(studio))
+                        return self.send_json(catalog(studio, actor=self.configuration_actor()))
                     except ValueError as exc:
                         return self.send_json({"error": str(exc)}, getattr(exc, "status", 400))
+                if url.path == "/api/benchmark-config/history":
+                    from wb_studio.benchmark_config import history
+                    return self.send_json(history(studio))
                 recovery_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/resume-preview", url.path)
                 if recovery_match:
                     from wb_studio.configured_controls import preview
@@ -1228,7 +1241,9 @@ def handler(studio):
                 if match:
                     identity = match[1]
                     if not match[2]:
-                        return self.send_json(with_setup_names(studio.job(identity)))
+                        from wb_studio.monarch_provenance import project
+                        job = studio.job(identity)
+                        return self.send_json({**with_setup_names(job), "monarch_provenance": project(job)})
                     if match[2] == "/report":
                         from wb_studio.report_data import narrative_status
                         report_job = studio.job(identity)
@@ -1263,6 +1278,17 @@ def handler(studio):
                 if url.path == '/api/reports':
                     from wb_studio.report_data import index as report_index
                     return self.send_json(report_index(studio))
+                download_match = re.fullmatch(r'/api/reports/run/([a-zA-Z0-9_-]+)/downloads/(logs|prompts|guide)', url.path)
+                if download_match:
+                    from wb_studio.report_downloads import download
+                    identity, kind = download_match.groups()
+                    if kind == 'guide':
+                        from wb_studio.evidence_guide import download as download_guide
+                        return self.send_text(download_guide(studio, identity),
+                                              'text/html; charset=utf-8', filename=f'{identity}-evidence-guide.html')
+                    value = download(studio, identity, kind)
+                    return self.send_text(json.dumps(value, ensure_ascii=False, indent=2),
+                                          'application/json; charset=utf-8', filename=f'{identity}-{kind}.json')
                 report_match = re.fullmatch(r'/api/reports/(run|round)/([a-zA-Z0-9_-]+)', url.path)
                 if report_match:
                     from wb_studio.report_data import AUDIENCES, round_report, run_report
@@ -1495,7 +1521,7 @@ def handler(studio):
                 if self.path.startswith("/api/benchmark-config/"):
                     from wb_studio.benchmark_config import dispatch
                     try:
-                        return self.send_json(dispatch(studio, self.path.rsplit("/", 1)[-1], payload, self.person()))
+                        return self.send_json(dispatch(studio, self.path.rsplit("/", 1)[-1], payload, self.person(), self.configuration_actor()))
                     except PermissionError as exc:
                         return self.send_json({"error": str(exc)}, 403)
                     except ValueError as exc:

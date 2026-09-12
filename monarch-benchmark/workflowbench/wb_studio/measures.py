@@ -14,6 +14,7 @@ import math
 import re
 from collections import defaultdict
 from itertools import combinations
+from statistics import median
 
 class Sentinel:
     """Distinct singleton sentinel for measures where 0, None, and unknown must not collide."""
@@ -473,8 +474,9 @@ def curve(rows, comparator_rows, max_n: int | None = None) -> dict:
 
 
 def time(rows) -> dict:
+    valid = evaluated(rows)
     seconds = []
-    for row in evaluated(rows):
+    for row in valid:
         if isinstance(row.get("seconds"), bool):
             continue
         try:
@@ -484,12 +486,45 @@ def time(rows) -> dict:
         if math.isfinite(value) and value >= 0:
             seconds.append(value)
     seconds.sort()
+    unknown = len(valid) - len(seconds)
     if not seconds:
-        return {"attempts": 0, "median": None, "p90": None, "max": None, "values": []}
+        return {"attempts": 0, "unknown_attempts": unknown, "median": None, "p90": None, "max": None, "values": []}
     def quantile(q):
         index = min(len(seconds) - 1, max(0, int(round(q * (len(seconds) - 1)))))
         return seconds[index]
-    return {"attempts": len(seconds), "median": quantile(.5), "p90": quantile(.9), "max": seconds[-1], "values": seconds}
+    return {"attempts": len(seconds), "unknown_attempts": unknown, "median": median(seconds), "p90": quantile(.9), "max": seconds[-1], "values": seconds}
+
+
+def initial_repetitions(job, setup):
+    settings = job.get("settings") or {}
+    arm = next((a for a in settings.get("arms") or [] if a["id"] == setup), {})
+    return arm.get("initial_repetitions") or settings.get("repetitions") or 1
+
+
+def task_progress(rows, tasks, repetitions=1) -> dict:
+    """Initial planned trials and conditional retries, counted once per task.
+
+    A retry is identified by its retained flag or trial, never completion order.
+    Multiple initial repetitions mean success in any initial trial, not pass^k.
+    Missing and infrastructure-only tasks stay in the selected-task denominator.
+    """
+    retries = [r for r in rows if "retry" in (r.get("flags") or []) or r.get("trial", 0) >= repetitions]
+    initial = [r for r in rows if "retry" not in (r.get("flags") or []) and r.get("trial", 0) < repetitions]
+    solved, first = solved_tasks(rows), solved_tasks(initial)
+    recorded = {r["task"] for r in rows}
+    valid = {r["task"] for r in evaluated(rows)}
+    ungraded = {r["task"] for r in rows if is_ungraded(r)} - valid
+    selected = set(tasks) | recorded
+    states = {task: "initial_pass" if task in first else "retry_pass" if task in solved else
+              "failed" if task in valid else "ungraded" if task in ungraded else "infrastructure" if task in recorded else "missing"
+              for task in sorted(selected)}
+    retry_cost = cost(retries)
+    low, high = wilson(len(solved), len(selected))
+    return {"tasks": len(selected), "initial_solved": len(first), "solved": len(solved),
+            "evaluated_tasks": len(valid), "initial_evaluated_tasks": len({r["task"] for r in evaluated(initial)}),
+            "missing_tasks": len(selected - recorded), "ungraded_tasks": len(ungraded), "infrastructure_tasks": len(recorded - valid - ungraded),
+            "retries": len(retries), "retry_cost": retry_cost["total"], "retry_unknown_costs": retry_cost["unknown_attempts"],
+            "rate": len(solved) / len(selected) if selected else None, "low": low, "high": high, "states": states}
 
 
 def solved_tasks(rows) -> set:
@@ -678,6 +713,7 @@ def run_measures(job, events) -> dict:
             "pass": pass_rate(rows), "pass_k": pass_k(rows), "objective_share": objective_share(rows),
             "violations": violations(rows), "false_completion": false_completion(rows),
             "turns": turns(rows, events), "cost": cost(rows), "time": time(rows),
+            "task_progress": task_progress(rows, settings.get("tasks") or [], initial_repetitions(job, setup)),
             "solved": sorted(solved_tasks(rows)),
             "paired": paired(rows, groups.get(baseline, [])) if baseline and setup != baseline and baseline in groups else None,
         }

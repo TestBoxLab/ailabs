@@ -58,6 +58,12 @@ and verification are recorded [here](rounds/2026-09-11-studio-run-controls.md).
   ref return HTTP 404. Keep snapshot mode read-only until actual repository
   access is verified. [Activation record](../../specs/013-benchmark-config-repository/operational-follow-ups/git-activation.md).
 
+- Later September 11: repository read/write access verified; removed only the
+  snapshot environment selector and reused the validated image. Hosted editing,
+  schema rejection, valid draft review, no-op save and history passed. Frozen
+  snapshot files, README and configuration main were unchanged.
+  [Verification](rounds/2026-09-11-studio-config-editing-restored.md).
+
 ## Complete UI metrics and billing visibility
 
 - Completed September 10: repaired configured-plan report inputs:
@@ -93,3 +99,69 @@ and verification are recorded [here](rounds/2026-09-11-studio-run-controls.md).
   summary telemetry must not duplicate generation costs.
 
 Related backlog: [WorkflowBench deferred work](../workflowbench/deferred.md).
+
+## Benchmark artifact workspace: rejected acceptance, September 11
+
+Carlos rejected the hosted acceptance because benchmark configuration belongs
+in its own module, with type-specific pages and enforced manifests. The report
+visual language remains approved. Carlos subsequently accepted the segregation
+and authorized push/PR after restoring editing. Current work is specified in
+[artifact workspace](../../specs/013-benchmark-config-repository/artifact-workspace/spec.md).
+Implemented, deployed and browser verified in
+[the revised release](rounds/2026-09-11-benchmark-artifact-workspace.md).
+Git-backed editing and history now pass hosted browser checks; README remains
+intact in the repository. Merge remains pending.
+[Activation verification](rounds/2026-09-11-studio-config-editing-restored.md).
+
+- Replace the general-looking repository browser with recognized YAML artifacts,
+  grouped as harnesses, models, plans and products; exclude README from the UI
+  and its write endpoints while preserving historical snapshot bytes.
+- Reuse authoritative AI Labs loaders, reject duplicate YAML keys, show manifest
+  requirements and validation errors, and retain drafts after failures/conflicts.
+- Attribute configuration saves to the authenticated Studio account, separately
+  from the Git credential's committer and the declared paid-run operator.
+- Show stored Monarch source/deployment evidence and knowledge-base content
+  hashes per run. Mark local checkout/declarations and missing history honestly;
+  a monorepo commit does not prove that independently deployed services match it.
+- Support validated discovery/model-family declarations, with explicit execution
+  refusals until the required runtime capabilities exist. Carlos confirmed that
+  discovery execution/evaluation is a later task, not part of this UI revision.
+
+## Select and deploy Monarch revisions from Studio (future)
+
+- Choose an immutable Monarch source revision and identify the services affected.
+  Record each service's source commit, uploaded tree digest, image digest and
+  Railway deployment ID; a dirty working tree cannot be represented by SHA alone.
+- Build an authenticated deployment orchestration flow with named approver,
+  visible scope, active-run drain, health checks, catalogue/knowledge verification
+  and rollback. Never replace services while paid attempts depend on them.
+- Freeze the verified deployment receipt on each run/continuation segment.
+  Expose a full, build-baked commit through Monarch's version endpoints; the local
+  checkout and operator environment are declarations, not deployment proof.
+- Do not assume a UI selector or a saved YAML field already changes deployments.
+
+## Execute feature discovery and apply Monarch model selections (future)
+
+- Define discovery-specific tasks, expected outcomes, permissions, independent
+  evaluation and spending limits before implementing an adapter. Keep discovery
+  results separate from workflow creation/execution scores.
+- Integrate Monarch's supported discovery harness/model interface. Add a supported
+  per-run workflow model-selection interface or verify an isolated deployment's
+  effective model choices; saving a price table is not model routing.
+- Record requested family/model selections and observed provider model IDs for
+  each role. Refuse mismatches or unsupported requirements before paid dispatch.
+
+## Individual login and budget approval profiles (future)
+
+- Replace shared-admin attribution with a selected SSO provider and stable user
+  subject IDs. The provider has not been decided in this session.
+- Define reader, editor, run requester and budget approver permissions; enforce
+  them server-side, with bounded user/run/weekly spending and no self-approved
+  escalation. Carlos/Lucas approval governance remains in force until changed.
+- Bind an approval to the requester, exact plan/config/task/runtime revisions,
+  maximum amount, expiry and continuation scope; changed scope requires review.
+- Retain actor, approver, timestamp, old/new revision, request identity, reserved
+  maximum, receipts and reconciliation status in auditable history. Preserve
+  unknown charges and existing reservations through logout, retries and restarts.
+- Existing plan and weekly ledger caps already constrain spending. Individual
+  permissions add to those controls; they do not replace the shared ledger.

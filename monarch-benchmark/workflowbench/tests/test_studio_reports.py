@@ -386,11 +386,12 @@ def test_recorded_setup_versions_remain_separate_in_every_report_view(studio, wi
     assert column['total'] == 17
     assert next(row for row in column['checks'] if row['id'] == 'passed')['percent'] == 23.53
     if with_winner:
-        assert report['subject'] == 'glm-5.3-fireworks/api'
-        assert report['verdict'].startswith('GLM 5.3 (Fireworks) passed 7 of 13 tasks')
-        assert 'Monarch (build 0cf63a74e) passed 4 of 17 attempts (23.53%).' in report['verdict']
+        assert report['subject'] == version
+        assert report['verdict'].startswith('Monarch passed 4 of 17 attempts')
+        assert report['setups']['glm-5.3-fireworks/api']['pass']['passed'] == 7
+        assert report['setups']['glm-5.3-fireworks/api']['pass']['attempts'] == 13
         assert 'Monarch (build different-build) passed 0 of 1 attempt (0.00%).' in report['verdict']
     else:
-        assert report['subject'] == version and 'passed 4 of 17 tasks' in report['verdict']
+        assert report['subject'] == version and 'passed 4 of 17 attempts' in report['verdict']
     assert report['method']['planned_attempts'] == len(record['settings']['tasks'])
     assert report['method']['recorded_attempts'] == len(record['results'])

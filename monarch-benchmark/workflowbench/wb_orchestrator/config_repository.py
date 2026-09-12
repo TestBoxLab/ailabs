@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import MISSING, fields
 import difflib
 import hashlib
 import json
@@ -21,7 +22,7 @@ MAX_TREE = 8_388_608
 SHA = re.compile(r"[0-9a-f]{40}")
 # Feature 026 gave each external product its own reviewed side-effect list beside
 # the original one: `side-effects.appworld.yaml`, `side-effects-tau2-retail.yaml`.
-SIDE_EFFECTS = re.compile(r"side-effects([.-][A-Za-z0-9_-]+)*\.yaml")
+SIDE_EFFECT_PATH = re.compile(r"config/side-effects([.-][A-Za-z0-9_-]+)*\.yaml")
 
 
 class RepositoryError(ValueError):
@@ -38,13 +39,70 @@ def safe_path(value):
     path = PurePosixPath(value)
     if any(p in (".", "..") for p in value.split("/")) or str(path) != value:
         raise ValueError("Config paths cannot escape their directory")
-    allowed = ((len(path.parts) == 3 and path.parts[1] in ("models", "harnesses", "plans", "products")
-                and path.suffix == ".yaml")
-               or value == "config/README.md"
-               or (len(path.parts) == 2 and SIDE_EFFECTS.fullmatch(path.name)))
+    allowed = (len(path.parts) == 3 and path.parts[1] in ("models", "harnesses", "plans", "products")
+               and path.suffix == ".yaml") or value == "config/README.md" or SIDE_EFFECT_PATH.fullmatch(value)
     if not allowed:
         raise ValueError("Unsupported config file path")
     return value
+
+
+def artifact(path, text=""):
+    """Editing policy, separate from paths retained in immutable historical snapshots."""
+    safe_path(path)
+    if path == "config/README.md":
+        return None
+    if SIDE_EFFECT_PATH.fullmatch(path):
+        return {"group": "products", "kind": "side-effects", "editable": True}
+    file = PurePosixPath(path)
+    group = file.parent.name
+    if group == "products" and "." in file.stem:
+        suffix = file.stem.rsplit(".", 1)[-1]
+        if suffix not in ("monarch-kb", "monarch-recipes", "knowledge-map"):
+            return None
+        return {"group": group, "kind": suffix, "editable": False,
+                "reason": "Generated product evidence; update it with its generator."}
+    kind = {"models": "model", "harnesses": "harness", "plans": "plan", "products": "product"}[group]
+    if group in ("models", "harnesses"):
+        try:
+            from wb_orchestrator.config import load_yaml
+            data = load_yaml(text)
+            if isinstance(data, dict):
+                if group == "models" and data.get("kind") == "price-table":
+                    kind = "price-table"
+                elif group == "harnesses" and data.get("kind") in ("api", "cli", "scripted", "monarch"):
+                    kind = "harness-" + data["kind"]
+        except yaml.YAMLError:
+            pass  # Invalid editable YAML must remain visible so it can be repaired.
+    return {"group": group, "kind": kind, "editable": True}
+
+
+def artifact_types():
+    """Editor examples come from AI Labs; executable loaders remain authoritative."""
+    from wb_orchestrator import config as c
+    examples = [("model", "models", "gpt-5.6-sol", c.Model),
+                ("price-table", "models", "monarch-team-anthropic-20260910", c.PriceTable),
+                ("plan", "plans", "tier-simple", c.Plan),
+                ("product", "products", "simulated-apps", c.Product)]
+    examples += [("harness-" + kind, "harnesses", name, c.Harness)
+                 for kind, name in (("api", "api"), ("cli", "claude-code"), ("scripted", "oracle"), ("monarch", "monarch"))]
+    result = []
+    for kind, group, name, cls in examples:
+        data = c.load_yaml((c.DEFAULT_CONFIG_DIR / group / (name + ".yaml")).read_text(encoding="utf-8"))
+        data["name"] = "__NAME__"
+        data.pop("description", None)
+        data.pop("approved_by", None)
+        required = [f.name for f in fields(cls) if f.default is MISSING and f.default_factory is MISSING]
+        if cls is c.PriceTable:
+            required.insert(1, "kind")
+        if cls is c.Harness:
+            required += list(c._HARNESS_KEYS[data["kind"]][0])
+        result.append({"id": kind, "group": group, "label": kind.replace("-", " ").capitalize(),
+                       "required_fields": required, "path_pattern": f"config/{group}/{{name}}.yaml",
+                       "template": "# Review example values and references before saving or launching.\n" + yaml.safe_dump(data, sort_keys=False)})
+    result.append({"id": "side-effects", "group": "products", "label": "Side effects",
+                   "required_fields": ["service", "allowed"], "path_pattern": "config/side-effects-{name}.yaml",
+                   "template": "# Allowed incidental changes; reference this file from a product.\n[]\n"})
+    return result
 
 
 def _texts(records):
@@ -148,9 +206,9 @@ def validate_files(files):
                         raise ValueError("YAML nesting is too deep")
                     if isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
                         depth -= 1
-                data[name] = yaml.safe_load(text)
+                data[name] = c.load_yaml(text)
                 group = file.parent.name
-                if name == "config/side-effects.yaml":
+                if SIDE_EFFECT_PATH.fullmatch(name):
                     c.load_side_effects(file)
                 elif group == "models":
                     models[file.stem] = c.load_price_table(file) if c.is_price_table(file) else c.load_model(file)
@@ -167,9 +225,16 @@ def validate_files(files):
         for name, product in products.items():
             if product.side_effects not in files:
                 errors.append(f"config/products/{name}.yaml: missing {product.side_effects}")
+            elif not SIDE_EFFECT_PATH.fullmatch(product.side_effects):
+                errors.append(f"config/products/{name}.yaml: side_effects must reference a side-effect artifact")
         for name, h in harnesses.items():
             if h.kind == "monarch" and not isinstance(models.get(h.price_table), c.PriceTable):
                 errors.append(f"config/harnesses/{name}.yaml: missing price table {h.price_table}")
+            elif h.kind == "monarch":
+                try:
+                    c.validate_model_families(h, models[h.price_table], f"config/harnesses/{name}.yaml")
+                except c.ConfigError as exc:
+                    errors.append(f"config/harnesses/{name}.yaml: {exc}")
         for name, p in plans.items():
             names = []
             for spec in p.competitors:
@@ -222,6 +287,9 @@ class _SnapshotRepository:
         raise RepositoryError("Configuration snapshot is read-only; editing requires repository access")
 
     save = validate
+
+    def history(self):
+        raise RepositoryError("History needs repository access; this snapshot retains its immutable revision")
 
 
 class Repository:
@@ -337,9 +405,16 @@ class Repository:
             raise ValueError("Expected a bounded list of file changes")
         seen, diff = set(), []
         for change in changes:
+            if not isinstance(change, dict) or set(change) != {"path", "text"}:
+                raise ValueError("Each file change must contain only path and text")
             name, text = safe_path(change["path"]), change["text"]
-            if name in seen or (text is not None and (not isinstance(text, str) or len(text.encode()) > MAX_FILE)):
-                raise ValueError("Duplicate or oversized file change")
+            if text is not None and (not isinstance(text, str) or len(text.encode()) > MAX_FILE):
+                raise ValueError("File change content must be bounded text or null")
+            description = artifact(name, text or files.get(name, ""))
+            if not description or not description["editable"]:
+                raise ValueError(f"{name}: not an editable artifact; generated evidence requires its generator")
+            if name in seen:
+                raise ValueError("Duplicate file change")
             seen.add(name)
             old = files.get(name, "")
             if text is None:
@@ -356,13 +431,38 @@ class Repository:
         return {"valid": not errors, "errors": errors, "warnings": warnings,
                 "diff": "".join(diff), "files": files}
 
-    def save(self, base_commit, changes, message, operator):
+    def history(self):
+        rows = self.request("GET", "commits?sha=main&path=config&per_page=20")
+        if not isinstance(rows, list):
+            raise RepositoryError("Repository returned invalid history")
+        result = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                raise RepositoryError("Repository returned invalid history")
+            commit, revision = row.get("commit", {}), row.get("sha", "")
+            if not isinstance(commit, dict) or not SHA.fullmatch(str(revision)):
+                raise RepositoryError("Repository returned invalid history")
+            author, committer = commit.get("author") or {}, commit.get("committer") or {}
+            if not isinstance(author, dict) or not isinstance(committer, dict):
+                raise RepositoryError("Repository returned invalid history")
+            result.append({"commit": revision, "author": str(author.get("name") or "Not recorded")[:200],
+                           "committer": str(committer.get("name") or "Not recorded")[:200],
+                           "time": str(author.get("date") or "")[:40] or None, "message": str(commit.get("message") or "")[:4000],
+                           "url": f"https://github.com/{self.repository}/commit/{revision}"})
+        return result
+
+    def save(self, base_commit, changes, message, actor):
         if not self.token:
             raise RepositoryError("A server repository credential is required to save")
         if not isinstance(message, str) or not message.strip() or len(message) > 500:
             raise ValueError("Give this commit a message of at most 500 characters")
-        if not isinstance(operator, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9 ._-]{0,79}", operator):
-            raise ValueError("Name the operator saving this configuration")
+        if (not isinstance(actor, dict) or actor.get("source") not in ("basic", "person-key")
+                or not isinstance(actor.get("name"), str) or not 1 <= len(actor["name"]) <= 200
+                or re.search(r"[\x00-\x1f\x7f<>]", actor["name"])
+                or actor.get("id") != ("basic:" if actor["source"] == "basic" else "person:") + actor["name"]):
+            raise ValueError("An authenticated configuration actor is required")
+        if any(line.startswith(("Config-Actor:", "Config-Authentication:")) for line in message.splitlines()):
+            raise ValueError("Configuration audit fields are supplied by the server")
         checked = self.validate(base_commit, changes)
         if not checked["valid"]:
             raise ValueError("; ".join(checked["errors"]))
@@ -379,7 +479,10 @@ class Repository:
                 entries.append({"path": path, "mode": "100644", "type": "blob",
                                 **({"content": checked["files"][path]} if path in checked["files"] else {"sha": None})})
         tree = self.request("POST", "git/trees", {"base_tree": tree_sha, "tree": entries})
-        commit = self.request("POST", "git/commits", {"message": message.strip() + "\n\nDeclared operator: " + operator,
+        audit = "\n\nConfig-Actor: " + actor["id"] + "\nConfig-Authentication: " + actor["source"]
+        author = {"name": actor["name"], "email": hashlib.sha256(actor["id"].encode()).hexdigest()[:24] + "@users.ailabs.invalid"}
+        commit = self.request("POST", "git/commits", {"message": message.strip() + audit, "author": author,
+                                                    "committer": {"name": "AI Labs Studio", "email": "studio@users.ailabs.invalid"},
                                                     "tree": tree["sha"], "parents": [base_commit]})["sha"]
         if not SHA.fullmatch(commit):
             raise RepositoryError("Repository returned an invalid commit")

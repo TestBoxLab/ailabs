@@ -4,7 +4,7 @@
 .report{max-width:var(--page-max);margin:0 auto;display:grid;grid-template-columns:minmax(0,68ch) minmax(240px,1fr);column-gap:var(--space-7);row-gap:var(--space-4);font-family:var(--font-prose);font-size:17px;line-height:1.55;color:var(--ink);padding:0 0 var(--space-9);counter-reset:section;font-optical-sizing:auto}
 .report>*{grid-column:1;min-width:0}
 .report>.report-section{grid-column:1/-1}
-.report-section>*:not(h2):not(figure):not(.table-scroll):not(.failures-block):not(.cost-block):not(.report-patterns):not(table){max-width:68ch}
+.report-section>*:not(h2):not(figure):not(.table-scroll):not(.failures-block):not(.cost-block):not(.reading-charts):not(.report-patterns):not(table){max-width:68ch}
 .report figure.chart{max-width:880px}
 .report .report-head,.report figure.chart,.report .failures-block,.report .cost-block,.report .table-scroll{grid-column:1/-1}
 .report-head{border-bottom:0;padding-bottom:var(--space-2);font-family:var(--font-ui);display:flex;flex-direction:column;align-items:flex-start}.report-head>h1+.meta{margin-top:var(--space-3)}
@@ -87,6 +87,84 @@ body.export main{max-width:1180px;margin:0 auto;padding:var(--space-5)}
 .model-findings{margin-top:var(--space-3)}
 }
 .round-date{white-space:nowrap;color:var(--muted)}
+.failed-attempts{margin:var(--space-3) 0}.attempt-fold{border-top:1px solid var(--line);padding:6px 0}.attempt-fold summary{display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap;cursor:pointer}.attempt-fold-task{font-weight:500}.attempt-fold p{margin:var(--space-2) 0}
+
+/* The same reading composition is carried by the standalone HTML export. */
+@layer views {
+.report.readable-report{display:block;max-width:1220px;font-family:var(--font-ui);font-size:16px;line-height:1.6}
+.readable-report .report-head{display:block}
+.readable-report h1{font-size:clamp(30px,4vw,46px);line-height:1.12;max-width:30ch;letter-spacing:-.02em;text-wrap:balance}
+.readable-report h2{border:0;padding:0;margin:var(--space-7) 0 var(--space-4);font-size:24px;line-height:1.3}
+.readable-report h2:before,.readable-report .report-contents li:before{content:none}
+.readable-report p{max-width:72ch}
+.readable-report [id]{scroll-margin-top:120px}
+.readable-report .report-summary{font:400 19px/1.6 var(--font-ui);margin:var(--space-4) 0 var(--space-5);max-width:72ch}
+.readable-report .report-head>.meta{font-family:var(--font-ui);font-size:13px;overflow-wrap:anywhere}
+.readable-report .report-contents{margin-top:var(--space-5)}
+.readable-report .report-contents ol{gap:var(--space-2) var(--space-5);flex-direction:row}
+.reading-highlights{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--space-5);border-top:2px solid var(--ink);padding:var(--space-5) 0;margin:var(--space-6) 0 0}
+.reading-highlights>div{display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:var(--space-2)}
+.reading-highlights dt{font-size:13px;color:var(--muted)}
+.reading-highlights dd{margin:0;font-size:34px;line-height:1.2;font-weight:600;font-variant-numeric:tabular-nums}
+.reading-highlights .report-note{display:block}
+.report-section>.reading-charts{max-width:none}
+.reading-charts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-5)}
+.reading-charts>p{grid-column:1/-1}
+.readable-report .reading-charts figure.chart{grid-column:auto;min-width:0;margin:0;width:100%;max-width:400px}
+.reading-charts .chart-title{font-size:15px;font-weight:600;min-height:3em}
+.readable-report .paired{font-size:14px;line-height:1.5}
+.readable-report .paired th,.readable-report .paired td{font-size:14px;padding:12px 10px;vertical-align:top}
+.readable-report .paired thead th{color:var(--ink);font-weight:600;border-bottom:2px solid var(--line-strong)}
+.readable-report .paired small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:4px}
+.readable-report .reading-comparison td{font-variant-numeric:tabular-nums;white-space:nowrap}
+.reading-diagnoses{table-layout:fixed}
+.reading-diagnoses th:nth-child(1){width:23%}
+.reading-diagnoses th:nth-child(2){width:16%}
+.reading-diagnoses th:nth-child(3){width:41%}
+.reading-diagnoses th:nth-child(4){width:20%}
+.reading-diagnoses tbody th,.reading-diagnoses td{overflow-wrap:anywhere}
+.reading-actions li{margin:var(--space-4) 0}
+.reading-actions p{margin:var(--space-2) 0}
+.result-state{font-size:13px;white-space:nowrap}
+.result-state.initial_pass{color:var(--accent-text)}
+.result-state.retry_pass{color:var(--warn-text)}
+.result-state.failed{color:var(--fail-text)}
+.result-state.infrastructure,.result-state.missing{color:var(--muted)}
+.measurement-details,.technical-details{margin:var(--space-7) 0 0;padding-top:var(--space-4);border-top:1px solid var(--line)}
+.measurement-details>summary,.technical-details>summary{cursor:pointer;font-size:16px;font-weight:600;padding:var(--space-2) 0}
+.measurement-content{padding-top:var(--space-4)}
+.readable-report .method{font-size:13px;line-height:1.6}
+.readable-report .chart-source,.readable-report .report-note{font-size:13px}
+.readable-report #report-buckets .report-note{font-size:16px}
+.readable-report :focus-visible{outline:2px solid var(--ink);outline-offset:4px}
+.readable-report a{text-underline-offset:3px}
+@media(max-width:1000px){.reading-charts{grid-template-columns:1fr}.reading-charts figure.chart{max-width:440px}.reading-charts .chart-title{min-height:0}.reading-charts{row-gap:var(--space-6)}}
+@media(max-width:620px){
+  .readable-report .report-summary{font-size:17px}
+  .reading-highlights{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-5)}
+  .reading-highlights dd{font-size:28px}
+  .readable-report h2{font-size:22px}
+  .reading-diagnoses thead{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}
+  .reading-diagnoses,.reading-diagnoses tbody,.reading-diagnoses tr,.reading-diagnoses td,.reading-diagnoses tbody th{display:block;width:100%;box-sizing:border-box}
+  .reading-diagnoses tr{border-bottom:1px solid var(--line);padding:var(--space-3) 0}
+  .readable-report .reading-diagnoses td,.readable-report .reading-diagnoses tbody th{border:0;padding:var(--space-2) 0}
+  .reading-diagnoses td:before{content:attr(data-label);display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px}
+  .readable-report .reading-diagnoses tbody th{font-weight:600;width:100%}
+  .readable-report .report-terms{grid-template-columns:1fr}
+  .readable-report .report-terms dd{margin-bottom:var(--space-3)}
+  .readable-report .method{grid-template-columns:1fr}
+}
+@media print{
+  .readable-report .studio-only,.readable-report .report-contents,.readable-report .chart-take{display:none}
+  .readable-report .measurement-details::details-content{content-visibility:visible;display:block}
+  .readable-report .measurement-details>.measurement-content{display:block}
+  .readable-report .measurement-details{break-inside:auto}
+  .readable-report .paired thead{display:table-header-group}
+  .readable-report .paired tr{break-inside:avoid}
+  .readable-report .table-scroll{overflow:visible}
+  .readable-report h1,.readable-report h2{break-after:avoid}
+}
+}
 .failure-modes{margin:var(--space-4) 0;font-family:var(--font-ui);font-size:var(--text-3)}.mode-fold{border-top:1px solid var(--line);padding:6px 0}.mode-fold summary{display:flex;gap:var(--space-3);align-items:baseline;flex-wrap:wrap;cursor:pointer}.mode-fold-label{font-weight:500}
 .mode-tasks{list-style:none;margin:var(--space-2) 0 var(--space-3);padding:0}.mode-tasks>li{margin:0 0 var(--space-3);padding-left:var(--space-3);border-left:1px solid var(--line)}.mode-tasks p{margin:0}
 /* Display yes, export no (Lucas, 11 Sep): a report carrying a lab build shows on screen and does

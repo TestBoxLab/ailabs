@@ -8,9 +8,9 @@ from wb_world.source import comparison_notes, product_of
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FORK_NOTE = ("The tasks come from AutomationBench {version}, a repaired fork of Zapier's benchmark. Pass here means the "
-             "expected result is present, nothing else changed and the attempt finished normally, so these figures are not "
-             "comparable with the AutomationBench numbers Zapier or Artificial Analysis publish.")
+FORK_NOTE = ("Local installation: AutomationBench {version}; this legacy record does not pin the world source. "
+             "WorkflowBench requires the expected result, no unrequested changes and a normal finish. "
+             "Results on this selected task set are not comparable with a full upstream leaderboard score.")
 
 
 def fork_version() -> str:
@@ -53,7 +53,7 @@ def for_run(job, m, narrative=None, reused=None) -> list[str]:
         out.append(f"{ungraded} attempts are ungraded because a checker could not produce a verdict; they are excluded from pass rates and their cost is retained.")
     infra = sum(s["pass"]["infrastructure"] for s in setups.values())
     if infra:
-        out.append(f"{infra} attempt{'s' if infra != 1 else ''} stopped with an execution issue and {'are' if infra != 1 else 'is'} excluded from pass rates.")
+        out.append(f"{infra} attempt{'s' if infra != 1 else ''} stopped with an execution issue and {'are' if infra != 1 else 'is'} excluded from technical attempt pass rates. Task-completion figures retain all selected tasks in their denominator.")
     unknown = {names[sid]: s["cost"]["unknown_attempts"] for sid, s in setups.items() if s["cost"]["unknown_attempts"]}
     if unknown:
         out.append("Cost is unknown for " + ", ".join(f"{name} ({n} attempt{'s' if n != 1 else ''} without a settled receipt)" for name, n in unknown.items()) + "; cost figures for those setups are shown as unknown, never estimated.")

@@ -119,6 +119,8 @@ class Setup:
                 if path is None or not path.is_file():
                     raise ValueError(f"the harness names no price table file ({table!r})")
                 self.price_table = config.load_price_table(path)
+                config.validate_model_families(self.harness, self.price_table, harness_path)
+                config.require_model_routing(self.harness, harness_path)
             except (config.ConfigError, OSError, ValueError) as exc:
                 self.problems.append(f"Price table: {exc}")
             for field in ("base_url", "fd_url", "langfuse_url"):
@@ -464,6 +466,8 @@ class EnterpriseArm:
                 self.recipe_summary = f"Workflow {d['workflow_id']} version {d.get('recipe_version')}, {len(nodes)} node(s)"
                 self.emit("step_finished", step="authoring", label="Build the workflow", status="completed", output=self.recipe_summary,
                           workflow_id=d["workflow_id"], recipe_version=d.get("recipe_version"), questions=d.get("questions"))
+                # Engine calls can arrive before the run-start acknowledgement.
+                self.step = "execution"
             else:
                 self.emit("step_finished", step="authoring", label="Build the workflow", status="error",
                           output=d.get("error") or "No workflow was built", questions=d.get("questions"))

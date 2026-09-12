@@ -177,6 +177,7 @@ def mock_plan(site, extra="", repetitions=1, ceiling=5, competitors="  - {model:
     plan = edit(plan, "baseline", "mock/api").replace("repetitions: 2", f"repetitions: {repetitions}")
     plan = plan.replace("concurrency: 4", "concurrency: 1")
     plan = edit(plan, "cost_ceiling_usd", ceiling)
+    plan = edit(plan, "attempt_cap_usd")
     plan += "competitors:\n" + competitors + extra
     write(site / "config/plans", plan)
     return plan

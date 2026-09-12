@@ -326,6 +326,8 @@ def _execute_owned(studio, identity):
         segment = dict(id=segment_id, started_at=now(), status="running",
                        deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"),
                        competitor_identities=state["competitor_identities"])
+        from wb_studio.monarch_provenance import capture
+        segment["monarch_provenance"] = capture(rc, os.environ)
         segment_dir = folder / "segments" / segment_id
         segment_dir.mkdir(parents=True)
         write_json(segment_dir / "prior-results.json", prior_rows)

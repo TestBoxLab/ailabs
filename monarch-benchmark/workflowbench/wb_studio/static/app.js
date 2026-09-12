@@ -137,12 +137,14 @@ function renderJobs() {
   if(focusId)$$('[data-job]').find(b=>b.dataset.job===focusId)?.focus({preventScroll:true});
 }
 function syncJob(value){
+  if(!value.monarch_provenance&&job?.id===value.id)value.monarch_provenance=job.monarch_provenance;
   job=value;const configured=!!(job.config_source||job.settings?.plan_semantics),status=runStatus(job);
   const index=state.jobs.findIndex(j=>j.id===job.id);if(index<0)state.jobs.unshift(job);else state.jobs[index]=job;
   renderJobs();$('#comparison-title').textContent=job.title;
   if(!$('.workspace').classList.contains('hidden'))document.title='AI Labs — '+job.title;
   $('#run-again').classList.toggle('hidden',configured||!['completed','failed','cancelled','interrupted'].includes(job.status));
   $('#run-details').classList.remove('hidden');$('#comparison-meta').innerHTML=runFacts(job);
+  renderMonarchProvenance(job.monarch_provenance);
   const paused=status==='paused',pausing=status==='pausing',recoverable=configured&&['paused','interrupted','failed'].includes(status);
   $('#job-status').textContent=pausing?'Pausing…':human(status);$('#job-status').className='status '+status;
   $('#pause-run').classList.toggle('hidden',!['queued','running'].includes(status));
@@ -151,8 +153,18 @@ function syncJob(value){
   $('#cancel-run').classList.toggle('hidden',!['queued','running','pausing','paused','cancelling'].includes(status));
   $('#cancel-run').disabled=status==='cancelling';$('#result-count').textContent=job.results.length;
   $('#stream-note').textContent=paused?'Paused':['queued','running','pausing','cancelling'].includes(status)?'Live updates':'Recorded execution';
-  const controlNote=pausing?'Pausing after active attempts finish. No new attempts will start.':paused?'Paused. Resume to review and continue the remaining attempts.':status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':recoverable?'Review remaining attempts and spending before resuming this run.':configured&&['completed','cancelled'].includes(status)?'To run this configured plan again, open Settings and preview its saved product and plan.':'';
+  const controlNote=pausing?'Pausing after active attempts finish. No new attempts will start.':paused?'Paused. Resume to review and continue the remaining attempts.':status==='cancelling'?'Cancelling. Active requests may take a moment to finish.':recoverable?'Review remaining attempts and spending before resuming this run.':configured&&['completed','cancelled'].includes(status)?'To run this configured plan again, open Benchmarks and preview its saved product and plan.':'';
   $('#run-message').textContent=[controlNote,job.error].filter(Boolean).join(' ');$('#run-message').classList.toggle('hidden',!controlNote&&!job.error);
+}
+function renderMonarchProvenance(provenance){
+  let panel=$('#monarch-version');
+  if(!panel){panel=document.createElement('details');panel.id='monarch-version';$('#run-details').append(panel);}
+  const segments=provenance?.segments||[];
+  panel.classList.toggle('hidden',!segments.length);
+  if(!segments.length){panel.replaceChildren();return;}
+  const labels={checkout:'Local checkout',declared:'Operator declaration',verified:'Verified deployment',not_recorded:'Not recorded'};
+  const fact=(label,value)=>value===undefined||value===null||value===''?'':'<dt>'+esc(label)+'</dt><dd>'+esc(String(value))+'</dd>';
+  panel.innerHTML='<summary>Monarch version · '+(provenance.status==='not_recorded'?'not recorded':'view recorded evidence')+'</summary>'+segments.map(s=>'<section aria-label="Execution segment"><h3>'+esc(labels[s.status]||'Not recorded')+'</h3><dl>'+fact('Competitor',s.competitor_id)+fact('Harness',s.harness)+fact('Execution segment',s.segment_id)+fact('Recorded at',s.recorded_at)+fact('Build label',s.build_label)+fact('Source commit',s.commit)+fact('Branch',s.branch)+fact('Working tree',s.dirty===true?'Modified':s.dirty===false?'Clean':null)+fact('Patch SHA-256',s.patch_sha256)+fact('Knowledge base SHA-256',s.knowledge_base_sha256)+Object.entries(s.model_families||{}).map(([role,family])=>fact('Requested '+role+' family',family)).join('')+'</dl>'+(s.services||[]).map(service=>'<dl>'+fact('Service',service.service)+fact('Commit',service.commit)+fact('Deployment',service.deployment_id)+fact('Image digest',service.image_digest)+fact('Source SHA-256',service.source_sha256)+'</dl>').join('')+'<p>'+esc(s.note||(s.status==='not_recorded'?'Exact deployed commit was not recorded.':s.status==='verified'?'':'This does not verify the code running on Railway.'))+'</p></section>').join('');
 }
 function runFacts(j){
   const started=j.created_at?new Date(j.created_at):null,ended=j.finished_at?new Date(j.finished_at):null;
@@ -689,7 +701,7 @@ async function initialize() {
   try {
     const latest=await api('/api/state');state=latest;budget(state.budget);setConnection('Connected','connected');$('#connection-error').classList.add('hidden');
     renderJobs();renderSetups();
-    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5).split('/')[0]));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis'||location.hash.startsWith('#genesis/'))await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio'||location.hash.startsWith('#studio/')){await $('#open-setup').onclick();const id=location.hash.slice(8);if(id&&window.openStudioItem)window.openStudioItem(decodeURIComponent(id));}else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
+    if(pendingJobId)await openJob(pendingJobId);else if(location.hash.startsWith('#run/'))await openJob(decodeURIComponent(location.hash.slice(5).split('/')[0]));else if(location.hash==='#launch')await openLaunch();else if(location.hash==='#genesis'||location.hash.startsWith('#genesis/'))await openGenesis();else if(location.hash==='#budget')await openBudget();else if(location.hash==='#studio'||location.hash.startsWith('#studio/')){await $('#open-setup').onclick();const id=location.hash.slice(8);if(id&&window.openStudioItem)window.openStudioItem(decodeURIComponent(id));}else if(location.hash==='#benchmarks'||location.hash.startsWith('#benchmarks/'))await window.openBenchmarks();else if(location.hash==='#runtime')await $('#nav-runtime').onclick();else if(location.hash==='#runs')window.showWorkspaceSurface('runs');else if(window.reportRoute&&(location.hash===''||location.hash==='#'||location.hash==='#reports'||location.hash==='#leaderboard'||location.hash.startsWith('#report/')||location.hash.startsWith('#round/')))await window.reportRoute(location.hash);else if(window.showWorkspaceSurface)window.showWorkspaceSurface('runs');
   } catch(error){showConnectionError(error.message);}
   finally {button.disabled=false;}
 }
@@ -990,7 +1002,7 @@ function reviewRule(){const tasks=selectedTasks.size,arms=armCount(),amount=Numb
   return week+'the ceiling '+money(amount)+' is reserved before the first request and settled from receipts. '+(tasks>20?'Above smoke scale: a launch by anyone but Lucas creates an approval request and waits.':'Smoke scale: it runs at once, no approval record needed.');}
 
 // ---- Feature 021: Run again opens New run with this run's tasks and setups (Postman's "Run Again", GitHub's re-run) ----
-function runAgain(job){if(job.config_source||job.settings?.plan_semantics)return toast('Open Settings and preview the saved product and plan to run it again.');const s=job.settings||{};const arms=s.arms||[];
+function runAgain(job){if(job.config_source||job.settings?.plan_semantics)return toast('Open Benchmarks and preview the saved product and plan to run it again.');const s=job.settings||{};const arms=s.arms||[];
   const draft={includeBare:arms.some(a=>a.kind==='bare'),tasks:s.tasks||[],models:(s.models||[]).filter(id=>!String(id).startsWith('blueprint.')&&id!=='default-monarch-enterprise'),architectures:s.architectures||[],
     fields:{'run-track':s.track||'agentic-request','run-title':'','run-budget':s.maximum_usd||'1','run-concurrency':String(s.concurrency||1),'task-set':'custom','architecture-choice':(s.architectures||[])[0]||'without-monarch'}};
   try{localStorage.setItem('ailabs-run-draft',JSON.stringify(draft));}catch{}

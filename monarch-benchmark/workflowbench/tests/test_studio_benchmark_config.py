@@ -13,6 +13,7 @@ from wb_studio import benchmark_config as bc
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("WB_OPERATOR", "Carlos")
+    monkeypatch.setenv("WB_CONFIG_CACHE", str(tmp_path / "cache"))
     api = GitAPI()
     api.content["config/plans/free-check.yaml"] = """name: free-check
 tasks: tasks/check-collateral
@@ -108,7 +109,7 @@ def test_http_accepts_a_bounded_configuration_edit_larger_than_legacy_job_body(w
     studio, remote = workspace
     with server_for(studio) as port:
         headers = {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json", "X-Studio-Token": studio.token}
-        body = json.dumps({"base_commit": remote.head, "changes": [{"path": "config/README.md", "text": "Documentation.\n" * 11000}]})
+        body = json.dumps({"base_commit": remote.head, "changes": [{"path": "config/models/gpt-5.6-sol.yaml", "text": remote.content["config/models/gpt-5.6-sol.yaml"] + "\n" + "# Documentation.\n" * 11000}]})
         status, _, text = request(port, "POST", "/api/benchmark-config/validate", body=body, headers=headers)
         assert status == 200, text
         assert json.loads(text)["valid"]
