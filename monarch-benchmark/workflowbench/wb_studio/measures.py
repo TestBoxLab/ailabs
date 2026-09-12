@@ -642,7 +642,10 @@ def setup_names(job) -> dict:
     from wb_studio.runtime_registry import display_name
     settings = job.get("settings") or {}
     names = {arm["id"]: arm.get("name") or display_name(arm["id"]) for arm in settings.get("arms") or []}
-    for model in setup_ids(job):
+    # `setup_ids` picks arms OR models, never both, so a job carrying an arm list left
+    # every id in `models` unnamed and a report printed the raw token. Naming is not
+    # selection: anything that could reach a page gets a name, from either list.
+    for model in list(setup_ids(job)) + list(settings.get("models") or []):
         names.setdefault(model, display_name(model))
     return names
 

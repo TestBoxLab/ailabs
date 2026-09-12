@@ -117,7 +117,12 @@ def test_a_person_can_decline_a_waiting_plan_and_the_card_closes_with_the_reason
 
 
 def test_work_now_respects_the_pause_and_the_queue(genesis, monkeypatch):
-    monkeypatch.setattr(harness, 'model_routes', lambda: [{'id': 'gemini-3.7-flash', 'available': True}])
+    routes = [{'id': 'gemini-3.7-flash', 'available': True}]
+    monkeypatch.setattr(harness, 'model_routes', lambda: routes)
+    # This test is about the pause and the queue, not about which model the lab picked.
+    # `reading` resolves the partner exactly and never substitutes, so pin it to this
+    # fixture's own stub route rather than inheriting the global partner default.
+    genesis.config.set({'models': {'chat': routes[0]['id'], 'reading': routes[0]['id']}}, routes=routes)
     dropped = genesis.drop({'text': 'A sentence to work.'})
     genesis.autonomy.set({'paused': True})
     with pytest.raises(ValueError, match='paused'):
