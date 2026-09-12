@@ -376,3 +376,17 @@ def test_no_displayed_95_interval_is_ever_zero_width():
     u_single = uncertainty(rows_single_rep)
     assert u_single["high"] > u_single["low"]
 
+
+
+def test_recorded_versions_do_not_rewrite_planned_missing_attempts():
+    version = 'monarch@0cf63a74e+feat/railway-dev-deploy*'
+    other = 'monarch@another-build'
+    run = job([result('t1', version, True), result('t2', version, False), result('t1', other, False)],
+              [{'id': 'monarch', 'name': 'Planned Monarch', 'kind': 'version'}])
+    measured = measures.run_measures(run, [])
+    assert measured['order'] == ['monarch', version, other]
+    assert measured['setups']['monarch']['pass']['attempts'] == 0
+    assert measured['setups'][version]['pass']['attempts'] == 2
+    assert measured['setups'][other]['pass']['attempts'] == 1
+    assert measured['planned_attempts'] == measured['unrecorded_attempts'] == 2
+    assert measured['recorded_attempts'] == 3

@@ -352,3 +352,45 @@ def test_the_curve_is_drawn_only_for_a_competitor_that_configures_something_once
     assert curve["id"] == "monarch" and curve["crossing"] == 1
     assert curve["configure_usd"] == pytest.approx(0.20)
     assert "Monarch" in curve["title"] and curve["comparator_name"] == "Bare Gemini"
+
+
+@pytest.mark.parametrize('with_winner', [False, True])
+def test_recorded_setup_versions_remain_separate_in_every_report_view(studio, with_winner):
+    job = finished_run(studio, models=('sloppy',))
+    folder = studio.directory / job['id']
+    record = json.loads((folder / 'job.json').read_text(encoding='utf8'))
+    version = 'monarch@0cf63a74e+feat/railway-dev-deploy*'
+    other_version = 'monarch@different-build+feat/railway-dev-deploy*'
+    template = record['results'][0]
+    for index in range(18):
+        passed = index < 4
+        record['results'].append({**template, 'episode_id': 'versioned-' + str(index),
+            'model': version if index < 17 else other_version, 'passed': passed,
+            'checks': [{'type': 'field_equals', 'passed': passed}, {'type': 'allowed_changes_only', 'passed': True}],
+            'unexpected_changes': []})
+    if with_winner:
+        record['results'].extend({**template, 'episode_id': 'winner-' + str(i), 'model': 'glm-5.3-fireworks/api',
+                                  'passed': i < 7} for i in range(13))
+    (folder / 'job.json').write_text(json.dumps(record), encoding='utf8')
+    report = report_data.run_report(studio, job['id'])
+    expected_order = ['sloppy', version, other_version] + (['glm-5.3-fireworks/api'] if with_winner else [])
+    assert report_data.setup_ids(record) == report['order'] == expected_order
+    assert report['setups'][version]['pass']['attempts'] == 17
+    assert report['setups'][version]['pass']['passed'] == 4
+    assert report['setups'][other_version]['pass']['attempts'] == 1
+    heroes = {row['id']: row for row in report['hero']}
+    assert (heroes[version]['passed'], heroes[version]['attempts'], heroes[version]['value']) == (4, 17, 4 / 17)
+    attempts = [row for row in report['failures']['attempts'] if row['model'] == version]
+    assert len(attempts) == 17 and sum(row['passed'] for row in attempts) == 4
+    column = next(row for row in report['patterns']['setups'] if row['id'] == version)
+    assert column['total'] == 17
+    assert next(row for row in column['checks'] if row['id'] == 'passed')['percent'] == 23.53
+    if with_winner:
+        assert report['subject'] == 'glm-5.3-fireworks/api'
+        assert report['verdict'].startswith('GLM 5.3 (Fireworks) passed 7 of 13 tasks')
+        assert 'Monarch (build 0cf63a74e) passed 4 of 17 attempts (23.53%).' in report['verdict']
+        assert 'Monarch (build different-build) passed 0 of 1 attempt (0.00%).' in report['verdict']
+    else:
+        assert report['subject'] == version and 'passed 4 of 17 tasks' in report['verdict']
+    assert report['method']['planned_attempts'] == len(record['settings']['tasks'])
+    assert report['method']['recorded_attempts'] == len(record['results'])

@@ -1099,7 +1099,8 @@ def handler(studio):
                     if not ok:
                         return self.send_json({'error': why}, 403)
                     who = 'human:' + person['name'] if person else 'human:studio'
-                    return self.send_json(self.voice_service().status(voice_match[1], who))
+                    known = parse_qs(url.query).get('known', [''])[0].split(',')[:12]
+                    return self.send_json(self.voice_service().status(voice_match[1], who, known=known))
                 diagnostics_match = re.fullmatch(r"/api/jobs/([a-zA-Z0-9_-]+)/diagnostics", url.path)
                 if diagnostics_match:
                     from wb_studio.failure_analysis import analysis
@@ -1483,11 +1484,13 @@ def handler(studio):
                     caller = self.person()
                     who = 'human:' + caller['name'] if caller else 'human:studio'
                     return self.send_json(self.voice_service().start(payload, who), 201)
-                voice_action = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)/(close|context)', self.path)
+                voice_action = re.fullmatch(r'/api/genesis/voice/sessions/([A-Za-z0-9_-]+)/(close|context|detach)', self.path)
                 if voice_action:
                     caller = self.person()
                     who = 'human:' + caller['name'] if caller else 'human:studio'
                     service = self.voice_service()
+                    if voice_action[2] == 'detach':
+                        return self.send_json(service.close(voice_action[1], who, reason='page_detached'))
                     if voice_action[2] == 'close':
                         return self.send_json(service.close(voice_action[1], who))
                     return self.send_json(service.context(voice_action[1], payload, who))

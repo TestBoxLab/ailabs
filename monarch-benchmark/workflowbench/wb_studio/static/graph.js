@@ -111,12 +111,24 @@ function updateHistoryButtons() { $('#builder-undo').disabled = !editHistory.und
 // Declared above its readers, not beside the code that fills it: markDirty and renderNodes
 // both read `provisional`, and `let` leaves it in the temporal dead zone until its line.
 let provisional = new Set(), heldOperations = [], pendingOperations = [];
-function markDirty() {
+// `report` is whether to tell the server a *person* is holding unsaved edits. Genesis's
+// own provisional operations must not: that record is what refuse_while_editing reads, so
+// a build applied to an open editor marked the editor dirty and then blocked the very
+// save_architecture that was meant to commit it -- FR-044's headline flow walling itself
+// in. The canvas is still dirty locally; what changes is only who is said to be holding it.
+function markDirty(report = true) {
   dirty = true;
   $('#builder-state').textContent = provisional.size ? 'Unsaved edits · ' + provisional.size + ' provisional' : 'Unsaved edits';
   $('#builder-state').className = 'builder-state dirty arch-only';
-  try { localStorage.setItem('ailabs-architecture-draft', JSON.stringify(blueprint)); } catch {}
-  tellStudioEditor(true); scheduleValidate(); updateRunButton();
+  // The provisional set rides with the draft. Without it a reload brought a model's
+  // unreviewed steps back as the person's own hand edits -- no marker, no aria suffix,
+  // no count in the state line -- and the next Save committed them (FR-045).
+  try {
+    localStorage.setItem('ailabs-architecture-draft',
+                         JSON.stringify({...blueprint, provisional: [...provisional]}));
+  } catch {}
+  if (report) tellStudioEditor(true);
+  scheduleValidate(); updateRunButton();
 }
 function markSaved(text) { dirty = false; provisional = new Set(); $('#builder-state').textContent = text; $('#builder-state').className = 'builder-state arch-only'; try { localStorage.removeItem('ailabs-architecture-draft'); } catch {} tellStudioEditor(false); updateRunButton(); }
 // A person's unsaved edits outrank a model's commit, and the server is the only place
@@ -151,7 +163,11 @@ window.applyArchitectureOperation = function (value) {
   // operations rather than dropping them, or an editor opened a moment too late shows
   // nothing and the reader is told a build happened that they cannot see.
   if (!opened) { if (pendingOperations.length < 200) pendingOperations.push(value); return; }
-  if (value.id && blueprint.id && value.id !== blueprint.id) return; // a different architecture than the one on screen
+  // A different architecture than the one on screen. A result with no id is a brand-new
+  // build, and that is the case the old guard let through: `value.id &&` was false, so
+  // Genesis's fresh sketch was merged into whatever saved draft the person had open, and
+  // a manual Save committed the mixture over it.
+  if (value.id ? (blueprint.id && value.id !== blueprint.id) : Boolean(blueprint.id)) return;
   if (promptFieldIsBusy(op)) {
     heldOperations.push(value);
     hint('Genesis has an edit for this prompt. It applies when you leave the field.');
@@ -173,7 +189,7 @@ function applyOperation(value) {
     const n = byId(op.node); if (!n) return;
     n.config = {...(n.config || {}), instructions: op.text}; provisional.add(op.node);
   } else return;
-  markDirty(); render(); renderInspector(true);
+  markDirty(false); render(); renderInspector(true);
   // The lab applied the same operation to its own copy and said what it got. Counts that
   // disagree mean this editor and the build have parted, and a save would commit a graph
   // nobody saw — say so rather than letting that happen quietly.
@@ -1029,7 +1045,18 @@ $('#open-setup').onclick = async () => {
       let cached; try { cached = JSON.parse(localStorage.getItem('ailabs-architecture-draft')); } catch {}
       if(cached&&(!cached.graph||!Array.isArray(cached.graph.nodes)||!Array.isArray(cached.graph.edges)))cached=null;
       setBlueprint(cached || {id: null, revision: 0, name: '', notes: '', graph: TEMPLATES[template].build()});
-      if (cached) { markDirty(); hint('Restored the unsaved draft from this browser'); }
+      if (cached) {
+        // setBlueprint clears `provisional`; put back the steps the draft says were
+        // Genesis's, so they keep their marker, their aria suffix and their place in the
+        // state line instead of reading as the person's own work (FR-045).
+        const kept = Array.isArray(cached.provisional) ? cached.provisional : [];
+        provisional = new Set(kept.filter(id => byId(id)));
+        markDirty();
+        if (provisional.size) render();   // setBlueprint drew them before the set was back
+        hint(provisional.size
+          ? 'Restored the unsaved draft from this browser · ' + provisional.size + ' provisional from Genesis'
+          : 'Restored the unsaved draft from this browser');
+      }
       opened = true;
     } else { renderVersions(); renderNodes(); fitView(); }
     if (pendingOperations.length) { const waiting = pendingOperations; pendingOperations = []; for (const v of waiting) window.applyArchitectureOperation(v); }

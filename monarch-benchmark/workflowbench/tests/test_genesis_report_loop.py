@@ -42,13 +42,15 @@ class ReportAdapter:
         self.step += 1
         calls, answer = [], ''
         if self.step == 1:
-            calls = [('report_evidence', {'run': 'run1', 'attempt': i}) for i in self.indexes] if self.role == 'analysis' else [('read_report_draft', {'run': 'run1', 'after': after, 'limit': 20}) for after in range(0, self.count, 20)]
-        elif self.step == 2 and self.role == 'analysis':
-            calls = [('record_report_attempt', {'run': 'run1', 'index': i, 'expected': 'Create the contact.',
+            calls = [('report_evidence' if self.role == 'analysis' else 'read_report_digest', {'run': 'run1'}), ('read_report_draft', {'run': 'run1', 'summary_only': True})]
+        elif self.step == 2:
+            calls = [('read_report_batch', {'run': 'run1'})] if self.role == 'analysis' else [('read_report_draft', {'run': 'run1', 'indexes': [0], 'include_draft': False})]
+        elif self.step == 3 and self.role == 'analysis':
+            calls = [('record_report_batch', {'run': 'run1', 'batch_sha256': self.results[-1]['batch_sha256'], 'attempts': [{'index': i, 'expected': 'Create the contact.',
                 'observed': 'The final check ' + ('passed.' if i else 'failed.'), 'explanation': 'The recorded outcome is explicit.',
                 'mechanism': 'The write is present.' if i else 'The write is absent.', 'alternatives': 'Cause requires an intervention.',
-                'confidence': 'limited', 'missing_evidence': 'No controlled intervention.', 'event_ids': [i + 1]}) for i in self.indexes]
-        elif self.step == 2 and self.role == 'author':
+                'confidence': 'limited', 'missing_evidence': 'No controlled intervention.', 'event_ids': [i + 1]} for i in self.indexes]})]
+        elif self.step == 3 and self.role == 'author':
             calls = [('write_report_draft', {'run': 'run1', 'summary': 'Monarch left the requested contact unwritten.',
                 'what_went_right': 'Bare passed the recorded check.', 'what_went_wrong': 'Monarch failed the recorded check.',
                 'why': 'The write was missing; the selection decision has not been experimentally isolated.',
@@ -96,5 +98,5 @@ def test_real_genesis_loop_publishes_with_bounded_receipts_and_restricted_tools(
     assert 'Editorial standard' in ReportAdapter.made[-2].system
     assert 'Figure and statistical explanation standard' in ReportAdapter.made[-1].system
     receipts = studio.ledger.reservations()
-    assert len(receipts) == batches * 3 + 5 and all(r.actual_microusd == 1000 for r in receipts)
+    assert len(receipts) == batches * 4 + 7 and all(r.actual_microusd == 1000 for r in receipts)
     assert studio.ledger.status().held_microusd == 0

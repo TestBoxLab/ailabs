@@ -266,7 +266,7 @@ def prompt_for(spec: dict) -> str:
               'a useful answer; a plausible edit to the wrong place costs someone an afternoon.')
 
 
-def implement(genesis, spec: dict, turn_id: str) -> dict:
+def implement(genesis, spec: dict, turn_id: str, *, repo_path=None, maximum_usd=None, verification_args=None, request_prompt=None, artifact_directory=None, validate_changes=None) -> dict:
     """One Codex agent in a detached worktree at the spec's commit. Returns what the Studio saw:
     the diff, whether it applies, what the verify command said, and the cost."""
     studio = genesis.studio
@@ -274,7 +274,7 @@ def implement(genesis, spec: dict, turn_id: str) -> dict:
     if not binary:
         return {'skipped': 'No Codex executable was found; set STUDIO_CODEX_BIN or install it. '
                            'The spec is filed without a diff.'}
-    repo = code_index.settings(studio, spec['repo'])['repo']
+    repo = Path(repo_path) if repo_path is not None else code_index.settings(studio, spec['repo'])['repo']
     if not (repo / '.git').exists():
         return {'skipped': 'There is no ' + spec['repo'] + ' checkout at ' + str(repo) + '.'}
     route = genesis.config.route_for('implement')
@@ -282,7 +282,7 @@ def implement(genesis, spec: dict, turn_id: str) -> dict:
         return {'skipped': 'No model route is configured for the implement step.'}
     from wb_arms import providers
     provider = providers.get(route['id'])
-    cap = ceiling('STUDIO_GENESIS_CODEX_USD', '1.00')
+    cap = Decimal(str(maximum_usd)) if maximum_usd is not None else ceiling('STUDIO_GENESIS_CODEX_USD', '1.00')
     ok, reason = genesis.allowance_allows(cap)
     if not ok:
         return {'skipped': reason}
@@ -308,8 +308,9 @@ def implement(genesis, spec: dict, turn_id: str) -> dict:
                 effort = genesis.config.effort_for('implement')
                 if effort:
                     args += ['-c', 'model_reasoning_effort=' + effort]
-                code, stdout, stderr = _run(args + [prompt_for(spec)], work, CODEX_SECONDS)
+                code, stdout, stderr = _run(args + [request_prompt or prompt_for(spec)], work, CODEX_SECONDS)
                 usage = usage_of(stdout.splitlines())
+                out['usage'] = usage
                 if usage:
                     actual = Decimal(str(providers.cost_usd(provider, usage['prompt_tokens'], usage['cached_tokens'],
                                                             usage['output_tokens'], usage['cache_write_tokens'])))
@@ -322,10 +323,27 @@ def implement(genesis, spec: dict, turn_id: str) -> dict:
                 if code:
                     out['agent_error'] = (stderr or stdout).strip()[-600:] or f'Codex exited {code}.'
                 code_index.git(work, 'add', '-A')
-                out['diff'] = code_index.git(work, 'diff', '--cached')[:60_000]
+                if artifact_directory is not None:
+                    # Preserve original bytes: replacement decoding can corrupt a
+                    # patch for a text source file that is not UTF-8 encoded.
+                    captured = subprocess.run(['git', '-C', str(work), 'diff', '--cached', '--binary'],
+                                              capture_output=True, check=True, timeout=120)
+                    evidence = Path(artifact_directory)
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    (evidence / 'change.patch').write_bytes(captured.stdout)
+                    out['diff_sha256'] = __import__('hashlib').sha256(captured.stdout).hexdigest()
+                    complete_diff = captured.stdout.decode('utf-8', errors='replace')
+                else:
+                    complete_diff = code_index.git(work, 'diff', '--cached', '--binary')
+                out['diff'] = complete_diff[:60_000]
+                out['diff_truncated'] = len(complete_diff) > 60_000
                 out['changed'] = bool(out['diff'].strip())
-                if out['changed'] and spec['verify']:
-                    status, said, err = _run(spec['verify'].split(), work, VERIFY_SECONDS)
+                changed_paths = code_index.git(work, 'diff', '--cached', '--name-only', '--no-renames', '-z').split('\0') if validate_changes else []
+                refusal = validate_changes([path for path in changed_paths if path]) if validate_changes else None
+                if refusal:
+                    out.update(verified=False, verify_output=refusal)
+                elif out['changed'] and (verification_args or spec['verify']):
+                    status, said, err = _run(verification_args or spec['verify'].split(), work, VERIFY_SECONDS)
                     out['verified'] = status == 0
                     out['verify_output'] = ((said or '') + (err or '')).strip()[-2000:]
                 elif out['changed']:

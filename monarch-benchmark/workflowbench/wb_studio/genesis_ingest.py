@@ -18,7 +18,7 @@ import os
 import re
 import socket
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 from wb_studio import library
 from wb_studio.genesis_reviewer import json_answer
@@ -45,9 +45,19 @@ def cap() -> str:
 
 # -- fetching ---------------------------------------------------------------------
 
+class _PublicRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_public(newurl)
+        if urlsplit(newurl).scheme not in ('http', 'https'):
+            raise ValueError('Source redirects must use http or https.')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _read(url, timeout=20) -> str:
     """One URL as text. The only network call in this module; faked in tests."""
-    with urlopen(Request(url, headers={'User-Agent': 'AILabs-Genesis/1.0 (research intake)'}), timeout=timeout) as response:
+    _check_public(url)
+    opener = build_opener(ProxyHandler({}), _PublicRedirect())
+    with opener.open(Request(url, headers={'User-Agent': 'AILabs-Genesis/1.0 (research intake)'}), timeout=timeout) as response:
         return response.read(MAX_BYTES).decode(response.headers.get_content_charset() or 'utf8', 'replace')
 
 
@@ -152,6 +162,8 @@ def _check_public(url: str) -> None:
     host = urlsplit(url).hostname
     if not host:
         raise ValueError('Give the source as an http or https link.')
+    if urlsplit(url).username is not None or urlsplit(url).password is not None:
+        raise ValueError('Source links must not contain credentials.')
     addresses = _resolve(host)
     if not addresses:
         raise ValueError(f'{host} does not resolve, so it is not reachable.')

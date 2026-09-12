@@ -177,6 +177,58 @@ def test_an_editor_on_another_architecture_does_not_block(genesis):
     assert genesis_build.open_editor(genesis.studio, 'mine') is False
 
 
+def test_a_brand_new_build_is_not_blocked_by_edits_to_something_else(genesis):
+    """No browser can be holding open an architecture that does not exist yet. This used
+    to refuse the save with a sentence about an architecture nobody had built, and keep
+    refusing for the fifteen minutes the editor record stays fresh."""
+    identity = turn(genesis)
+    worker(genesis, identity)
+    genesis.studio.editors['architecture'] = {'id': 'someone-elses-draft', 'dirty': True, 'at': time.time()}
+    assert genesis_build.open_editor(genesis.studio, None) is False
+    assert genesis.tool('save_architecture', {'name': 'Fresh'}, identity)['revision'] == 1
+
+
+# ---- the turn record is the build, so it may not be summarised ---------------------------
+def test_a_long_prompt_survives_the_turn_record_and_reaches_the_commit(genesis):
+    """The harness cut tool results at DETAIL_CHARS for the turn record. For every other
+    tool that shortens a log; for this one it deletes a build step, because the record is
+    the only place the build exists."""
+    from wb_studio import genesis_harness
+
+    assert 'edit_architecture' in genesis_harness.VERBATIM_RESULT
+    identity = turn(genesis)
+    worker(genesis, identity)
+    long_prompt = 'Follow the policy exactly. ' * 400          # ~10,800 characters
+    assert len(long_prompt) > genesis_harness.DETAIL_CHARS
+    result = genesis.tool('edit_architecture', {'operation': 'set_prompt', 'node': 'worker',
+                                                'text': long_prompt}, identity)
+    text = json.dumps(result, ensure_ascii=False, default=str)
+    detail = text if 'edit_architecture' in genesis_harness.VERBATIM_RESULT \
+        else genesis_harness.summary(text, genesis_harness.DETAIL_CHARS)
+    genesis.event(identity, 'tool_completed', action='edit_architecture',
+                  result=genesis_harness.summary(text), detail=detail)
+    graph, *_ = genesis_build.build(genesis, identity)
+    worker_node = next(n for n in graph['nodes'] if n['id'] == 'worker')
+    assert worker_node['config']['instructions'] == long_prompt
+    saved = genesis.tool('save_architecture', {'name': 'Long'}, identity)
+    stored = json.loads((blueprints.paths(genesis.studio, saved['id']) / 'draft.json').read_text(encoding='utf-8'))
+    kept = next(n for n in stored['graph']['nodes'] if n['id'] == 'worker')
+    assert kept['config']['instructions'] == long_prompt, "the commit reported success without the prompt"
+
+
+def test_a_step_that_cannot_be_read_back_refuses_the_save_instead_of_dropping_it(genesis):
+    """Silently skipping it committed a graph short a step under a normal revision
+    receipt, and told the model and the person the build was saved."""
+    identity = turn(genesis)
+    worker(genesis, identity)
+    genesis.event(identity, 'tool_completed', action='edit_architecture', result='',
+                  detail='{"operation": {"operation": "set_prompt", "node": "worker", "text": "tru')
+    with pytest.raises(ValueError, match='cannot be read back'):
+        genesis_build.build(genesis, identity)
+    with pytest.raises(ValueError, match='cannot be read back'):
+        genesis.tool('save_architecture', {'name': 'Broken'}, identity)
+
+
 # ---- the dial (FR-058) ------------------------------------------------------------------
 def test_editing_ships_on_and_off_refuses(genesis):
     assert genesis.autonomy.read()['edit'] == 'act'

@@ -11,6 +11,31 @@ const STAGE_WORDS=stageNames;
 const stageWord=s=>stageNames[s]||s;
 const PERSON='human:studio';
 const me=()=>genesisData?.me||PERSON;
+const ACTIVE_THREAD_KEY='genesis.activeConversation';
+function rememberConversation(){
+ try{if(genesisThread)sessionStorage.setItem(ACTIVE_THREAD_KEY,JSON.stringify({thread:genesisThread,owner:me()}));else sessionStorage.removeItem(ACTIVE_THREAD_KEY);}catch{}
+}
+let restoringConversation=null;
+window.genesisRestoreConversation=function(){
+ if(genesisThread)return Promise.resolve();
+ if(restoringConversation)return restoringConversation;
+ restoringConversation=(async()=>{
+  if(!genesisData)genesisData=await api('/api/genesis');
+  let saved;try{saved=JSON.parse(sessionStorage.getItem(ACTIVE_THREAD_KEY)||'null');}catch{return;}
+  if(!saved?.thread)return;
+  const data=genesisData||await api('/api/genesis');
+  if(genesisThread)return;
+  genesisData=data;
+  if(saved.owner!==me()||!(data.threads||[]).some(t=>t.id===saved.thread)){sessionStorage.removeItem(ACTIVE_THREAD_KEY);return;}
+  genesisThread=saved.thread;
+  await renderConversation();
+ })().finally(()=>{restoringConversation=null;});
+ return restoringConversation;
+};
+window.genesisRememberVoiceThread=function(result){
+ if(result.thread){if(genesisThread!==result.thread){threadTurns=[];$('#genesis-messages').innerHTML='';}genesisThread=result.thread;genesisParent=result.parent||null;rememberConversation();}
+};
+
 
 // Voice and typing refer to the same visible objects. Never scrape page text,
 // password fields, API credentials, or unsaved prompt bodies into model context.
@@ -38,7 +63,7 @@ window.genesisAcceptVoiceTurn = async function(t) {
  try {
   if(!genesisData)genesisData=await api('/api/genesis');
   if(genesisThread!==t.thread){genesisThread=t.thread;threadTurns=[];$('#genesis-messages').innerHTML='';}
-  genesisParent=t.parent||genesisParent;
+  genesisParent=t.parent||genesisParent;rememberConversation();
   if(!threadTurns.some(x=>x.id===t.id)){
    if($('#genesis-messages .genesis-welcome'))$('#genesis-messages').innerHTML='';
    threadTurns.push(t);$('#genesis-messages').insertAdjacentHTML('beforeend',turnHtml(t));
@@ -54,18 +79,18 @@ window.genesisAcceptVoiceTurn = async function(t) {
 // ---- routes: #genesis, #genesis/board|library|memory|activity, #genesis/t/<thread> ----------
 function genesisRoute(){const parts=location.hash.replace(/^#/,'').split('/');if(parts[0]!=='genesis')return {view:'chat',thread:null};if(parts[1]==='t'&&parts[2])return {view:'chat',thread:decodeURIComponent(parts[2])};return {view:['board','library','memory','activity','digest'].includes(parts[1])?parts[1]:'chat',thread:null};}
 function genesisHash(){return genesisView==='chat'?(genesisThread?'#genesis/t/'+encodeURIComponent(genesisThread):'#genesis'):'#genesis/'+genesisView;}
-function settleGenesisHash(){const want=genesisHash();if(location.hash!==want)history.replaceState(null,'',want);}
+function settleGenesisHash(){rememberConversation();const want=genesisHash();if(location.hash!==want)history.replaceState(null,'',want);}
 async function openGenesis(){
  showWorkspaceSurface('genesis');
  const route=genesisRoute();genesisView=route.view;if(route.thread)genesisThread=route.thread;
- try{genesisData=await api('/api/genesis');if(genesisThread&&!genesisData.threads.some(t=>t.id===genesisThread))genesisThread=null;if(genesisView==='chat'&&!genesisThread&&!location.hash.includes('/t/')&&needsPerson(genesisData.cards).length&&!sessionStorage.getItem('genesis-inbox-seen')){genesisView='board';sessionStorage.setItem('genesis-inbox-seen','1');}renderGenesis();}catch(e){toast(e.message);}
+ try{genesisData=await api('/api/genesis');await window.genesisRestoreConversation();if(genesisThread&&!genesisData.threads.some(t=>t.id===genesisThread))genesisThread=null;if(genesisView==='chat'&&!genesisThread&&!location.hash.includes('/t/')&&needsPerson(genesisData.cards).length&&!sessionStorage.getItem('genesis-inbox-seen')){genesisView='board';sessionStorage.setItem('genesis-inbox-seen','1');}renderGenesis();}catch(e){toast(e.message);}
 }
 window.openGenesis=openGenesis;
 $('#nav-genesis').onclick=()=>{genesisView='chat';openGenesis();};
 
 function needsPerson(cards){return (cards||[]).filter(c=>c.kind!=='brief'&&((c.kind==='question'&&!c.answer)||(c.stage==='approval'&&c.plan&&!c.job)));}
 function renderNavCount(cards){const n=needsPerson(cards).length;for(const id of ['nav-genesis','genesis-tab-board']){const nav=$('#'+id);if(!nav)continue;let mark=nav.querySelector('.nav-count');if(!mark){mark=document.createElement('span');mark.className='nav-count';nav.append(mark);}mark.textContent=n?String(n):'';mark.hidden=!n;}const nav=$('#nav-genesis');if(nav)nav.title=n?n+(n===1?' item needs you':' items need you'):'';}
-window.addEventListener('DOMContentLoaded',()=>{api('/api/genesis').then(d=>{if(!genesisData)genesisData=d;renderNavCount(d.cards);}).catch(()=>{});},{once:true});
+window.addEventListener('DOMContentLoaded',()=>{api('/api/genesis').then(async d=>{if(!genesisData)genesisData=d;renderNavCount(d.cards);await window.genesisRestoreConversation();}).catch(()=>{});},{once:true});
 
 async function refreshGenesis(){genesisData=await api('/api/genesis');renderGenesis();}
 function renderGenesis(){
@@ -89,7 +114,7 @@ function showGenesisView(view,settle=true){
  if(settle)settleGenesisHash();
 }
 $$('#genesis-panel [data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.view==='settings'){$('#nav-runtime').click();return;}showGenesisView(b.dataset.view);});
-$('#genesis-new').onclick=()=>{genesisThread=null;threadTurns=[];genesisParent=null;showGenesisView('chat');renderRail();$('#genesis-message').focus();};
+$('#genesis-new').onclick=()=>{genesisThread=null;threadTurns=[];genesisParent=null;rememberConversation();showGenesisView('chat');renderRail();$('#genesis-message').focus();};
 
 // ---- the rail: the person's conversations, newest first --------------------------------------
 function renderRail(){
@@ -101,13 +126,16 @@ const when=iso=>iso?new Date(iso).toLocaleDateString('en-US',{month:'short',day:
 
 // ---- the conversation ------------------------------------------------------------------------
 async function renderConversation(){
+ rememberConversation();
  const title=$('#genesis-thread-title');
- if(!genesisThread){threadTurns=[];genesisParent=null;title.textContent='Genesis';$('#genesis-messages').innerHTML='<p class="genesis-welcome">Ask Genesis about a run, a source or a hypothesis. Drop a link or a run id and it works the card.</p>';renderTracking();return;}
+ if(!genesisThread){threadTurns=[];genesisParent=null;title.textContent='Genesis';$('#genesis-messages').innerHTML=genesisWelcome();bindGenesisStarters();renderTracking();return;}
  const t=(genesisData.threads||[]).find(x=>x.id===genesisThread);title.textContent=t?.title||'Conversation';
- try{const data=await api('/api/genesis/threads/'+encodeURIComponent(genesisThread));threadTurns=data.turns||[];}catch(e){threadTurns=[];toast(e.message);}
+ const requestedThread=genesisThread;
+ try{const data=await api('/api/genesis/threads/'+encodeURIComponent(requestedThread));if(genesisThread!==requestedThread)return;threadTurns=data.turns||[];}catch(e){if(genesisThread!==requestedThread)return;threadTurns=[];toast(e.message);}
  genesisParent=threadTurns.at(-1)?.id||null;
  $('#genesis-messages').innerHTML=threadTurns.length?threadTurns.map(turnHtml).join(''):'<p class="genesis-welcome">Nothing here yet.</p>';
  linkRecTags($('#genesis-messages'));drawFigures($('#genesis-messages'));bindTurnChips();
+ for(const turn of threadTurns){const el=$$('[data-turn]').find(e=>e.dataset.turn===turn.id);if(el)window.GenesisStage?.sync(el.querySelector('.turn-work'),turn);}
  $('#genesis-messages').scrollTop=$('#genesis-messages').scrollHeight;
  const running=threadTurns.find(x=>x.status==='running'&&x.purpose!=='Genesis mission');if(running)streamGenesis(running.id);
  renderTracking();scheduleMissionPoll();
@@ -172,14 +200,14 @@ function stoppedLine(t){
  const recovery=/allowance|ledger|left of|ceiling|cap\b/i.test(reason)?' Raise the per-turn cap under Settings, Genesis, or choose a cheaper model.':'';
  return '<p class="turn-stopped">Stopped: '+esc(reason)+esc(recovery)+'</p>';
 }
-function turnHtml(t){return '<article class="genesis-turn" data-turn="'+esc(t.id)+'"><div class="user-message"><span class="meta">'+esc(String(t.by||'You').replace('human:',''))+' · '+esc(when(t.created_at))+'</span><p>'+esc(t.message)+'</p>'+(t.card?'<button type="button" class="rec-chip" data-rec-kind="card" data-rec-id="'+esc(t.card)+'">'+esc(recLabel('card',t.card))+'</button>':'')+'</div><div class="scientist-message"><span class="message-model" data-family="'+genesisFamily(t.model)+'">'+esc(genesisModelName(t.model))+'</span><div class="turn-work">'+stepsHtml(t)+'</div><div class="genesis-answer">'+genesisText(t.answer||'')+'</div><p class="genesis-turn-status">'+esc(t.status==='running'?'Working…':'')+'</p>'+stoppedLine(t)+'</div></article>';}
+function turnHtml(t){return '<article class="genesis-turn" data-turn="'+esc(t.id)+'"><div class="user-message"><span class="meta">'+esc(t.purpose==='Genesis mission'?'Genesis':String(t.by||'You').replace('human:',''))+' · '+esc(when(t.created_at))+'</span><p>'+esc(t.purpose==='Genesis mission'?'Continuing the research mission.':t.message)+'</p>'+(t.card?'<button type="button" class="rec-chip" data-rec-kind="card" data-rec-id="'+esc(t.card)+'">'+esc(recLabel('card',t.card))+'</button>':'')+'</div><div class="scientist-message"><span class="message-model" data-family="'+genesisFamily(t.model)+'">'+esc(genesisModelName(t.model))+'</span><div class="turn-work">'+(window.GenesisStage?window.GenesisStage.html(t):stepsHtml(t))+'</div><div class="genesis-answer">'+genesisText(t.answer||'')+'</div><p class="genesis-turn-status">'+esc(t.status==='running'?'Working…':'')+'</p>'+stoppedLine(t)+'</div></article>';}
 function bindTurnChips(){$$('#genesis-messages .rec-chip').forEach(b=>b.onclick=()=>openRecord(b.dataset.recKind,b.dataset.recId));}
 // WCAG 2.2.2: content that updates itself beside other content needs a way to pause,
 // stop or hide it. A turn re-renders its step list for minutes while the rest of the
 // workspace stays interactive, and the Studio had no such control anywhere. Paused, the
 // turn keeps running and keeps being recorded — only the screen holds still.
 let genesisPaused=false,genesisPending=null;
-function setGenesisPaused(on){genesisPaused=on;const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
+function setGenesisPaused(on){genesisPaused=on;window.GenesisStage?.setPaused(on);const b=$('#genesis-pause-updates');b.setAttribute('aria-pressed',String(on));b.textContent=on?'Resume updates':'Pause updates';
  if(!on&&genesisPending){const t=genesisPending;genesisPending=null;paintTurn(t);}}
 $('#genesis-pause-updates').onclick=()=>setGenesisPaused(!genesisPaused);
 // The opening sentence of the answer, which is the part a person waiting for a verdict
@@ -226,8 +254,12 @@ function follow(route){
  if(!followArmed||!followOn()||followBroken||document.hidden)return false;
  if(genesisView!=='chat'&&genesisView!=='board')return false;
  if(!window.goRoute)return false;
+ if(location.hash===route)return true;
+ if(typeof dirty!=='undefined'&&dirty&&location.hash.startsWith('#studio'))return false;
  history.pushState(null,'',route);
- window.goRoute(route);
+ const navigate=()=>Promise.resolve(window.goRoute(route)).finally(()=>document.dispatchEvent(new Event('genesis:navigated')));
+ if(document.startViewTransition&&!matchMedia('(prefers-reduced-motion: reduce)').matches)document.startViewTransition(navigate);
+ else navigate();
  // Scroll moves; focus does not. Focus is on the change-of-context list too, and taking
  // it mid-keystroke breaks actual typing. It moves only when the person clicked the link.
  return true;
@@ -256,7 +288,7 @@ function startFollow(){
 // so the default flip turned a swallowed ReferenceError into a broken page.
 startFollow();
 function announceShow(t){
- const shown=stepList(t).filter(s=>s.action==='show'&&s.result!==null);
+ const shown=stepList(t).filter(s=>['show','present'].includes(s.action)&&s.result!==null).filter(s=>{try{const r=typeof s.result==='string'?JSON.parse(s.result):s.result;return r?.route;}catch{return false;}});
  if(!shown.length)return;
  let r=shown[shown.length-1].result;if(typeof r==='string'){try{r=JSON.parse(r);}catch(e){return;}}
  if(!r||!r.label)return;
@@ -269,10 +301,10 @@ function announceShow(t){
  if(r.route&&followed!==t.id+' '+r.route){followed=t.id+' '+r.route;follow(r.route);}}
 let followed='';
 let paintedSteps={};
-function paintTurn(t,opts){const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
+function paintTurn(t,opts){document.dispatchEvent(new CustomEvent('genesis:turn',{detail:t}));const el=$$('[data-turn]').find(e=>e.dataset.turn===t.id);if(!el)return;
  const before=paintedSteps[t.id]||0;
  const messages=$('#genesis-messages'),follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<60;
- el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);
+ if(window.GenesisStage)window.GenesisStage.sync(el.querySelector('.turn-work'),t);else el.querySelector('.turn-work').innerHTML=stepsHtml(t);el.querySelector('.genesis-answer').innerHTML=genesisText(t.answer);
  linkRecTags(el);bindTurnChips();el.querySelector('.genesis-turn-status').textContent=t.status==='running'?'Working…':'';
  const old=el.querySelector('.turn-stopped');if(old)old.remove();
  el.querySelector('.scientist-message').insertAdjacentHTML('beforeend',stoppedLine(t));
@@ -359,7 +391,7 @@ $('#genesis-message').addEventListener('keydown',event=>{if(event.key==='Enter'&
 $('#genesis-message').addEventListener('input',()=>{const box=$('#genesis-message');box.style.height='auto';box.style.height=Math.min(180,box.scrollHeight)+'px';});
 
 function genesisFamily(id){const name=String(id).toLowerCase();return name.includes('claude')?'claude':name.includes('gpt')?'gpt':name.includes('gemini')?'gemini':name.includes('kimi')?'kimi':name.includes('glm')?'glm':'other';}
-function genesisModelName(id){const route=genesisData?.models.find(m=>m.id===id);const name=String(route?.name||id).split('/').at(-1),labels={'claude-opus-4-8':'Claude Opus 4.8','claude-opus-5':'Claude Opus 5','gemini-3.7-flash':'Gemini 3.7 Flash','gpt-5.6-sol':'GPT-5.6 Sol','gpt-5.6-terra':'GPT-5.6 Terra','glm-5p3':'GLM 5.3','glm-5.3':'GLM 5.3','kimi-k3':'Kimi K3'};return labels[name]||name;}
+function genesisModelName(id){const route=genesisData?.models.find(m=>m.id===id);const name=String(route?.name||id).split('/').at(-1),labels={'gpt-6-astra':'GPT-6 Astra','claude-opus-4-8':'Claude Opus 4.8','claude-opus-5':'Claude Opus 5','gemini-3.7-flash':'Gemini 3.7 Flash','gpt-5.6-sol':'GPT-5.6 Sol','gpt-5.6-terra':'GPT-5.6 Terra','glm-5p3':'GLM 5.3','glm-5.3':'GLM 5.3','kimi-k3':'Kimi K3'};return labels[name]||name;}
 function renderGenesisModels(){
  const seen=new Set(),models=genesisData.models.filter(m=>m.available).filter(m=>{const key=genesisModelName(m.name||m.id)+'|'+(m.provider||'');if(seen.has(key))return false;seen.add(key);return true;});
  const configured=genesisData.config?.models?.chat||genesisData.config?.effective?.chat?.route||genesisData.config?.effective?.chat;const chosen=models.find(m=>m.id===$('#genesis-model').value)||models.find(m=>m.id===configured);
@@ -424,7 +456,7 @@ function reviewBlock(c){const r=c.review;if(!r||typeof r!=='object')return '';re
 function planBlock(c){const plan=c.plan;if(!plan||!plan.lines)return '';return '<section class="plan-block"><h3>The plan</h3><ol class="plan-lines">'+plan.lines.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ol>'+(c.waiting?'<p class="card-waiting">'+esc(c.waiting)+'</p>':'')+(c.approval?'<p class="meta">Launched by '+esc(String(c.approval.by||'a person').replace('human:',''))+' '+esc((c.approval.at||'').slice(0,16).replace('T',' '))+(c.job?' · run '+esc(String(c.job).slice(0,12)):'')+'</p>':'')+'</section>';}
 function questionBlock(c){if(c.kind!=='question')return '';if(c.answer)return '<section class="question-block"><h3>Answer</h3><p>'+esc(c.answer)+'</p></section>';return '<section class="question-block"><h3>Genesis asks</h3><p>'+esc(c.question||c.body)+'</p><form id="question-form" class="question-form"><input id="question-answer" maxlength="600" value="'+esc(c.default||'')+'" placeholder="Write the answer"><button class="button" type="submit">Send answer</button><p id="question-error" role="alert"></p></form></section>';}
 function bindQuestion(c){const form=$('#question-form');if(!form)return;form.onsubmit=async e=>{e.preventDefault();try{await api('/api/genesis/cards/'+c.id+'/answer',{answer:$('#question-answer').value.trim()||c.default||''});toast('Answered. Genesis resumes the card on its next wake.');await refreshGenesis();showResearchCard(c.id);}catch(err){$('#question-error').textContent=err.message;}};}
-function missionAction(c){const m=c.mission;if(!m)return '';return m.status==='waiting'?'Waiting on experiment'+(m.wait_for?' '+m.wait_for:''):m.status==='blocked'?'Blocked: '+(m.summary||'Review the mission checkpoint'):m.status==='stopped'?'Mission stopped':m.status==='completed'?'Mission completed':m.status==='queued'?'Mission queued':m.status==='working'?'Genesis is working':'';}
+function missionAction(c){const m=c.mission;if(!m)return '';return m.status==='waiting'?(m.wait_kind==='question'?'Waiting for your answer':'Waiting on experiment')+(m.wait_for?' '+m.wait_for:''):m.status==='blocked'?'Blocked: '+(m.summary||'Review the mission checkpoint'):m.status==='stopped'?'Mission stopped':m.status==='completed'?'Mission completed':m.status==='queued'?'Mission queued':m.status==='working'?'Genesis is working':'';}
 function nextAction(c){if(c.mission)return '<span class="next-action">'+esc(missionAction(c))+'</span>';const w=c.work||{};let text='';if(c.kind==='question'&&!c.answer)text='Answer';else if(c.stage==='approval'&&c.plan&&!c.job)text='Approve or decline';else if(c.stage==='review'&&c.plan&&c.analysis)text='Read the verdict';else if(c.stage==='review'&&c.plan)text='Verdict pending';else if(w.status==='working')text='Genesis is working';else if(w.status==='waiting')text='Waiting for an answer';return text?'<span class="next-action">'+esc(text)+'</span>':'';}
 function recLabel(kind,id){const c=genesisData?.cards.find(x=>x.id===id);if(kind==='card'&&c)return c.title.slice(0,50);if(kind==='run'){const j=(state?.jobs||[]).find(x=>x.id===id);return j?j.title.slice(0,50):'run '+id.slice(0,10);}return kind+' '+id.slice(0,12);}
 // [figure:<id>] in a card body becomes the drawing itself. The options were computed by the

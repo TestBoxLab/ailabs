@@ -88,12 +88,12 @@ function toast(text) {
   $('#toast').textContent=text; $('#toast').classList.remove('hidden');
   toastTimer=setTimeout(()=>$('#toast').classList.add('hidden'),6000);
 }
-async function api(path,body,recovered=false) {
+async function api(path,body,recovered=false,options={}) {
   const write=body!==undefined;
   let response;
   try {
     const personKey=(()=>{try{return localStorage.getItem('ailabs-person-key')||'';}catch{return '';}})();
-    response=await fetch(path,write?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||'',...(personKey?{'X-Person-Key':personKey}:{})},body:JSON.stringify(body)}:{headers:personKey?{'X-Person-Key':personKey}:{},signal:AbortSignal.timeout(30000)});
+    response=await fetch(path,write?{keepalive:!!options.keepalive,method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':state?.token||'',...(personKey?{'X-Person-Key':personKey}:{})},body:JSON.stringify(body)}:{headers:personKey?{'X-Person-Key':personKey}:{},signal:AbortSignal.timeout(30000)});
   } catch (error) {
     const issue=new Error(error.name==='TimeoutError'?'Studio took too long to respond. Try again.':'Cannot reach Studio. Check the local server and try again.');
     issue.uncertain=write; throw issue;
@@ -107,7 +107,7 @@ async function api(path,body,recovered=false) {
   if(write && response.status===403 && data.error==='Origin or session refused' && !recovered) {
     const previous=state?.token;
     const fresh=await api('/api/state');
-    if(fresh.token && fresh.token!==previous) { state.token=fresh.token; return api(path,body,true); }
+    if(fresh.token && fresh.token!==previous) { state.token=fresh.token; return api(path,body,true,options); }
   }
   if(!response.ok) {
     const issue=new Error(response.status===403?'Your Studio session changed. Reload the workspace before trying again.':data.error||'Studio could not complete this request. Try again.');

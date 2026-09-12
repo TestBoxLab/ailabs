@@ -45,30 +45,48 @@ PROTOCOL = (
 
 
 def _recorded(genesis, turn):
-    """Every operation this turn has completed, in order, and the draft it started from."""
+    """Every operation this turn has completed, in order, and the draft it started from.
+
+    The fourth value counts operations the record cannot be read back from. That used to
+    be a silent `continue`, which is the worst thing it could be: the harness truncated
+    long results at DETAIL_CHARS, so a prompt of a few thousand characters left an
+    unparseable event, the step vanished from the replay, and the commit still returned a
+    normal revision receipt. The build was short a step and everyone was told it was
+    saved. `genesis_harness.VERBATIM_RESULT` stops the truncation; this stops anything
+    else with the same shape from passing quietly.
+    """
     try:
         record = genesis.read('turns', turn)
     except (OSError, ValueError, KeyError):
-        return [], None, 0
-    operations, base, revision = [], None, 0
+        return [], None, 0, 0
+    operations, base, revision, unreadable = [], None, 0, 0
     for event in record.get('events') or []:
         if event.get('type') != 'tool_completed' or event.get('action') != 'edit_architecture':
             continue
         try:
             value = json.loads(event.get('detail') or event.get('result') or '')
         except ValueError:
-            continue          # a result the record had to truncate is not an operation
+            unreadable += 1
+            continue
         if not isinstance(value, dict) or not isinstance(value.get('operation'), dict):
+            unreadable += 1
             continue
         operations.append(value['operation'])
         if base is None and value.get('id'):
             base, revision = value['id'], value.get('revision') or 0
-    return operations, base, revision
+    return operations, base, revision, unreadable
 
 
 def build(genesis, turn, identity=None, revision=0):
     """The graph this turn has built: the named draft as it was saved, then every operation."""
-    operations, base, base_revision = _recorded(genesis, turn)
+    operations, base, base_revision, unreadable = _recorded(genesis, turn)
+    if unreadable:
+        # Refusing is the only honest answer. We know a step happened and we cannot say
+        # what it was, so the graph below is not this turn's build -- and committing it
+        # would write that shortfall into a revision under a receipt saying all is well.
+        raise ValueError(f"{unreadable} step(s) of this build cannot be read back from the turn's "
+                         'record, so the architecture cannot be rebuilt from it. Nothing was saved. '
+                         'Start the build again in a new turn.')
     identity = identity or base
     graph = {'nodes': [], 'edges': []}
     if identity:
@@ -118,11 +136,19 @@ def edit(genesis, turn, payload):
 
 
 def open_editor(studio, identity=None):
-    """Whether a browser has this architecture open right now with unsaved edits (FR-049)."""
+    """Whether a browser has this architecture open right now with unsaved edits (FR-049).
+
+    `identity=None` means a brand-new build, which no browser can be holding open --
+    there is nothing yet to hold. Blocking it on someone's unsaved edits to a *different*
+    architecture refused a save with a sentence about an architecture that did not exist,
+    and kept refusing for the fifteen minutes the record stays fresh.
+    """
+    if identity is None:
+        return False
     record = getattr(studio, 'editors', {}).get('architecture')
     if not isinstance(record, dict) or not record.get('dirty'):
         return False
-    if identity and record.get('id') and record['id'] != identity:
+    if record.get('id') and record['id'] != identity:
         return False
     return (time.time() - float(record.get('at') or 0)) < STALE_SECONDS
 

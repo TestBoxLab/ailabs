@@ -212,3 +212,34 @@ def test_stop_cancels_child_worker_and_review_despite_missing_job(g):
     g.studio.cancel.assert_called_once_with('run2')
     assert g.read('cards',y['id'])['work']['status']=='stopped'
     assert any(row['kind']=='mission-cancel-error' for row in g.autonomy.tail())
+
+def test_question_waits_and_answer_resumes_mission_once(g):
+    c=start(g); t=worker(g,c)
+    q=g.ask_question({'card':c['id'],'question':'Which development set?', 'default':'Existing development tasks'})
+    m.ON_TURN(g,dict(t,status='completed'))
+    waiting=g.read('cards',c['id'])
+    assert waiting['mission']['status']=='waiting'
+    assert waiting['mission']['wait_for']==q['card']
+    assert waiting['mission']['wait_kind']=='question'
+    m.reconcile(g)
+    assert g.read('cards',c['id'])==waiting
+    g.answer_question(q['card'],{'answer':'Use development-10','by':'human:Lucas'})
+    m.reconcile(g)
+    resumed=g.read('cards',c['id'])
+    assert resumed['mission']['status']=='queued'
+    assert 'development-10' in resumed['mission']['summary']
+    m.reconcile(g)
+    assert g.read('cards',c['id'])==resumed
+
+
+def test_answer_after_stop_does_not_restart_mission(g):
+    c=start(g); t=worker(g,c)
+    q=g.ask_question({'card':c['id'],'question':'Which set?'})
+    m.ON_TURN(g,dict(t,status='completed'))
+    m.trusted_control(g,c,'stop')
+    g.answer_question(q['card'],{'answer':'development-10'})
+    m.reconcile(g)
+    saved=g.read('cards',c['id'])
+    assert saved['mission']['status']=='stopped'
+    assert saved['work']['status']=='stopped'
+    assert saved['auto'] is False

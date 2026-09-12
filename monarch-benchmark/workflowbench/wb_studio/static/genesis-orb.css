@@ -1,0 +1,73 @@
+@layer views{
+/* Floating Genesis instrument: the sphere is a state symbol; graphs are measurements. */
+.genesis-voice-bar{position:fixed;inset:auto var(--space-5) max(var(--space-4),env(safe-area-inset-bottom)) auto;z-index:45;width:320px;max-width:calc(100vw - 32px);padding:0;border:0;background:transparent;pointer-events:none}
+.genesis-orb-panel{pointer-events:auto;background:var(--bg);border:1px solid var(--line-strong);padding:var(--space-3);margin-bottom:var(--space-3);max-height:calc(100dvh - 136px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--muted) var(--bg);box-shadow:none}
+.genesis-orb-panel[hidden],.genesis-voice-bar [hidden]{display:none}
+.genesis-orb-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin-bottom:var(--space-3)}
+.genesis-orb-heading>span{font-size:var(--text-2);color:var(--muted)}
+.genesis-orb-heading h2{margin:0;font:400 var(--text-7)/1 var(--font-prose);letter-spacing:-.02em}
+.genesis-orb-heading .text-button{min-height:44px}
+.genesis-orb-panel #genesis-voice-state:empty{display:none}
+.genesis-orb-panel #genesis-voice-state{display:block;min-height:18px;color:var(--muted);font:var(--text-2)/1.5 var(--font-ui)}
+.genesis-orb-panel .voice-controls{border-top:1px solid var(--line);padding-top:var(--space-3);margin-top:var(--space-4);gap:var(--space-2)}
+.genesis-orb-panel .voice-controls .button{min-height:40px;font-size:var(--text-2)}
+.genesis-orb-panel .voice-controls .voice-mode{flex-basis:100%;text-align:left;min-height:36px;font-size:var(--text-2)}
+.genesis-orb-panel .meta{font:var(--text-1)/1.6 var(--font-ui);color:var(--muted)}
+.genesis-orb-panel #genesis-voice-price{margin-top:var(--space-3)}
+.genesis-orb-panel #genesis-voice-work:empty{display:none}
+.genesis-signal{margin:var(--space-4) 0 0}
+.genesis-signal figcaption,.genesis-action-heading{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-3);font:var(--text-2)/1.5 var(--font-ui)}
+.genesis-signal figcaption span:last-child,.genesis-action-heading span{color:var(--muted);font:var(--text-1)/1.5 var(--font-mono)}
+.genesis-signal svg{display:block;width:100%;height:64px;margin-top:var(--space-2);overflow:hidden}
+.genesis-signal[data-reduced=true] svg,.genesis-signal[data-reduced=true] .genesis-signal-legend{display:none}
+.genesis-signal-grid{stroke:var(--line);stroke-width:1;fill:none}
+.genesis-input-line,.genesis-output-line{fill:none;stroke:var(--ink);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.genesis-output-line{stroke:var(--signal)}
+.genesis-signal-legend{display:flex;gap:var(--space-4);font:var(--text-1)/1.5 var(--font-ui);color:var(--muted)}
+.genesis-signal-legend span:before{content:"";display:inline-block;width:12px;border-top:2px solid var(--ink);margin-right:6px;vertical-align:middle}
+.genesis-signal-legend span:last-child:before{border-color:var(--signal)}
+.genesis-action-chart{margin-top:var(--space-4);border-top:1px solid var(--line);padding-top:var(--space-3)}
+.genesis-action-bars{display:grid;gap:var(--space-2);margin:var(--space-3) 0 0;padding:0;list-style:none}
+.genesis-action-bars li{display:grid;grid-template-columns:90px minmax(0,1fr) 28px;gap:var(--space-2);align-items:center;font:var(--text-2)/1.5 var(--font-ui)}
+.genesis-action-bars svg{width:100%;height:12px;background:var(--surface-3)}
+.genesis-action-bars rect{fill:var(--ink)}
+.genesis-action-bars li[data-active=true] rect{fill:var(--signal)}
+.genesis-action-bars output{text-align:right;font-family:var(--font-mono)}
+.genesis-orb-footer{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);border-top:1px solid var(--line);margin-top:var(--space-4);padding-top:var(--space-2);font-size:var(--text-2)}
+.genesis-orb-footer a{color:var(--ink);text-underline-offset:3px}
+.genesis-orb-footer button{font-size:var(--text-1);min-height:40px}
+.genesis-orb-launcher{pointer-events:auto;display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);margin-left:auto;max-width:100%;border:0;padding:0;background:transparent;color:var(--ink);cursor:pointer;font:var(--text-2)/1.4 var(--font-ui);text-align:right}
+.genesis-orb-launcher:focus-visible{outline:2px solid var(--signal);outline-offset:5px}
+.genesis-orb-label{background:var(--bg);padding:var(--space-2) var(--space-3);border:1px solid var(--line);max-width:220px;overflow-wrap:anywhere}
+.genesis-orb-label strong{display:block;font-weight:500}
+.genesis-orb-label span{color:var(--muted);font-size:var(--text-1)}
+.genesis-orb-sphere{width:48px;height:48px;flex-shrink:0;border-radius:50%;display:grid;place-items:center;overflow:hidden;isolation:isolate;background:radial-gradient(circle at 30% 22%,var(--muted),var(--ink) 65%);box-shadow:0 5px 14px color-mix(in srgb,var(--ink) 18%,transparent);transition:transform .25s cubic-bezier(.16,1,.3,1)}
+.genesis-orb-launcher:hover .genesis-orb-sphere{transform:translateY(-3px)}
+.genesis-orb-sphere svg{width:100%;height:100%;fill:none;stroke:var(--bg);stroke-width:.65;opacity:.65;transform:rotate(-24deg)}
+.genesis-orb-sphere .orb-equator{stroke-width:1.4}
+.genesis-voice-bar[data-phase=working] .genesis-orb-sphere,.genesis-voice-bar[data-phase=speaking] .genesis-orb-sphere{background:radial-gradient(circle at 28% 20%,var(--signal),var(--signal-hover) 45%,var(--ink) 100%)}
+.genesis-voice-bar[data-phase=error] .genesis-orb-label{border-color:var(--fail);color:var(--fail-text)}
+@media(prefers-reduced-motion:no-preference){.genesis-orb-sphere.is-reacting svg{animation:genesis-orb-turn 1.8s cubic-bezier(.16,1,.3,1) both}}
+@keyframes genesis-orb-turn{from{transform:rotate(-24deg) scale(.91)}to{transform:rotate(156deg) scale(1)}}
+.genesis-voice-bar[data-motion=off] .genesis-orb-sphere svg{animation:none}
+.genesis-voice-bar[data-motion=off] .genesis-orb-sphere{transition:none}
+@media(prefers-reduced-motion:reduce){.genesis-orb-sphere.is-reacting svg{animation:none}.genesis-orb-sphere{transition:none}.genesis-orb-launcher:hover .genesis-orb-sphere{transform:none}}
+@media(max-width:600px){
+ .genesis-voice-bar{right:var(--space-4);max-width:calc(100vw - 32px)}
+ .genesis-orb-panel{padding:var(--space-4)}
+ .genesis-orb-panel .voice-controls .button,.genesis-orb-panel .voice-controls .voice-mode{min-height:44px}
+ .genesis-orb-sphere{width:48px;height:48px}
+ .genesis-orb-label{max-width:190px}
+}
+@media print{.genesis-voice-bar{display:none}}
+}
+
+
+@layer views {
+/* Fine terminal paper and registration corners, using the Studio palette. */
+.genesis-orb-panel{position:relative;border-color:var(--line);background-color:var(--surface);background-image:radial-gradient(circle,color-mix(in srgb,var(--muted) 16%,transparent) .6px,transparent .8px);background-size:8px 8px;box-shadow:0 6px 18px color-mix(in srgb,var(--ink) 8%,transparent)}
+.genesis-orb-panel:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(var(--ink),var(--ink)) left top/14px 1px,linear-gradient(var(--ink),var(--ink)) left top/1px 14px,linear-gradient(var(--ink),var(--ink)) right top/14px 1px,linear-gradient(var(--ink),var(--ink)) right top/1px 14px,linear-gradient(var(--ink),var(--ink)) left bottom/14px 1px,linear-gradient(var(--ink),var(--ink)) left bottom/1px 14px,linear-gradient(var(--ink),var(--ink)) right bottom/14px 1px,linear-gradient(var(--ink),var(--ink)) right bottom/1px 14px;background-repeat:no-repeat}
+.genesis-orb-panel .genesis-stage-toolbar,.genesis-orb-panel .genesis-stage-work,.genesis-orb-panel .genesis-stage-log,.genesis-window-controls{background:var(--surface)}
+.genesis-orb-panel .genesis-stage{border-top-color:var(--line)}
+@media(forced-colors:active){.genesis-orb-panel{background:Canvas;border-color:CanvasText;box-shadow:none}.genesis-orb-panel:after{display:none}}
+}

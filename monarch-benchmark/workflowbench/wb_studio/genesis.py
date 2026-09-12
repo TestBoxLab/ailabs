@@ -528,10 +528,21 @@ class Genesis:
         if not question or len(question)>600: raise ValueError('Ask one question of up to 600 characters')
         blocks=payload.get('card')
         default=str(payload.get('default') or '').strip() or None
-        q=self.card({'title':question[:140],'body':question,'kind':'question','stage':'approval','question':question,'default':default,'blocks':blocks,'auto':False,'by':'genesis'})
-        if blocks:
-            with self.lock:
-                card=self.read('cards',blocks);work=card.get('work') or {}
+        with self.lock:
+            card=self.read('cards',blocks) if blocks else None
+            mission=bool(card and card.get('mission'))
+            if mission:
+                from wb_studio import genesis_missions as missions
+                turn=missions._turn(self)
+                if card['mission']['status'] != 'working' or (card.get('work') or {}).get('turn') != turn['id'] or turn.get('mission_generation') != card['mission']['generation'] or turn.get('by') != card['mission']['owner']:
+                    raise ValueError('Only the current mission worker can ask a blocking question.')
+                if missions._unsaved_build(turn):
+                    raise ValueError('Save the provisional architecture before asking a blocking question.')
+            q=self.card({'title':question[:140],'body':question,'kind':'question','stage':'approval','question':question,'default':default,'blocks':blocks,'auto':False,'by':'genesis',**({'parent':blocks} if mission else {})})
+            if mission:
+                missions.checkpoint_mission(self,{'card':blocks,'revision':card['revision'],'status':'waiting','wait_for':q['id'],'summary':'Waiting for your answer: '+question,'next_action':card['mission']['next_action']})
+            elif card:
+                work=card.get('work') or {}
                 work.update(status='waiting',reason='Waiting for an answer: '+question[:80]);card['work']=work
                 write_json(self.path('cards',blocks),card)
         self.autonomy.record('question',card=q['id'],blocks=blocks,question=question[:200],default=default)
@@ -550,7 +561,9 @@ class Genesis:
                 except (ValueError,FileNotFoundError): card=None
                 if card:
                     card['body']=(card['body']+'\n\nQuestion: '+q['question']+'\nAnswer from the lab: '+answer)[:20000]
-                    card['work']={'status':'queued','queued_at':stamp()};card['auto']=True;card['revision']+=1;card['updated_at']=stamp()
+                    if not card.get('mission'):
+                        card['work']={'status':'queued','queued_at':stamp()};card['auto']=True
+                    card['revision']+=1;card['updated_at']=stamp()
                     write_json(self.path('cards',blocked),card)
         self.autonomy.record('answer',card=identity,blocks=blocked,answer=answer[:200],by=str(payload.get('by') or 'human:studio'))
         self.watcher.notify()
@@ -639,6 +652,8 @@ class Genesis:
         if purpose=='Genesis mission':
             turn['mission_generation']=payload.get('mission_generation')
         turn['input_mode'] = 'voice' if payload.get('input_mode') == 'voice' else 'text'
+        if turn['input_mode'] == 'voice':
+            turn['voice_request'] = str(payload.get('voice_request') or '')[:14000]
         write_json(self.path('turns',identity),turn)
         if thread:
             with self.lock:

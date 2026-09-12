@@ -32,6 +32,12 @@ push or deployment was performed. The complete feature remains in progress.
 
 ---
 
+11 September Genesis orb: [x] the global voice strip is replaced locally by a
+floating animated sphere and measured audio/recorded action graphs. Lucas removed
+visible captions, toolbar and cost copy. Sixteen offline browser scenarios and nine
+CSP checks pass; desktop/mobile light and dark captures reviewed. Both final review
+fixes resolved. No live audio session, push or deployment in this slice. Component
+record: [orb design](../specs/025-genesis-voice-live-build/orb-design.md).
 ## 1. Test methodology
 
 The methodology is the constant. Three things vary and plug into it: the **target platform**,
@@ -409,3 +415,16 @@ Impeccable independent reviews informed a workflow-first responsive layout,
 passed. Desktop, phone and dark screenshots were inspected. No paid execution,
 deployment, frozen task change or historical regrading occurred. Evidence and
 limits: specs/028-live-workflow-metrics/implementation.md.
+
+
+### September 11: Genesis partner and mission hosting
+
+Feature 029 now defaults Genesis conversation and reading to GPT-6 Astra medium, with durable bounded missions, clarification resume/stop protection, visible worker updates and recorded voice progress. Focused shared-workspace checks: 614 passed; mission browser 4 scenarios, voice browser 13. Hosted release `6320318b-a1d4-4c5b-ae07-8cabe86ede5d` reached SUCCESS; authenticated browser confirms Astra medium without page errors. Current-week billing verification blocks voice/live paid acceptance; Cards/Runs remain off, source checkout access is absent, and no 50-task comparison has run. Evidence: `specs/029-genesis-research-missions/implementation-2026-09-11.md` and `hosted-verification.json` at the repository root.
+
+### September 11: Genesis live stage (feature 030)
+
+Implemented local animated work stages, seven ASCII scenes, typed reusable presentation cards, recorded tool drilldown, guided route transitions and persistent off-page results. Added architecture/history audit and Product Graph Fast Path proposal; no performance win is claimed. Focused checks: 73 passed, mission browser 4 and voice browser 17; 1440/390 presentation replay and actual draft/editor operation replay passed. No paid run or deployment. Evidence: `specs/030-genesis-live-stage/implementation.md`.
+
+Feature 030 visual correction: Lucas requested Matrix-like, 3D ASCII. Replaced flat scenes with projected shaded geometry, code rain and a black/phosphor display. Seven scene captures and desktop/mobile stage/editor checks passed; animated preview retained with feature evidence. No benchmark execution or deployment.
+
+Feature 030 compact refinement: Lucas requested closer alignment with Studio and less screen space. Restored theme-aware paper/ink styling while retaining projected 3D ASCII. Work details and activity start collapsed; the companion is 320px wide with a 48px launcher and a 352px reserved desktop column. Desktop/mobile presentation and guided-editor checks passed; nine static policy checks passed. Local implementation only; no paid execution or deployment.

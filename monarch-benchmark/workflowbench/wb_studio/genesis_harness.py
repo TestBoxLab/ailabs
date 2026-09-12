@@ -43,6 +43,13 @@ TURN_SECONDS = 900        # a turn ends after this, whatever it is doing
 REQUEST_TIMEOUT = 180     # one provider request
 RESULT_CHARS = 60_000     # a tool result sent to the model is cut here, with a marker
 DETAIL_CHARS = 6_000      # what the turn record keeps of a tool result, beyond the short summary
+#: Tools whose recorded result IS the durable record of what happened, not a summary of
+#: it. `genesis_build` deliberately keeps no state of its own -- it replays the whole
+#: architecture from these events -- so cutting one at DETAIL_CHARS does not shorten a
+#: log, it deletes a build step, and the commit then reports success for a graph missing
+#: it. A `set_prompt` of 5,711 characters was enough, against the 20,000 the blueprint
+#: validation allows. Their results are bounded by that validation, well under RESULT_CHARS.
+VERBATIM_RESULT = ('edit_architecture',)
 DELTA_CHARS = 400         # text deltas are written to the record in pieces at least this long
 HARNESS = 'loop'
 
@@ -256,6 +263,17 @@ def start_turn(genesis, turn):
     try:
         if stopped():
             raise Stopped()
+        from wb_studio.genesis_show import direct_request
+        direct = direct_request(turn.get('voice_request') if turn.get('input_mode') == 'voice' else turn.get('message'))
+        if direct and turn.get('purpose') == 'Genesis conversation' and not turn.get('images'):
+            genesis.event(identity, 'tool_started', action='show', payload=summary(direct))
+            value = run_tool(genesis, 'show', direct, identity)
+            if value.get('error'):
+                raise GenesisRefused(value['error'])
+            genesis.event(identity, 'tool_completed', action='show', detail=json.dumps(value), result=json.dumps(value))
+            genesis.event(identity, 'text_delta', text='The link to ' + direct['route'] + ' is ready.')
+            genesis.event(identity, 'completed', message='Genesis finished this navigation request.')
+            return
         adapter = ADAPTERS[provider.adapter](provider, tools, REQUEST_TIMEOUT)
         effort = resolve_effort(provider, turn.get('effort') or 'default')
         if effort is not None and hasattr(adapter, 'effort'):
@@ -339,7 +357,8 @@ def start_turn(genesis, turn):
                 text = json.dumps(value, ensure_ascii=False, default=str)
                 if len(text) > RESULT_CHARS:
                     text = text[:RESULT_CHARS] + ' ...[cut by the lab at ' + f'{RESULT_CHARS:,}' + ' characters; ask for a smaller page]'
-                genesis.event(identity, 'tool_completed', action=call.get('name'), result=summary(text), detail=summary(text, DETAIL_CHARS), **voice)
+                detail = text if call.get('name') in VERBATIM_RESULT else summary(text, DETAIL_CHARS)
+                genesis.event(identity, 'tool_completed', action=call.get('name'), result=summary(text), detail=detail, **voice)
                 adapter.append_tool_result(messages, call, text + landing)
                 landing = ''
         else:

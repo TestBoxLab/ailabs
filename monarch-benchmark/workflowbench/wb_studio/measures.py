@@ -626,6 +626,13 @@ def baseline_id(job):
     return None
 
 
+def setup_ids(job) -> list:
+    """Planned setups followed by every exact recorded identity, without aliasing versions."""
+    settings = job.get('settings') or {}
+    planned = [arm['id'] for arm in settings.get('arms') or []] or list(settings.get('models') or [])
+    return list(dict.fromkeys(planned + [row['model'] for row in job.get('results') or []]))
+
+
 def setup_names(job) -> dict:
     """The name a report prints for each competitor. An id nobody named is
     resolved the same way the rest of the Studio resolves it, so an internal
@@ -633,7 +640,7 @@ def setup_names(job) -> dict:
     from wb_studio.runtime_registry import display_name
     settings = job.get("settings") or {}
     names = {arm["id"]: arm.get("name") or display_name(arm["id"]) for arm in settings.get("arms") or []}
-    for model in settings.get("models") or []:
+    for model in setup_ids(job):
         names.setdefault(model, display_name(model))
     return names
 
@@ -643,10 +650,12 @@ def run_measures(job, events) -> dict:
     results = job.get("results") or []
     groups = by_setup(results)
     settings = job.get("settings") or {}
-    setups = [arm["id"] for arm in settings.get("arms") or []] or list(settings.get("models") or []) or sorted(groups)
+    setups = setup_ids(job)
     names = setup_names(job)
     baseline = baseline_id(job)
-    planned = len(settings.get("tasks") or []) * len(setups)
+    planned_setups = [arm['id'] for arm in settings.get('arms') or []] or list(settings.get('models') or []) or list(groups)
+    planned_pairs = {(task, setup) for task in settings.get('tasks') or [] for setup in planned_setups}
+    planned = len(planned_pairs)
     recorded = {(r["task"], r["model"]) for r in results}
     per_setup = {}
     for setup in setups:
@@ -662,7 +671,7 @@ def run_measures(job, events) -> dict:
     return {"version": 1, "run": job.get("id"), "baseline": baseline, "setups": per_setup, "order": setups,
             "overlap": overlap({s: groups.get(s, []) for s in setups}),
             "planned_attempts": planned, "recorded_attempts": len(results),
-            "unrecorded_attempts": max(0, planned - len({k for k in recorded if k[1] in setups})),
+            "unrecorded_attempts": len(planned_pairs - recorded),
             "repetitions": max((pass_k(groups.get(s, [])).get("k") or 1) for s in setups) if setups else 1}
 
 def run_counts(job, events) -> dict:

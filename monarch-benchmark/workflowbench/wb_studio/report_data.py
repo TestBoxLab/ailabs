@@ -27,10 +27,8 @@ FINISHED = ("completed", "failed", "cancelled", "interrupted")
 
 
 def setup_ids(job) -> list:
-    """Every setup the run recorded. A report hides none of them."""
-    settings = job.get("settings") or {}
-    return [arm["id"] for arm in settings.get("arms") or []] or list(settings.get("models") or [])
-
+    """Every planned or recorded setup, preserving distinct version identities."""
+    return measures.setup_ids(job)
 
 def is_lab(name) -> bool:
     """A lab build: Lucas's own experiment, not a released version.
@@ -589,12 +587,25 @@ def run_report(studio, identity) -> dict:
     narrative = narrative_status(studio.directory / identity)
     aliases_back = {alias: m["setups"].get(real, {}).get("name", real) for real, alias in (narrative.get("aliases") or {}).items()}
     tasks = task_rows(job, studio.tasks)
+    verdict = verdict_text(subject, baseline, g, len(live_tasks), reused) if subject else "This run has no evaluated attempts."
+    # Keep the selected comparison, while making recorded Monarch versions visible
+    # even when a different setup has the highest pass rate.
+    for sid in shown:
+        setup = m['setups'].get(sid)
+        if not setup or sid == (subject or {}).get('id') or not (sid == 'monarch' or sid.startswith('monarch@')):
+            continue
+        p = setup['pass']
+        if p['attempts']:
+            build = sid.partition('@')[2].split('+', 1)[0]
+            label = setup['name'] + (f" (build {build})" if build else '')
+            unit = 'attempt' if p['attempts'] == 1 else 'attempts'
+            verdict += f" {label} passed {p['passed']} of {p['attempts']} {unit} ({p['rate'] * 100:.2f}%)."
     return {
         "version": 1, "run": identity, "title": job.get("title"), "status": job.get("status"),
         "created_at": job.get("created_at"), "finished_at": job.get("finished_at"), "track": settings.get("track", "agentic-request"),
         "grade": g, "subject": subject["id"] if subject else None, "baseline": baseline_id,
         "baseline_source": {"run": reused["run"], "title": reused["title"], "finished_at": reused["finished_at"]} if reused else None,
-        "verdict": verdict_text(subject, baseline, g, len(live_tasks), reused) if subject else "This run has no evaluated attempts.",
+        "verdict": verdict,
         "findings": [f for f in code_findings(m, shown, baseline_id, {**fa, "attempts": fa_attempts})
                      if not (subject and f["kind"] in ("count", "violations") and (f.get("evidence") or {}).get("setup") == subject["id"])],
         "authored": genesis_reports.published(studio, identity),

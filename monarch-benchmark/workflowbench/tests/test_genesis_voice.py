@@ -47,7 +47,8 @@ def event(voice, kind, **data):
 
 def test_reserves_and_claims_before_create_with_server_owned_configuration(voice):
     manager, g, provider, ledger, _ = voice
-    def create(payload):
+    def create(payload, actor):
+        assert actor == 'human:lucas'
         hold, = ledger.reservations()
         assert hold.dispatched_at is not None
         assert hold.maximum_usd > 0
@@ -61,7 +62,7 @@ def test_reserves_and_claims_before_create_with_server_owned_configuration(voice
     result = start(voice, model='attacker', maximum_usd='0')
     assert result['transport']['sdp'] == 'answer'
     assert result['maximum_usd'] != '0'
-    provider.attach.assert_called_once_with('live_test')
+    provider.attach.assert_called_once_with('live_test', 'human:lucas')
 
 
 @pytest.mark.parametrize('reason', ['paused', 'allowance'])
@@ -287,18 +288,22 @@ def test_real_transport_adapter_uses_live_endpoints_and_server_authentication(mo
     connect = Mock(return_value=connection)
     monkeypatch.setattr(websockets.sync.client, 'connect', connect)
     provider = LiveProvider()
-    assert provider.attach('live_id') is connection
+    assert provider.attach('live_id', 'human:lucas') is connection
     assert connect.call_args.args[0] == 'wss://api.openai.com/v1/live/sessions/live_id/attach'
-    assert connect.call_args.kwargs['additional_headers'] == {'Authorization': 'Bearer server-only-key'}
+    attach_headers = connect.call_args.kwargs['additional_headers']
+    assert attach_headers['Authorization'] == 'Bearer server-only-key'
+    assert attach_headers['OpenAI-Safety-Identifier']
+    assert 'lucas' not in attach_headers['OpenAI-Safety-Identifier']
     client = Mock()
     factory = Mock()
     factory.return_value.__enter__ = Mock(return_value=client)
     factory.return_value.__exit__ = Mock(return_value=False)
     monkeypatch.setattr(httpx, 'Client', factory)
     client.post.return_value.json.return_value = {'session': {'id': 'live_id'}}
-    assert provider.create({'session': {'model': 'gpt-live-1'}}) == {'session': {'id': 'live_id'}}
+    assert provider.create({'session': {'model': 'gpt-live-1'}}, 'human:lucas') == {'session': {'id': 'live_id'}}
     assert client.post.call_args.args[0] == 'https://api.openai.com/v1/live/sessions'
-    assert client.post.call_args.kwargs['headers'] == {'Authorization': 'Bearer server-only-key'}
+    create_headers = client.post.call_args.kwargs['headers']
+    assert create_headers == attach_headers
 
 
 def test_successful_action_receipts_report_specific_committed_state():
@@ -415,3 +420,124 @@ def test_voice_compare_respects_the_per_setup_comparability_gate():
     spoken = ' '.join(voice_facts('compare', result))
     assert '2 matched tasks' in spoken
     assert 'better on 2' in spoken
+
+@pytest.fixture
+def voice_clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr('wb_studio.genesis_voice.time.monotonic', lambda: now[0])
+    return now
+
+
+def test_idle_closes_without_browser_and_keeps_final_billing_authoritative(voice, voice_clock):
+    manager, g, provider, ledger, _ = voice
+    result = start(voice)
+    assert result['idle_seconds'] == manager.availability()['idle_seconds'] == 60
+    voice_clock[0] += 59
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['status'] == 'running'
+    voice_clock[0] += 1
+    manager._tick('live_test')
+    status = manager.status('live_test', 'human:lucas')
+    assert (status['status'], status['close_reason']) == ('closing', 'idle_timeout')
+    assert 'session.close' in str(provider.attach.return_value.send.call_args_list)
+    assert ledger.reservations()[0].actual_usd is None
+    event(voice, 'session.closed', usage={'seconds': 61}, reason='close_requested')
+    assert manager.status('live_test', 'human:lucas')['close_reason'] == 'idle_timeout'
+    assert ledger.reservations()[0].actual_usd == Decimal('0.050834')
+    import json
+    session = manager.sessions['live_test']
+    persisted = json.loads((manager.root / (session['record_id'] + '.json')).read_text())
+    assert persisted['close_reason'] == 'idle_timeout'
+    assert persisted['provider_close_reason'] == 'close_requested'
+    provider.create.assert_called_once()
+    g.chat.assert_not_called()
+
+
+def test_only_new_user_transcript_resets_idle_not_output_telemetry_or_browser(voice, voice_clock):
+    manager = voice[0]
+    start(voice)
+    voice_clock[0] += 50
+    event(voice, 'session.input_transcript.delta', delta='Hello', event_id='speech')
+    voice_clock[0] += 50
+    event(voice, 'session.input_transcript.delta', delta='Hello', event_id='speech')
+    event(voice, 'session.input_transcript.delta', delta='   ')
+    event(voice, 'session.output_transcript.delta', delta='Still here.')
+    event(voice, 'session.usage.updated', usage={'seconds': 100})
+    manager.context('live_test', {'workspace': {'route': '#budget'}}, 'human:lucas')
+    manager.status('live_test', 'human:lucas')
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['status'] == 'running'
+    voice_clock[0] += 10
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['close_reason'] == 'idle_timeout'
+
+
+def test_ordinary_work_defers_idle_with_terminal_grace_but_never_hard_deadline(voice, voice_clock):
+    manager, g, _, _, records = voice
+    start(voice)
+    event(voice, 'session.input_transcript.delta', delta='Compare results')
+    event(voice, 'session.delegation.created', delegation={'id': 'work', 'target': 'client'})
+    turn = records['turns', g.chat.call_args.args[0]['id']]
+    voice_clock[0] += 70
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['status'] == 'running'
+    turn['status'] = 'completed'
+    manager._tick('live_test')
+    voice_clock[0] += 14
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['status'] == 'running'
+    voice_clock[0] += 1
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['close_reason'] == 'idle_timeout'
+
+
+def test_busy_work_cannot_extend_hard_lifetime(voice, voice_clock):
+    manager, g, _, _, records = voice
+    start(voice)
+    event(voice, 'session.input_transcript.delta', delta='Compare results')
+    event(voice, 'session.delegation.created', delegation={'id': 'work', 'target': 'client'})
+    voice_clock[0] += 300
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['close_reason'] == 'max_duration'
+    assert not records['turns', g.chat.call_args.args[0]['id']].get('stop_requested')
+
+
+def test_mission_progress_cannot_keep_idle_voice_open_or_cancel_mission(voice, voice_clock):
+    manager, g, _, _, records = voice
+    result = start(voice)
+    g.listing = lambda kind: [{'id': 'mission', 'mission': {'thread': result['thread'],
+        'owner': 'human:lucas', 'status': 'working'}, 'work': {'turn': 'worker'}}]
+    records['turns', 'worker'] = {'id': 'worker', 'status': 'running', 'events': [
+        {'type': 'tool_started', 'action': 'read_run'}]}
+    voice_clock[0] += 50
+    manager._tick('live_test')
+    event(voice, 'session.output_transcript.delta', delta='The mission is working.')
+    voice_clock[0] += 10
+    manager._tick('live_test')
+    assert manager.status('live_test', 'human:lucas')['close_reason'] == 'idle_timeout'
+    assert records['turns', 'worker']['status'] == 'running'
+    assert 'stop_requested' not in records['turns', 'worker']
+
+
+def test_idle_timeout_retains_unknown_hold_without_final_usage(voice, voice_clock):
+    manager, _, provider, ledger, _ = voice
+    start(voice)
+    voice_clock[0] += 60
+    manager._tick('live_test')
+    voice_clock[0] += 15
+    manager._tick('live_test')
+    provider.hangup.assert_called_once_with('live_test')
+    status = manager.status('live_test', 'human:lucas')
+    assert (status['status'], status['billing'], status['close_reason']) == ('disconnected', 'unknown', 'idle_timeout')
+    assert ledger.status().held_usd == ledger.reservations()[0].maximum_usd
+
+
+@pytest.mark.parametrize('configured, expected', [('15', 15), ('120', 120), ('0', 60), ('601', 60), ('invalid', 60)])
+def test_idle_configuration_is_bounded(voice, monkeypatch, configured, expected):
+    monkeypatch.setenv('WB_GENESIS_VOICE_IDLE_SECONDS', configured)
+    assert start(voice)['idle_seconds'] == expected
+
+
+def test_idle_configuration_cannot_extend_short_hard_limit(voice, monkeypatch):
+    monkeypatch.setenv('WB_GENESIS_VOICE_MAX_SECONDS', '30')
+    assert start(voice)['idle_seconds'] == 30

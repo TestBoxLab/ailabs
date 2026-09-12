@@ -103,3 +103,19 @@ def show(genesis, payload: dict) -> dict:
 
 
 TOOLS = {"show": show}
+
+
+def direct_request(text):
+    """Only a complete, unambiguous page-opening command avoids a model request."""
+    match = re.fullmatch(
+        r'(?:(?:please|can you|could you)\s+)?(?:open|show|go to|take me to|navigate to)\s+'
+        r'(?:the\s+)?([a-z ]+?)(?:\s+page)?(?:\s+please)?[.!?]?',
+        str(text or '').strip().lower())
+    if not match:
+        return None
+    routes = {'budget': '#budget', 'reports': '#reports', 'runs': '#runs',
+              'runtime': '#runtime', 'studio': '#studio', 'leaderboard': '#leaderboard',
+              'research board': '#genesis/board', 'library': '#genesis/library',
+              'memory': '#genesis/memory', 'genesis settings': '#genesis/settings'}
+    route = routes.get(match[1])
+    return {'route': route, 'why': 'You asked to open this page.'} if route else None

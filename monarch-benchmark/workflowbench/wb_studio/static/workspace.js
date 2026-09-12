@@ -5,6 +5,7 @@ const historyPageSize = 15, graphLogCache = new Map();
 const trackName = value => value === 'create-and-run' ? 'Workflow configuration' : 'Agentic requests';
 const chevron = '<svg class="icon small" aria-hidden="true"><use href="/vendor/lucide/sprite.svg#chevron-right"/></svg>';
 function showWorkspaceSurface(surface, updateHash=true) {
+ queueMicrotask(()=>document.dispatchEvent(new Event('genesis:surface')));
   workspaceSurface=surface;
   for(const [selector,name] of [['#reports-panel','reports'],['#report-panel','report'],['#genesis-panel','genesis'],['#runs-panel','runs'],['.workspace','detail'],['#setup-panel','studio'],['#runtime-panel','runtime'],['#budget-panel','budget'],['#launch-panel','launch']])$(selector).classList.toggle('hidden',surface!==name);
   $('.page-heading').classList.toggle('hidden',['studio','launch','genesis','report','detail'].includes(surface));

@@ -106,14 +106,16 @@ def _attempt(result, trace, report, index):
             "passed": result["passed"], "infrastructure": report["infrastructure"], "bucket": bucket,
             "headline": headline, "narrative": narrative, "termination": result["termination"],
             "checks": checks, "observed_facts": facts, "earliest_supported_evidence": earliest, "story": report.get("story"),
-            "event_ids": [e["id"] for e in trace], "causal_hypotheses": [], "limitations": LIMITATION}
+            "event_ids": [e["id"] for e in trace], "causal_hypotheses": [], "limitations": LIMITATION,
+            **{key: result[key] for key in ("invariant_passed", "unexpected_changes", "count_violations", "receipt_source") if key in result}}
 
 
 def analysis(studio, identity):
     """Analyze only saved completed attempts, including failures; never dispatch or write."""
     job = studio.job(identity)
     events = studio.events(identity)
-    results = job["results"]
+    from wb_studio.report_receipts import enrich
+    results = enrich(studio, identity, job["results"])
     # Separate repeated task/model attempts at journal completion boundaries. A partial
     # later attempt must never lend its errors to an earlier completed result.
     grouped, pending, episodes = defaultdict(list), defaultdict(list), defaultdict(list)
@@ -143,7 +145,7 @@ def analysis(studio, identity):
                      if event.get("task", key[0]) == key[0] and event.get("model", key[1]) == key[1]]
         else:
             trace = segments[occurrence] if occurrence < len(segments) else pending[key] if counts[key] == 1 and not segments else []
-        # Job results already retain the evaluator checks and scope changes. Avoid
+        # Missing legacy fields were filled from exact read-only receipts. Avoid
         # opening Store here: its initialization can migrate/write the results DB.
         report = outcome_report({"id": identity, "results": [result]}, trace, studio.tasks)["attempts"][0]
         attempts.append(_attempt(result, trace, report, index))

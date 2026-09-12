@@ -591,6 +591,27 @@ check('genesis voice: a fast show receipt follows once and respects the follow p
   } finally { await context.close(); }
 });
 
+check('genesis voice: refresh restores the conversation without replaying navigation', async browser => {
+  const { p, context, errors } = await page(browser, 'light', '/#genesis');
+  try {
+    await p.waitForSelector('#genesis-panel:not(.hidden) #genesis-form');
+    const turn = {id:'durable-voice-turn',thread:'durable-voice-thread',status:'completed',by:'human:studio',message:'Open budget',answer:'The budget link is ready.',events:[{type:'tool_completed',action:'show',detail:JSON.stringify({route:'#budget',label:'Budget'})}]};
+    await p.route('**/api/genesis', async route => {
+      const response=await route.fetch(), data=await response.json();
+      data.threads=[...(data.threads||[]),{id:turn.thread,owner:data.me||'human:studio',title:'Durable voice',turn_count:1}];
+      await route.fulfill({response,json:data});
+    });
+    await p.route('**/api/genesis/threads/durable-voice-thread', route => route.fulfill({json:{turns:[turn]}}));
+    await p.evaluate(async t => {localStorage.setItem('genesis.follow','0');await window.genesisAcceptVoiceTurn(t);location.hash='#reports';},turn);
+    await p.reload();
+    await p.waitForFunction(() => window.genesisVoiceThreadContext?.().parent==='durable-voice-turn');
+    assert(await p.evaluate(() => location.hash)==='#reports','refresh preserves the current page');
+    assert(await p.locator('[data-turn="durable-voice-turn"]').count()===1,'restored turn renders once');
+    assert((await p.evaluate(() => window.genesisVoiceThreadContext())).thread===turn.thread,'next voice turn continues the saved conversation');
+    await noOverflowNoErrors(p, errors, 'voice refresh recovery');
+  } finally { await context.close(); }
+});
+
 (async () => {
   const { chromium } = loadPlaywright();
   if (!(await portIsFree())) throw new Error('Port ' + PORT + ' already answers: a stale fixture server is running. Kill Python listeners on 8766-8799 (they answer with old code), or set BROWSER_PORT.');

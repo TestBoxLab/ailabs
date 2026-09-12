@@ -28,6 +28,7 @@
     $('genesis-voice-playback').textContent = audio().muted ? 'Resume audio' : 'Pause audio';
     $('genesis-voice-playback').setAttribute('aria-pressed', String(audio().muted));
     $('genesis-voice-bar').dataset.active = String(!!s);
+    window.genesisOrb?.voice(s);
     const mic = $('genesis-mic'); if (mic) mic.disabled = !!s;
   }
 
@@ -85,21 +86,21 @@
     for (const key of ['startup','deadline','closeTimer','disconnectTimer','pollTimer','muteTimer']) clearTimeout(s[key]);
     s.stream?.getTracks().forEach(t => t.stop());
     s.channel?.close(); s.peer?.close();
-    if (current === s) { current = null; audio().srcObject = null; controls(null); }
+    if (current === s) { current = null; audio().srcObject = null; controls(null); if(s.idle)window.genesisOrb?.idle(); }
   }
 
-  function serverClose(s) {
+  function serverClose(s, detached=false) {
     if (!s.id || s.closeRequested) return;
     s.closeRequested = true;
     // The server retains unknown usage if finalization is not observed.
-    api(endpoint(s) + '/close', {}).catch(() => {
+    api(endpoint(s) + (detached ? '/detach' : '/close'), {}, false, {keepalive:detached}).catch(() => {
       if (!current || current === s) say('Audio ended. Server finalization is unconfirmed; check Genesis usage before reconnecting.');
     });
   }
 
   function fail(s, message) {
     if (!owned(s)) return;
-    serverClose(s); release(s); say(message);
+    serverClose(s); release(s); say(message); window.genesisOrb?.problem();
   }
 
   function end() {
@@ -154,11 +155,21 @@
   async function poll(s) {
     if (!owned(s) || !s.id) return;
     try {
-      const data = await api(endpoint(s));
+      const known = [...(s.acceptedTurns || [])].slice(-12).join(',');
+      const data = await api(endpoint(s) + (known ? '?known=' + encodeURIComponent(known) : ''));
       if (!owned(s)) return;
-      for (const turn of data.turns || []) await window.genesisAcceptVoiceTurn?.(turn);
+      if (data.close_reason === 'idle_timeout') s.idle = true;
+      if (data.status === 'closing' && s.idle) {
+        s.closing = true; s.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
+        controls(s); say('Going idle. Voice is closing.');
+      }
+      for (const turn of data.turns || []) {
+        if (!window.genesisAcceptVoiceTurn) continue;
+        await window.genesisAcceptVoiceTurn(turn);
+        (s.acceptedTurns ||= new Set()).add(turn.id);
+      }
       if (data.status === 'closed') {
-        release(s); say('Voice ended.'); return;
+        release(s); say(s.idle ? 'Voice is idle. Click the ball to talk again.' : 'Voice ended.'); return;
       }
       if (['failed','unknown','expired','disconnected'].includes(data.status)) {
         fail(s, 'Voice disconnected. Final usage may be unconfirmed. Start a new conversation when ready.'); return;
@@ -188,7 +199,7 @@
       if (s.closing) return;
       poll(s);
     } else if (data.type === 'session.closed') {
-      release(s); say('Voice ended.');
+      release(s); say(s.idle ? 'Voice is idle. Click the ball to talk again.' : 'Voice ended.');
     } else if (data.type === 'session.input_transcript.delta' || data.type === 'session.output_transcript.delta') {
       caption(s, data);
     } else if (data.type === 'session.input_audio.muted' || data.type === 'session.input_audio.unmuted') {
@@ -200,7 +211,7 @@
         if (s.wantedMuted !== s.remoteMuted) requestMuted(s, s.wantedMuted);
       }
     } else if (data.type === 'error') {
-      say('Voice reported a problem: ' + String(data.error?.message || data.message || 'Check the connection and try speaking again.').slice(0,300));
+      say('Voice reported a problem: ' + String(data.error?.message || data.message || 'Check the connection and try speaking again.').slice(0,300)); window.genesisOrb?.problem();
     }
   }
 
@@ -219,7 +230,7 @@
   async function start() {
     if (current) return;
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
-      say('Live voice needs microphone support on HTTPS or localhost. You can still type to Genesis.'); return;
+      say('Live voice needs microphone support on HTTPS or localhost. You can still type to Genesis.'); window.genesisOrb?.problem(); return;
     }
     window.genesisStopDictation?.(); window.genesisStopSpeaking?.();
     const s = {ready:false,finished:false,closing:false,muted:false,remoteMuted:false,wantedMuted:false,commandId:0,captions:[],seen:new Set()};
@@ -231,6 +242,7 @@
       const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
       if (!owned(s)) { stream.getTracks().forEach(t => t.stop()); return; }
       s.stream = stream;
+      window.genesisOrb?.attach(stream, 'input');
       s.muted = s.wantedMuted = mode === 'push' && !pttHeld;
       if (s.muted) stream.getAudioTracks().forEach(track => { track.enabled = false; });
       controls(s); say('Connecting to Genesis…');
@@ -239,8 +251,9 @@
       peer.addEventListener('track', e => {
         if (!owned(s)) return;
         audio().srcObject = e.streams?.[0] || new MediaStream([e.track]);
+        window.genesisOrb?.attach(audio().srcObject, 'output');
         audio().play().catch(() => {
-          if (owned(s)) { audio().hidden = false; say('Select Play below to hear Genesis.'); }
+          if (owned(s)) { s.playbackBlocked = true; controls(s); say('Click the ball to hear Genesis.'); }
         });
       });
       peer.addEventListener('connectionstatechange', () => {
@@ -261,9 +274,12 @@
       const offer = await peer.createOffer(); if (!owned(s)) return;
       await peer.setLocalDescription(offer); await waitForIce(peer); if (!owned(s)) return;
       const context = workspace(); s.context = JSON.stringify(context);
+      await window.genesisRestoreConversation?.();
+      if (!owned(s)) return;
       const thread = window.genesisVoiceThreadContext?.() || {};
       const result = await api('/api/genesis/voice/sessions', {sdp:peer.localDescription.sdp,...thread,workspace:context});
       s.id = result.id || result.session?.id;
+      window.genesisRememberVoiceThread?.(result);
       if (!owned(s)) { serverClose(s); return; }
       if (!s.id || !result.transport?.sdp) throw new Error('Voice connection returned no session or audio connection. Try again.');
       await peer.setRemoteDescription({type:'answer',sdp:result.transport.sdp});
@@ -299,13 +315,13 @@
       $('genesis-voice-latest').hidden = true;
     });
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape' && current) { audio().muted = true; controls(current); return; }
+      if (e.key === 'Escape' && current) { end(); return; }
       const target = e.target;
       const typing = target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '');
       if (typing) return;
       if (e.code === 'F8' && !e.repeat) {
         e.preventDefault(); setMode(mode === 'always' ? 'push' : 'always');
-      } else if (e.code === 'Space') {
+      } else if (e.code === 'Space' && e.ctrlKey && e.shiftKey) {
         e.preventDefault();
         if (e.repeat || pttHeld) return;
         pttHeld = true; setMode('push');
@@ -321,8 +337,8 @@
       if (!pttHeld) return;
       pttHeld = false; if (current && mode === 'push') requestMuted(current,true);
     });
-    window.addEventListener('pagehide', () => { const s = current; if (s) { serverClose(s); release(s); } });
+    window.addEventListener('pagehide', () => { const s = current; if (s) { serverClose(s,true); release(s); } });
   }
-  window.genesisLiveVoice = {active:() => !!current, end};
+  window.genesisLiveVoice = {active:() => !!current, start, end, interact(){const s=current;if(!s){start();return;}if(s.playbackBlocked){audio().play().then(()=>{s.playbackBlocked=false;controls(s);say('Connected.');}).catch(()=>say('Playback was blocked. Click the ball to try again.'));}else end();}};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init); else init();
 })();

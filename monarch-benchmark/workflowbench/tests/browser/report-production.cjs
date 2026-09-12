@@ -24,7 +24,7 @@ let playwright;
 for (const name of [process.env.PLAYWRIGHT_MODULE, 'playwright', 'C:/Users/Lucas Wakigawa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'].filter(Boolean)) {
   try { playwright = require(name); break; } catch {}
 }
-const evidence = {run:RUN, url:BASE + '/#run/' + RUN, report_url:BASE + '/#report/' + RUN,
+const evidence = {run:RUN, url:BASE + '/#run/' + RUN, report_url:BASE + '/#report/' + RUN + '?audience=engine-team',
   recorded_at:new Date().toISOString(), expected_attempts:EXPECTED, require_authored:strict,
   status:'checking', checks:[], surfaces:[], blocked_requests:[], page_errors:[], artifacts:[]};
 function check(name, passed, detail) {
@@ -92,7 +92,7 @@ async function diagnoseNarrow(credentials) {
     await context.addInitScript(()=>localStorage.setItem('ailabs-theme','light'));
     const page=await context.newPage();
     page.on('pageerror',error=>evidence.page_errors.push({surface:'narrow',message:clean(error.message)}));
-    await page.goto(BASE+'/#report/'+RUN,{waitUntil:'domcontentloaded',timeout:60000});
+    await page.goto(BASE+'/#report/'+RUN+'?audience=engine-team',{waitUntil:'domcontentloaded',timeout:60000});
     await page.locator('#report-article .report-head').waitFor({timeout:60000});
     const geometry=await overflowDetails(page);
     evidence.surfaces.push({name:'narrow',width:390,theme:'light',report_overflow:geometry.overflow,overflow_diagnostics:geometry});
@@ -143,7 +143,7 @@ async function main() {
     if (diagnosticOnly) return await diagnoseNarrow(credentials);
     if (!surfaces.length) throw new Error('REPORT_SURFACES must select desktop, narrow, or dark.');
     const job = await getJson(request, '/api/jobs/' + RUN);
-    const report = await getJson(request, '/api/reports/run/' + RUN);
+    const report = await getJson(request, '/api/reports/run/' + RUN + '?audience=engine-team');
     const diagnostic = await getJson(request, '/api/jobs/' + RUN + '/diagnostics');
     const attempts = diagnostic.attempts || [];
     const authored = report.authored;
@@ -209,7 +209,7 @@ async function main() {
         surface.run_overflow=await page.evaluate(()=>Math.max(0,document.documentElement.scrollWidth-innerWidth));
         check(name + ': run view shows 106 recorded results', Number(await page.locator('#result-count').innerText())===EXPECTED);
         await screenshot(page, name+'-run');
-        await page.goto(BASE + '/#report/' + RUN, {waitUntil:'domcontentloaded',timeout:60000});
+        await page.goto(BASE + '/#report/' + RUN + '?audience=engine-team', {waitUntil:'domcontentloaded',timeout:60000});
         await page.locator('#report-article .report-head').waitFor({timeout:60000});
         surface.overflow_diagnostics=await overflowDetails(page);
         surface.report_overflow=surface.overflow_diagnostics.overflow;

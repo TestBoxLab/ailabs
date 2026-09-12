@@ -135,7 +135,7 @@ def checkpoint_mission(g, payload):
                         raise ValueError('Read the linked run evidence successfully in this turn before completing.')
                 elif child.get('stage') not in ('complete', 'review'):
                     raise ValueError('The linked experiment has not finished.')
-        state.update(summary=summary, next_action=next_action, wait_for=target if status == 'waiting' else None, checkpoint=status, checkpoint_turn=turn['id'], checkpoint_generation=state['generation'])
+        state.update(summary=summary, next_action=next_action, wait_for=target if status == 'waiting' else None, wait_kind=('question' if child.get('kind') == 'question' else 'experiment') if status == 'waiting' else None, checkpoint=status, checkpoint_turn=turn['id'], checkpoint_generation=state['generation'])
         return _save(g, card)
 
 def worker_payload(g, card):
@@ -253,7 +253,9 @@ def reconcile(g):
                     continue
                 if not finished:
                     continue
-                state.update(status='queued' if state['turn_count'] < state['max_turns'] else 'blocked', wait_for=None)
+                if child.get('kind') == 'question':
+                    state['summary'] = ('Answer from the owner: ' + str(child.get('answer') or 'Question closed.'))[:4000]
+                state.update(status='queued' if state['turn_count'] < state['max_turns'] else 'blocked', wait_for=None, wait_kind=None)
                 card.update(stage='research' if state['status']=='queued' else 'review', auto=state['status']=='queued', work={'status':'queued' if state['status']=='queued' else 'failed'})
                 _save(g, card)
 
@@ -295,6 +297,6 @@ def _unsaved_build(turn):
 def _projection(card):
     state = card['mission']
     return {'id':card['id'], 'revision':card['revision'], 'mission':{
-        key: state.get(key) for key in ('objective','acceptance','status','model','effort','next_action','summary','wait_for','turn_count','max_turns')
+        key: state.get(key) for key in ('objective','acceptance','status','model','effort','next_action','summary','wait_for','wait_kind','turn_count','max_turns')
     }}
 

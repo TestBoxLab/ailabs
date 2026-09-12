@@ -94,8 +94,8 @@ performance or complete autonomous operation of every lab capability.
 
 ## Final local results
 
-- `uv run python -m pytest tests/test_genesis_voice.py tests/test_genesis_voice_routes.py tests/test_genesis_workspace.py tests/test_genesis_voice_cancel.py tests/test_genesis_loop.py tests/test_genesis_threads.py tests/test_genesis_access.py tests/test_genesis_stream.py tests/test_genesis_stream_contract.py tests/test_genesis_show.py tests/test_genesis_build.py tests/test_voice_stt.py tests/test_static_csp.py -q`: **152 passed**, 11.76 seconds.
-- `node tests/browser/genesis-voice.cjs`: **11 scenarios passed**.
+- `uv run python -m pytest tests/test_genesis_voice.py tests/test_genesis_voice_routes.py tests/test_genesis_workspace.py tests/test_genesis_voice_cancel.py tests/test_genesis_loop.py tests/test_genesis_threads.py tests/test_genesis_access.py tests/test_genesis_stream.py tests/test_genesis_stream_contract.py tests/test_genesis_show.py tests/test_genesis_build.py tests/test_voice_stt.py tests/test_static_csp.py -q`: **153 passed**, 12.21 seconds (latest review run).
+- `node tests/browser/genesis-voice.cjs`: **13 scenarios passed**.
 - `node tests/browser/suite.cjs --only 'genesis voice'`: **2 scenarios passed**.
 - `node tests/browser/suite.cjs --only 'studio: Genesis'`: **1 scenario passed**.
 - Earlier existing `node tests/browser/suite.cjs --only genesis` checks passed.
@@ -115,3 +115,33 @@ No free-form model answer is treated as a verified result.
 
 The repository-wide suite was not run; these are focused connection and shared
 Genesis regressions, not a certification of unrelated work in the dirty tree.
+
+## Current official-document review
+
+A second review against the current OpenAI GPT-Live documentation confirmed the
+implemented lifecycle: WebRTC listeners are installed before the offer, the
+server creates the session with the project key, the browser applies the returned
+SDP and waits for `session.started`, and no redundant `session.start` is sent.
+The authenticated sideband owns delegation, tool execution and durable state.
+Transcript fragments are ordered by their audio timeline. Mute and unmute wait
+for matching acknowledgements. Close keeps both transports alive until the final
+`session.closed` usage record or records incomplete finalization.
+
+The review found one production hardening gap and corrected it. Session creation
+and sideband attachment now carry the same `OpenAI-Safety-Identifier`, derived
+on the trusted server as an HMAC of the authenticated internal identity. The raw
+identity, derived identifier and project key are never sent to browser code.
+Focused adapter tests confirm both authenticated connections use the same opaque
+identifier.
+
+The prompt remains short and delegates detailed workflow logic to the backend.
+Application permissions, confirmations, cancellations and success receipts stay
+server-owned. Append acknowledgements are treated only as injection timing, while
+tool receipts and the final close event remain the evidence for action and billing
+completion. Provider storage and local raw-audio recording remain disabled.
+
+Additional references reviewed:
+
+- [Live API overview](https://developers.openai.com/api/docs/guides/live)
+- [Live prompting](https://developers.openai.com/api/docs/guides/live-prompting)
+- [Your data](https://developers.openai.com/api/docs/guides/your-data)

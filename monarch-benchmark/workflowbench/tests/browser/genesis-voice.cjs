@@ -20,7 +20,7 @@ const server = http.createServer((req,res) => {
   else if (file.startsWith(staticDir) && fs.existsSync(file)) res.end(fs.readFileSync(file));
   else { res.statusCode=404;res.end('Missing fixture asset'); }
 });
-async function setup(browser, width=1440) {
+async function setup(browser, width=1440, legacy=true) {
   const page=await browser.newPage({viewport:{width,height:960},reducedMotion:'reduce'});
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.evaluate(() => {
@@ -58,11 +58,13 @@ async function setup(browser, width=1440) {
       static async available(options){window.recognitionLangs=options.langs;return window.localRecognition?'available':'unavailable';}
       start(){window.recognitionLanguage=this.lang;}stop(){}
     };
-    window.AudioContext=class {createAnalyser(){return {fftSize:2048,getByteTimeDomainData:b=>b.fill(128)};}createMediaStreamSource(){return {connect(){}};}async close(){}};
+    window.AudioContext=class {createAnalyser(){return {fftSize:2048,getByteTimeDomainData:b=>b.fill(window.fixtureAmplitude||128)};}createMediaStreamSource(){return {connect(){},disconnect(){}};}async resume(){}async close(){}};
     window.MediaRecorder=class {static isTypeSupported(){return true;}constructor(){this.state='inactive';}start(){window.recordings++;this.state='recording';}stop(){this.state='inactive';this.ondataavailable({data:new Blob(['fixture-audio'])});this.onstop();}};
     window.fetch=async (url,opts)=>{window.calls.push({url,headers:opts.headers});return {ok:true,json:async()=>({text:'Fixture transcription',cost_usd:0.001})};};
   });
   await page.addScriptTag({path:path.join(staticDir,'voice.js')});
+  if (!legacy) await page.addScriptTag({path:path.join(staticDir,'genesis-orb.js')});
+  else await page.evaluate(()=>{document.getElementById('genesis-orb-panel').hidden=false;document.getElementById('genesis-voice-internal').hidden=false;});
   await page.addScriptTag({path:path.join(staticDir,'voice-live.js')});
   return page;
 }
@@ -202,17 +204,85 @@ async function check(name, fn){await fn();results.push(name);console.log('PASS '
       await p.locator('#genesis-mic').dispatchEvent('pointerdown');await p.waitForTimeout(100);
       assert.equal(await p.evaluate(()=>window.stopped),1);assert.match(await p.locator('#mic-state').innerText(),/could not start/);await p.close();
     });
+    await check('floating orb starts and ends voice without a toolbar; graphs use recorded actions',async()=>{
+      const p=await setup(browser,1440,false);
+      assert.equal(await p.locator('#genesis-orb-panel').isVisible(),false);
+      assert.equal(await p.locator('#genesis-voice-start').isVisible(),false);
+      await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>window.peers[0].remoteDescription);
+      await p.evaluate(()=>window.emitVoice({type:'session.started'}));
+      assert.equal(await p.locator('#genesis-orb-toggle').getAttribute('aria-label'),'End Genesis voice');
+      assert.equal(await p.locator('#genesis-orb-panel').isVisible(),true);
+      assert.equal(await p.locator('#genesis-voice-mute').isVisible(),false);
+      await p.evaluate(()=>document.dispatchEvent(new CustomEvent('genesis:turn',{detail:{id:'turn-test',status:'running',events:[{type:'tool_started',action:'read_source'},{type:'tool_completed',action:'read_source'},{type:'tool_started',action:'edit_architecture'}]}})));
+      assert.equal(await p.locator('#genesis-action-count').innerText(),'1 recorded');
+      assert.equal(await p.locator('#genesis-orb-phase').innerText(),'edit architecture');
+      assert.equal(await p.locator('#genesis-action-bars li').nth(0).locator('output').innerText(),'1');
+      assert.equal(await p.locator('#genesis-action-bars li').nth(1).getAttribute('data-active'),'true');
+      await p.evaluate(()=>document.dispatchEvent(new CustomEvent('genesis:turn',{detail:{id:'turn-test',status:'completed',events:[{type:'tool_completed',action:'read_source'},{type:'tool_completed',action:'edit_architecture'}]}})));
+      assert.equal(await p.locator('#genesis-action-count').innerText(),'2 recorded');
+      await p.locator('#genesis-orb-toggle').focus();await p.keyboard.press('Space');
+      assert.equal(await p.evaluate(()=>window.peers[0].channel.sent.at(-1).type),'session.close');
+      await p.evaluate(()=>window.emitVoice({type:'session.closed'}));
+      assert.equal(await p.locator('#genesis-orb-panel').isVisible(),false);
+      assert.equal(await p.evaluate(()=>window.stopped),1);
+      assert.equal(await p.locator('#genesis-orb-toggle').getAttribute('aria-label'),'Talk to Genesis');await p.close();
+    });
+    await check('audio graph reflects input and silence; reduced motion suppresses the scrolling plot',async()=>{
+      const p=await setup(browser,1440,false);await p.emulateMedia({reducedMotion:'no-preference'});
+      await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>window.peers[0].remoteDescription);
+      await p.evaluate(()=>{window.fixtureAmplitude=144;window.emitVoice({type:'session.started'});});
+      await p.waitForFunction(()=>document.getElementById('genesis-signal-reading').textContent.includes('Mic 50'));
+      assert.match(await p.locator('#genesis-input-line').getAttribute('points'),/,16\.0/);
+      await p.evaluate(()=>window.fixtureAmplitude=128);
+      await p.waitForFunction(()=>document.getElementById('genesis-signal-reading').textContent.includes('Mic 0'));
+      await p.emulateMedia({reducedMotion:'reduce'});
+      await p.waitForFunction(()=>document.querySelector('.genesis-signal').dataset.reduced==='true');
+      assert.equal(await p.locator('.genesis-signal svg').isVisible(),false);
+      await p.keyboard.press('Escape');await p.evaluate(()=>window.emitVoice({type:'session.closed'}));
+      assert.equal(await p.evaluate(()=>window.stopped),1);await p.close();
+    });
+    await check('orb recovers denied microphone and autoplay without hidden controls',async()=>{
+      const p=await setup(browser,1440,false);await p.evaluate(()=>window.rejectMic=true);
+      await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>document.getElementById('genesis-voice-bar').dataset.phase==='error');
+      assert.equal(await p.evaluate(()=>window.calls.length),0);
+      await p.evaluate(()=>window.rejectMic=false);await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>window.peers[0].remoteDescription);
+      await p.evaluate(()=>{window.emitVoice({type:'session.started'});const a=document.getElementById('genesis-voice-audio');a.play=()=>Promise.reject(new Error('blocked'));const e=new Event('track');e.streams=[new MediaStream()];window.peers[0].dispatchEvent(e);});
+      await p.waitForFunction(()=>document.getElementById('genesis-orb-toggle').getAttribute('aria-label')==='Play Genesis audio');
+      await p.evaluate(()=>window.fixtureAmplitude=144);await p.waitForFunction(()=>document.getElementById('genesis-signal-reading').textContent.includes('Voice 0'));
+      assert.equal(await p.locator('#genesis-voice-bar').getAttribute('data-phase'),'listening');
+      assert.match(await p.locator('#genesis-signal-reading').innerText(),/Voice 0/);
+      await p.evaluate(()=>document.getElementById('genesis-voice-audio').play=()=>Promise.resolve());await p.locator('#genesis-orb-toggle').click();
+      await p.waitForFunction(()=>document.getElementById('genesis-orb-toggle').getAttribute('aria-label')==='End Genesis voice');
+      await p.locator('#genesis-orb-toggle').click();await p.evaluate(()=>window.emitVoice({type:'session.closed'}));
+      assert.equal(await p.locator('#genesis-orb-panel').isVisible(),false);await p.close();
+    });
+    await check('server idle expiry releases capture, returns orb to idle and never restarts voice',async()=>{
+      const p=await setup(browser,1440,false);
+      await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>window.peers[0]?.remoteDescription);
+      await p.evaluate(()=>{const original=window.api;window.api=async(url,body)=>body===undefined&&url.endsWith('/voice-1')?{status:'closed',close_reason:'idle_timeout',turns:[]}:original(url,body);window.emitVoice({type:'session.started'});});
+      await p.waitForFunction(()=>document.getElementById('genesis-orb-phase').textContent==='Idle · click to talk');
+      assert.equal(await p.evaluate(()=>window.stopped),1);
+      assert.equal(await p.evaluate(()=>window.genesisLiveVoice.active()),false);
+      assert.equal(await p.locator('#genesis-orb-panel').isVisible(),false);
+      await p.waitForTimeout(1100);
+      assert.equal(await p.evaluate(()=>window.calls.filter(x=>x.url.endsWith('/sessions')).length),1);
+      await p.close();
+    });
     const out=path.resolve(__dirname,'../../.tmp/genesis-voice-browser');fs.mkdirSync(out,{recursive:true});
     for (const width of [1440,390]) {
-      const p=await setup(browser,width);await p.locator('#genesis-voice-start').click();await p.waitForFunction(()=>window.peers[0].remoteDescription);
-      await p.evaluate(()=>{window.emitVoice({type:'session.started'});window.emitVoice({type:'session.output_transcript.delta',delta:'I can inspect this architecture and show the recorded changes as I work.',start_ms:0,end_ms:1000});});
-      assert(await p.locator('#genesis-voice-end').isVisible());
-      await p.locator('#genesis-voice-mode').click();
-      assert(await p.locator('#genesis-voice-mode-notice').evaluate(e=>e.scrollWidth<=e.clientWidth));
+      const p=await setup(browser,width,false);await p.emulateMedia({reducedMotion:'no-preference'});
+      const errors=[];p.on('pageerror',e=>errors.push(e.message));
+      await p.screenshot({path:path.join(out,`orb-idle-${width}.png`),fullPage:true});
+      await p.locator('#genesis-orb-toggle').click();await p.waitForFunction(()=>window.peers[0].remoteDescription);
+      await p.evaluate(()=>{window.emitVoice({type:'session.started'});document.dispatchEvent(new CustomEvent('genesis:turn',{detail:{id:'visual-fixture',status:'running',events:[{type:'tool_completed',action:'read_source'},{type:'tool_completed',action:'search_library'},{type:'tool_completed',action:'read_report'},{type:'tool_completed',action:'edit_architecture'},{type:'tool_started',action:'save_architecture'}]}}));});
+      assert.equal(await p.locator('#genesis-voice-internal').isVisible(),false);
       assert(await p.locator('#genesis-voice-bar').evaluate(e=>e.scrollWidth<=e.clientWidth));
-      await p.screenshot({path:path.join(out,`voice-${width}.png`)});await p.close();
-    }
-    fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(results,null,2));
-    console.log(`Genesis voice: ${results.length} scenarios passed; desktop/mobile screenshots saved.`);
+      assert(await p.locator('#genesis-orb-panel').evaluate(e=>e.getBoundingClientRect().left>=0 && e.getBoundingClientRect().top>=0));
+      await p.waitForTimeout(2000);
+      await p.screenshot({path:path.join(out,`orb-working-${width}.png`),fullPage:true});
+      await p.evaluate(()=>document.documentElement.classList.add('dark'));
+      await p.screenshot({path:path.join(out,`orb-dark-${width}.png`),fullPage:true});
+      assert.deepEqual(errors,[]);await p.close();
+    }    console.log(`Genesis voice: ${results.length} scenarios passed; desktop/mobile screenshots saved.`);
   } finally {await browser.close();server.close();}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

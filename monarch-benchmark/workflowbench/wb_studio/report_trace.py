@@ -38,3 +38,40 @@ def capture(studio, job):
                 item['note'] = 'The registered event file is outside this run evidence directory.'
         out.append(item)
     return out
+
+
+def project(native):
+    """Index every source line, preserving action metadata and marking bounded previews."""
+    out = {key: value for key, value in native.items() if key != 'events'}
+    out['projection'] = 'Complete native event index; result previews explicitly identify omitted characters. Read native_line for the exact retained record.'
+    out['events'] = []
+    for event in native.get('events', []):
+        record = event['record']
+        item = {'line': event['line'], 'record': {k: v for k, v in record.items() if k != 'result'}}
+        if 'result' in record:
+            serialized = json.dumps(record['result'], ensure_ascii=False, sort_keys=True)
+            limit = 96 if record.get('tool') == 'api_search' else 1200
+            complete = len(serialized) <= limit
+            item['result_preview'] = {'text': serialized[:limit], 'characters': len(serialized),
+                'sha256': hashlib.sha256(serialized.encode('utf8')).hexdigest(), 'complete': complete,
+                'encoding': 'Canonical JSON result; preview may end inside a value.'}
+            error = record.get('status') not in (None, 'completed', 'success', 'ok') or (
+                isinstance(record['result'], dict) and bool(record['result'].get('error')))
+            item['full_read_required'] = not complete and (record.get('tool') != 'api_search' or error)
+        out['events'].append(item)
+    return out
+
+
+def line_page(native, line, after=0, limit=24000):
+    """Lossless canonical JSON of one frozen native record; line is the source line."""
+    if type(line) is not int or line < 1 or type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 24000:
+        raise ValueError('Use a positive native_line, a nonnegative character offset and limit from 1 to 24000.')
+    event = next((event for event in native.get('events', []) if event['line'] == line), None)
+    if event is None:
+        raise ValueError('That native source line is not recorded for this exact attempt.')
+    serialized = json.dumps(event['record'], ensure_ascii=False, sort_keys=True)
+    end = min(after + limit, len(serialized))
+    return {'native_line': line, 'source': native.get('source'), 'source_sha256': native.get('sha256'),
+        'fragment': serialized[after:end], 'after': after, 'next_after': end if end < len(serialized) else None,
+        'total_characters': len(serialized), 'record_sha256': hashlib.sha256(serialized.encode('utf8')).hexdigest(),
+        'note': 'Exact retained record encoded as canonical JSON, without clipping. Continue this native_line until next_after is null.'}

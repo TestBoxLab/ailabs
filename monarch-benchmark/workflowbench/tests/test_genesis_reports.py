@@ -67,6 +67,7 @@ def reading(lab, index):
 
 def authored(lab):
     as_worker(lab)
+    reports.read_digest(lab, {'run': 'run1'})
     reports.read_draft(lab, {'run': 'run1', 'limit': 20})
     return reports.write_draft(lab, {'run': 'run1', 'summary': 'Monarch read the record but did not complete the requested write.',
         'what_went_right': 'Bare produced the requested record.', 'what_went_wrong': 'Monarch left the request unfinished.',
@@ -84,6 +85,7 @@ def prepare_review(lab):
 
 def verdict(lab, decision='accept'):
     as_worker(lab)
+    reports.read_digest(lab, {'run': 'run1'})
     reports.read_draft(lab, {'run': 'run1', 'limit': 20})
     state = reports.status(lab, {'run': 'run1'})
     return json.dumps({'verdict': decision, 'issues': [] if decision == 'accept' else ['Explain the alternative.'],
@@ -192,7 +194,7 @@ def test_reviewer_cannot_accept_an_unread_analysis(lab):
     prepare_review(lab)
     answer = verdict(lab)
     state = reports._state(lab, 'run1')
-    state['draft_reads']['review'] = [0]
+    state['digest_reads']['review']['complete'] = False
     reports._save(lab, state)
     finish(lab, answer)
     assert reports.published(lab.studio, 'run1') is None
@@ -257,8 +259,8 @@ def test_report_procedures_are_injected_into_native_worker_prompts(lab):
     reports.start(lab, {'run': 'run1'})
     text = reports.PROMPT(lab, active(lab))
     assert 'Genesis report analysis procedure' in text
-    assert 'EVERY indexed attempt' in text
-    assert reports.allowed_tools(active(lab)) == ('report_evidence', 'read_report_state', 'read_report_draft', 'report_status', 'record_report_attempt')
+    assert 'ALL assigned attempts' in text
+    assert reports.allowed_tools(active(lab)) == ('report_evidence', 'read_report_state', 'read_report_draft', 'report_status', 'read_report_batch', 'record_report_batch', 'record_report_attempt')
 
 
 def test_oversized_attempt_pages_losslessly_and_requires_every_fragment(lab):
@@ -415,3 +417,31 @@ def test_episode_scoped_unknown_charges_reduce_report_headroom(lab, tmp_path):
     reports.start(lab, {'run': 'run1', 'maximum_usd': '5'})
     assert lab.chat.call_count == 1
     assert next(r for r in ledger.reservations() if r.reservation_id == 'run1/episode-b/request-1').actual_usd is None
+
+
+def test_native_response_must_be_read_without_skipped_characters(lab, monkeypatch):
+    raw = {'kind': 'tool', 'tool': 'api_fetch', 'arguments': {'method': 'PATCH', 'url': 'https://example.test/records/1'},
+           'status': 'completed', 'result': {'body': 'retained-native-response-' * 3000, 'tail': 'exact-end'}}
+    monkeypatch.setattr('wb_studio.report_trace.capture', lambda *args: [
+        {'episode_id': 'first', 'status': 'available', 'source': 'first.jsonl', 'sha256': 'frozen-hash', 'events': [{'line': 3, 'record': raw}]},
+        {'status': 'unavailable'}])
+    reports.start(lab, {'run': 'run1'}); as_worker(lab)
+    page = reports.evidence(lab, {'run': 'run1', 'attempt': 0})
+    event = page['checked']['retained_trace']['events'][0]
+    assert event['full_read_required'] and not event['result_preview']['complete']
+    item = {'run': 'run1', 'index': 0, **{k: 'The retained evidence supports this explanation.' for k in reports.ATTEMPT_FIELDS},
+            'confidence': 'limited', 'event_ids': [1]}
+    with pytest.raises(ValueError, match='native_line=3'):
+        reports.record_attempt(lab, item)
+    end = reports.evidence(lab, {'run': 'run1', 'attempt': 0, 'native_line': 3, 'after': 60000})
+    assert end['next_after'] is None
+    with pytest.raises(ValueError, match='native_line=3'):
+        reports.record_attempt(lab, item)
+    fragments, offset = [], 0
+    while offset is not None:
+        full = reports.evidence(lab, {'run': 'run1', 'attempt': 0, 'native_line': 3, 'after': offset})
+        fragments.append(full['fragment']); offset = full['next_after']
+    assert json.loads(''.join(fragments)) == raw
+    assert reports.record_attempt(lab, item)['index'] == 0
+    with pytest.raises(ValueError, match='exact attempt'):
+        reports.evidence(lab, {'run': 'run1', 'attempt': 1, 'native_line': 3})

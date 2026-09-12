@@ -68,6 +68,9 @@ def _column(rows, identity, name):
 
 def patterns(attempts, setups, run=None):
     """Build setup and business-domain slices, sharing the same attempt references."""
+    setups = dict(setups)
+    for attempt in attempts:
+        setups.setdefault(attempt['model'], attempt['model'])
     rows = [(a, _ref(a, i, run)) for i, a in enumerate(attempts)]
     domains = sorted({str(a.get("task") or "unknown").split(".")[0] for a, _ in rows})
     return {"version": 1, "denominator": DENOMINATOR,

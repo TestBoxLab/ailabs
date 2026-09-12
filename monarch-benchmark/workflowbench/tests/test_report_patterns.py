@@ -154,3 +154,16 @@ def test_compact_pattern_summary_preserves_numbers_and_unique_source_refs():
     assert set(result["attempts"]) == {"run-1:0", "run-1:1"}
     assert result["attempts"]["run-1:1"]["event_ids"] == [2]
     assert "explanation" not in result["attempts"]["run-1:1"]
+
+
+def test_pattern_names_do_not_exclude_recorded_setup_versions():
+    version = 'monarch@0cf63a74e+feat/railway-dev-deploy*'
+    rows = [attempt(i, model=version, passed=i < 4) for i in range(17)]
+    names = {'monarch': 'Planned Monarch'}
+    result = patterns(rows, names)
+    assert [c['id'] for c in result['setups']] == ['monarch', version]
+    assert result['setups'][0]['total'] == 0
+    assert result['setups'][1]['total'] == 17
+    assert slices(result['setups'][1])['passed']['count'] == 4
+    assert slices(result['setups'][1])['passed']['percent'] == 23.53
+    assert names == {'monarch': 'Planned Monarch'}

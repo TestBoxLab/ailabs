@@ -60,3 +60,16 @@ def test_dictation_cannot_bypass_the_person_gate(studio,monkeypatch):
             {'Content-Type':'audio/webm','X-Studio-Token':studio.token,'X-Clip-Seconds':'1'})
     assert status==403
     transcribe.assert_not_called()
+
+
+def test_detach_preserves_work_and_requires_authenticated_caller(studio):
+    key = studio.genesis.access.add('Lucas', 'admin')['key']
+    with server_for(studio) as port:
+        status, _, _ = request(port, 'POST', '/api/genesis/voice/sessions/voice1/detach', '{}',
+                               {'Content-Type': 'application/json', 'X-Studio-Token': studio.token})
+        assert status == 403
+        studio.voice.close.assert_not_called()
+        status, _, _ = request(port, 'POST', '/api/genesis/voice/sessions/voice1/detach', '{}',
+                               {'Content-Type': 'application/json', 'X-Person-Key': key})
+        assert status == 200
+    studio.voice.close.assert_called_once_with('voice1', 'human:lucas', reason='page_detached')
