@@ -175,9 +175,18 @@ def run_enterprise(tmp_path, site, repo, port, fake, fd, lf, request_id="enterpr
     return app, job
 
 
-def test_an_enterprise_attempt_streams_builder_frames_recipe_nodes_and_front_door_calls(tmp_path, site, repo):
+def test_an_enterprise_attempt_streams_builder_frames_recipe_nodes_and_front_door_calls(tmp_path, site, repo, monkeypatch):
     port = free_port()
     with FakeMonarch(scenario(port)) as fake, fd_serving(kb_hashes()) as fd, FakeLangfuse() as lf:
+        start_run = MonarchArm._start_run
+
+        def complete_before_acknowledgement(self, *args, **kwargs):
+            started = start_run(self, *args, **kwargs)
+            # The engine can call the front door before the start response arrives.
+            assert fake.wait_for_run(started["id"])
+            return started
+
+        monkeypatch.setattr(MonarchArm, "_start_run", complete_before_acknowledgement)
         expected_cost = add_cost(lf, "enterprise-run")
         app, job = run_enterprise(tmp_path, site, repo, port, fake, fd, lf)
         app.execute(job["id"])

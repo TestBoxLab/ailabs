@@ -475,6 +475,8 @@ class EnterpriseArm:
                 self.recipe_summary = f"Workflow {d['workflow_id']} version {d.get('recipe_version')}, {len(nodes)} node(s)"
                 self.emit("step_finished", step="authoring", label="Build the workflow", status="completed", output=self.recipe_summary,
                           workflow_id=d["workflow_id"], recipe_version=d.get("recipe_version"), questions=d.get("questions"))
+                # Engine calls can arrive before the run-start acknowledgement.
+                self.step = "execution"
             else:
                 self.emit("step_finished", step="authoring", label="Build the workflow", status="error",
                           output=d.get("error") or "No workflow was built", questions=d.get("questions"))

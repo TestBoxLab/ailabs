@@ -11,6 +11,7 @@ import yaml
 from tests.fake_fd import FakeFD
 from tests.fake_langfuse import FakeLangfuse
 from tests.fake_monarch import FakeMonarch
+from tests.test_config import edit
 from wb_orchestrator import cli, config, monarch_setup
 from wb_world import seeds
 
@@ -139,8 +140,8 @@ def test_setup_sends_the_fd_api_key_when_the_harness_names_one(workspace, tmp_pa
     """The Railway discovery service gates every /v1/* route (verified 4 Sep 2026)."""
     product, out = workspace
     harness = tmp_path / "monarch.yaml"
-    harness.write_text(HARNESS.read_text(encoding="utf-8")
-                       + "fd_api_key_env: FD_API_SHARED_SECRET\n", encoding="utf-8")
+    harness.write_text(edit(HARNESS.read_text(encoding="utf-8"), "fd_api_key_env", "FD_API_SHARED_SECRET"),
+                       encoding="utf-8")
     with FakeFD(fixtures_dir=out, api_key="s3cret") as fd:
         buf = io.StringIO()
         code = monarch_setup.run(product, harness, out,
